@@ -31,12 +31,17 @@ import { TableauSuiviBaux } from "@/components/immobilier/tableau-suivi-baux";
 import { type SuiviBailRow } from "@/components/immobilier/fin-bail";
 import { authedFetch } from "@/lib/auth";
 import {
+  GarantsContactsSection,
+  TalDossiersSection
+} from "@/components/immobilier/tal-garants";
+import {
   AuMoisToggle,
   ResilierBailButton,
   BailDocActions,
   DocumentsSection
 } from "@/components/immobilier/tal-avis";
 import { AssignerBailButton } from "@/components/immobilier/assigner-bail";
+import { BoutonExportZip } from "@/components/immobilier/bouton-export";
 import {
   echeanceLabel,
   JOUR_ECHEANCE_DEFAUT,
@@ -758,6 +763,16 @@ export default function LocataireDetailPage({
                   )}
                   État de compte
                 </button>
+                {/* Tout le dossier (documents signés/importés ET
+                    communications générées) dans un zip + index.csv. */}
+                <BoutonExportZip
+                  path={`/api/v1/immobilier/locataires/${locataireId}/documents.zip?categorie=tout`}
+                  sujet={`locataire_${locataireId}`}
+                  size="sm"
+                  variant="outline"
+                  title="Télécharger tous les documents de ce locataire (PDF) dans un zip, avec un index.csv"
+                  onError={(msg) => setError(`Export : ${msg}`)}
+                />
                 <button
                   type="button"
                   onClick={() => void supprimerLocataire()}
@@ -1233,9 +1248,29 @@ export default function LocataireDetailPage({
                 id: b.id,
                 label: `${b.immeuble_name}${
                   b.logement_numero ? ` · ${b.logement_numero}` : ""
-                }`
+                }`,
+                status: b.status,
+                document_id: b.document_id ?? null
               }))}
             />
+
+            {/* Dossier TAL — suivi simple des recours (retour Phil
+                2026-09-09, point 5) : statut, motif, numéro, dates,
+                notes et pièces rattachées. */}
+            <TalDossiersSection
+              locataireId={locataireId}
+              baux={(dossier?.baux || []).map((b) => ({
+                id: b.id,
+                status: b.status,
+                label: `${b.immeuble_name}${
+                  b.logement_numero ? ` · ${b.logement_numero}` : ""
+                } (${b.date_debut} → ${b.date_fin})`
+              }))}
+            />
+
+            {/* Garants & contacts — sans fiche complète, cherchables
+                (retour Phil 2026-09-09, point 8). */}
+            <GarantsContactsSection locataireId={locataireId} />
 
             {/* Communications — journal manuel */}
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">

@@ -3,17 +3,16 @@
 import { useEffect, useState } from "react";
 import {
   AlertTriangle,
-  ExternalLink,
   Loader2,
   Plus,
   Search,
-  User,
-  UserCheck,
-  X
+  User
 } from "lucide-react";
 
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { BoutonExport } from "@/components/immobilier/bouton-export";
+import { CreateLocataireModal } from "@/components/immobilier/create-locataire-modal";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
 
 type Locataire = {
@@ -29,6 +28,10 @@ type Locataire = {
   immeuble_name?: string | null;
   logement_id?: number | null;
   logement_numero?: string | null;
+  /** Pourquoi la fiche remonte quand ce n'est PAS son nom qui matche
+   *  (« garant : Jacques Roy », « courriel : … ») — retour Phil
+   *  2026-09-09, point 8 : chercher Jacques doit montrer Sébastien. */
+  match_via?: string | null;
 };
 
 type ImmeubleLite = {
@@ -39,18 +42,6 @@ type ImmeubleLite = {
 /** Fiche existante qui porte le même courriel ou le même téléphone —
  *  matière de l'alerte anti-doublon (retour Phil 2026-08-13 : 6 paires
  *  de fiches avaient dû être fusionnées à la main). */
-type LocataireDoublon = {
-  id: number;
-  full_name: string;
-  email?: string | null;
-  phone?: string | null;
-  motif: string;
-  immeuble_id?: number | null;
-  immeuble_name?: string | null;
-  logement_id?: number | null;
-  logement_numero?: string | null;
-  bail_id?: number | null;
-};
 
 type BailLite = {
   id: number;
@@ -145,7 +136,7 @@ export default function LocatairesPage() {
         setImmeubleLocataireIds(
           new Set(
             baux
-              .filter((b) => b.status === "actif")
+              .filter((b) => b.status === "actif" || b.status === "propose")
               .map((b) => b.locataire_id)
           )
         );
@@ -189,14 +180,28 @@ export default function LocatairesPage() {
           { label: "Locataires" }
         ]}
         rightSlot={
-          <button
-            type="button"
-            onClick={() => setShowCreate(true)}
-            className="btn-outline-accent btn-sm"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Nouveau locataire
-          </button>
+          <>
+            <BoutonExport
+              cibles={[
+                {
+                  base: "/api/v1/immobilier/exports/locataires",
+                  sujet: "locataires",
+                  params: {
+                    immeuble_id:
+                      immeubleFilter !== "all" ? immeubleFilter : undefined
+                  }
+                }
+              ]}
+            />
+            <button
+              type="button"
+              onClick={() => setShowCreate(true)}
+              className="btn-outline-accent btn-sm"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Nouveau locataire
+            </button>
+          </>
         }
       />
 
@@ -207,7 +212,7 @@ export default function LocatairesPage() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Recherche par nom…"
+              placeholder="Recherche nom / garant / courriel / téléphone…"
               className="input w-full pl-9"
             />
           </div>
@@ -288,8 +293,18 @@ export default function LocatairesPage() {
                         <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-500/15 text-accent-500">
                           <User className="h-4 w-4" />
                         </div>
-                        <span className="font-bold text-white group-hover:text-accent-500">
-                          {l.full_name}
+                        <span className="min-w-0">
+                          <span className="block font-bold text-white group-hover:text-accent-500">
+                            {l.full_name}
+                          </span>
+                          {l.match_via ? (
+                            <span
+                              className="block text-[11px] text-amber-200"
+                              title="Cette fiche remonte parce qu'un de ses contacts (ou son courriel / téléphone) correspond à la recherche"
+                            >
+                              trouvé via {l.match_via}
+                            </span>
+                          ) : null}
                         </span>
                       </Link>
                     </td>
@@ -375,342 +390,6 @@ export default function LocatairesPage() {
         />
       ) : null}
     </>
-  );
-}
-
-function CreateLocataireModal({
-  onClose,
-  onSaved
-}: {
-  onClose: () => void;
-  /** Fiche retenue : celle qu'on vient de créer, ou l'existante
-   *  choisie dans l'alerte doublon (« Sélectionner »). */
-  onSaved: (locataireId: number) => void;
-}) {
-  // Formulaire COMPLET dès la création (retour Phil 2026-07-20 : « je
-  // veux pouvoir avoir toutes les infos dès la création »).
-  const [form, setForm] = useState({
-    full_name: "",
-    email: "",
-    phone: "",
-    employeur: "",
-    revenu_annuel: "",
-    date_naissance: "",
-    nas_last4: "",
-    notes: ""
-  });
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  // Alerte anti-doublon : on interroge le backend AVANT de créer. Elle
-  // est purement informative — « Créer quand même » passe outre (vrais
-  // homonymes, couple qui partage un courriel de ménage).
-  const [doublons, setDoublons] = useState<LocataireDoublon[] | null>(null);
-  const [verifDoublons, setVerifDoublons] = useState(false);
-
-  async function creer() {
-    setSaving(true);
-    setErr(null);
-    try {
-      const body: Record<string, unknown> = {
-        full_name: form.full_name.trim()
-      };
-      if (form.email.trim()) body.email = form.email.trim();
-      if (form.phone.trim()) body.phone = form.phone.trim();
-      if (form.employeur.trim()) body.employeur = form.employeur.trim();
-      if (form.revenu_annuel)
-        body.revenu_annuel = Number(form.revenu_annuel);
-      if (form.date_naissance) body.date_naissance = form.date_naissance;
-      if (form.nas_last4.trim()) body.nas_last4 = form.nas_last4.trim();
-      if (form.notes.trim()) body.notes = form.notes.trim();
-      const res = await authedFetch("/api/v1/immobilier/locataires", {
-        method: "POST",
-        body: JSON.stringify(body)
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
-      }
-      const created = (await res.json()) as { id: number };
-      onSaved(created.id);
-    } catch (e2) {
-      setErr((e2 as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    // Rien à comparer (ni courriel ni téléphone) → création directe.
-    const email = form.email.trim();
-    const phone = form.phone.trim();
-    if (!email && !phone) {
-      void creer();
-      return;
-    }
-    setVerifDoublons(true);
-    setErr(null);
-    try {
-      const p = new URLSearchParams();
-      if (email) p.set("email", email);
-      if (phone) p.set("phone", phone);
-      const r = await authedFetch(
-        `/api/v1/immobilier/locataires/doublons?${p.toString()}`
-      );
-      if (r.ok) {
-        const trouves = (await r.json()) as LocataireDoublon[];
-        if (trouves.length > 0) {
-          setDoublons(trouves);
-          return; // on montre l'alerte, on ne crée rien pour l'instant
-        }
-      }
-      // Détection en panne = on ne bloque pas la saisie du staff.
-    } catch {
-      // idem : l'alerte est un confort, pas un verrou.
-    } finally {
-      setVerifDoublons(false);
-    }
-    void creer();
-  }
-
-  function set<K extends keyof typeof form>(k: K, v: string) {
-    setForm({ ...form, [k]: v });
-    // Une correction du courriel/téléphone invalide l'alerte affichée.
-    if (k === "email" || k === "phone") setDoublons(null);
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
-      <div className="my-8 w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-accent-500">
-            Nouveau locataire
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn-ghost btn-xs"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <form onSubmit={submit} className="grid gap-4 p-5">
-          <div>
-            <label className="label">Nom complet</label>
-            <input
-              required
-              value={form.full_name}
-              onChange={(e) => set("full_name", e.target.value)}
-              className="input"
-            />
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <label className="label">Email</label>
-              <input
-                type="email"
-                value={form.email}
-                onChange={(e) => set("email", e.target.value)}
-                className="input"
-              />
-              {/* On ne BLOQUE pas : après l'achat d'un immeuble, on
-                  saisit des locataires déjà en place dont on n'a pas
-                  encore le courriel. Mais la conséquence doit être
-                  visible tout de suite — sans courriel, aucun avis, aucun
-                  relevé 31, aucune relance ne pourra partir vers cette
-                  personne (2026-08-19). */}
-              {!form.email.trim() ? (
-                <p className="mt-1 text-[11px] text-amber-300/80">
-                  Sans courriel, aucune communication ne pourra lui être
-                  envoyée — ni avis, ni relevé 31, ni relance.
-                </p>
-              ) : null}
-            </div>
-            <div>
-              <label className="label">Téléphone</label>
-              <input
-                value={form.phone}
-                onChange={(e) => set("phone", e.target.value)}
-                className="input font-mono"
-              />
-            </div>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <label className="label">Employeur</label>
-              <input
-                value={form.employeur}
-                onChange={(e) => set("employeur", e.target.value)}
-                className="input"
-              />
-            </div>
-            <div>
-              <label className="label">Revenu annuel (CAD)</label>
-              <input
-                type="number"
-                value={form.revenu_annuel}
-                onChange={(e) => set("revenu_annuel", e.target.value)}
-                className="input font-mono"
-                min={0}
-                step={1000}
-              />
-            </div>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <label className="label">Date de naissance</label>
-              <input
-                type="date"
-                value={form.date_naissance}
-                onChange={(e) => set("date_naissance", e.target.value)}
-                className="input"
-              />
-            </div>
-            <div>
-              <label className="label">NAS (4 derniers chiffres)</label>
-              <input
-                maxLength={4}
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={form.nas_last4}
-                onChange={(e) => set("nas_last4", e.target.value)}
-                className="input font-mono"
-              />
-            </div>
-          </div>
-          <div>
-            <label className="label">Notes</label>
-            <textarea
-              rows={3}
-              value={form.notes}
-              onChange={(e) => set("notes", e.target.value)}
-              placeholder="ex. références, particularités, animaux…"
-              className="input"
-            />
-          </div>
-
-          {err ? (
-            <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-              <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
-              {err}
-            </p>
-          ) : null}
-
-          {/* Alerte DOUBLON — même courriel ou même téléphone qu'une
-              fiche existante. Jamais bloquante : trois issues, dont
-              « Créer quand même ». */}
-          {doublons && doublons.length > 0 ? (
-            <div className="rounded-xl border border-amber-500/50 bg-amber-500/10 p-3">
-              <p className="flex items-start gap-2 text-xs font-semibold text-amber-200">
-                <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                <span>
-                  {doublons.length === 1
-                    ? "Cette personne existe déjà"
-                    : `${doublons.length} fiches existantes correspondent`}{" "}
-                  <span className="font-normal text-amber-200/80">
-                    — même coordonnée. Utilise la fiche existante plutôt
-                    que d&apos;en créer une deuxième.
-                  </span>
-                </span>
-              </p>
-              <ul className="mt-2 space-y-2">
-                {doublons.map((d) => (
-                  <li
-                    key={d.id}
-                    className="rounded-lg border border-brand-800 bg-brand-950 px-3 py-2"
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-bold text-white">
-                          {d.full_name}
-                        </p>
-                        <p className="text-[11px] text-white/60">
-                          {d.email || "pas de courriel"} ·{" "}
-                          <span className="font-mono">
-                            {d.phone || "pas de téléphone"}
-                          </span>
-                        </p>
-                        <p className="text-[11px] text-white/45">
-                          {d.logement_id
-                            ? `${d.immeuble_name || "Immeuble"} · ${
-                                d.logement_numero || ""
-                              }`
-                            : "Aucun bail actif"}{" "}
-                          <span className="text-amber-300/80">
-                            (même {d.motif})
-                          </span>
-                        </p>
-                      </div>
-                      <div className="flex flex-shrink-0 items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => onSaved(d.id)}
-                          className="btn-accent btn-xs inline-flex items-center gap-1"
-                          title="Utiliser cette fiche au lieu d'en créer une nouvelle"
-                        >
-                          <UserCheck className="h-3 w-3" />
-                          Sélectionner
-                        </button>
-                        <Link
-                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                          href={`/immobilier/locataires/${d.id}` as any}
-                          target="_blank"
-                          className="btn-secondary btn-xs inline-flex items-center gap-1"
-                          title="Ouvrir la fiche dans un nouvel onglet pour la modifier — le formulaire reste ouvert"
-                        >
-                          <ExternalLink className="h-3 w-3" />
-                          Ouvrir
-                        </Link>
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-
-          <div className="flex items-center justify-end gap-2 border-t border-brand-800 pt-4">
-            <button type="button" onClick={onClose} className="btn-secondary text-sm">
-              Annuler
-            </button>
-            {doublons && doublons.length > 0 ? (
-              // Le staff garde le dernier mot : l'alerte informe, elle
-              // n'interdit rien.
-              <button
-                type="button"
-                onClick={() => void creer()}
-                disabled={saving}
-                className="btn-accent inline-flex items-center text-sm disabled:opacity-60"
-              >
-                {saving ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Création…
-                  </>
-                ) : (
-                  "Créer quand même"
-                )}
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={saving || verifDoublons || !form.full_name.trim()}
-                className="btn-accent inline-flex items-center text-sm disabled:opacity-60"
-              >
-                {saving || verifDoublons ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {verifDoublons ? "Vérification…" : "Création…"}
-                  </>
-                ) : (
-                  "Créer"
-                )}
-              </button>
-            )}
-          </div>
-        </form>
-      </div>
-    </div>
   );
 }
 

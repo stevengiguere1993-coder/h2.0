@@ -36,6 +36,10 @@ import { useSearchParams } from "next/navigation";
 
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch, getToken } from "@/lib/auth";
+import {
+  ouvrirDossierTal,
+  TalPastille
+} from "@/components/immobilier/tal-garants";
 import { ImmobilierTopbar, useImmobilierLayout } from "../../layout";
 import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { ContratGestionTab } from "./contrat-gestion-tab";
@@ -48,10 +52,12 @@ import {
   LogementFiche
 } from "@/components/immobilier/logement-fiche";
 import { LocationsBoard } from "@/components/immobilier/locations-board";
+import { TransfertUniteButton } from "@/components/immobilier/transfert-unite";
 import {
   BailDocActions,
   ImmeubleDocumentsSection
 } from "@/components/immobilier/tal-avis";
+import { BoutonExport } from "@/components/immobilier/bouton-export";
 import {
   BadgeGestionExterne,
   CelluleLoyer,
@@ -819,6 +825,8 @@ export default function ImmeubleDetailPage({
               {gestionExterne ? (
                 <span className="badge badge-sky">Gestion externe</span>
               ) : null}
+              {/* Dossiers TAL en cours dans l'immeuble (point 5). */}
+              <TalPastille immeubleId={immeubleId} />
             </div>
           </div>
 
@@ -849,6 +857,50 @@ export default function ImmeubleDetailPage({
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-accent-500" />
               ) : null}
             </label>
+            {/* Exports de CET immeuble (immeuble_id préfixé) : tableaux
+                CSV/Excel + zip de tous ses documents. */}
+            <BoutonExport
+              cibles={[
+                {
+                  label: "Paiements (mois courant)",
+                  base: "/api/v1/immobilier/exports/paiements",
+                  sujet: "paiements",
+                  params: {
+                    mois: new Date().toISOString().slice(0, 7),
+                    immeuble_id: immeubleId
+                  }
+                },
+                {
+                  label: "Locataires",
+                  base: "/api/v1/immobilier/exports/locataires",
+                  sujet: "locataires",
+                  params: { immeuble_id: immeubleId }
+                },
+                {
+                  label: "Baux",
+                  base: "/api/v1/immobilier/exports/baux",
+                  sujet: "baux",
+                  params: { immeuble_id: immeubleId }
+                },
+                {
+                  label: "Logements",
+                  base: "/api/v1/immobilier/exports/logements",
+                  sujet: "logements",
+                  params: { immeuble_id: immeubleId }
+                },
+                {
+                  label: "Dépôts de garantie",
+                  base: "/api/v1/immobilier/exports/depots",
+                  sujet: "depots",
+                  params: { immeuble_id: immeubleId }
+                }
+              ]}
+              zip={{
+                path: `/api/v1/immobilier/immeubles/${immeubleId}/documents.zip?categorie=tout`,
+                sujet: `immeuble_${immeubleId}`
+              }}
+              variant="outline"
+            />
             <ActionsMenu
               onEdit={openEdit}
               onDelete={() => setShowDelete(true)}
@@ -998,7 +1050,10 @@ export default function ImmeubleDetailPage({
             />
           ) : null}
           {tab === "paiements" ? (
-            <PaiementsMoisSection immeubleId={immeubleId} />
+            <PaiementsMoisSection
+              immeubleId={immeubleId}
+              gestionExterne={gestionExterne}
+            />
           ) : null}
           {tab === "baux" ? (
             <BauxTab
@@ -2676,13 +2731,30 @@ function BauxTab({
                                 Annuler le départ
                               </button>
                             ) : (
-                              <button
-                                type="button"
-                                onClick={() => setFinBailFor(r)}
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-2.5 py-1 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20"
-                              >
-                                Mettre fin au bail
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => setFinBailFor(r)}
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-2.5 py-1 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20"
+                                >
+                                  Mettre fin au bail
+                                </button>
+                                {/* Transfert d'unité — miroir de la page Baux. */}
+                                <TransfertUniteButton
+                                  bailId={r.bail_id}
+                                  locataireNom={r.locataire_nom}
+                                  immeubleId={r.immeuble_id}
+                                  immeubleName={r.immeuble_name}
+                                  logementId={r.logement_id}
+                                  logementNumero={r.logement_numero}
+                                  loyerActuel={r.loyer_mensuel}
+                                  finActuelle={r.date_fin}
+                                  onDone={(msg) => {
+                                    setFlash(msg);
+                                    void load();
+                                  }}
+                                />
+                              </>
                             )}
                             <BailDocActions
                               bailId={r.bail_id}
@@ -2844,12 +2916,16 @@ type LoyerRow = {
   logement_statut?: string | null;
   /** Dossier ouvert au TAL sur ce bail (non-paiement). */
   tal_dossier_ouvert_le?: string | null;
+  /** Garants / contacts actifs + celui qui paie le loyer (point 8). */
+  garants?: string[];
+  payeur_nom?: string | null;
   /** Bail résilié/terminé en cours de mois : la ligne reste dans le
    *  mois couvert avec un badge « Bail terminé le X » (M7). */
   bail_statut?: string;
   bail_termine_le?: string | null;
   frais_mois?: { id: number; montant: number; libelle: string }[];
   solde_total?: number;
+  solde_anterieur?: boolean;
 };
 
 // Tri de la liste des paiements : retards en haut, partiels ensuite,
@@ -2862,7 +2938,15 @@ const ETAT_ORDRE: Record<string, number> = {
   vacant: 4
 };
 
-function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
+function PaiementsMoisSection({
+  immeubleId,
+  gestionExterne = false
+}: {
+  immeubleId: number;
+  /** Gestion externe : pas de recours TAL de notre côté (même garde
+   *  que la page Paiements). */
+  gestionExterne?: boolean;
+}) {
   const [rows, setRows] = useState<LoyerRow[] | null>(null);
   const [mois, setMois] = useState<string>(() => {
     const d = new Date();
@@ -3021,38 +3105,22 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
     }
   }
 
-  // Coche « dossier TAL ouvert » — même geste que la page Paiements.
-  async function toggleTal(row: LoyerRow) {
-    const ouvre = !row.tal_dossier_ouvert_le;
+  // « Ouvrir un dossier TAL » — même geste que la page Paiements : crée
+  // le dossier (non-paiement) ; le suivi (statut, pièces, fermeture) se
+  // fait dans la fiche du locataire (retour Phil 2026-09-09).
+  async function ouvrirTal(row: LoyerRow) {
     if (
-      !ouvre &&
       !window.confirm(
-        "Retirer le suivi « dossier TAL ouvert » sur ce bail ?"
+        "Ouvrir un dossier TAL (non-paiement) pour ce bail ? Il sera visible par toute l'équipe et se gère depuis la fiche du locataire."
       )
     )
       return;
     try {
-      const r = await authedFetch(
-        `/api/v1/immobilier/baux/${row.bail_id}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            tal_dossier_ouvert_le: ouvre
-              ? new Date().toISOString().slice(0, 10)
-              : null
-          })
-        }
-      );
-      if (!r.ok)
-        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
-      setInfo(
-        ouvre
-          ? "Dossier TAL marqué ouvert — visible par toute l'équipe."
-          : "Suivi TAL retiré."
-      );
+      await ouvrirDossierTal(row.bail_id);
+      setInfo("Dossier TAL ouvert — suivi dans la fiche du locataire.");
       await load();
     } catch (e) {
-      setErr(`Mise à jour TAL échouée : ${(e as Error).message}`);
+      setErr(`Ouverture du dossier TAL échouée : ${(e as Error).message}`);
     }
   }
 
@@ -3353,7 +3421,9 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                     {r.etat === "paye" ? (
                       <span className="badge badge-emerald">Payé</span>
                     ) : r.etat === "partiel" ? (
-                      <span className="badge badge-amber">Partiel</span>
+                      <span className="badge badge-amber">
+                        {r.solde_anterieur ? "Solde antérieur" : "Partiel"}
+                      </span>
                     ) : r.etat === "retard" ? (
                       <span className="badge badge-rose">Retard</span>
                     ) : r.etat === "vacant" ? (
@@ -3431,10 +3501,18 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                     {r.tal_dossier_ouvert_le ? (
                       <span
                         className="ml-2 inline-flex items-center gap-1 rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-violet-300"
-                        title={`Dossier ouvert au TAL le ${r.tal_dossier_ouvert_le} — décochable via le bouton TAL de la ligne`}
+                        title={`Dossier ouvert au TAL le ${r.tal_dossier_ouvert_le} — suivi dans la fiche du locataire`}
                       >
                         <Scale className="h-3 w-3" /> TAL ouvert
                       </span>
+                    ) : null}
+                    {r.payeur_nom ? (
+                      <p
+                        className="mt-0.5 text-[11px] text-emerald-300"
+                        title={`Le loyer est payé par ${r.payeur_nom} (garant / contact) — utile pour reconnaître le virement`}
+                      >
+                        paie : {r.payeur_nom}
+                      </p>
                     ) : null}
                   </td>
                   <td className="py-2 pr-3 font-mono text-xs">
@@ -3542,23 +3620,35 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                           )}
                           Relancer
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => void toggleTal(r)}
-                          title={
-                            r.tal_dossier_ouvert_le
-                              ? `Dossier TAL ouvert le ${r.tal_dossier_ouvert_le} — cliquer pour retirer le suivi`
-                              : "Marquer qu'un dossier de non-paiement est ouvert au TAL pour ce bail"
-                          }
-                          className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition ${
-                            r.tal_dossier_ouvert_le
-                              ? "border-violet-500/40 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20"
-                              : "border-white/15 bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/80"
-                          }`}
-                        >
-                          <Scale className="h-3 w-3" />
-                          {r.tal_dossier_ouvert_le ? "TAL ouvert" : "TAL"}
-                        </button>
+                        {/* Dossier TAL (point 5) : ouvrir = création ;
+                            ouvert = lien vers la fiche du locataire où
+                            il se suit. Pas de recours en gestion externe. */}
+                        {gestionExterne ? null : r.tal_dossier_ouvert_le &&
+                          r.locataire_id != null ? (
+                          <Link
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            href={
+                              `/immobilier/locataires/${r.locataire_id}` as any
+                            }
+                            title={`Dossier TAL ouvert le ${r.tal_dossier_ouvert_le} — ouvrir la fiche du locataire (suivi, pièces, fermeture)`}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/40 bg-violet-500/10 px-2.5 py-1 text-xs font-semibold text-violet-300 transition hover:bg-violet-500/20"
+                          >
+                            <Scale className="h-3 w-3" /> TAL ouvert
+                          </Link>
+                        ) : r.tal_dossier_ouvert_le ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/40 bg-violet-500/10 px-2.5 py-1 text-xs font-semibold text-violet-300">
+                            <Scale className="h-3 w-3" /> TAL ouvert
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => void ouvrirTal(r)}
+                            title="Ouvrir un dossier TAL (non-paiement) pour ce bail — visible par toute l'équipe"
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/50 transition hover:bg-white/10 hover:text-white/80"
+                          >
+                            <Scale className="h-3 w-3" /> Ouvrir un dossier TAL
+                          </button>
+                        )}
                         {(r.montant_paye ?? 0) > 0 ? (
                           correctingId === r.bail_id ? (
                             <CorrectionOptions
@@ -3604,23 +3694,35 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                             Corriger
                           </button>
                         )}
-                        <button
-                          type="button"
-                          onClick={() => void toggleTal(r)}
-                          title={
-                            r.tal_dossier_ouvert_le
-                              ? `Dossier TAL ouvert le ${r.tal_dossier_ouvert_le} — cliquer pour retirer le suivi`
-                              : "Marquer qu'un dossier de non-paiement est ouvert au TAL pour ce bail"
-                          }
-                          className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition ${
-                            r.tal_dossier_ouvert_le
-                              ? "border-violet-500/40 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20"
-                              : "border-white/15 bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/80"
-                          }`}
-                        >
-                          <Scale className="h-3 w-3" />
-                          {r.tal_dossier_ouvert_le ? "TAL ouvert" : "TAL"}
-                        </button>
+                        {/* Dossier TAL (point 5) : ouvrir = création ;
+                            ouvert = lien vers la fiche du locataire où
+                            il se suit. Pas de recours en gestion externe. */}
+                        {gestionExterne ? null : r.tal_dossier_ouvert_le &&
+                          r.locataire_id != null ? (
+                          <Link
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            href={
+                              `/immobilier/locataires/${r.locataire_id}` as any
+                            }
+                            title={`Dossier TAL ouvert le ${r.tal_dossier_ouvert_le} — ouvrir la fiche du locataire (suivi, pièces, fermeture)`}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/40 bg-violet-500/10 px-2.5 py-1 text-xs font-semibold text-violet-300 transition hover:bg-violet-500/20"
+                          >
+                            <Scale className="h-3 w-3" /> TAL ouvert
+                          </Link>
+                        ) : r.tal_dossier_ouvert_le ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/40 bg-violet-500/10 px-2.5 py-1 text-xs font-semibold text-violet-300">
+                            <Scale className="h-3 w-3" /> TAL ouvert
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => void ouvrirTal(r)}
+                            title="Ouvrir un dossier TAL (non-paiement) pour ce bail — visible par toute l'équipe"
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/50 transition hover:bg-white/10 hover:text-white/80"
+                          >
+                            <Scale className="h-3 w-3" /> Ouvrir un dossier TAL
+                          </button>
+                        )}
                       </span>
                     )}
                   </td>
@@ -5802,8 +5904,11 @@ type PaiementExtRow = {
   etat: "paye" | "partiel" | "retard" | "attente" | "aucun";
   montant: number | null;
   paye_le: string | null;
-  /** Manquant du MOIS (pas de solde cumulatif en gestion externe). */
+  /** Solde CUMULATIF dû sur l'unité (mois antérieurs compris). */
   solde_total: number;
+  solde_anterieur?: boolean;
+  /** Nom du locataire saisi sur le logement (facultatif). */
+  locataire_nom?: string | null;
 };
 
 type PaiementExtOverview = {
@@ -5841,7 +5946,11 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
     void load();
   }, [load]);
 
-  async function enregistrer(row: PaiementExtRow, montant: number) {
+  async function enregistrer(
+    row: PaiementExtRow,
+    montant: number,
+    cumul = false
+  ) {
     setBusyId(row.logement_id);
     try {
       const r = await authedFetch("/api/v1/immobilier/paiements-externes", {
@@ -5849,7 +5958,8 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
         body: JSON.stringify({
           logement_id: row.logement_id,
           mois,
-          montant
+          montant,
+          cumul
         })
       });
       if (!r.ok)
@@ -5862,10 +5972,32 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
     }
   }
 
-  // 1 clic = le restant du mois (attendu − cumul déjà reçu).
+  async function renommer(row: PaiementExtRow) {
+    const v = window.prompt(
+      `Nom du locataire pour le logement ${row.logement_numero} (vide = aucun)`,
+      row.locataire_nom ?? ""
+    );
+    if (v === null) return;
+    const r = await authedFetch(
+      `/api/v1/immobilier/logements/${row.logement_id}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ locataire_externe_nom: v.trim() || null })
+      }
+    );
+    if (!r.ok) setErr("Nom non enregistré.");
+    await load();
+  }
+
+  // 1 clic = tout ce qui est dû (restant du mois + mois antérieurs —
+  // solde cumulatif, retour Phil 2026-09-09).
   async function marquerPaye(row: PaiementExtRow) {
     let montant: number;
-    if (row.loyer_attendu != null) {
+    let cumul = false;
+    if (row.solde_total > 0) {
+      montant = row.solde_total;
+      cumul = true;
+    } else if (row.loyer_attendu != null) {
       montant =
         Math.round(
           (row.loyer_attendu - (row.montant ?? 0)) * 100
@@ -6056,7 +6188,9 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
                     {r.etat === "paye" ? (
                       <span className="badge badge-emerald">Payé</span>
                     ) : r.etat === "partiel" ? (
-                      <span className="badge badge-amber">Partiel</span>
+                      <span className="badge badge-amber">
+                        {r.solde_anterieur ? "Solde antérieur" : "Partiel"}
+                      </span>
                     ) : r.etat === "retard" ? (
                       <span className="badge badge-rose">Retard</span>
                     ) : r.etat === "attente" ? (
@@ -6070,7 +6204,18 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
                     )}
                   </td>
                   <td className="py-2 pr-3">
-                    <BadgeGestionExterne />
+                    <BadgeGestionExterne
+                      nom={r.locataire_nom}
+                      onRename={() => void renommer(r)}
+                    />
+                    {r.solde_anterieur ? (
+                      <span
+                        className="ml-1 badge badge-rose"
+                        title="Un mois antérieur reste dû sur cette unité"
+                      >
+                        Solde antérieur
+                      </span>
+                    ) : null}
                   </td>
                   <td className="py-2 pr-3 font-mono text-xs">
                     <Link

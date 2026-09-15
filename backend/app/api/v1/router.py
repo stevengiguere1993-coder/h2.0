@@ -61,6 +61,8 @@ from app.api.v1.endpoints import (
     immobilier,
     immobilier_communications,
     immobilier_documents,
+    immobilier_exports,
+    immobilier_tal_garants,
     immobilier_extras,
     immobilier_import_excel,
     immobilier_locations,
@@ -501,6 +503,10 @@ api_router.include_router(
 api_router.include_router(
     immobilier_documents.router, dependencies=DEP_IMMOBILIER
 )
+# Dossiers TAL + garants/contacts d'un locataire (2026-09-09).
+api_router.include_router(
+    immobilier_tal_garants.router, dependencies=DEP_IMMOBILIER
+)
 # Page Communications — envois courriel sans signature + audit.
 api_router.include_router(
     immobilier_communications.router, dependencies=DEP_IMMOBILIER
@@ -523,6 +529,11 @@ api_router.include_router(
 )
 api_router.include_router(
     immobilier_frais_gestion.router, dependencies=DEP_IMMOBILIER
+)
+# Exports CSV/Excel + zip de documents (/immobilier/exports/*,
+# /immobilier/<sujet>/{id}/documents.zip) — avant immobilier.router.
+api_router.include_router(
+    immobilier_exports.router, dependencies=DEP_IMMOBILIER
 )
 # Validation bancaire des loyers (QuickBooks lecture seule) — avant
 # immobilier.router (préfixe /immobilier/validation-bancaire).

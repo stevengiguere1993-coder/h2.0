@@ -32,10 +32,13 @@ type DepotRow = {
   locataire_id: number | null;
   locataire_name: string | null;
   montant: number;
-  statut: string; // "detenu" | "a_rendre" | "rendu" | "aucun"
+  statut: string; // "detenu" | "a_rendre" | "rendu" | "aucun" | "transfere"
   depot_recu_le: string | null;
   depot_detenteur: string | null;
   depot_rendu_le: string | null;
+  //: Transfert d'unité : le dépôt est parti vers / venu d'un autre logement.
+  transfere_vers_logement?: string | null;
+  transfere_depuis_logement?: string | null;
   date_debut: string;
   date_fin: string;
 };
@@ -58,13 +61,61 @@ function money(n: number | null | undefined): string {
   });
 }
 
+/** Date de réception + détenteur du dépôt, MODIFIABLES sur place
+ *  (retour Phil 2026-09-09 : « date inconnue » partout parce qu'aucun
+ *  formulaire ne les écrivait). */
+function DepotInfosCell({
+  row,
+  onSave
+}: {
+  row: { depot_recu_le?: string | null; depot_detenteur?: string | null; date_debut?: string | null };
+  onSave: (patch: { depot_recu_le?: string | null; depot_detenteur?: string | null }) => Promise<boolean>;
+}) {
+  const [date, setDate] = useState(row.depot_recu_le ?? "");
+  const [det, setDet] = useState(row.depot_detenteur ?? "");
+  useEffect(() => {
+    setDate(row.depot_recu_le ?? "");
+    setDet(row.depot_detenteur ?? "");
+  }, [row.depot_recu_le, row.depot_detenteur]);
+  return (
+    <div className="space-y-1">
+      <input
+        type="date"
+        value={date}
+        onChange={(e) => setDate(e.target.value)}
+        onBlur={() => {
+          if ((date || null) !== (row.depot_recu_le ?? null))
+            void onSave({ depot_recu_le: date || null });
+        }}
+        className="input w-36 py-0.5 text-xs"
+        title={
+          row.depot_recu_le
+            ? "Date de réception du dépôt"
+            : `Date à compléter${row.date_debut ? ` (bail débuté le ${row.date_debut})` : ""}`
+        }
+      />
+      <input
+        value={det}
+        onChange={(e) => setDet(e.target.value)}
+        onBlur={() => {
+          if ((det.trim() || null) !== (row.depot_detenteur ?? null))
+            void onSave({ depot_detenteur: det.trim() || null });
+        }}
+        placeholder="détenteur à préciser"
+        className="input w-36 py-0.5 text-[11px]"
+        title="Qui détient l'argent du dépôt"
+      />
+    </div>
+  );
+}
+
 export default function DepotsPage() {
   const { currentEntrepriseId } = useImmobilierLayout();
   const [data, setData] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statutFilter, setStatutFilter] = useState<
-    "all" | "detenu" | "a_rendre" | "aucun" | "rendu"
+    "all" | "detenu" | "a_rendre" | "aucun" | "rendu" | "transfere"
   >("all");
   const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
   const [actionErr, setActionErr] = useState<string | null>(null);
@@ -259,6 +310,11 @@ export default function DepotsPage() {
             onClick={() => setStatutFilter("aucun")}
           />
           <FilterPill
+            label="Transférés"
+            active={statutFilter === "transfere"}
+            onClick={() => setStatutFilter("transfere")}
+          />
+          <FilterPill
             label="Rendus"
             active={statutFilter === "rendu"}
             onClick={() => setStatutFilter("rendu")}
@@ -376,12 +432,14 @@ export default function DepotsPage() {
                         détail au moment de le rendre. */}
                     <td className="px-3 py-2.5 text-xs text-white/60">
                       {r.montant > 0 ? (
-                        <>
-                          {r.depot_recu_le || "date inconnue"}
-                          <span className="block text-[11px] text-white/40">
-                            {r.depot_detenteur || "détenteur non précisé"}
-                          </span>
-                        </>
+                        <DepotInfosCell
+                          row={r}
+                          onSave={async (patch) => {
+                            const ok = await patchBail(r.bail_id, patch);
+                            if (ok) void load();
+                            return ok;
+                          }}
+                        />
                       ) : (
                         <span className="text-white/25">—</span>
                       )}
@@ -397,8 +455,28 @@ export default function DepotsPage() {
                         <span className="badge border border-white/10 text-white/50">
                           À saisir
                         </span>
+                      ) : r.statut === "transfere" ? (
+                        <span
+                          className="badge badge-sky"
+                          title="Transfert d'unité : le dépôt a suivi le locataire sur son nouveau bail — rien à rendre"
+                        >
+                          Transféré
+                          {r.transfere_vers_logement
+                            ? ` → Log. ${r.transfere_vers_logement}`
+                            : ""}
+                        </span>
                       ) : (
-                        <span className="badge badge-violet">Détenu</span>
+                        <span className="badge badge-violet">
+                          Détenu
+                          {r.transfere_depuis_logement ? (
+                            <span
+                              className="ml-1 font-normal opacity-70"
+                              title="Reçu par transfert d'unité"
+                            >
+                              (du log. {r.transfere_depuis_logement})
+                            </span>
+                          ) : null}
+                        </span>
                       )}
                     </td>
                     <td className="px-3 py-2.5 text-right">

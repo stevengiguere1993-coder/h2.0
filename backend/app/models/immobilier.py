@@ -304,6 +304,21 @@ class Logement(Base, TimestampUpdateMixin):
         Numeric(10, 2), nullable=True
     )
 
+    # Gestion EXTERNE (retour Phil 2026-09-09) : nom du locataire,
+    # FACULTATIF, sans fiche ni bail — pour cocher « payé » avec le
+    # nom à côté quand le rapport mensuel du gestionnaire arrive.
+    # Effacé quand l'unité redevient vacante. Colonne additive.
+    locataire_externe_nom: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    #: Depuis quand ce locataire (externe) occupe l'unité — posé quand
+    #: le nom est saisi / l'unité passe « occupé », effacé au départ.
+    #: Les mois de vacance qui précèdent ne comptent pas comme impayés
+    #: (audit 2026-09-15 : dette fantôme héritée). Colonne additive.
+    locataire_externe_depuis: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
+    )
+
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
@@ -472,13 +487,16 @@ class ImmCommunication(Base):
 
 
 class LocationDossierStatut(str, Enum):
-    AVIS_RECU = "avis_recu"              # le locataire a confirmé son départ
-    ANNONCE_PUBLIEE = "annonce_publiee"  # l'annonce est en ligne
-    VISITES = "visites"                  # visites en cours
-    CANDIDAT_RETENU = "candidat_retenu"  # candidat choisi, bail à signer
-    BAIL_A_ENVOYER = "bail_a_envoyer"    # locataire créé — bail à faire (CORPIQ)
-    BAIL_ENVOYE = "bail_envoye"          # bail envoyé — attente de signature
-    RELOUE = "reloue"                    # nouveau bail signé
+    """Pipeline « Locations » SIMPLIFIÉ (retour Phil 2026-09-09) : quatre
+    étapes, plus d'annonces ni de candidats/visites/enquêtes dans Kratos
+    — ça se passe ailleurs. Les anciennes valeurs (visites,
+    candidat_retenu, bail_a_envoyer) sont traduites, cf.
+    ``services.locatif_depart.LOCATION_STATUTS_LEGACY``."""
+
+    AVIS_RECU = "avis_recu"              # « À louer » : départ confirmé / unité libre
+    ANNONCE_PUBLIEE = "annonce_publiee"  # « Affiché » : l'annonce est en ligne
+    BAIL_ENVOYE = "bail_envoye"          # « Bail en signature » : locataire lié
+    RELOUE = "reloue"                    # nouveau bail signé au dossier
     ANNULE = "annule"                    # départ annulé / logement retiré
 
 
@@ -534,7 +552,10 @@ class LocationDossier(Base, TimestampUpdateMixin):
 
 
 class LocationAnnonce(Base, TimestampUpdateMixin):
-    """Annonce publiée pour un dossier de relocation (suivi manuel)."""
+    """Annonce publiée pour un dossier de relocation (suivi manuel).
+
+    ⚠️ Plus exposée depuis la Location simplifiée (2026-09-09) : la
+    table reste pour les données existantes, aucun endpoint ne l'écrit."""
 
     __tablename__ = "imm_location_annonces"
 
@@ -553,7 +574,10 @@ class LocationAnnonce(Base, TimestampUpdateMixin):
 
 
 class LocationVisite(Base, TimestampUpdateMixin):
-    """Visite planifiée/faite avec un candidat pour un dossier."""
+    """Visite planifiée/faite avec un candidat pour un dossier.
+
+    ⚠️ Plus exposée depuis la Location simplifiée (2026-09-09) : la
+    table reste pour les données existantes, aucun endpoint ne l'écrit."""
 
     __tablename__ = "imm_location_visites"
 
@@ -658,6 +682,24 @@ class Bail(Base, TimestampUpdateMixin):
     # Date de REMISE du dépôt au locataire (bail terminé → dépôt rendu).
     # NULL = toujours détenu (ou à rendre si le bail est terminé/résilié).
     depot_rendu_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    #: TRANSFERT D'UNITÉ (retour Phil 2026-09-09) : le dépôt de ce bail a
+    #: SUIVI le locataire sur son nouveau bail — il n'est ni « à rendre »
+    #: ni « rendu », il dort maintenant sur l'autre bail. Colonne
+    #: additive → ensure_critical_columns.
+    depot_transfere_vers_bail_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    #: TRANSFERT D'UNITÉ (audit 2026-09-15) : ce bail (le NOUVEAU) a été
+    #: créé par le transfert du bail ``transfere_depuis_bail_id`` ; la
+    #: fin que l'ancien bail avait AVANT le transfert est mémorisée pour
+    #: pouvoir annuler le transfert proprement. Colonnes additives →
+    #: ensure_critical_columns.
+    transfere_depuis_bail_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    transfert_ancienne_fin: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
+    )
 
     #: Bail AU MOIS (chambres, retour Phil 2026-07-28) : reconduction
     #: automatique au même prix — jamais dans le suivi des renouvellements
@@ -1243,6 +1285,15 @@ class ImmDocument(Base, TimestampUpdateMixin):
     drive_file_id: Mapped[Optional[str]] = mapped_column(
         String(128), nullable=True
     )
+    #: Pièce rattachée à un dossier TAL (mise en demeure, avis
+    #: d'audience, décision…) — PAS de second stockage : le document
+    #: vit ici, le dossier ne fait que pointer dessus (retour Phil
+    #: 2026-09-09, point 5). Colonne additive nullable → ajoutée au
+    #: démarrage par schema_check.
+    tal_dossier_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("imm_tal_dossiers.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
 
 
 class Releve31(Base, TimestampUpdateMixin):
@@ -1509,5 +1560,128 @@ class ImmDocTemplate(Base, TimestampUpdateMixin):
     )
     pdf_blob = deferred(mapped_column(LargeBinary, nullable=False))
     uploaded_by_email: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True
+    )
+
+
+# ─── Dossier TAL (point 5, retour Phil 2026-09-09) ──────────────────────
+
+#: Motifs de recours au Tribunal administratif du logement — volontairement
+#: courts, pas de champs juridiques (Phil : « rien de compliqué »).
+TAL_MOTIFS: tuple[str, ...] = (
+    "non_paiement",
+    "retards",
+    "reprise",
+    "travaux",
+    "non_reconduction",
+    "troubles",
+    "autre",
+)
+
+#: Statuts d'un dossier. Tout ce qui n'est pas « ferme » compte comme un
+#: dossier EN COURS (pastilles, miroir ``Bail.tal_dossier_ouvert_le``).
+TAL_STATUTS: tuple[str, ...] = (
+    "a_ouvrir",
+    "ouvert",
+    "audience",
+    "decision",
+    "ferme",
+)
+TAL_STATUT_FERME = "ferme"
+
+
+class ImmTalDossier(Base, TimestampUpdateMixin):
+    """Dossier ouvert au TAL pour un bail — le SUIVI simple de l'équipe.
+
+    Remplace la seule date ``Bail.tal_dossier_ouvert_le`` (qui reste en
+    MIROIR : posée/effacée par les endpoints de ce dossier, et
+    inversement le PATCH bail qui pose la date crée un dossier). Les
+    pièces (mise en demeure, décision…) sont des ``imm_documents``
+    rattachés par ``tal_dossier_id``. Nouvelle table →
+    ensure_immobilier_aux_tables.
+    """
+
+    __tablename__ = "imm_tal_dossiers"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    bail_id: Mapped[int] = mapped_column(
+        ForeignKey("imm_baux.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    # Dénormalisés depuis le bail pour les filtres (fiche locataire,
+    # pastilles logement/immeuble) sans jointure.
+    locataire_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, index=True
+    )
+    logement_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, index=True
+    )
+    immeuble_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, index=True
+    )
+
+    motif: Mapped[str] = mapped_column(
+        String(32), nullable=False,
+        default="non_paiement", server_default="non_paiement",
+    )
+    statut: Mapped[str] = mapped_column(
+        String(24), nullable=False,
+        default="ouvert", server_default="ouvert", index=True,
+    )
+    numero_dossier: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    ouvert_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    audience_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    decision_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by_email: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True
+    )
+
+
+# ─── Garants & contacts d'un locataire (point 8, 2026-09-09) ────────────
+
+#: Rôles d'un contact : garant, colocataire, occupant, contact d'urgence.
+CONTACT_ROLES: tuple[str, ...] = ("garant", "colocataire", "occupant", "urgence")
+
+
+class ImmLocataireContact(Base, TimestampUpdateMixin):
+    """Personne liée à un locataire SANS fiche complète (garant,
+    colocataire, occupant, contact d'urgence).
+
+    Retour Phil 2026-09-09 : « un virement de Jacques alors que le
+    locataire est Sébastien : quand je cherche Jacques, je vois
+    Sébastien ». D'où ``paie_le_loyer`` (affiché sur la ligne Paiements)
+    et l'indexation du nom dans les recherches. Nouvelle table →
+    ensure_immobilier_aux_tables.
+    """
+
+    __tablename__ = "imm_locataire_contacts"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    locataire_id: Mapped[int] = mapped_column(
+        ForeignKey("imm_locataires.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    role: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="garant", server_default="garant"
+    )
+    full_name: Mapped[str] = mapped_column(
+        String(255), nullable=False, index=True
+    )
+    email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+    phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    #: Lien avec le locataire (« père », « conjointe », « colocataire »…).
+    relation: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    #: C'est LUI qui paie le loyer (virements à son nom).
+    paie_le_loyer: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    actif: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    created_by_email: Mapped[Optional[str]] = mapped_column(
         String(256), nullable=True
     )

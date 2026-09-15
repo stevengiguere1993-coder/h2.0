@@ -53,6 +53,8 @@ export type LogementFicheData = {
    *  tacitement, échéance n'est pas départ. */
   libre_le?: string | null;
   notes?: string | null;
+  /** Gestion externe : nom du locataire (facultatif). */
+  locataire_externe_nom?: string | null;
 };
 
 export type LogementFicheBail = {
@@ -187,11 +189,16 @@ export function LogementFiche({
     setForm((f) => ({ ...f, [k]: v }));
   }
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  //: Création refusée pour doublon de numéro : le message du serveur
+  //: s'affiche et « Créer quand même » rejoue avec force=true.
+  const [doublon, setDoublon] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent | null, force = false) {
+    e?.preventDefault();
     if (!form.numero.trim()) return;
     setSaving(true);
     setErr(null);
+    setDoublon(null);
     try {
       const body: Record<string, unknown> = {
         numero: form.numero.trim(),
@@ -209,10 +216,22 @@ export function LogementFiche({
       let res: Response;
       if (isCreate) {
         if (immeubleId == null) throw new Error("immeubleId manquant.");
-        res = await authedFetch("/api/v1/immobilier/logements", {
-          method: "POST",
-          body: JSON.stringify({ ...body, immeuble_id: immeubleId })
-        });
+        res = await authedFetch(
+          `/api/v1/immobilier/logements${force ? "?force=true" : ""}`,
+          {
+            method: "POST",
+            body: JSON.stringify({ ...body, immeuble_id: immeubleId })
+          }
+        );
+        if (res.status === 409 && !force) {
+          const t = await res.json().catch(() => null);
+          setDoublon(
+            (t && (t.detail || t.message)) ||
+              "Un logement porte déjà ce numéro dans cet immeuble."
+          );
+          setSaving(false);
+          return;
+        }
       } else {
         res = await authedFetch(
           `/api/v1/immobilier/logements/${logement.id}`,
@@ -484,6 +503,20 @@ export function LogementFiche({
               <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
               {err}
             </p>
+          ) : null}
+          {doublon ? (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+              <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+              {doublon}
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void submit(null, true)}
+                className="ml-2 rounded-md border border-amber-400/60 bg-amber-500/20 px-2 py-0.5 text-[11px] font-semibold text-amber-100 hover:bg-amber-500/30 disabled:opacity-50"
+              >
+                Créer quand même
+              </button>
+            </div>
           ) : null}
 
           <div className="flex flex-wrap items-center justify-between gap-2 border-t border-brand-800 pt-4">

@@ -17,10 +17,12 @@ import {
 } from "react";
 import {
   Eye,
+  FileSignature,
   FileDown,
   Loader2,
   Mail,
   Pencil,
+  Plus,
   Trash2,
   Upload,
   X
@@ -28,7 +30,24 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { BoutonExportZip } from "@/components/immobilier/bouton-export";
+import {
+  docTypeLabel,
+  estDocTypeNormalise,
+  versFichiersAImporter,
+  type FichierAImporter
+} from "@/components/immobilier/doc-types";
+import {
+  FichiersAImporterListe,
+  importerEnSerie,
+  texteProgression,
+  type ImportResultat
+} from "@/components/immobilier/documents-a-importer";
 import { FinBailModal } from "@/components/immobilier/fin-bail";
+
+// Types normalisés (miroir du backend) — ré-exportés ici pour les pages
+// qui importent déjà tout de tal-avis.
+export { IMM_DOC_TYPES, docTypeLabel } from "@/components/immobilier/doc-types";
 
 export type BailDocument = {
   id: number;
@@ -50,81 +69,259 @@ export type BailDocument = {
   remplace_document_id?: number | null;
   /** false = simple communication (rappel, avis d'accès…). */
   signature_requise?: boolean;
+  /** Pièce d'un dossier TAL (2026-09-09). */
+  tal_dossier_id?: number | null;
 };
 
-/** Téléverse un document au dossier (bouton « Importer »). */
-export async function importDocument(opts: {
-  file: File;
-  type?: string;
-  titre?: string;
-  bailId?: number;
-  locataireId?: number;
-  logementId?: number;
-  immeubleId?: number;
-}): Promise<BailDocument> {
-  const fd = new FormData();
-  fd.append("file", opts.file);
-  fd.append("type", opts.type || "autre");
-  if (opts.titre) fd.append("titre", opts.titre);
-  if (opts.bailId != null) fd.append("bail_id", String(opts.bailId));
-  if (opts.locataireId != null)
-    fd.append("locataire_id", String(opts.locataireId));
-  if (opts.logementId != null)
-    fd.append("logement_id", String(opts.logementId));
-  if (opts.immeubleId != null)
-    fd.append("immeuble_id", String(opts.immeubleId));
-  const r = await authedFetch("/api/v1/immobilier/documents/import", {
-    method: "POST",
-    body: fd
-  });
-  const d = await r.json().catch(() => null);
-  if (!r.ok) {
-    throw new Error((d && (d.detail || d.message)) || `Erreur ${r.status}`);
-  }
-  return d as BailDocument;
-}
+// Appels d'API des documents (import, bail signé) — dans leur propre
+// module pour que fin-bail.tsx puisse les utiliser sans cycle d'import.
+import {
+  importDocument,
+  uploadBailDocument
+} from "@/components/immobilier/documents-api";
 
-/** Bouton « Importer » réutilisable (input fichier caché). */
+export { importDocument, uploadBailDocument };
+
+/**
+ * Bouton « Importer » réutilisable (input fichier caché).
+ *
+ * Mono-fichier par défaut (`onPick`) — compatible avec tous les usages
+ * existants. Avec `multiple`, plusieurs fichiers d'un coup : un
+ * mini-panneau liste les fichiers avec leur type (dès qu'il y en a plus
+ * d'un, ou toujours avec `avecType`) puis `onImport` est appelé fichier
+ * par fichier — progression « 2/4 », erreurs par fichier sans bloquer
+ * les autres (retour Phil 2026-09-09).
+ */
 export function ImportDocButton({
   label,
   onPick,
   busy,
-  title
+  title,
+  multiple = false,
+  avecType = false,
+  onImport,
+  onDone
 }: {
   label: string;
-  onPick: (file: File) => void;
+  /** Un seul fichier (usage historique). Sans `onImport`, c'est aussi
+   *  le repli fichier par fichier quand `multiple` est actif. */
+  onPick?: (file: File) => void;
   busy?: boolean;
   /** Infobulle : à quoi sert vraiment cet import. */
   title?: string;
+  /** Plusieurs fichiers à la fois (panneau types + progression). */
+  multiple?: boolean;
+  /** Toujours demander le type, même pour un seul fichier. */
+  avecType?: boolean;
+  /** Import d'UN fichier avec son type — appelé en série. */
+  onImport?: (file: File, type: string) => Promise<unknown>;
+  /** Après la série, dès qu'au moins un import a réussi. */
+  onDone?: () => void;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [fichiers, setFichiers] = useState<FichierAImporter[]>([]);
+  const [panneau, setPanneau] = useState(false);
+  const [progression, setProgression] = useState<{
+    fait: number;
+    total: number;
+  } | null>(null);
+  const [resultats, setResultats] = useState<ImportResultat[] | null>(null);
+  const enCours =
+    progression != null && progression.fait < progression.total;
+  const echecs = (resultats || []).filter((r) => r.erreur);
+
+  function fermer() {
+    if (enCours) return;
+    setPanneau(false);
+    setFichiers([]);
+    setResultats(null);
+    setProgression(null);
+  }
+
+  async function lancer(liste: FichierAImporter[]) {
+    if (liste.length === 0 || !onImport) return;
+    setFichiers(liste);
+    setResultats(null);
+    const res = await importerEnSerie(
+      liste,
+      (f) => onImport(f.file, f.type),
+      (fait, total) => setProgression({ fait, total })
+    );
+    setResultats(res);
+    const ok = res.filter((r) => !r.erreur).length;
+    if (ok > 0) onDone?.();
+    if (ok === res.length) {
+      // Tout est passé : rien à montrer, on referme.
+      setPanneau(false);
+      setFichiers([]);
+      setResultats(null);
+      setProgression(null);
+    }
+  }
+
+  function choisir(list: FileList | null) {
+    const files = list ? Array.from(list) : [];
+    if (files.length === 0) return;
+    // Dans les sections Documents on ne présume pas « bail » : c'est
+    // une pièce au dossier, le gestionnaire choisit le type.
+    const entrees = versFichiersAImporter(files).map((f) => ({
+      ...f,
+      type: "autre"
+    }));
+    if (panneau) {
+      // « Ajouter d'autres fichiers » depuis le panneau ouvert.
+      setFichiers((prev) => [...prev, ...entrees]);
+      return;
+    }
+    if (files.length === 1 && !avecType) {
+      // Usage historique : un fichier, pas de type à choisir.
+      if (onPick) {
+        onPick(files[0]);
+        return;
+      }
+      if (onImport) {
+        void lancer(entrees);
+        return;
+      }
+    }
+    if (!onImport) {
+      // Pas de boucle typée fournie : chaque fichier passe par onPick.
+      if (onPick) files.forEach((f) => onPick(f));
+      return;
+    }
+    setFichiers(entrees);
+    setResultats(null);
+    setProgression(null);
+    setPanneau(true);
+  }
+
+  const occupe = Boolean(busy) || enCours;
   return (
     <>
       <input
         ref={inputRef}
         type="file"
+        multiple={multiple}
         accept="application/pdf,image/jpeg,image/png"
         className="hidden"
         onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) onPick(f);
+          choisir(e.target.files);
           e.target.value = "";
         }}
       />
       <button
         type="button"
         className="btn-secondary btn-xs"
-        disabled={busy}
+        disabled={occupe}
         title={title}
         onClick={() => inputRef.current?.click()}
       >
-        {busy ? (
+        {occupe ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
         ) : (
           <Upload className="h-3.5 w-3.5" />
         )}
         {label}
+        {enCours ? (
+          <span className="ml-1 text-[10px] text-white/60">
+            {texteProgression(progression)}
+          </span>
+        ) : null}
       </button>
+      {panneau ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={fermer}
+        >
+          <div
+            className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl border border-brand-800 bg-brand-900 p-4 shadow-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-white">
+                  Importer {fichiers.length} document
+                  {fichiers.length > 1 ? "s" : ""}
+                </h3>
+                <p className="mt-0.5 text-[11px] text-white/50">
+                  Choisis le type de chaque pièce. Un « Bail » déposé ici
+                  est une pièce au dossier — pour LE bail signé qui active
+                  le bail, utilise « Joindre le bail signé ».
+                </p>
+              </div>
+              <button
+                type="button"
+                className="rounded-lg p-1.5 text-white/40 hover:text-white disabled:opacity-40"
+                onClick={fermer}
+                disabled={enCours}
+                title="Fermer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <FichiersAImporterListe
+              fichiers={fichiers}
+              onChange={setFichiers}
+              disabled={enCours}
+              resultats={resultats}
+            />
+            {fichiers.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-brand-700 px-3 py-2 text-xs text-white/40">
+                Aucun fichier.
+              </p>
+            ) : null}
+            <button
+              type="button"
+              className="mt-2 inline-flex items-center gap-1 text-xs text-accent-500 hover:underline disabled:opacity-40"
+              disabled={enCours}
+              onClick={() => inputRef.current?.click()}
+            >
+              <Plus className="h-3 w-3" /> Ajouter d&apos;autres fichiers
+            </button>
+            <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+              {enCours ? (
+                <span className="mr-auto inline-flex items-center gap-1 text-xs text-white/60">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Import {texteProgression(progression)}
+                </span>
+              ) : echecs.length > 0 ? (
+                <span className="mr-auto text-xs text-rose-300">
+                  {echecs.length} fichier{echecs.length > 1 ? "s" : ""} en
+                  échec — les autres sont déposés.
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                onClick={fermer}
+                disabled={enCours}
+              >
+                {resultats ? "Fermer" : "Annuler"}
+              </button>
+              {echecs.length > 0 ? (
+                <button
+                  type="button"
+                  className="btn-accent btn-sm"
+                  disabled={enCours}
+                  onClick={() => void lancer(echecs.map((r) => r.fichier))}
+                >
+                  Réessayer les échecs
+                </button>
+              ) : !resultats ? (
+                <button
+                  type="button"
+                  className="btn-accent btn-sm"
+                  disabled={enCours || fichiers.length === 0}
+                  onClick={() => void lancer(fichiers)}
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  Importer {fichiers.length > 1 ? fichiers.length : ""}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
@@ -1048,16 +1245,53 @@ function fmtDateTime(iso: string | null): string {
 export function DocsList({
   docs,
   onChanged,
-  emptyText
+  emptyText,
+  rattacherA = []
 }: {
   docs: BailDocument[];
   onChanged: () => void;
   emptyText?: string;
+  /** Baux qui attendent leur bail signé : un PDF « Bail » déposé sans
+   *  bail (à la création du locataire) peut y être rattaché sans le
+   *  re-téléverser (audit 2026-09-15). */
+  rattacherA?: { id: number; label: string }[];
 }) {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [editDoc, setEditDoc] = useState<BailDocument | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
+
+  async function rattacher(d: BailDocument, bailId: number, label: string) {
+    if (
+      !window.confirm(
+        `Utiliser « ${d.titre} » comme LE bail signé${
+          rattacherA.length > 1 ? ` de ${label}` : ""
+        } ? Le bail devient actif et le logement est considéré loué.`
+      )
+    )
+      return;
+    setBusyId(d.id);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${bailId}/document/rattacher`,
+        { method: "POST", body: JSON.stringify({ document_id: d.id }) }
+      );
+      if (!r.ok) {
+        const t = await r.json().catch(() => null);
+        throw new Error(
+          (t && (t.detail || t.message)) || `Erreur ${r.status}`
+        );
+      }
+      setFlash("Bail signé au dossier — le bail est actif.");
+      window.dispatchEvent(new Event(DOCS_EVENT));
+      onChanged();
+    } catch (e) {
+      setErr(`Rattachement échoué : ${(e as Error).message}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   async function voir(d: BailDocument) {
     setBusyId(d.id);
@@ -1171,6 +1405,14 @@ export function DocsList({
                     <span className="text-sm font-medium text-white">
                       {d.titre}
                     </span>
+                    {d.tal_dossier_id != null ? (
+                      <span
+                        className="ml-2 rounded bg-violet-500/15 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-violet-300"
+                        title="Pièce d'un dossier TAL — se gère dans la section « Dossier TAL » de la fiche locataire"
+                      >
+                        TAL
+                      </span>
+                    ) : null}
                     {d.source === "importe" ? (
                       <span className="ml-2 rounded bg-sky-500/15 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-sky-300">
                         importé
@@ -1200,6 +1442,9 @@ export function DocsList({
                         </span>
                       ) : d.source === "importe" ? (
                         <span className="text-white/40">
+                          {d.type !== "autre" && estDocTypeNormalise(d.type)
+                            ? `${docTypeLabel(d.type)} · `
+                            : ""}
                           {d.filename || "Fichier déposé au dossier"}
                         </span>
                       ) : (
@@ -1252,6 +1497,24 @@ export function DocsList({
                         {d.envoye_le ? "Renvoyer" : "Envoyer"}
                       </button>
                     ) : null}
+                    {d.source === "importe" &&
+                    d.type === "bail" &&
+                    d.bail_id == null
+                      ? rattacherA.map((b) => (
+                          <button
+                            key={b.id}
+                            type="button"
+                            onClick={() => void rattacher(d, b.id, b.label)}
+                            disabled={busyId === d.id}
+                            className="btn-accent btn-xs"
+                            title="Ce PDF devient LE bail signé du bail (sans le re-téléverser)"
+                          >
+                            <FileSignature className="h-3 w-3" />
+                            Utiliser comme bail signé
+                            {rattacherA.length > 1 ? ` · ${b.label}` : ""}
+                          </button>
+                        ))
+                      : null}
                     {!d.signed_at ? (
                       <button
                         type="button"
@@ -1293,12 +1556,23 @@ export function DocumentsSection({
 }: {
   locataireId?: number;
   logementId?: number;
-  /** Baux depuis lesquels générer un document (libellé affiché si >1). */
-  bails: { id: number; label: string }[];
+  /** Baux depuis lesquels générer un document (libellé affiché si >1).
+   *  `status`/`document_id` (facultatifs) servent à proposer « Utiliser
+   *  comme bail signé » sur un PDF « Bail » déposé sans bail. */
+  bails: {
+    id: number;
+    label: string;
+    status?: string | null;
+    document_id?: number | null;
+  }[];
 }) {
+  const rattacherA = bails.filter(
+    (b) =>
+      b.status === "propose" ||
+      (b.status === "actif" && b.document_id == null)
+  );
   const [docs, setDocs] = useState<BailDocument[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [importing, setImporting] = useState(false);
 
   const load = useCallback(async () => {
     // categorie=dossier : uniquement les pièces SIGNÉES ou IMPORTÉES —
@@ -1317,24 +1591,12 @@ export function DocumentsSection({
     }
   }, [locataireId, logementId]);
 
-  const doImport = useCallback(
-    async (file: File) => {
-      setImporting(true);
-      setErr(null);
-      try {
-        await importDocument({
-          file,
-          locataireId,
-          logementId
-        });
-        await load();
-      } catch (e) {
-        setErr(`Import : ${(e as Error).message}`);
-      } finally {
-        setImporting(false);
-      }
-    },
-    [locataireId, logementId, load]
+  // Plusieurs pièces d'un coup, un type par fichier (retour Phil
+  // 2026-09-09) — chaque fichier passe par /documents/import.
+  const importerUn = useCallback(
+    (file: File, type: string) =>
+      importDocument({ file, type, locataireId, logementId }),
+    [locataireId, logementId]
   );
 
   useEffect(() => {
@@ -1357,9 +1619,29 @@ export function DocumentsSection({
         <span className="ml-auto flex flex-wrap items-center gap-2">
           <ImportDocButton
             label="Importer"
-            busy={importing}
-            onPick={(f) => void doImport(f)}
+            multiple
+            avecType
+            onImport={importerUn}
+            onDone={() => void load()}
+            title="Déposer une ou plusieurs pièces au dossier (un type par fichier)"
           />
+          {/* Zip de ce qui est listé ici (pièces du DOSSIER : signées ou
+              importées) + index.csv. */}
+          {docs && docs.length > 0 ? (
+            <BoutonExportZip
+              path={
+                locataireId != null
+                  ? `/api/v1/immobilier/locataires/${locataireId}/documents.zip?categorie=dossier`
+                  : `/api/v1/immobilier/logements/${logementId}/documents.zip?categorie=dossier`
+              }
+              sujet={
+                locataireId != null
+                  ? `locataire_${locataireId}`
+                  : `logement_${logementId}`
+              }
+              onError={(msg) => setErr(`Export : ${msg}`)}
+            />
+          ) : null}
           {bails.map((b) => (
             <span key={b.id} className="inline-flex items-center gap-1.5">
               {bails.length > 1 ? (
@@ -1414,6 +1696,7 @@ export function DocumentsSection({
         <DocsList
           docs={docs}
           onChanged={() => void load()}
+          rattacherA={rattacherA}
           emptyText="Aucun document au dossier — importe un fichier (bouton « Importer ») ou génère un avis avec « Générer ▾ ». Les documents signés en ligne arrivent ici automatiquement."
         />
       )}
@@ -1764,23 +2047,15 @@ export function BailDocActions({
     setBusy(true);
     setErr(null);
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      if (date) fd.append("date_entree", date);
       // « Au mois » demandé au même moment que la date (retour Phil
       // 2026-07-28) — coché seulement, on n'écrase pas un réglage
       // existant quand la case reste vide.
-      if (auMois) fd.append("au_mois", "true");
-      const r = await authedFetch(
-        `/api/v1/immobilier/baux/${bailId}/document`,
-        { method: "POST", body: fd }
-      );
-      const d = await r.json().catch(() => null);
-      if (!r.ok) {
-        throw new Error(
-          (d && (d.detail || d.message)) || `HTTP ${r.status}`
-        );
-      }
+      await uploadBailDocument({
+        bailId,
+        file,
+        dateEntree: date || undefined,
+        auMois
+      });
       notifyDocumentsChanged(bailId);
       onChanged?.();
       // C'est ICI que Phil voulait le consentement : « faudrait que ce

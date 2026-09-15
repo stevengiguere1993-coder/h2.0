@@ -26,6 +26,11 @@ import { BandeauBailManquant } from "@/components/immobilier/bandeau-bail-manqua
 import { BandeauDepotARembourser } from "@/components/immobilier/bandeau-depot";
 import { echeanceLabel } from "@/components/immobilier/fin-bail";
 import {
+  normaliserTexte,
+  ouvrirDossierTal
+} from "@/components/immobilier/tal-garants";
+import { BoutonExport } from "@/components/immobilier/bouton-export";
+import {
   BadgeGestionExterne,
   CelluleLoyer,
   CorrectionOptions,
@@ -84,6 +89,10 @@ type Row = {
   /** Dossier ouvert au TAL sur ce bail (non-paiement) — badge + coche
    *  pour que l'équipe voie que le recours est lancé. */
   tal_dossier_ouvert_le?: string | null;
+  /** Garants / contacts actifs du locataire (cherchables) et celui qui
+   *  PAIE le loyer — « paie : Jacques Roy » sous le nom (point 8). */
+  garants?: string[];
+  payeur_nom?: string | null;
   //: Mois affiché payé, mais un mois antérieur du bail impayé.
   solde_anterieur?: boolean;
   /** Bail résilié/terminé en cours de mois : la ligne reste dans le
@@ -118,6 +127,8 @@ type RowExterne = {
   paye_le: string | null;
   etat: string;
   solde_total: number;
+  solde_anterieur?: boolean;
+  locataire_nom?: string | null;
 };
 
 type OverviewExterne = {
@@ -152,9 +163,10 @@ function externeToRow(x: RowExterne): Row {
     logement_id: x.logement_id,
     logement_numero: x.logement_numero,
     locataire_id: null,
-    locataire_name: null,
+    // Nom facultatif saisi sur le logement (2026-09-09) — repère pour
+    // le rapport mensuel, jamais de courriel (pas de relance).
+    locataire_name: x.locataire_nom ?? null,
     locataire_phone: null,
-    // Gestion externe : aucun locataire chez nous, donc aucun courriel.
     locataire_email: null,
     libre_le: null,
     loyer_mensuel: x.loyer_mensuel,
@@ -165,6 +177,7 @@ function externeToRow(x: RowExterne): Row {
     etat: x.etat,
     frais_mois: [],
     solde_total: x.solde_total,
+    solde_anterieur: x.solde_anterieur ?? false,
     nb_relances: 0,
     derniere_relance_le: null,
     gestion_externe: true
@@ -186,8 +199,8 @@ type Overview = {
 };
 
 const RELOC_LABEL: Record<string, string> = {
-  bail_a_envoyer: "bail à envoyer",
-  bail_envoye: "bail envoyé — à signer",
+  bail_a_envoyer: "bail en signature",
+  bail_envoye: "bail en signature",
   a_venir: "à venir"
 };
 
@@ -387,37 +400,22 @@ export default function PaiementsPage() {
     }
   }
 
-  async function toggleTal(row: Row) {
-    const ouvre = !row.tal_dossier_ouvert_le;
+  // « Ouvrir un dossier TAL » (point 5, 2026-09-09) : crée le dossier
+  // (non-paiement) — le suivi (statut, pièces, fermeture) se fait dans
+  // la fiche du locataire, où le bouton « TAL ouvert » mène.
+  async function ouvrirTal(row: Row) {
     if (
-      !ouvre &&
       !window.confirm(
-        "Retirer le suivi « dossier TAL ouvert » sur ce bail ?"
+        "Ouvrir un dossier TAL (non-paiement) pour ce bail ? Il sera visible par toute l'équipe et se gère depuis la fiche du locataire."
       )
     )
       return;
     try {
-      const r = await authedFetch(
-        `/api/v1/immobilier/baux/${row.bail_id}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            tal_dossier_ouvert_le: ouvre
-              ? new Date().toISOString().slice(0, 10)
-              : null
-          })
-        }
-      );
-      if (!r.ok)
-        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
-      flash(
-        ouvre
-          ? "Dossier TAL marqué ouvert — visible par toute l'équipe."
-          : "Suivi TAL retiré."
-      );
+      await ouvrirDossierTal(row.bail_id);
+      flash("Dossier TAL ouvert — suivi dans la fiche du locataire.");
       await load();
     } catch (e) {
-      setError(`Mise à jour TAL échouée : ${(e as Error).message}`);
+      setError(`Ouverture du dossier TAL échouée : ${(e as Error).message}`);
     }
   }
 
@@ -545,7 +543,11 @@ export default function PaiementsPage() {
   // ── Gestion externe : les mêmes gestes, sur le logement ────────────
   // Pas de bail ni de locataire chez nous : on coche ce que le rapport
   // du gestionnaire indique. Ni relance ni frais ponctuel ici.
-  async function enregistrerExterne(row: Row, montant: number) {
+  async function enregistrerExterne(
+    row: Row,
+    montant: number,
+    cumul = false
+  ) {
     if (row.logement_id == null) return;
     setPayingId(busyKey(row));
     try {
@@ -554,7 +556,10 @@ export default function PaiementsPage() {
         body: JSON.stringify({
           logement_id: row.logement_id,
           mois,
-          montant
+          montant,
+          // Solde cumulatif : ventilé sur les mois antérieurs impayés,
+          // le reste sur le mois courant (audit 2026-09-15).
+          cumul
         })
       });
       if (!r.ok)
@@ -571,12 +576,34 @@ export default function PaiementsPage() {
   }
 
   async function marquerPayeExterne(row: Row) {
+    // 1 clic = tout ce qui est dû (restant du mois + mois antérieurs —
+    // solde cumulatif, retour Phil 2026-09-09), sinon le loyer du mois.
     const restant =
       Math.round((row.loyer_mensuel - (row.montant_paye ?? 0)) * 100) / 100;
+    const solde = row.solde_total ?? 0;
     await enregistrerExterne(
       row,
-      restant > 0 ? restant : row.loyer_mensuel
+      solde > 0 ? solde : restant > 0 ? restant : row.loyer_mensuel,
+      solde > 0
     );
+  }
+
+  async function renommerExterne(row: Row) {
+    if (row.logement_id == null) return;
+    const v = window.prompt(
+      `Nom du locataire pour ${row.immeuble_name} · ${row.logement_numero} (vide = aucun)`,
+      row.locataire_name ?? ""
+    );
+    if (v === null) return;
+    const r = await authedFetch(
+      `/api/v1/immobilier/logements/${row.logement_id}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ locataire_externe_nom: v.trim() || null })
+      }
+    );
+    if (!r.ok) setError("Nom non enregistré.");
+    await load();
   }
 
   async function marquerPartielExterne(row: Row) {
@@ -684,7 +711,9 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
   // retards en haut, partiels ensuite, payés en bas (retour Steven).
   const filteredRows = useMemo(() => {
     if (!data) return [];
-    const q = search.trim().toLowerCase();
+    // Accents insensibles : « sebastien » trouve « Sébastien ».
+    const q = normaliserTexte(search.trim());
+    const qChiffres = q.replace(/\D/g, "");
     const ordre: Record<string, number> = {
       retard: 0,
       partiel: 1,
@@ -698,13 +727,25 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
         if (etatFilter !== "all" && r.etat !== etatFilter) return false;
         if (q) {
           // « gestion externe » est cherchable comme un nom de locataire :
-          // c'est ce que la ligne affiche à sa place.
-          const hay = `${r.locataire_name || ""} ${r.immeuble_name} ${
-            r.logement_numero || ""
-          }${r.gestion_externe ? " gestion externe" : ""}${
-            r.etat === "vacant" ? " vacant" : ""
-          }`.toLowerCase();
-          if (!hay.includes(q)) return false;
+          // c'est ce que la ligne affiche à sa place. Les garants /
+          // contacts, le courriel et le téléphone aussi (point 8 :
+          // « un virement de Jacques alors que le locataire est
+          // Sébastien »).
+          const hay = normaliserTexte(
+            `${r.locataire_name || ""} ${r.immeuble_name} ${
+              r.logement_numero || ""
+            } ${(r.garants || []).join(" ")} ${r.locataire_email || ""} ${
+              r.locataire_phone || ""
+            }${r.gestion_externe ? " gestion externe" : ""}${
+              r.etat === "vacant" ? " vacant" : ""
+            }`
+          );
+          const telChiffres = (r.locataire_phone || "").replace(/\D/g, "");
+          if (
+            !hay.includes(q) &&
+            !(qChiffres.length >= 3 && telChiffres.includes(qChiffres))
+          )
+            return false;
         }
         return true;
       })
@@ -771,6 +812,35 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                 <ChevronRight className="h-4 w-4" />
               </button>
             </div>
+            {/* Export CSV/Excel : le mois affiché (mêmes lignes, mêmes
+                états que le tableau, filtre immeuble compris) ou une
+                période du/au. */}
+            <BoutonExport
+              cibles={[
+                {
+                  label: `Mois affiché (${monthLabel(mois)})`,
+                  base: "/api/v1/immobilier/exports/paiements",
+                  sujet: `paiements_${mois}`,
+                  params: {
+                    mois,
+                    immeuble_id:
+                      immeubleFilter !== "all" ? immeubleFilter : undefined,
+                    entreprise_id: currentEntrepriseId ?? undefined
+                  }
+                }
+              ]}
+              periode={{
+                base: "/api/v1/immobilier/exports/paiements",
+                sujet: "paiements_periode",
+                du: shiftMonth(mois, -11),
+                au: mois,
+                params: {
+                  immeuble_id:
+                    immeubleFilter !== "all" ? immeubleFilter : undefined,
+                  entreprise_id: currentEntrepriseId ?? undefined
+                }
+              }}
+            />
           </div>
         </header>
 
@@ -859,7 +929,7 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Recherche locataire / immeuble…"
+              placeholder="Recherche locataire / garant / immeuble…"
               className="input w-full pl-9"
             />
           </div>
@@ -1030,7 +1100,10 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                             Aucun locataire
                           </span>
                         ) : r.gestion_externe ? (
-                          <BadgeGestionExterne />
+                          <BadgeGestionExterne
+                            nom={r.locataire_name}
+                            onRename={() => void renommerExterne(r)}
+                          />
                         ) : r.locataire_id != null ? (
                           <Link
                             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1060,13 +1133,19 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                               const [y, m, d] = r.libre_le
                                 .split("-")
                                 .map(Number);
+                              // Année affichée dès qu'elle diffère de
+                              // l'année courante (« 30 juin 2027 », pas
+                              // « 30 juin » — retour Phil 2026-09-09).
                               return new Date(
                                 y,
                                 (m || 1) - 1,
                                 d || 1
                               ).toLocaleDateString("fr-CA", {
                                 day: "numeric",
-                                month: "short"
+                                month: "short",
+                                ...(y !== new Date().getFullYear()
+                                  ? { year: "numeric" }
+                                  : {})
                               });
                             })()}
                           </span>
@@ -1086,10 +1165,21 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                         {r.tal_dossier_ouvert_le ? (
                           <span
                             className="ml-2 inline-flex items-center gap-1 rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-violet-300"
-                            title={`Dossier ouvert au TAL le ${r.tal_dossier_ouvert_le} — décochable via le bouton TAL de la ligne`}
+                            title={`Dossier ouvert au TAL le ${r.tal_dossier_ouvert_le} — suivi dans la fiche du locataire`}
                           >
                             <Scale className="h-3 w-3" /> TAL ouvert
                           </span>
+                        ) : null}
+                        {/* Qui paie vraiment le loyer (garant / contact
+                            coché « paie le loyer ») — pour reconnaître le
+                            virement d'un coup d'œil (point 8). */}
+                        {r.payeur_nom ? (
+                          <p
+                            className="mt-0.5 text-[11px] text-emerald-300"
+                            title={`Le loyer est payé par ${r.payeur_nom} (garant / contact)`}
+                          >
+                            paie : {r.payeur_nom}
+                          </p>
                         ) : null}
                       </td>
                       <td className="px-3 py-2.5 text-white/70">
@@ -1132,6 +1222,17 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                             {" — "}
                             {RELOC_LABEL[r.prochain_statut || ""] ||
                               "à venir"}
+                            {r.prochain_statut === "bail_envoye" &&
+                            r.prochain_debut &&
+                            r.prochain_debut <=
+                              new Date().toISOString().slice(0, 10) ? (
+                              <span
+                                className="ml-1 rounded bg-fuchsia-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-fuchsia-200"
+                                title="Le bail a commencé mais le PDF signé n'est pas encore joint : aucun loyer n'est suivi tant qu'il manque (transfert d'unité, bail préparé en retard)"
+                              >
+                                locataire en place — bail signé à joindre
+                              </span>
+                            ) : null}
                           </div>
                         ) : null}
                       </td>
@@ -1374,27 +1475,32 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                                 responsable des paiements — DANS le
                                 groupe pour rester sur une seule ligne
                                 (retour Phil 2026-09-01). */}
-                            {!r.gestion_externe ? (
+                            {r.gestion_externe ? null : r.tal_dossier_ouvert_le &&
+                              r.locataire_id != null ? (
+                              <Link
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                href={
+                                  `/immobilier/locataires/${r.locataire_id}` as any
+                                }
+                                title={`Dossier TAL ouvert le ${r.tal_dossier_ouvert_le} — ouvrir la fiche du locataire (suivi, pièces, fermeture)`}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/40 bg-violet-500/10 px-2.5 py-1 text-xs font-semibold text-violet-300 transition hover:bg-violet-500/20"
+                              >
+                                <Scale className="h-3 w-3" /> TAL ouvert
+                              </Link>
+                            ) : r.tal_dossier_ouvert_le ? (
+                              <span className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/40 bg-violet-500/10 px-2.5 py-1 text-xs font-semibold text-violet-300">
+                                <Scale className="h-3 w-3" /> TAL ouvert
+                              </span>
+                            ) : (
                               <button
                                 type="button"
-                                onClick={() => void toggleTal(r)}
-                                title={
-                                  r.tal_dossier_ouvert_le
-                                    ? `Dossier TAL ouvert le ${r.tal_dossier_ouvert_le} — cliquer pour retirer le suivi`
-                                    : "Marquer qu'un dossier de non-paiement est ouvert au TAL pour ce bail"
-                                }
-                                className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition ${
-                                  r.tal_dossier_ouvert_le
-                                    ? "border-violet-500/40 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20"
-                                    : "border-white/15 bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/80"
-                                }`}
+                                onClick={() => void ouvrirTal(r)}
+                                title="Ouvrir un dossier TAL (non-paiement) pour ce bail — visible par toute l'équipe"
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/50 transition hover:bg-white/10 hover:text-white/80"
                               >
-                                <Scale className="h-3 w-3" />
-                                {r.tal_dossier_ouvert_le
-                                  ? "TAL ouvert"
-                                  : "TAL"}
+                                <Scale className="h-3 w-3" /> Ouvrir un dossier TAL
                               </button>
-                            ) : null}
+                            )}
                             </div>
                             {/* Page PAIEMENTS pure (split v15) : les
                                 avis et le bail vivent sur la page
@@ -1430,8 +1536,8 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
           payé » enregistre le restant du mois en 1 clic ; « Partiel » saisit
           un montant précis ; « ± Frais/crédit » ajoute un frais ponctuel
           (ex. 20 $ de retard) ou un crédit (montant négatif) qui réduit le
-          loyer dû. « TAL » marque qu&apos;un dossier de non-paiement est
-          ouvert au tribunal — visible par toute l&apos;équipe. Les lignes
+          loyer dû. « Ouvrir un dossier TAL » crée le dossier (non-paiement)
+          — son suivi et ses pièces vivent dans la fiche du locataire. Les lignes
           « Vacant » listent les logements sans bail ce mois-ci (loyer
           demandé à titre indicatif, exclu des totaux). La colonne
           « Loyer » empile le loyer du mois,

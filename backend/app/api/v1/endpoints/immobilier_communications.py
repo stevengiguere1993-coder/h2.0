@@ -122,6 +122,9 @@ class DestinataireOut(BaseModel):
     nom: str
     email: Optional[str] = None
     logement: Optional[str] = None
+    #: « actif » ou « propose » (bail en signature — on a justement
+    #: besoin de lui écrire pour le bail et le consentement).
+    bail_status: str = "actif"
     #: Dû du MOIS COURANT (loyer + frais − payé) — alimente le bouton
     #: « Retards du mois » de la page (retour Phil 2026-07-27).
     du_mois: float = 0.0
@@ -158,7 +161,9 @@ async def list_destinataires(
         .join(Logement, Logement.id == Bail.logement_id)
         .join(Immeuble, Immeuble.id == Logement.immeuble_id)
         .where(
-            Bail.status == BailStatus.ACTIF.value,
+            Bail.status.in_(
+                [BailStatus.ACTIF.value, BailStatus.PROPOSE.value]
+            ),
             Immeuble.is_active.is_(True),
         )
         .order_by(Immeuble.name.asc(), Logement.numero.asc())
@@ -182,6 +187,7 @@ async def list_destinataires(
                 nom=loc.full_name or f"Locataire {loc.id}",
                 email=(loc.email or "").strip() or None,
                 logement=lg.numero,
+                bail_status=bail.status,
                 du_mois=max(
                     0.0,
                     round(
@@ -321,6 +327,9 @@ class EnvoyerIn(BaseModel):
     type: str
     immeuble_ids: List[int] = []
     locataire_ids: List[int] = []
+    #: Baux cochés (audit 2026-09-15 : un locataire à deux baux recevait
+    #: le courriel du mauvais immeuble). Prioritaire sur locataire_ids.
+    bail_ids: List[int] = []
     #: Message libre : sujet + corps (variables {locataire} {adresse}
     #: {logement} {locateur} remplacées par destinataire).
     sujet: Optional[str] = Field(default=None, max_length=255)
@@ -359,6 +368,7 @@ async def _resoudre_destinataires(
     db,
     immeuble_ids: List[int],
     locataire_ids: List[int],
+    bail_ids: Optional[List[int]] = None,
 ) -> List[tuple]:
     """(bail, locataire, logement, immeuble) des baux ACTIFS visés —
     union immeubles ∪ locataires, dédupliquée par locataire.
@@ -367,28 +377,41 @@ async def _resoudre_destinataires(
     TOUJOURS exclue. Le filtre est appliqué ici AUSSI (et pas seulement
     dans le sélecteur) pour qu'un identifiant forgé dans la requête ne
     puisse pas viser un locataire hors mandat."""
-    if not immeuble_ids and not locataire_ids:
+    bail_ids = list(bail_ids or [])
+    if not immeuble_ids and not locataire_ids and not bail_ids:
         return []
     q = (
         select(Bail, Locataire, Logement, Immeuble)
         .join(Locataire, Locataire.id == Bail.locataire_id)
         .join(Logement, Logement.id == Bail.logement_id)
         .join(Immeuble, Immeuble.id == Logement.immeuble_id)
-        .where(Bail.status == BailStatus.ACTIF.value)
+        .where(
+            Bail.status.in_(
+                [BailStatus.ACTIF.value, BailStatus.PROPOSE.value]
+            )
+        )
         .order_by(Immeuble.name.asc(), Logement.numero.asc())
     )
     q = q.where(Immeuble.gestion_externe.isnot(True))
     rows = (await db.execute(q)).all()
-    vus: set[int] = set()
+    vus: set = set()
     out: List[tuple] = []
     imm_set = set(immeuble_ids)
     loc_set = set(locataire_ids)
+    bail_set = set(bail_ids)
     for bail, loc, lg, imm in rows:
-        if imm.id not in imm_set and loc.id not in loc_set:
+        if bail_set:
+            # Sélection par BAIL : exactement les lignes cochées.
+            if bail.id not in bail_set and imm.id not in imm_set:
+                continue
+            cle = (loc.id, bail.id)
+        else:
+            if imm.id not in imm_set and loc.id not in loc_set:
+                continue
+            cle = loc.id
+        if cle in vus:
             continue
-        if loc.id in vus:
-            continue
-        vus.add(loc.id)
+        vus.add(cle)
         out.append((bail, loc, lg, imm))
     return out
 
@@ -507,6 +530,7 @@ async def envoyer(
         db,
         payload.immeuble_ids,
         payload.locataire_ids,
+        payload.bail_ids,
     )
     if not cibles:
         raise HTTPException(

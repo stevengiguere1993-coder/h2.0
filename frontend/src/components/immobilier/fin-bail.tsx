@@ -12,10 +12,21 @@
  */
 
 import { useEffect, useState } from "react";
-import { FileSignature, Info, Loader2, X } from "lucide-react";
+import { FileSignature, Info, Loader2, UserPlus, X } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { ExpediteurResume } from "@/components/immobilier/apercu-envoi";
+import { CreateLocataireModal } from "@/components/immobilier/create-locataire-modal";
+import type { FichierAImporter } from "@/components/immobilier/doc-types";
+import {
+  DocumentsAImporterZone,
+  importerEnSerie,
+  type ImportResultat
+} from "@/components/immobilier/documents-a-importer";
+import {
+  importDocument,
+  uploadBailDocument
+} from "@/components/immobilier/documents-api";
 import { authedFetch } from "@/lib/auth";
 
 /** Ligne renvoyée par l'API `GET /api/v1/immobilier/suivi-baux` — une
@@ -66,25 +77,28 @@ export type SuiviBailRow = {
 
 // Mêmes étapes que le kanban Locations — même donnée, changer ici
 // change là-bas (et vice-versa).
+// Location SIMPLIFIÉE (2026-09-09) : quatre étapes. Les anciennes
+// valeurs (visites, candidat_retenu, bail_a_envoyer) sont traduites
+// côté serveur ; on garde un libellé de repli au cas où.
 export const KANBAN_STATUTS: Array<{ id: string; label: string }> = [
-  { id: "avis_recu", label: "Départ confirmé" },
-  { id: "annonce_publiee", label: "Annonce publiée" },
-  { id: "visites", label: "Visite prévue" },
-  { id: "candidat_retenu", label: "Candidat retenu" },
-  { id: "bail_a_envoyer", label: "Bail à envoyer" },
-  { id: "bail_envoye", label: "Bail envoyé — à signer" },
-  { id: "reloue", label: "Reloué" }
+  { id: "avis_recu", label: "À louer" },
+  { id: "annonce_publiee", label: "Affiché" },
+  { id: "bail_envoye", label: "Bail en signature" },
+  { id: "reloue", label: "Reloué" },
+  { id: "visites", label: "Affiché" },
+  { id: "candidat_retenu", label: "Affiché" },
+  { id: "bail_a_envoyer", label: "Bail en signature" }
 ];
 
 // Mêmes points de couleur que les colonnes du kanban Locations.
 const KANBAN_STATUT_DOT: Record<string, string> = {
   avis_recu: "bg-amber-400",
   annonce_publiee: "bg-sky-400",
-  visites: "bg-violet-400",
-  candidat_retenu: "bg-blue-400",
-  bail_a_envoyer: "bg-orange-400",
   bail_envoye: "bg-fuchsia-400",
-  reloue: "bg-emerald-400"
+  reloue: "bg-emerald-400",
+  visites: "bg-sky-400",
+  candidat_retenu: "bg-sky-400",
+  bail_a_envoyer: "bg-fuchsia-400"
 };
 
 /** Pastille LECTURE SEULE du statut de relocation + lien vers la
@@ -520,19 +534,31 @@ export function CreerBailModal({
   onDone: (statut: CreerBailStatut) => void;
 }) {
   const indefini = Boolean(logementEnChambres);
-  const [modeExistant, setModeExistant] = useState(true);
   const [dispo, setDispo] = useState<
     { id: number; full_name: string }[] | null
   >(null);
   const [q, setQ] = useState("");
   const [locId, setLocId] = useState<number | null>(null);
-  const [nom, setNom] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
+  //: « Nouveau locataire » = LA modale de création (même processus que
+  //: la page Locataires) — retour Phil 2026-09-15.
+  const [showCreate, setShowCreate] = useState(false);
+  const [nouveauId, setNouveauId] = useState<number | null>(null);
+  //: Documents déposés APRÈS la création du bail (« Bail » → bail signé
+  //: si le bail est créé actif ; pièce liée sinon).
+  const [fichiers, setFichiers] = useState<FichierAImporter[]>([]);
+  const [progression, setProgression] = useState<{
+    fait: number;
+    total: number;
+  } | null>(null);
+  const [resultatsImport, setResultatsImport] = useState<
+    ImportResultat[] | null
+  >(null);
   const [debut, setDebut] = useState("");
   const [fin, setFin] = useState("");
   const [loyer, setLoyer] = useState("");
   const [depot, setDepot] = useState("");
+  const [depotRecuLe, setDepotRecuLe] = useState("");
+  const [depotDetenteur, setDepotDetenteur] = useState("");
   // Bail TAL « Ou le ___ » : 1er du mois pour l'immense majorité.
   const [jourEcheance, setJourEcheance] = useState(JOUR_ECHEANCE_DEFAUT);
   // Statut de création UNIFIÉ (même défaut que la page Baux) : proposé
@@ -542,7 +568,7 @@ export function CreerBailModal({
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!modeExistant || dispo !== null) return;
+    if (dispo !== null) return;
     void (async () => {
       try {
         const res = await authedFetch("/api/v1/immobilier/locataires");
@@ -555,28 +581,13 @@ export function CreerBailModal({
         setDispo([]);
       }
     })();
-  }, [modeExistant, dispo]);
+  }, [dispo]);
 
   async function creer() {
     setBusy(true);
     setErr(null);
     try {
-      let locataireId = locId;
-      if (!modeExistant) {
-        const rl = await authedFetch("/api/v1/immobilier/locataires", {
-          method: "POST",
-          body: JSON.stringify({
-            full_name: nom.trim(),
-            email: email.trim() || null,
-            phone: phone.trim() || null
-          })
-        });
-        if (!rl.ok) {
-          const t = await rl.text();
-          throw new Error(t.slice(0, 240) || `HTTP ${rl.status}`);
-        }
-        locataireId = ((await rl.json()) as { id: number }).id;
-      }
+      const locataireId = locId;
       if (locataireId == null) throw new Error("Choisis un locataire.");
       const rb = await authedFetch("/api/v1/immobilier/baux", {
         method: "POST",
@@ -587,6 +598,8 @@ export function CreerBailModal({
           date_fin: fin,
           loyer_mensuel: Number(loyer),
           depot_garantie: depot.trim() ? Number(depot) : null,
+          depot_recu_le: depotRecuLe || null,
+          depot_detenteur: depotDetenteur.trim() || null,
           jour_echeance: jourEcheance,
           status: statut,
           // Le flag du logement fait foi (le serveur le réimpose de
@@ -597,6 +610,37 @@ export function CreerBailModal({
       if (!rb.ok) {
         const t = await rb.text();
         throw new Error(t.slice(0, 240) || `HTTP ${rb.status}`);
+      }
+      const bail = (await rb.json()) as { id: number };
+      if (fichiers.length > 0) {
+        const res = await importerEnSerie(
+          fichiers,
+          (f) =>
+            f.type === "bail" && statut === "actif"
+              ? uploadBailDocument({
+                  bailId: bail.id,
+                  file: f.file,
+                  dateEntree: debut
+                })
+              : importDocument({
+                  file: f.file,
+                  type: f.type,
+                  locataireId,
+                  bailId: bail.id
+                }),
+          (fait, total) => setProgression({ fait, total })
+        );
+        setResultatsImport(res);
+        const echecs = res.filter((r) => r.erreur).length;
+        if (echecs > 0) {
+          setErr(
+            `Le bail est créé, mais ${echecs} document${echecs > 1 ? "s" : ""} ` +
+              "n'ont pas pu être déposés — importe-les depuis la fiche du locataire."
+          );
+          setBusy(false);
+          window.setTimeout(() => onDone(statut), 2500);
+          return;
+        }
       }
       onDone(statut);
     } catch (e) {
@@ -626,7 +670,7 @@ export function CreerBailModal({
           <p className="text-xs text-white/60">
             {immeubleName || "Immeuble"} · Log. {logementNumero || "—"} —
             en « proposé », la carte apparaît au kanban Locations
-            (« Bail à envoyer ») : importe ensuite le PDF signé (CORPIQ)
+            (« Bail en signature ») : importe ensuite le PDF signé (CORPIQ)
             pour le rendre actif.
           </p>
           {indefini ? (
@@ -639,38 +683,42 @@ export function CreerBailModal({
               {LOUER_INDEFINIMENT_INFO}
             </LouerIndefinimentBulle>
           ) : null}
-          <div className="flex gap-1.5">
-            <button
-              type="button"
-              onClick={() => setModeExistant(true)}
-              className={`rounded-md border px-2.5 py-1 text-xs font-semibold ${
-                modeExistant
-                  ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
-                  : "border-brand-700 text-white/50 hover:bg-brand-900"
-              }`}
-            >
-              Locataire existant
-            </button>
-            <button
-              type="button"
-              onClick={() => setModeExistant(false)}
-              className={`rounded-md border px-2.5 py-1 text-xs font-semibold ${
-                !modeExistant
-                  ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
-                  : "border-brand-700 text-white/50 hover:bg-brand-900"
-              }`}
-            >
-              Nouveau locataire
-            </button>
-          </div>
-          {modeExistant ? (
-            <div className="grid gap-1.5">
+          <div className="grid gap-1.5">
+            <div className="flex items-center gap-2">
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="Rechercher le locataire…"
-                className={`${INPUT_CLS} w-full`}
+                className={`${INPUT_CLS} flex-1`}
               />
+              <button
+                type="button"
+                onClick={() => setShowCreate(true)}
+                className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/25"
+                title="Ouvre la fiche de création complète (même processus que la page Locataires)"
+              >
+                <UserPlus className="h-3.5 w-3.5" /> Nouveau locataire
+              </button>
+            </div>
+            {locId != null ? (
+              <p className="flex items-center gap-2 rounded-md border border-emerald-400/40 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-200">
+                <span className="min-w-0 truncate font-semibold">
+                  {(dispo || []).find((l) => l.id === locId)?.full_name ??
+                    `Locataire #${locId}`}
+                </span>
+                {nouveauId === locId ? (
+                  <span className="badge badge-emerald">nouvelle fiche</span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setLocId(null)}
+                  className="ml-auto text-white/50 hover:text-white"
+                  title="Changer de locataire"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </p>
+            ) : (
               <div className="max-h-36 overflow-y-auto rounded-md border border-brand-800">
                 {(dispo || [])
                   .filter((l) =>
@@ -682,11 +730,7 @@ export function CreerBailModal({
                       key={l.id}
                       type="button"
                       onClick={() => setLocId(l.id)}
-                      className={`block w-full px-3 py-1.5 text-left text-xs ${
-                        locId === l.id
-                          ? "bg-emerald-500/20 font-semibold text-emerald-200"
-                          : "text-white/75 hover:bg-brand-900"
-                      }`}
+                      className="block w-full px-3 py-1.5 text-left text-xs text-white/75 hover:bg-brand-900"
                     >
                       {l.full_name}
                     </button>
@@ -697,38 +741,8 @@ export function CreerBailModal({
                   </p>
                 ) : null}
               </div>
-            </div>
-          ) : (
-            <div className="grid gap-2">
-              <label className="text-[11px] font-semibold text-white/60">
-                Nom complet *
-                <input
-                  value={nom}
-                  onChange={(e) => setNom(e.target.value)}
-                  className={`${INPUT_CLS} mt-0.5 block w-full`}
-                />
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="text-[11px] font-semibold text-white/60">
-                  Courriel
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className={`${INPUT_CLS} mt-0.5 block w-full`}
-                  />
-                </label>
-                <label className="text-[11px] font-semibold text-white/60">
-                  Téléphone
-                  <input
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    className={`${INPUT_CLS} mt-0.5 block w-full`}
-                  />
-                </label>
-              </div>
-            </div>
-          )}
+            )}
+          </div>
           <div className="grid grid-cols-2 gap-2">
             <label className="text-[11px] font-semibold text-white/60">
               Début du bail *
@@ -775,6 +789,24 @@ export function CreerBailModal({
                 className={`${INPUT_CLS} mt-0.5 block w-full`}
               />
             </label>
+            <label className="text-[11px] font-semibold text-white/60">
+              Dépôt reçu le
+              <input
+                type="date"
+                value={depotRecuLe}
+                onChange={(e) => setDepotRecuLe(e.target.value)}
+                className={`${INPUT_CLS} mt-0.5 block w-full`}
+              />
+            </label>
+            <label className="text-[11px] font-semibold text-white/60">
+              Dépôt détenu par
+              <input
+                value={depotDetenteur}
+                onChange={(e) => setDepotDetenteur(e.target.value)}
+                placeholder="ex. compte en fidéicommis"
+                className={`${INPUT_CLS} mt-0.5 block w-full`}
+              />
+            </label>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <JourEcheanceField
@@ -782,6 +814,14 @@ export function CreerBailModal({
               onChange={setJourEcheance}
             />
           </div>
+          <DocumentsAImporterZone
+            fichiers={fichiers}
+            onChange={setFichiers}
+            disabled={busy}
+            progression={progression}
+            resultats={resultatsImport}
+            aide="Déposés après la création du bail. « Déjà en vigueur » : le fichier « Bail » devient LE bail signé. « Proposé » : il reste une pièce liée, que « Joindre le bail signé » (Locations) activera."
+          />
           <div className="grid gap-1.5">
             <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-brand-800 px-3 py-2 text-xs text-white/75">
               <input
@@ -794,7 +834,7 @@ export function CreerBailModal({
                 <span className="font-semibold text-white">
                   À faire suivre via Locations (proposé)
                 </span>{" "}
-                — la carte apparaît au kanban (« Bail à envoyer ») ;
+                — la carte apparaît au kanban (« Bail en signature ») ;
                 importe le PDF signé pour rendre le bail actif.
               </span>
             </label>
@@ -831,7 +871,7 @@ export function CreerBailModal({
               type="button"
               disabled={
                 busy ||
-                (modeExistant ? locId == null : !nom.trim()) ||
+                locId == null ||
                 !debut ||
                 !fin ||
                 loyer.trim() === "" ||
@@ -850,6 +890,24 @@ export function CreerBailModal({
           </div>
         </div>
       </div>
+      {showCreate ? (
+        <CreateLocataireModal
+          documents="differer"
+          zIndexClass="z-[80]"
+          onClose={() => setShowCreate(false)}
+          onSaved={(id, info) => {
+            setShowCreate(false);
+            setDispo((prev) => [
+              { id, full_name: info.full_name },
+              ...(prev || []).filter((l) => l.id !== id)
+            ]);
+            setLocId(id);
+            setNouveauId(id);
+            if (info.fichiers.length > 0)
+              setFichiers((prev) => [...prev, ...info.fichiers]);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
