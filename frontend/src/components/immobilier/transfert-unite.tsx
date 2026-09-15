@@ -512,9 +512,9 @@ function TransfertUniteModal({
               </p>
             ) : pasLePremier ? (
               <p className="rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2 text-[11px] text-white/55">
-                Transfert en cours de mois : le mois de bascule est compté
-                en entier sur les deux baux (pas de prorata automatique) —
-                ajuste par un frais ou un crédit si besoin.
+                Transfert en cours de mois : le loyer du mois de bascule
+                reste dû une seule fois, sur l&apos;ancienne unité ; le
+                nouveau bail réclame à partir du mois suivant.
               </p>
             ) : null}
             <div className="grid grid-cols-2 gap-3">

@@ -2926,6 +2926,7 @@ type LoyerRow = {
   frais_mois?: { id: number; montant: number; libelle: string }[];
   solde_total?: number;
   solde_anterieur?: boolean;
+  transfert_bascule?: boolean;
 };
 
 // Tri de la liste des paiements : retards en haut, partiels ensuite,
@@ -3419,7 +3420,16 @@ function PaiementsMoisSection({
                 >
                   <td className="py-2 pr-3">
                     {r.etat === "paye" ? (
-                      <span className="badge badge-emerald">Payé</span>
+                      <span
+                        className="badge badge-emerald"
+                        title={
+                          r.transfert_bascule
+                            ? "Mois de bascule du transfert d'unité : le loyer du mois est sur l'ancienne unité"
+                            : undefined
+                        }
+                      >
+                        {r.transfert_bascule ? "Rien dû (bascule)" : "Payé"}
+                      </span>
                     ) : r.etat === "partiel" ? (
                       <span className="badge badge-amber">
                         {r.solde_anterieur ? "Solde antérieur" : "Partiel"}

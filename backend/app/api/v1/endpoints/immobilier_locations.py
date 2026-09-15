@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
+from app.services.audit import log_action
 from app.core.permissions import visible_immeuble_ids
 from app.models.immobilier import (
     Bail,
@@ -673,6 +674,11 @@ async def delete_dossier(
     await db.delete(obj)
     await db.flush()
     await _recaler_statut_logement(db, logement_id)
+    await log_action(
+        db, user=user, action="locations.deleted",
+        entity_type="locations", entity_id=dossier_id,
+        details={"logement_id": logement_id},
+    )
     await db.commit()
 
 
@@ -889,6 +895,15 @@ async def convertir_dossier(
 
     locataire_id = locataire.id
     bail_id = bail.id
+    await log_action(
+        db, user=user, action="locations.locataire_lie",
+        entity_type="baux", entity_id=bail_id,
+        details={
+            "dossier_id": dossier.id, "locataire_id": locataire_id,
+            "locataire_cree": bool(dossier.locataire_cree),
+            "logement_id": dossier.logement_id,
+        },
+    )
     await db.commit()
 
     # Consentement aux communications électroniques : le PDF est généré et
@@ -1069,6 +1084,11 @@ async def desistement_candidat(
             )
         except AnnulationTransfertImpossible as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        await log_action(
+            db, user=user, action="baux.transfert_annule",
+            entity_type="baux", entity_id=bail_lie.id,
+            details={"dossier_id": dossier_id},
+        )
         await db.commit()
         obj = await _dossier_or_404(db, dossier_id)
         return await _to_row(db, obj)
@@ -1095,6 +1115,11 @@ async def desistement_candidat(
     dossier.updated_at = _now()
     await db.flush()
     await recaler_statut_logement(db, dossier.logement_id)
+    await log_action(
+        db, user=user, action="locations.locataire_retire",
+        entity_type="locations", entity_id=dossier_id,
+        details={"logement_id": dossier.logement_id},
+    )
     await db.commit()
     obj = await _dossier_or_404(db, dossier_id)
     return await _to_row(db, obj)
