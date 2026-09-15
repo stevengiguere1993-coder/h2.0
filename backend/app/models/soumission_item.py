@@ -56,3 +56,19 @@ class SoumissionItem(Base, TimestampUpdateMixin):
     kind: Mapped[str] = mapped_column(
         String(16), nullable=False, default="service", server_default="service"
     )
+
+    # ── Avenants (retour 2026-09-15) ─────────────────────────────────────
+    # Item AJOUTÉ par un avenant après l'acceptation du devis.
+    avenant_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("soumission_avenants.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    # Item RETIRÉ du contrat par un avenant : jamais supprimé (son
+    # historique « facturé à date » reste attaché), simplement exclu du
+    # contrat courant, des totaux, du PDF et de la facturation.
+    retire_par_avenant_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("soumission_avenants.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )

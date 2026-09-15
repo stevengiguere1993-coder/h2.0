@@ -93,6 +93,21 @@ type Item = {
   tps_applicable: boolean;
   tvq_applicable: boolean;
   kind: "service" | "frais" | "rabais";
+  // Avenants : item ajouté par AV-n / retiré du contrat par AV-n.
+  avenant_id?: number | null;
+  retire_par_avenant_id?: number | null;
+};
+
+// Avenant (change order) d'un devis accepté — le devis signé est figé,
+// tout changement passe par ici (retour 2026-09-15).
+type Avenant = {
+  id: number;
+  numero: number;
+  reference: string;
+  note: string | null;
+  impact_subtotal: number;
+  created_by_email: string | null;
+  created_at?: string | null;
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -207,6 +222,29 @@ export default function SoumissionDetailPage() {
   const [contractorSigNotice, setContractorSigNotice] = useState<
     string | null
   >(null);
+  // Avenants du devis accepté + avertissements de sur-facturation
+  // renvoyés à la création d'un avenant (crédit à prévoir).
+  const [avenants, setAvenants] = useState<Avenant[]>([]);
+  const [avenantModalOpen, setAvenantModalOpen] = useState(false);
+  const [avenantNotices, setAvenantNotices] = useState<string[]>([]);
+
+  const estAccepte = s?.status === "accepted";
+
+  useEffect(() => {
+    if (!estAccepte || !id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authedFetch(`/api/v1/soumissions/${id}/avenants`);
+        if (r.ok && !cancelled) setAvenants((await r.json()) as Avenant[]);
+      } catch {
+        /* section avenants simplement vide */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [estAccepte, id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1151,22 +1189,160 @@ export default function SoumissionDetailPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-brand-800">
-                      {items.map((it) => (
-                        <ItemRow
-                          key={it.id}
-                          item={it}
-                          busy={itemBusy === it.id}
-                          onPatch={(patch) => patchItem(it.id, patch)}
-                          onDelete={() => deleteItem(it.id)}
-                        />
-                      ))}
+                      {estAccepte
+                        ? // Devis ACCEPTÉ = figé : lignes en lecture seule,
+                          // items retirés par avenant barrés (l'historique
+                          // reste visible). Changements via un avenant.
+                          items.map((it) => {
+                            const retire = !!it.retire_par_avenant_id;
+                            const av = avenants.find(
+                              (a) =>
+                                a.id ===
+                                (it.retire_par_avenant_id || it.avenant_id)
+                            );
+                            return (
+                              <tr
+                                key={it.id}
+                                className={retire ? "opacity-50" : ""}
+                              >
+                                <td className="px-5 py-3 text-white">
+                                  <span
+                                    className={
+                                      retire ? "line-through" : ""
+                                    }
+                                  >
+                                    {it.description}
+                                  </span>
+                                  {av ? (
+                                    <span
+                                      className={`ml-2 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                                        retire
+                                          ? "bg-rose-500/15 text-rose-300"
+                                          : "bg-emerald-500/15 text-emerald-300"
+                                      }`}
+                                    >
+                                      {retire
+                                        ? `Retiré (${av.reference})`
+                                        : `Ajouté (${av.reference})`}
+                                    </span>
+                                  ) : null}
+                                </td>
+                                <td className="px-3 py-3 text-right text-white/80">
+                                  {it.quantity}
+                                </td>
+                                <td className="px-3 py-3 text-white/60">
+                                  {it.unit || "—"}
+                                </td>
+                                <td className="px-3 py-3 text-right text-white/40">
+                                  {it.cost_labor_per_unit != null
+                                    ? fmtMoney(it.cost_labor_per_unit)
+                                    : "—"}
+                                </td>
+                                <td className="px-3 py-3 text-right text-white/40">
+                                  {it.cost_material_per_unit != null
+                                    ? fmtMoney(it.cost_material_per_unit)
+                                    : "—"}
+                                </td>
+                                <td className="px-3 py-3 text-right text-white/80">
+                                  {fmtMoney(it.unit_price)}
+                                </td>
+                                <td className="px-3 py-3 text-center text-white/50">
+                                  {it.tps_applicable ? "✓" : "—"}
+                                </td>
+                                <td className="px-3 py-3 text-center text-white/50">
+                                  {it.tvq_applicable ? "✓" : "—"}
+                                </td>
+                                <td
+                                  className={`px-3 py-3 text-right font-semibold ${
+                                    retire
+                                      ? "text-white/40 line-through"
+                                      : "text-white"
+                                  }`}
+                                >
+                                  {fmtMoney(it.total)}
+                                </td>
+                                <td className="px-3 py-3"></td>
+                              </tr>
+                            );
+                          })
+                        : items.map((it) => (
+                            <ItemRow
+                              key={it.id}
+                              item={it}
+                              busy={itemBusy === it.id}
+                              onPatch={(patch) => patchItem(it.id, patch)}
+                              onDelete={() => deleteItem(it.id)}
+                            />
+                          ))}
                     </tbody>
                   </table>
                 </div>
               )}
 
               {/* Toolbar d'ajout — SOUS la liste : on ajoute un item juste
-                  là où on a fini de scroller, sans remonter en haut. */}
+                  là où on a fini de scroller, sans remonter en haut.
+                  Devis ACCEPTÉ : figé — tout passe par un avenant. */}
+              {estAccepte ? (
+                <div className="border-t border-brand-800 px-5 py-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-xs text-white/60">
+                      🔒 Devis accepté : les items sont figés. Ajouts,
+                      retraits et modifications passent par un{" "}
+                      <strong className="text-white">avenant</strong> — la
+                      facturation progressive suit alors le contrat
+                      courant sans fausser les montants déjà facturés.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setAvenantModalOpen(true)}
+                      className="btn-accent text-xs"
+                    >
+                      <Plus className="mr-1.5 h-3.5 w-3.5" /> Nouvel avenant
+                    </button>
+                  </div>
+                  {avenantNotices.length > 0 ? (
+                    <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-200">
+                      {avenantNotices.map((n, i) => (
+                        <p key={i}>⚠ {n}</p>
+                      ))}
+                    </div>
+                  ) : null}
+                  {avenants.length > 0 ? (
+                    <ul className="mt-3 space-y-1.5">
+                      {avenants.map((a) => (
+                        <li
+                          key={a.id}
+                          className="flex flex-wrap items-center gap-2 rounded-lg border border-brand-800 bg-brand-900/60 px-3 py-2 text-xs"
+                        >
+                          <span className="font-mono font-semibold text-accent-500">
+                            {a.reference}
+                          </span>
+                          <span
+                            className={`font-semibold ${
+                              Number(a.impact_subtotal) >= 0
+                                ? "text-emerald-300"
+                                : "text-rose-300"
+                            }`}
+                          >
+                            {Number(a.impact_subtotal) >= 0 ? "+" : ""}
+                            {fmtMoney(Number(a.impact_subtotal))}
+                          </span>
+                          <span className="text-white/70">
+                            {a.note || "—"}
+                          </span>
+                          {a.created_at ? (
+                            <span className="ml-auto text-white/40">
+                              {new Date(a.created_at).toLocaleDateString(
+                                "fr-CA"
+                              )}
+                            </span>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : (
               <div className="flex flex-wrap items-center gap-2 border-t border-brand-800 px-5 py-4">
                 <button
                   type="button"
@@ -1206,6 +1382,7 @@ export default function SoumissionDetailPage() {
                   <Plus className="mr-1.5 h-3.5 w-3.5" /> Rabais
                 </button>
               </div>
+              )}
             </section>
             ) : contractData ? (
               <>
@@ -1678,6 +1855,31 @@ export default function SoumissionDetailPage() {
         <ClientPhotosModal
           contactId={contactId}
           onClose={() => setPhotosOpen(false)}
+        />
+      ) : null}
+
+      {avenantModalOpen ? (
+        <AvenantModal
+          soumissionId={id}
+          items={items.filter((it) => !it.retire_par_avenant_id)}
+          onClose={() => setAvenantModalOpen(false)}
+          onDone={async (surfactures) => {
+            setAvenantModalOpen(false);
+            setAvenantNotices(surfactures);
+            // Recharge items + avenants + totaux du devis.
+            try {
+              const [iRes, aRes, sRes] = await Promise.all([
+                authedFetch(`/api/v1/soumissions/${id}/items`),
+                authedFetch(`/api/v1/soumissions/${id}/avenants`),
+                authedFetch(`/api/v1/soumissions/${id}`)
+              ]);
+              if (iRes.ok) setItems((await iRes.json()) as Item[]);
+              if (aRes.ok) setAvenants((await aRes.json()) as Avenant[]);
+              if (sRes.ok) setS((await sRes.json()) as Soumission);
+            } catch {
+              /* la page se rafraîchira à la prochaine visite */
+            }
+          }}
         />
       ) : null}
 
@@ -2836,6 +3038,392 @@ function NoteTemplatePicker({
             {error}
           </p>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+// ─── Avenant (change order) d'un devis accepté ─────────────────────────
+// Trois blocs : ajouter des travaux, retirer des lignes, modifier une
+// ligne (prix / quantité / description). Tout part en UNE opération —
+// l'avenant s'applique en entier ou pas du tout.
+
+type AvenantOpAjout = { description: string; quantity: string; unit_price: string };
+type AvenantOpModif = {
+  item_id: number;
+  description: string;
+  quantity: string;
+  unit_price: string;
+};
+
+function AvenantModal({
+  soumissionId,
+  items,
+  onClose,
+  onDone
+}: {
+  soumissionId: number;
+  items: Item[];
+  onClose: () => void;
+  onDone: (surfactures: string[]) => void;
+}) {
+  const [note, setNote] = useState("");
+  const [ajouts, setAjouts] = useState<AvenantOpAjout[]>([]);
+  const [retraits, setRetraits] = useState<number[]>([]);
+  const [modifs, setModifs] = useState<AvenantOpModif[]>([]);
+  const [modifPick, setModifPick] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const nbOps =
+    ajouts.filter((a) => a.description.trim()).length +
+    retraits.length +
+    modifs.length;
+
+  async function submit() {
+    setErr(null);
+    const operations: Record<string, unknown>[] = [];
+    for (const a of ajouts) {
+      if (!a.description.trim()) continue;
+      operations.push({
+        op: "ajout",
+        description: a.description.trim(),
+        quantity: Number(a.quantity) || 1,
+        unit_price: Number(a.unit_price) || 0
+      });
+    }
+    for (const rid of retraits) {
+      operations.push({ op: "retrait", item_id: rid });
+    }
+    for (const m of modifs) {
+      operations.push({
+        op: "modification",
+        item_id: m.item_id,
+        ...(m.description.trim() ? { description: m.description.trim() } : {}),
+        ...(m.quantity !== "" ? { quantity: Number(m.quantity) } : {}),
+        ...(m.unit_price !== "" ? { unit_price: Number(m.unit_price) } : {})
+      });
+    }
+    if (operations.length === 0) {
+      setErr("Ajoute au moins une opération (ajout, retrait ou modification).");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await authedFetch(
+        `/api/v1/soumissions/${soumissionId}/avenants`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ note: note.trim() || null, operations })
+        }
+      );
+      const body = (await res.json().catch(() => null)) as {
+        detail?: string;
+        surfactures?: string[];
+        avenant?: { reference?: string };
+      } | null;
+      if (!res.ok) {
+        setErr(
+          typeof body?.detail === "string"
+            ? body.detail
+            : "Création de l'avenant échouée."
+        );
+        return;
+      }
+      onDone(body?.surfactures || []);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4"
+      onClick={() => (busy ? null : onClose())}
+    >
+      <div
+        className="mt-8 w-full max-w-2xl rounded-2xl border border-brand-800 bg-brand-950 p-6 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-lg font-bold text-white">Nouvel avenant</h3>
+        <p className="mt-1 text-xs text-white/60">
+          Le devis accepté reste figé : l&apos;avenant journalise chaque
+          changement et met à jour le contrat courant. La facturation
+          progressive suivra automatiquement — les montants déjà facturés
+          ne bougent jamais.
+        </p>
+
+        <label className="label mt-4" htmlFor="av-note">
+          Raison du changement
+        </label>
+        <input
+          id="av-note"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="Ex. Le client ajoute la céramique de la salle d'eau"
+          className="input w-full"
+        />
+
+        {/* Ajouts */}
+        <div className="mt-5">
+          <p className="text-xs font-semibold uppercase tracking-wider text-emerald-300">
+            Ajouter des travaux
+          </p>
+          {ajouts.map((a, i) => (
+            <div key={i} className="mt-2 flex flex-wrap items-center gap-2">
+              <input
+                value={a.description}
+                onChange={(e) =>
+                  setAjouts((prev) =>
+                    prev.map((x, j) =>
+                      j === i ? { ...x, description: e.target.value } : x
+                    )
+                  )
+                }
+                placeholder="Description des travaux"
+                className="input min-w-0 flex-1"
+              />
+              <input
+                value={a.quantity}
+                onChange={(e) =>
+                  setAjouts((prev) =>
+                    prev.map((x, j) =>
+                      j === i ? { ...x, quantity: e.target.value } : x
+                    )
+                  )
+                }
+                type="number"
+                min="0"
+                step="0.001"
+                placeholder="Qté"
+                className="input w-20"
+                aria-label="Quantité"
+              />
+              <input
+                value={a.unit_price}
+                onChange={(e) =>
+                  setAjouts((prev) =>
+                    prev.map((x, j) =>
+                      j === i ? { ...x, unit_price: e.target.value } : x
+                    )
+                  )
+                }
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Prix $"
+                className="input w-28"
+                aria-label="Prix unitaire"
+              />
+              <button
+                type="button"
+                onClick={() =>
+                  setAjouts((prev) => prev.filter((_, j) => j !== i))
+                }
+                className="rounded p-1 text-white/40 hover:text-rose-300"
+                title="Retirer cette ligne"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() =>
+              setAjouts((prev) => [
+                ...prev,
+                { description: "", quantity: "1", unit_price: "" }
+              ])
+            }
+            className="btn-secondary mt-2 text-xs"
+          >
+            <Plus className="mr-1 h-3.5 w-3.5" /> Ligne à ajouter
+          </button>
+        </div>
+
+        {/* Retraits */}
+        <div className="mt-5">
+          <p className="text-xs font-semibold uppercase tracking-wider text-rose-300">
+            Retirer des travaux
+          </p>
+          <p className="mt-1 text-[11px] text-white/50">
+            La ligne reste au dossier (barrée) et ce qui a déjà été
+            facturé dessus ne bouge pas — un crédit vous sera signalé au
+            besoin.
+          </p>
+          <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto">
+            {items.map((it) => (
+              <li key={it.id} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  id={`av-ret-${it.id}`}
+                  checked={retraits.includes(it.id)}
+                  onChange={(e) =>
+                    setRetraits((prev) =>
+                      e.target.checked
+                        ? [...prev, it.id]
+                        : prev.filter((x) => x !== it.id)
+                    )
+                  }
+                  className="h-4 w-4 accent-rose-500"
+                />
+                <label
+                  htmlFor={`av-ret-${it.id}`}
+                  className="cursor-pointer truncate text-white/80"
+                >
+                  {it.description}{" "}
+                  <span className="text-white/40">
+                    ({fmtMoney(it.total)})
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* Modifications */}
+        <div className="mt-5">
+          <p className="text-xs font-semibold uppercase tracking-wider text-sky-300">
+            Modifier une ligne
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <select
+              value={modifPick}
+              onChange={(e) => setModifPick(e.target.value)}
+              className="input min-w-0 flex-1"
+              aria-label="Ligne à modifier"
+            >
+              <option value="">— Choisir une ligne —</option>
+              {items
+                .filter((it) => !modifs.some((m) => m.item_id === it.id))
+                .map((it) => (
+                  <option key={it.id} value={String(it.id)}>
+                    {it.description.slice(0, 80)}
+                  </option>
+                ))}
+            </select>
+            <button
+              type="button"
+              disabled={!modifPick}
+              onClick={() => {
+                const it = items.find((x) => String(x.id) === modifPick);
+                if (!it) return;
+                setModifs((prev) => [
+                  ...prev,
+                  {
+                    item_id: it.id,
+                    description: "",
+                    quantity: String(it.quantity),
+                    unit_price: String(it.unit_price)
+                  }
+                ]);
+                setModifPick("");
+              }}
+              className="btn-secondary text-xs"
+            >
+              Modifier
+            </button>
+          </div>
+          {modifs.map((m, i) => {
+            const it = items.find((x) => x.id === m.item_id);
+            return (
+              <div
+                key={m.item_id}
+                className="mt-2 rounded-lg border border-brand-800 bg-brand-900/60 p-2"
+              >
+                <p className="truncate text-xs text-white/60">
+                  {it?.description}
+                </p>
+                <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                  <input
+                    value={m.description}
+                    onChange={(e) =>
+                      setModifs((prev) =>
+                        prev.map((x, j) =>
+                          j === i
+                            ? { ...x, description: e.target.value }
+                            : x
+                        )
+                      )
+                    }
+                    placeholder="Nouvelle description (optionnel)"
+                    className="input min-w-0 flex-1"
+                  />
+                  <input
+                    value={m.quantity}
+                    onChange={(e) =>
+                      setModifs((prev) =>
+                        prev.map((x, j) =>
+                          j === i ? { ...x, quantity: e.target.value } : x
+                        )
+                      )
+                    }
+                    type="number"
+                    min="0"
+                    step="0.001"
+                    className="input w-20"
+                    aria-label="Nouvelle quantité"
+                  />
+                  <input
+                    value={m.unit_price}
+                    onChange={(e) =>
+                      setModifs((prev) =>
+                        prev.map((x, j) =>
+                          j === i
+                            ? { ...x, unit_price: e.target.value }
+                            : x
+                        )
+                      )
+                    }
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="input w-28"
+                    aria-label="Nouveau prix unitaire"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setModifs((prev) => prev.filter((_, j) => j !== i))
+                    }
+                    className="rounded p-1 text-white/40 hover:text-rose-300"
+                    title="Annuler cette modification"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {err ? <p className="mt-3 text-xs text-rose-400">{err}</p> : null}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="btn-secondary text-sm"
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={() => void submit()}
+            disabled={busy || nbOps === 0}
+            className="btn-accent text-sm"
+          >
+            {busy ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Création…
+              </>
+            ) : (
+              <>Créer l&apos;avenant ({nbOps})</>
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );

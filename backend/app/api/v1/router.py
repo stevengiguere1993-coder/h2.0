@@ -163,6 +163,7 @@ from app.api.v1.endpoints import (
     qbo_webhook,
     search,
     contract_sign,
+    soumission_avenants,
     soumission_items,
     soumission_qbo,
     soumission_send,
@@ -377,6 +378,7 @@ api_router.include_router(sous_traitants_router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(sous_traitant_timesheets_router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(note_templates_router)
 api_router.include_router(soumissions_router, dependencies=DEP_CONSTRUCTION)
+api_router.include_router(soumission_avenants.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(soumission_items.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(soumission_qbo.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(soumission_send.router, dependencies=DEP_CONSTRUCTION)

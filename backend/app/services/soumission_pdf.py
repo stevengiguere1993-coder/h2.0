@@ -189,7 +189,10 @@ async def _load(db: AsyncSession, soumission_id: int):
         (
             await db.execute(
                 select(SoumissionItem)
-                .where(SoumissionItem.soumission_id == soumission_id)
+                .where(
+                    SoumissionItem.soumission_id == soumission_id,
+                    SoumissionItem.retire_par_avenant_id.is_(None),
+                )
                 .order_by(SoumissionItem.position.asc(), SoumissionItem.id.asc())
             )
         )

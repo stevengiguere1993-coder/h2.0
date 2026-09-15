@@ -70,6 +70,16 @@ class ConvertToFactureRequest(BaseModel):
             "(ancien comportement)."
         ),
     )
+    apply_deposit_amount: Optional[float] = Field(
+        default=None, ge=0,
+        description=(
+            "Acompte ($ HT) à déduire sur CETTE facture via une ligne "
+            "négative « Moins acompte appliqué ». None (défaut) = "
+            "calcul automatique au prorata de l'avancement facturé ; "
+            "0 = ne rien appliquer cette fois. Toujours plafonné à "
+            "l'acompte restant (reçu - déjà appliqué)."
+        ),
+    )
     include_hours: bool = Field(
         default=True,
         description="Seed line items from the punched hours (T&M).",
@@ -176,7 +186,11 @@ async def convert_project_to_facture(
             sm_items = (
                 await db.execute(
                     select(SoumissionItem)
-                    .where(SoumissionItem.soumission_id == sm.id)
+                    .where(
+                        SoumissionItem.soumission_id == sm.id,
+                        # Contrat courant : items retirés par avenant exclus.
+                        SoumissionItem.retire_par_avenant_id.is_(None),
+                    )
                     .order_by(SoumissionItem.position.asc(), SoumissionItem.id.asc())
                 )
             ).scalars().all()
@@ -222,6 +236,21 @@ async def convert_project_to_facture(
                     )
                 ).scalars().all()
                 if prev_ids:
+                    # L'ACOMPTE n'est plus compté comme de l'avancement
+                    # (retour 2026-09-15) : c'est une AVANCE, déduite
+                    # explicitement par une ligne « Moins acompte
+                    # appliqué » — plus de répartition prorata invisible
+                    # qui dérivait dès que le devis changeait. On exclut
+                    # le nouveau kind « acompte », les lignes
+                    # d'application, et les acomptes HISTORIQUES
+                    # (lignes non liées dont le libellé commence par
+                    # « Acompte »).
+                    from sqlalchemy import and_ as _and, not_ as _not
+
+                    _acompte_legacy = _and(
+                        FactureItem.soumission_item_id.is_(None),
+                        FactureItem.description.ilike("acompte%"),
+                    )
                     rows = (
                         await db.execute(
                             select(
@@ -232,7 +261,10 @@ async def convert_project_to_facture(
                             )
                             .where(
                                 FactureItem.facture_id.in_(prev_ids),
-                                FactureItem.kind != "extra",
+                                FactureItem.kind.notin_(
+                                    ("extra", "acompte", "acompte_applique")
+                                ),
+                                _not(_acompte_legacy),
                             )
                             .group_by(FactureItem.soumission_item_id)
                         )
@@ -372,6 +404,122 @@ async def convert_project_to_facture(
                     )
                 )
                 pos += 1
+
+            # 3) ACOMPTE — application explicite (retour 2026-09-15).
+            # L'acompte reçu est une AVANCE : on le déduit par une ligne
+            # négative visible « Moins acompte appliqué », au prorata de
+            # l'avancement que représente CETTE facture sur le restant du
+            # contrat (la dernière facture applique tout le solde).
+            # apply_deposit_amount : montant imposé ($ HT) ; 0 = sauter.
+            if data.progressive_billing and delta_amount > 0:
+                from sqlalchemy import and_ as _and2
+
+                from app.models.facture import Facture as _FacAc
+
+                _acompte_lignes = _and2(
+                    FactureItem.soumission_item_id.is_(None),
+                    FactureItem.description.ilike("acompte%"),
+                    FactureItem.kind != "acompte_applique",
+                )
+                depot_recu = float(
+                    (
+                        await db.execute(
+                            select(
+                                func.coalesce(func.sum(FactureItem.total), 0)
+                            )
+                            .join(
+                                _FacAc, _FacAc.id == FactureItem.facture_id
+                            )
+                            .where(
+                                _FacAc.project_id == project_id,
+                                _FacAc.id != facture.id,
+                                _FacAc.status != FactureStatus.VOID.value,
+                                (FactureItem.kind == "acompte")
+                                | _acompte_lignes,
+                            )
+                        )
+                    ).scalar_one()
+                    or 0
+                )
+                depot_applique = -float(
+                    (
+                        await db.execute(
+                            select(
+                                func.coalesce(func.sum(FactureItem.total), 0)
+                            )
+                            .join(
+                                _FacAc, _FacAc.id == FactureItem.facture_id
+                            )
+                            .where(
+                                _FacAc.project_id == project_id,
+                                _FacAc.status != FactureStatus.VOID.value,
+                                FactureItem.kind == "acompte_applique",
+                            )
+                        )
+                    ).scalar_one()
+                    or 0
+                )
+                depot_restant = round(
+                    max(0.0, depot_recu - depot_applique), 2
+                )
+                if depot_restant > 0.01 and (
+                    data.apply_deposit_amount is None
+                    or data.apply_deposit_amount > 0
+                ):
+                    # Restant du contrat AVANT cette facture (items
+                    # actifs), pour le prorata.
+                    restant_avant = round(
+                        sum(
+                            max(
+                                0.0,
+                                float(it.total or 0)
+                                - (
+                                    linked_billed.get(int(it.id), 0.0)
+                                    + unattributed_billed
+                                    * (
+                                        float(it.total or 0) / sm_base
+                                        if sm_base > 0
+                                        else 0.0
+                                    )
+                                ),
+                            )
+                            for it in sm_items
+                        ),
+                        2,
+                    )
+                    if data.apply_deposit_amount is not None:
+                        a_appliquer = float(data.apply_deposit_amount)
+                    elif restant_avant > 0 and delta_amount < restant_avant - 0.01:
+                        a_appliquer = round(
+                            depot_restant * delta_amount / restant_avant, 2
+                        )
+                    else:
+                        # Cette facture solde le contrat → tout le
+                        # restant de l'acompte est appliqué.
+                        a_appliquer = depot_restant
+                    a_appliquer = round(
+                        min(max(0.0, a_appliquer), depot_restant), 2
+                    )
+                    if a_appliquer > 0.01:
+                        db.add(
+                            FactureItem(
+                                facture_id=facture.id,
+                                position=pos,
+                                description=(
+                                    "Moins acompte appliqué — "
+                                    f"{a_appliquer:.2f} $ de l'acompte "
+                                    f"reçu de {depot_recu:.2f} $ "
+                                    f"(restant après cette facture : "
+                                    f"{depot_restant - a_appliquer:.2f} $)"
+                                ),
+                                unit="lot",
+                                quantity=1,
+                                unit_price=-a_appliquer,
+                                total=-a_appliquer,
+                                kind="acompte_applique",
+                            )
+                        )
+                        pos += 1
 
     # 2) T&M — heures punchées approuvées (non encore facturées) au
     #    `billing_rate` de l'employé (fallback hourly_rate), groupées
@@ -641,3 +789,215 @@ async def convert_project_to_facture(
 
     await db.refresh(facture)
     return FactureRead.model_validate(facture)
+
+
+# ─────────────────────── État du contrat (retour 2026-09-15) ──────────
+# Vue d'ensemble de la facturation progressive d'un projet à contrat :
+# contrat de base + avenants = contrat courant, facturé à date (extras
+# et acomptes exclus), acompte reçu / appliqué / restant, solde à
+# facturer et % réel — global et ligne par ligne. C'est la source que
+# l'encadré « État du contrat » de la fiche facture/projet affiche.
+
+
+class EtatContratLigne(BaseModel):
+    item_id: int
+    description: str
+    au_contrat: float
+    facture: float
+    restant: float
+    pct: float
+    retire: bool = False
+    avenant: Optional[str] = None
+
+
+class EtatContrat(BaseModel):
+    soumission_id: int
+    soumission_reference: str
+    contrat_base: float
+    avenants_impact: float
+    contrat_courant: float
+    facture_a_date: float
+    extras_factures: float
+    acompte_recu: float
+    acompte_applique: float
+    acompte_restant: float
+    solde_a_facturer: float
+    pct_avancement: float
+    #: Items facturés AU-DELÀ de leur montant au contrat (crédit à
+    #: prévoir) — libellés lisibles.
+    surfactures: list[str] = []
+    lignes: list[EtatContratLigne] = []
+
+
+@router.get(
+    "/{project_id}/etat-contrat",
+    response_model=EtatContrat,
+    summary="État de la facturation progressive du contrat (avenants, "
+    "acompte, facturé à date, solde)",
+)
+async def etat_contrat(
+    project_id: int, db: DBSession, _: Annotated[User, Depends(require_capability("project.to_facture"))]
+) -> EtatContrat:
+    project = (
+        await db.execute(select(Project).where(Project.id == project_id))
+    ).scalar_one_or_none()
+    if project is None or not project.soumission_id:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "Projet sans soumission liée — pas de contrat à suivre.",
+        )
+    sm = await db.get(Soumission, project.soumission_id)
+    if sm is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Soumission introuvable.")
+
+    items = (
+        await db.execute(
+            select(SoumissionItem)
+            .where(SoumissionItem.soumission_id == sm.id)
+            .order_by(SoumissionItem.position.asc(), SoumissionItem.id.asc())
+        )
+    ).scalars().all()
+    actifs = [it for it in items if it.retire_par_avenant_id is None]
+    contrat_courant = round(sum(float(it.total or 0) for it in actifs), 2)
+
+    from app.models.soumission_avenant import SoumissionAvenant
+
+    avenants = (
+        await db.execute(
+            select(SoumissionAvenant)
+            .where(SoumissionAvenant.soumission_id == sm.id)
+            .order_by(SoumissionAvenant.numero.asc())
+        )
+    ).scalars().all()
+    avenants_impact = round(
+        sum(float(a.impact_subtotal or 0) for a in avenants), 2
+    )
+    av_ref = {a.id: a.reference for a in avenants}
+    contrat_base = round(contrat_courant - avenants_impact, 2)
+
+    fac_ids = (
+        await db.execute(
+            select(Facture.id).where(
+                Facture.project_id == project_id,
+                Facture.status != FactureStatus.VOID.value,
+            )
+        )
+    ).scalars().all()
+
+    facture_par_item: dict[int, float] = {}
+    extras = 0.0
+    acompte_recu = 0.0
+    acompte_applique = 0.0
+    non_attribue = 0.0
+    if fac_ids:
+        rows = (
+            await db.execute(
+                select(
+                    FactureItem.soumission_item_id,
+                    FactureItem.kind,
+                    FactureItem.description,
+                    func.coalesce(func.sum(FactureItem.total), 0),
+                )
+                .where(FactureItem.facture_id.in_(fac_ids))
+                .group_by(
+                    FactureItem.soumission_item_id,
+                    FactureItem.kind,
+                    FactureItem.description,
+                )
+            )
+        ).all()
+        for sid, kind, desc, tot in rows:
+            m = round(float(tot or 0), 2)
+            k = kind or "service"
+            if k == "acompte_applique":
+                acompte_applique += -m
+            elif k == "acompte" or (
+                sid is None and (desc or "").lower().startswith("acompte")
+            ):
+                acompte_recu += m
+            elif k == "extra":
+                extras += m
+            elif sid is not None:
+                facture_par_item[int(sid)] = (
+                    facture_par_item.get(int(sid), 0.0) + m
+                )
+            else:
+                non_attribue += m
+
+    facture_a_date = round(
+        sum(facture_par_item.values()) + non_attribue, 2
+    )
+    acompte_recu = round(acompte_recu, 2)
+    acompte_applique = round(acompte_applique, 2)
+    acompte_restant = round(max(0.0, acompte_recu - acompte_applique), 2)
+
+    lignes: list[EtatContratLigne] = []
+    surfactures: list[str] = []
+    for it in items:
+        au_contrat = (
+            0.0
+            if it.retire_par_avenant_id is not None
+            else round(float(it.total or 0), 2)
+        )
+        # Le « non attribué » (anciennes factures sans lien par item) est
+        # réparti au prorata du poids de la ligne — même règle que la
+        # facturation progressive, pour que les deux affichent pareil.
+        share = (
+            (float(it.total or 0) / contrat_courant)
+            if contrat_courant > 0 and it.retire_par_avenant_id is None
+            else 0.0
+        )
+        b = round(
+            facture_par_item.get(int(it.id), 0.0) + non_attribue * share, 2
+        )
+        if b <= 0.005 and it.retire_par_avenant_id is not None:
+            # Ligne retirée jamais facturée : pas de bruit dans l'état.
+            continue
+        restant = round(max(0.0, au_contrat - b), 2)
+        pct = round((b / au_contrat * 100) if au_contrat > 0 else 100.0, 1)
+        av = (
+            av_ref.get(it.retire_par_avenant_id)
+            if it.retire_par_avenant_id
+            else av_ref.get(it.avenant_id) if it.avenant_id else None
+        )
+        lignes.append(
+            EtatContratLigne(
+                item_id=it.id,
+                description=it.description,
+                au_contrat=au_contrat,
+                facture=b,
+                restant=restant,
+                pct=min(pct, 999.9),
+                retire=it.retire_par_avenant_id is not None,
+                avenant=av,
+            )
+        )
+        if b - au_contrat > 0.01:
+            surfactures.append(
+                f"« {it.description[:80]} » : {b:.2f} $ facturé pour "
+                f"{au_contrat:.2f} $ au contrat."
+            )
+
+    return EtatContrat(
+        soumission_id=sm.id,
+        soumission_reference=sm.reference,
+        contrat_base=contrat_base,
+        avenants_impact=avenants_impact,
+        contrat_courant=contrat_courant,
+        facture_a_date=facture_a_date,
+        extras_factures=round(extras, 2),
+        acompte_recu=acompte_recu,
+        acompte_applique=acompte_applique,
+        acompte_restant=acompte_restant,
+        solde_a_facturer=round(
+            max(0.0, contrat_courant - facture_a_date), 2
+        ),
+        pct_avancement=round(
+            (facture_a_date / contrat_courant * 100)
+            if contrat_courant > 0
+            else 0.0,
+            1,
+        ),
+        surfactures=surfactures,
+        lignes=lignes,
+    )

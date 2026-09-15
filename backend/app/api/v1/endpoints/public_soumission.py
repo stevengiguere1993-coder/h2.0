@@ -147,7 +147,10 @@ async def public_read(token: str, db: DBSession) -> PublicSoumission:
         (
             await db.execute(
                 select(SoumissionItem)
-                .where(SoumissionItem.soumission_id == sm.id)
+                .where(
+                    SoumissionItem.soumission_id == sm.id,
+                    SoumissionItem.retire_par_avenant_id.is_(None),
+                )
                 .order_by(
                     SoumissionItem.position.asc(), SoumissionItem.id.asc()
                 )
