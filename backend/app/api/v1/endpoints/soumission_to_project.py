@@ -72,7 +72,10 @@ async def _soumission_subtotal(db: AsyncSession, sm: Soumission) -> float:
         await db.execute(
             select(SoumissionItem.quantity, SoumissionItem.unit_price,
                    SoumissionItem.total)
-            .where(SoumissionItem.soumission_id == sm.id)
+            .where(
+                SoumissionItem.soumission_id == sm.id,
+                SoumissionItem.retire_par_avenant_id.is_(None),
+            )
         )
     ).all()
     total = 0.0
@@ -162,7 +165,10 @@ async def provision_project_for_soumission(
         _sm_items = (
             await db.execute(
                 select(SoumissionItem)
-                .where(SoumissionItem.soumission_id == sm.id)
+                .where(
+                    SoumissionItem.soumission_id == sm.id,
+                    SoumissionItem.retire_par_avenant_id.is_(None),
+                )
                 .order_by(
                     SoumissionItem.position.asc(), SoumissionItem.id.asc()
                 )
@@ -298,6 +304,11 @@ async def provision_project_for_soumission(
                 quantity=1,
                 unit_price=deposit_subtotal,
                 total=deposit_subtotal,
+                # « acompte » : avance sur le contrat, PAS un avancement —
+                # exclue des cibles de facturation progressive et déduite
+                # explicitement sur les factures d'avancement (retour
+                # 2026-09-15).
+                kind="acompte",
             )
         )
         await db.flush()

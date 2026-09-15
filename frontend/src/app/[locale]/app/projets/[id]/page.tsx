@@ -71,6 +71,31 @@ const STATUS_CLASS: Record<string, string> = {
   delivered: "badge-emerald"
 };
 
+// État de la facturation progressive du contrat (avenants, acompte…).
+type EtatContrat = {
+  contrat_base: number;
+  avenants_impact: number;
+  contrat_courant: number;
+  facture_a_date: number;
+  extras_factures: number;
+  acompte_recu: number;
+  acompte_applique: number;
+  acompte_restant: number;
+  solde_a_facturer: number;
+  pct_avancement: number;
+  surfactures: string[];
+  lignes: {
+    item_id: number;
+    description: string;
+    au_contrat: number;
+    facture: number;
+    restant: number;
+    pct: number;
+    retire: boolean;
+    avenant: string | null;
+  }[];
+};
+
 type TabId =
   | "summary"
   | "planification"
@@ -122,6 +147,10 @@ export default function ProjectDetailPage() {
   const [deleting, setDeleting] = useState(false);
   const [convertingToFacture, setConvertingToFacture] = useState(false);
   const [factureModalOpen, setFactureModalOpen] = useState(false);
+  // État du contrat (facturation progressive) : contrat courant avec
+  // avenants, facturé à date, acompte — affiché dans le dialogue de
+  // création de facture pour choisir le bon % en pleine connaissance.
+  const [etatContrat, setEtatContrat] = useState<EtatContrat | null>(null);
   const [includeSoumission, setIncludeSoumission] = useState(true);
   const [soumissionMode, setSoumissionMode] = useState<"pct" | "amount">("pct");
   const [soumissionPct, setSoumissionPct] = useState("100");
@@ -365,6 +394,20 @@ export default function ProjectDetailPage() {
     setOnlyApproved(true);
     setDueInDays("0");
     setFactureModalOpen(true);
+    // État du contrat — best-effort, le dialogue s'affiche sans lui.
+    setEtatContrat(null);
+    if (p.soumission_id) {
+      void (async () => {
+        try {
+          const r = await authedFetch(
+            `/api/v1/projects/${id}/etat-contrat`
+          );
+          if (r.ok) setEtatContrat((await r.json()) as EtatContrat);
+        } catch {
+          /* encadré simplement absent */
+        }
+      })();
+    }
   }
 
   async function createFacture() {
@@ -688,6 +731,68 @@ export default function ProjectDetailPage() {
               toi-même chaque ligne. Tu pourras de toute façon ajuster
               manuellement sur la fiche.
             </p>
+
+            {etatContrat ? (
+              <div className="mt-4 rounded-lg border border-brand-800 bg-brand-900 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-accent-500">
+                  État du contrat
+                </p>
+                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3">
+                  <div>
+                    <span className="text-white/50">Contrat courant</span>
+                    <p className="font-semibold text-white">
+                      {fmtMoney(etatContrat.contrat_courant)}
+                      {etatContrat.avenants_impact !== 0 ? (
+                        <span className="ml-1 font-normal text-white/50">
+                          (base {fmtMoney(etatContrat.contrat_base)}
+                          {etatContrat.avenants_impact > 0 ? " +" : " −"}
+                          {fmtMoney(Math.abs(etatContrat.avenants_impact))}{" "}
+                          d&apos;avenants)
+                        </span>
+                      ) : null}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-white/50">Facturé à date</span>
+                    <p className="font-semibold text-white">
+                      {fmtMoney(etatContrat.facture_a_date)}{" "}
+                      <span className="font-normal text-white/50">
+                        ({etatContrat.pct_avancement} %)
+                      </span>
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-white/50">Solde à facturer</span>
+                    <p className="font-semibold text-emerald-300">
+                      {fmtMoney(etatContrat.solde_a_facturer)}
+                    </p>
+                  </div>
+                  {etatContrat.acompte_recu > 0 ? (
+                    <div className="col-span-2 sm:col-span-3">
+                      <span className="text-white/50">Acompte</span>
+                      <p className="text-white/80">
+                        {fmtMoney(etatContrat.acompte_recu)} reçu ·{" "}
+                        {fmtMoney(etatContrat.acompte_applique)} déjà
+                        déduit ·{" "}
+                        <strong className="text-white">
+                          {fmtMoney(etatContrat.acompte_restant)} restant
+                        </strong>
+                        {etatContrat.acompte_restant > 0
+                          ? " — déduit automatiquement au prorata sur cette facture (ligne « Moins acompte appliqué », modifiable)."
+                          : ""}
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
+                {etatContrat.surfactures.length > 0 ? (
+                  <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] text-amber-200">
+                    {etatContrat.surfactures.map((s, i) => (
+                      <p key={i}>⚠ {s}</p>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
             <div className="mt-5 space-y-3">
               <label className="flex items-start gap-3 rounded-lg border border-brand-800 bg-brand-900 p-3 text-sm text-white/80">

@@ -43,7 +43,10 @@ async def _recompute_soumission_totals(db, soumission_id: int) -> None:
     items = (
         await db.execute(
             select(SoumissionItem).where(
-                SoumissionItem.soumission_id == soumission_id
+                SoumissionItem.soumission_id == soumission_id,
+                # Contrat COURANT : les items retirés par avenant ne
+                # comptent plus dans les totaux (retour 2026-09-15).
+                SoumissionItem.retire_par_avenant_id.is_(None),
             )
         )
     ).scalars().all()
@@ -123,6 +126,9 @@ class SoumissionItemRead(BaseModel):
     tps_applicable: bool
     tvq_applicable: bool
     kind: str
+    # Avenants : item ajouté par AV-n / retiré du contrat par AV-n.
+    avenant_id: Optional[int] = None
+    retire_par_avenant_id: Optional[int] = None
 
 
 async def _ensure_soumission(db, soumission_id: int) -> Soumission:
@@ -132,6 +138,24 @@ async def _ensure_soumission(db, soumission_id: int) -> Soumission:
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Soumission not found")
     return record
+
+
+def _verrou_devis_accepte(sm: Soumission) -> None:
+    """Devis ACCEPTÉ = FIGÉ (retour 2026-09-15) : plus aucune écriture
+    directe sur ses items — c'est ce qui faisait dériver la facturation
+    progressive (item supprimé → historique facturé redistribué au
+    prorata). Tout changement passe par un AVENANT
+    (POST /soumissions/{id}/avenants), qui garde la trace et protège
+    les montants déjà facturés."""
+    if sm.status == "accepted":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Ce devis est accepté : ses items sont figés. Pour "
+                "ajouter, modifier ou retirer des travaux, créez un "
+                "avenant (section Avenants de la fiche)."
+            ),
+        )
 
 
 @router.get(
@@ -165,7 +189,8 @@ async def create_item(
     db: DBSession,
     _: CurrentUser,
 ) -> SoumissionItemRead:
-    await _ensure_soumission(db, soumission_id)
+    sm = await _ensure_soumission(db, soumission_id)
+    _verrou_devis_accepte(sm)
     # Rabais = negative line, frais = positive no-tax line.
     qty = data.quantity
     unit_price = data.unit_price
@@ -223,6 +248,8 @@ async def update_item(
     db: DBSession,
     _: CurrentUser,
 ) -> SoumissionItemRead:
+    sm = await _ensure_soumission(db, soumission_id)
+    _verrou_devis_accepte(sm)
     item = (
         await db.execute(
             select(SoumissionItem).where(
@@ -281,6 +308,8 @@ async def delete_item(
     db: DBSession,
     _: CurrentUser,
 ) -> None:
+    sm = await _ensure_soumission(db, soumission_id)
+    _verrou_devis_accepte(sm)
     item = (
         await db.execute(
             select(SoumissionItem).where(

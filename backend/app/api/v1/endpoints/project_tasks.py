@@ -258,7 +258,11 @@ async def import_tasks_from_soumission(
     items = (
         await db.execute(
             select(_SmIt)
-            .where(_SmIt.soumission_id == project.soumission_id)
+            .where(
+                _SmIt.soumission_id == project.soumission_id,
+                # Items retirés par avenant : plus de tâche à faire.
+                _SmIt.retire_par_avenant_id.is_(None),
+            )
             .order_by(_SmIt.position.asc(), _SmIt.id.asc())
         )
     ).scalars().all()

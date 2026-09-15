@@ -177,7 +177,8 @@ async def _compute_finances(
             (
                 await db.execute(
                     select(SoumissionItem).where(
-                        SoumissionItem.soumission_id == proj.soumission_id
+                        SoumissionItem.soumission_id == proj.soumission_id,
+                        SoumissionItem.retire_par_avenant_id.is_(None),
                     )
                 )
             ).scalars().all()
