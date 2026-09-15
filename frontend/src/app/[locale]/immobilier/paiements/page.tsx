@@ -95,6 +95,8 @@ type Row = {
   payeur_nom?: string | null;
   //: Mois affiché payé, mais un mois antérieur du bail impayé.
   solde_anterieur?: boolean;
+  //: Mois de bascule d'un transfert d'unité : rien n'est dû ici.
+  transfert_bascule?: boolean;
   /** Bail résilié/terminé en cours de mois : la ligne reste dans le
    *  mois couvert avec un badge « Bail terminé le X » (M7). */
   bail_statut?: string;
@@ -1047,8 +1049,16 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                     >
                       <td className="px-3 py-2.5">
                         {r.etat === "paye" ? (
-                          <span className="badge badge-emerald">
-                            <CheckCircle2 className="h-3 w-3" /> Payé
+                          <span
+                            className="badge badge-emerald"
+                            title={
+                              r.transfert_bascule
+                                ? "Mois de bascule du transfert d'unité : le loyer du mois est sur l'ancienne unité"
+                                : undefined
+                            }
+                          >
+                            <CheckCircle2 className="h-3 w-3" />{" "}
+                            {r.transfert_bascule ? "Rien dû (bascule)" : "Payé"}
                           </span>
                         ) : r.etat === "partiel" ? (
                           <span className="badge badge-amber">

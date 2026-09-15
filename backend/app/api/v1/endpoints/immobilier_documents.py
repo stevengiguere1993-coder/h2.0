@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import undefer
 
 from app.api.deps import CurrentUser, DBSession
+from app.services.audit import log_action
 from app.integrations.email_graph import EmailAttachment, get_mailer
 from app.models.immobilier import (
     Bail,
@@ -900,6 +901,12 @@ async def upload_bail_document(
         remplace_document_id=ancien,
     )
     await _poser_document_courant(db, bail, obj)
+    await log_action(
+        db, user=user, action="baux.document_signe_importe",
+        entity_type="baux", entity_id=bail.id,
+        details={"document_id": obj.id, "ancien_document_id": ancien,
+                 "status": bail.status},
+    )
     await db.commit()
     await db.refresh(obj)
     log.info(
@@ -1003,6 +1010,12 @@ async def rattacher_bail_document(
             f"Bail signé {bail.date_debut.isoformat() if bail.date_debut else ''}"
         ).strip()
     await _poser_document_courant(db, bail, doc)
+    await log_action(
+        db, user=user, action="baux.document_signe_rattache",
+        entity_type="baux", entity_id=bail.id,
+        details={"document_id": doc.id, "ancien_document_id": ancien,
+                 "status": bail.status},
+    )
     await db.commit()
     await db.refresh(doc)
     log.info(
