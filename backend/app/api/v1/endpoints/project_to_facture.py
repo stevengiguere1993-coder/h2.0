@@ -27,7 +27,7 @@ from app.models.soumission import Soumission, SoumissionStatus
 from app.models.soumission_item import SoumissionItem
 from app.models.user import User
 from app.schemas.business import FactureRead
-from app.services.numbering import next_facture_number
+from app.services.numbering import provisional_facture_reference
 from app.services.permissions_service import require_capability
 
 
@@ -129,7 +129,9 @@ async def convert_project_to_facture(
         due_at = datetime.now(timezone.utc) + timedelta(days=data.due_in_days)
 
     facture = Facture(
-        reference=await next_facture_number(db),
+        # Référence PROVISOIRE : le vrai numéro est attribué à l'ENVOI
+        # (pas de trous dans la séquence QuickBooks — audit).
+        reference=provisional_facture_reference(),
         client_id=project.client_id,
         project_id=project.id,
         status=FactureStatus.DRAFT.value,

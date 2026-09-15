@@ -1224,7 +1224,7 @@ export default function SoumissionDetailPage() {
                   <button
                     type="button"
                     onClick={saveMeta}
-                    disabled={saving || !metaDirty}
+                    disabled={saving}
                     className="btn-accent text-sm"
                   >
                     {saving ? (
@@ -1235,9 +1235,7 @@ export default function SoumissionDetailPage() {
                     ) : (
                       <>
                         <Save className="mr-2 h-4 w-4" />
-                        {metaDirty
-                          ? "Sauvegarder le contrat"
-                          : "Contrat à jour"}
+                        Sauvegarder le contrat
                       </>
                     )}
                   </button>
@@ -1502,7 +1500,7 @@ export default function SoumissionDetailPage() {
                   <button
                     type="button"
                     onClick={saveMeta}
-                    disabled={saving || !metaDirty}
+                    disabled={saving}
                     className="btn-accent text-sm"
                   >
                     {saving ? (
@@ -1513,7 +1511,7 @@ export default function SoumissionDetailPage() {
                     ) : (
                       <>
                         <Save className="mr-2 h-4 w-4" />
-                        {metaDirty ? "Sauvegarder" : "Aucun changement"}
+                        Sauvegarder
                       </>
                     )}
                   </button>

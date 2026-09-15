@@ -38,6 +38,11 @@ export default function NewBonPage() {
   const [immeubleId, setImmeubleId] = useState("");
   const [logementId, setLogementId] = useState("");
   const [clientId, setClientId] = useState("");
+  // Mode compagnie : la FICHE CLIENT de la compagnie propriétaire —
+  // chaque bon doit être relié à un client, pas seulement une adresse
+  // (retour 2026-09-12, point 15). Pré-remplie par nom quand une fiche
+  // client porte le nom de la compagnie.
+  const [compagnieClientId, setCompagnieClientId] = useState("");
   const [clientAddress, setClientAddress] = useState("");
   // Exécutant.
   const [executantType, setExecutantType] = useState("nos_hommes");
@@ -196,6 +201,9 @@ export default function NewBonPage() {
         setError("Choisis l'immeuble concerné.");
         return;
       }
+      // Le client facturé = la compagnie propriétaire (même ligne,
+      // retour 2026-09-13). Si aucune fiche client ne porte son nom,
+      // elle est créée automatiquement au submit — pas de blocage.
     } else if (!clientId) {
       setError("Choisis le client.");
       return;
@@ -224,6 +232,34 @@ export default function NewBonPage() {
         payload.owner_entreprise_id = Number(entrepriseId);
         payload.immeuble_id = Number(immeubleId);
         if (logementId) payload.logement_id = Number(logementId);
+        // Fiche client de la compagnie — la facture du bon partira à
+        // ce client (et le sous-client QuickBooks se crée dessous).
+        // Aucune fiche à ce nom ? On la crée automatiquement : la
+        // compagnie propriétaire EST le client facturé.
+        let ccId = compagnieClientId;
+        if (!ccId) {
+          const ent = entreprises.find(
+            (x) => String(x.id) === entrepriseId
+          );
+          const cr = await authedFetch("/api/v1/clients", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: (ent?.name || "").trim() || `Compagnie ${entrepriseId}`,
+              is_company: true
+            })
+          });
+          if (!cr.ok) {
+            throw new Error(
+              "Création automatique de la fiche client de la "
+              + "compagnie échouée — réessaie ou crée-la dans Clients."
+            );
+          }
+          const cc = (await cr.json()) as { id: number };
+          ccId = String(cc.id);
+          setCompagnieClientId(ccId);
+        }
+        payload.client_id = Number(ccId);
         const addr = buildAddress();
         if (addr) payload.address = addr;
       } else {
@@ -393,13 +429,40 @@ export default function NewBonPage() {
                 <>
               <div>
                 <label htmlFor="entreprise" className="label">
-                  Compagnie propriétaire{" "}
+                  Compagnie propriétaire (client facturé){" "}
                   <span className="text-rose-400">*</span>
                 </label>
                 <select
                   id="entreprise"
                   value={entrepriseId}
-                  onChange={(e) => setEntrepriseId(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setEntrepriseId(v);
+                    // La compagnie propriétaire EST le client facturé
+                    // (retour 2026-09-13) : une seule ligne. On résout
+                    // sa fiche client par le nom ; à défaut elle sera
+                    // créée automatiquement à la création du bon.
+                    const ent = entreprises.find(
+                      (x) => String(x.id) === v
+                    );
+                    const nom = (ent?.name || "").trim().toLowerCase();
+                    const exact = nom
+                      ? clients.find(
+                          (c) => c.name.trim().toLowerCase() === nom
+                        )
+                      : undefined;
+                    const partiel =
+                      exact ||
+                      (nom
+                        ? clients.find((c) => {
+                            const cn = c.name.trim().toLowerCase();
+                            return cn.includes(nom) || nom.includes(cn);
+                          })
+                        : undefined);
+                    setCompagnieClientId(
+                      partiel ? String(partiel.id) : ""
+                    );
+                  }}
                   className="input"
                 >
                   <option value="">— Choisir —</option>
@@ -409,6 +472,17 @@ export default function NewBonPage() {
                     </option>
                   ))}
                 </select>
+                <p className="mt-1 text-xs text-white/50">
+                  {!entrepriseId
+                    ? "La compagnie propriétaire est aussi le client facturé — la facture du bon partira à son nom."
+                    : compagnieClientId
+                      ? `Facturé à : ${
+                          clients.find(
+                            (c) => String(c.id) === compagnieClientId
+                          )?.name || "sa fiche client"
+                        } (fiche client de la compagnie).`
+                      : "Aucune fiche client à ce nom — elle sera créée automatiquement à la création du bon."}
+                </p>
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">

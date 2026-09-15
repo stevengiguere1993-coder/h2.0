@@ -527,7 +527,10 @@ function ClientTabs({
           <button
             type="button"
             onClick={onSave}
-            disabled={saving || !dirty}
+            // Toujours cliquable (sauf pendant la sauvegarde) : la
+            // détection de changement rate parfois un champ et bloquait
+            // l'enregistrement (retour 2026-09-12, point 4).
+            disabled={saving}
             className="btn-accent text-sm"
           >
             {saving ? (
@@ -537,7 +540,7 @@ function ClientTabs({
             ) : (
               <>
                 <Save className="mr-2 h-4 w-4" />
-                {dirty ? "Sauvegarder" : "Aucun changement"}
+                Sauvegarder
               </>
             )}
           </button>

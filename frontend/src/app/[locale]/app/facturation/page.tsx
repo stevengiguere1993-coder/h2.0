@@ -534,7 +534,9 @@ function Card({
           somme subtotal+tps+tvq, puis sur subtotal seul. */}
       <div className="mt-2 flex items-center justify-between">
         <span className="text-xs font-semibold uppercase tracking-wider text-accent-500">
-          {fa.reference}
+          {/* Référence provisoire « BR-… » : le numéro n'est attribué
+              qu'à l'envoi (pas de trous QuickBooks). */}
+          {fa.reference?.startsWith("BR-") ? "brouillon" : fa.reference}
         </span>
         <span className="text-sm font-bold text-white">
           {fmtMoney(amountFor(fa))}

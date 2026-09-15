@@ -20,10 +20,14 @@ import uuid
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 
 
-def _creer_bon(client, headers, *, kind: str | None) -> int:
+def _creer_bon(
+    client, headers, *, kind: str | None, address: str | None = None
+) -> int:
+    # Deux bons internes au MÊME lieu fusionnent automatiquement à la
+    # création (2026-09-15) : chaque bon de test a donc sa propre adresse.
     payload = {
         "title": f"Photos smoke {kind or 'construction'}",
-        "address": "12 rue de la Photo",
+        "address": address or f"12 rue de la Photo {uuid.uuid4().hex[:6]}",
         "reference": f"BT-PH-{uuid.uuid4().hex[:10]}",
     }
     if kind:
@@ -93,7 +97,10 @@ def test_cycle_complet_liste_octets_format_suppression(client, auth_headers):
 
     # Une photo d'un AUTRE bon n'est pas servie par cet id (pas d'accès
     # par id deviné).
-    autre = _creer_bon(client, auth_headers, kind="interne")
+    autre = _creer_bon(
+        client, auth_headers, kind="interne", address="99 rue Ailleurs"
+    )
+    assert autre != bon_id
     assert client.get(
         f"/api/v1/bons-travail/{autre}/photos/{photo_id}", headers=auth_headers
     ).status_code == 404

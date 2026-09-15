@@ -1360,6 +1360,12 @@ function ListView({
   events: AgendaEvent[];
   onEventClick: (e: AgendaEvent) => void;
 }) {
+  // Les événements PASSÉS n'encombrent plus la liste (retour
+  // 2026-09-12 : « on voit des événements de mai dans le mois de
+  // septembre ») : ils sont repliés dans une section « Événements
+  // passés », fermée par défaut. Un événement encore EN COURS (fin
+  // aujourd'hui ou plus tard) reste dans la liste principale.
+  const [showPast, setShowPast] = useState(false);
   if (events.length === 0) {
     return (
       <div className="empty-state mx-auto mt-16 max-w-md">
@@ -1376,57 +1382,98 @@ function ListView({
     .sort(
       (a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
     );
+  const debutAujourdhui = new Date();
+  debutAujourdhui.setHours(0, 0, 0, 0);
+  const estPasse = (e: AgendaEvent) =>
+    new Date(e.end_at || e.start_at).getTime() < debutAujourdhui.getTime();
+  const passes = sorted.filter(estPasse);
+  const aVenir = sorted.filter((e) => !estPasse(e));
+
   // Group by date (YYYY-MM-DD)
-  const groups = new Map<string, AgendaEvent[]>();
-  for (const e of sorted) {
-    const key = new Date(e.start_at).toDateString();
-    const arr = groups.get(key) || [];
-    arr.push(e);
-    groups.set(key, arr);
-  }
+  const grouper = (xs: AgendaEvent[]) => {
+    const groups = new Map<string, AgendaEvent[]>();
+    for (const e of xs) {
+      const key = new Date(e.start_at).toDateString();
+      const arr = groups.get(key) || [];
+      arr.push(e);
+      groups.set(key, arr);
+    }
+    return groups;
+  };
+
+  const renderGroups = (groups: Map<string, AgendaEvent[]>) =>
+    Array.from(groups.entries()).map(([key, list]) => (
+      <div key={key} className="rounded-xl border border-brand-800 bg-brand-900">
+        <div className="border-b border-brand-800 px-4 py-2 text-xs font-semibold uppercase tracking-wider text-accent-500">
+          {new Date(key).toLocaleDateString("fr-CA", {
+            weekday: "long",
+            day: "numeric",
+            month: "long"
+          })}
+        </div>
+        <ul className="divide-y divide-brand-800">
+          {list.map((e) => (
+            <li
+              key={e.id}
+              onClick={() => onEventClick(e)}
+              className="flex cursor-pointer items-center justify-between gap-3 px-4 py-3 hover:bg-brand-800/50"
+            >
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-white">
+                  {e.title}
+                </p>
+                <p className="truncate text-xs text-white/50">
+                  {e.all_day
+                    ? "Toute la journée"
+                    : `${fmtTime(e.start_at)}${
+                        e.end_at ? ` – ${fmtTime(e.end_at)}` : ""
+                      }`}
+                  {e.location ? ` · ${e.location}` : ""}
+                </p>
+              </div>
+              <span
+                className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-semibold ${
+                  TYPE_CLASS[e.event_type] || TYPE_CLASS.autre
+                }`}
+              >
+                {TYPE_LABELS[e.event_type] || e.event_type}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    ));
+
   return (
     <div className="space-y-5">
-      {Array.from(groups.entries()).map(([key, list]) => (
-        <div key={key} className="rounded-xl border border-brand-800 bg-brand-900">
-          <div className="border-b border-brand-800 px-4 py-2 text-xs font-semibold uppercase tracking-wider text-accent-500">
-            {new Date(key).toLocaleDateString("fr-CA", {
-              weekday: "long",
-              day: "numeric",
-              month: "long"
-            })}
-          </div>
-          <ul className="divide-y divide-brand-800">
-            {list.map((e) => (
-              <li
-                key={e.id}
-                onClick={() => onEventClick(e)}
-                className="flex cursor-pointer items-center justify-between gap-3 px-4 py-3 hover:bg-brand-800/50"
-              >
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-white">
-                    {e.title}
-                  </p>
-                  <p className="truncate text-xs text-white/50">
-                    {e.all_day
-                      ? "Toute la journée"
-                      : `${fmtTime(e.start_at)}${
-                          e.end_at ? ` – ${fmtTime(e.end_at)}` : ""
-                        }`}
-                    {e.location ? ` · ${e.location}` : ""}
-                  </p>
-                </div>
-                <span
-                  className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-semibold ${
-                    TYPE_CLASS[e.event_type] || TYPE_CLASS.autre
-                  }`}
-                >
-                  {TYPE_LABELS[e.event_type] || e.event_type}
-                </span>
-              </li>
-            ))}
-          </ul>
+      {passes.length > 0 ? (
+        <div>
+          <button
+            type="button"
+            onClick={() => setShowPast((v) => !v)}
+            className="flex w-full items-center gap-2 rounded-xl border border-brand-800 bg-brand-900/60 px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-white/60 hover:border-brand-700 hover:text-white"
+          >
+            <ChevronRight
+              className={`h-4 w-4 transition-transform ${
+                showPast ? "rotate-90" : ""
+              }`}
+            />
+            Événements passés ({passes.length})
+          </button>
+          {showPast ? (
+            <div className="mt-3 space-y-5 opacity-70">
+              {renderGroups(grouper(passes))}
+            </div>
+          ) : null}
         </div>
-      ))}
+      ) : null}
+      {aVenir.length === 0 ? (
+        <div className="rounded-xl border border-brand-800 bg-brand-900 px-4 py-6 text-center text-sm text-white/60">
+          Aucun événement à venir.
+        </div>
+      ) : (
+        renderGroups(grouper(aVenir))
+      )}
     </div>
   );
 }

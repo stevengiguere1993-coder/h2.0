@@ -102,6 +102,19 @@ async def send_facture(
             "Microsoft Graph mailer is not configured (AZURE_* / MAIL_FROM_EMAIL)."
         )
 
+    # Numéro DÉFINITIF attribué à l'ENVOI : un brouillon porte une
+    # référence provisoire (« BR-… ») qui ne consomme pas la séquence —
+    # on attribue le vrai numéro ICI, AVANT le rendu du PDF (qui
+    # l'imprime) et l'objet du courriel. Pas de trous QuickBooks si un
+    # brouillon traîne ou est supprimé (audit).
+    _fa0 = (
+        await db.execute(select(Facture).where(Facture.id == facture_id))
+    ).scalar_one_or_none()
+    if _fa0 is not None:
+        from app.services.numbering import ensure_facture_number
+
+        await ensure_facture_number(db, _fa0)
+
     rendered = await render_facture_pdf(
         db, facture_id, include_statement=include_statement,
     )

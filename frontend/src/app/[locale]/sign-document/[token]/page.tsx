@@ -25,6 +25,11 @@ type PublicDocument = {
   repute_accepte_le?: string | null;
   copie_envoyee?: boolean | null;
   copie_erreur?: string | null;
+  // Signature de plusieurs documents : d'autres documents attendent
+  // encore la signature du même locataire (ex. bail + consentement) —
+  // la page propose d'enchaîner.
+  documents_en_attente?: number;
+  document_suivant_token?: string | null;
   company_name: string;
   company_email: string;
 };
@@ -226,6 +231,43 @@ export default function SignDocumentPage() {
                 </p>
               </div>
             </div>
+            {data.document_suivant_token ? (
+              <div className="mt-4 border-t border-emerald-500/30 pt-4">
+                <p className="text-sm text-white">
+                  Il vous reste{" "}
+                  <strong>
+                    {data.documents_en_attente} document
+                    {(data.documents_en_attente || 0) > 1 ? "s" : ""}
+                  </strong>{" "}
+                  à signer.
+                </p>
+                <a
+                  href={`/sign-document/${data.document_suivant_token}`}
+                  className="mt-2 inline-block rounded-lg bg-accent-500 px-5 py-2.5 text-sm font-bold text-brand-950 hover:bg-accent-400"
+                >
+                  Signer le document suivant →
+                </a>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* Plusieurs documents en attente : annoncé AVANT la signature
+            pour que le locataire sache qu'il enchaînera. */}
+        {!isSigned &&
+        signatureRequise &&
+        (data.documents_en_attente || 0) > 0 ? (
+          <div className="mt-6 rounded-xl border border-sky-400/40 bg-sky-500/10 p-4">
+            <p className="text-sm text-sky-200">
+              {data.documents_en_attente} autre
+              {(data.documents_en_attente || 0) > 1 ? "s" : ""} document
+              {(data.documents_en_attente || 0) > 1 ? "s" : ""} vous{" "}
+              {(data.documents_en_attente || 0) > 1
+                ? "attendent"
+                : "attend"}{" "}
+              — après votre signature ici, la page vous proposera le
+              suivant.
+            </p>
           </div>
         ) : null}
 

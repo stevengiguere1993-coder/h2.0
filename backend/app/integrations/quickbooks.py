@@ -510,6 +510,30 @@ class QuickBooksClient:
         # customer QB, cas St-Thimothee/hotl).
         return matches[0] if len(matches) == 1 else None
 
+    async def void_invoice(self, invoice_id: str) -> bool:
+        """ANNULE (void) une Invoice QBO — jamais de suppression : la
+        facture reste visible à 0 $ avec la mention « Annulé », la piste
+        d'audit et la séquence de numéros restent intactes. Renvoie True
+        si l'annulation a été faite, False si l'Invoice est introuvable."""
+        safe = str(invoice_id).replace("'", "''")
+        rows = await self.query(
+            f"SELECT Id, SyncToken FROM Invoice WHERE Id = '{safe}' "
+            "MAXRESULTS 1"
+        )
+        if not rows:
+            return False
+        inv = rows[0]
+        await self._request(
+            "POST",
+            "/invoice",
+            json_body={
+                "Id": str(inv.get("Id")),
+                "SyncToken": str(inv.get("SyncToken") or "0"),
+            },
+            params={"operation": "void", "minorversion": "70"},
+        )
+        return True
+
     async def get_customer(self, customer_id: str) -> Optional[Dict[str, Any]]:
         safe = str(customer_id).replace("'", "''")
         rows = await self.query(

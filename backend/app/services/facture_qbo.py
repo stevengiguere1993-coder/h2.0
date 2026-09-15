@@ -528,6 +528,30 @@ async def sync_facture_payments_to_qbo(
     return pushed
 
 
+async def void_qbo_invoice_now(qbo_invoice_id: str) -> None:
+    """Arrière-plan : ANNULE (void) l'Invoice QB d'une facture supprimée
+    dans Kratos. Jamais de suppression côté QB — la facture annulée reste
+    dans la piste d'audit et la numérotation (retour 2026-09-12, point
+    10). Best-effort : loggé, jamais bloquant."""
+    try:
+        qbo = get_qbo()
+        await qbo._load_refresh_from_db()
+        if not qbo.ready:
+            return
+        ok = await qbo.void_invoice(qbo_invoice_id)
+        if ok:
+            log.info("Invoice QB %s annulée (void)", qbo_invoice_id)
+        else:
+            log.warning(
+                "Invoice QB %s introuvable — rien à annuler",
+                qbo_invoice_id,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "void Invoice QB %s échoué : %s", qbo_invoice_id, exc
+        )
+
+
 async def sync_facture_to_qbo(
     db: AsyncSession, facture_id: int
 ) -> Dict[str, Any]:
@@ -554,6 +578,13 @@ async def sync_facture_to_qbo(
             "reason": "facture_draft_ou_annulee",
             "status": fa.status,
         }
+
+    # Filet : jamais de référence provisoire (« BR-… ») dans QuickBooks —
+    # si la facture a quitté le brouillon sans passer par les chemins qui
+    # numérotent, on attribue le numéro ici avant de créer l'Invoice.
+    from app.services.numbering import ensure_facture_number
+
+    await ensure_facture_number(db, fa)
 
     items = await _load_items(db, facture_id)
     client = await _load_client(db, fa.client_id)

@@ -37,6 +37,10 @@ class ContactRequestStatus(str, Enum):
 
     NEW = "new"
     CONTACTED = "contacted"
+    # À RAPPELER (retour 2026-09-12, point 2) : appel sortant sans
+    # réponse → le prospect atterrit ici automatiquement, avec SMS +
+    # courriel « nous avons tenté de vous joindre ».
+    A_RAPPELER = "a_rappeler"
     RDV_PREVU = "rdv_prevu"
     QUALIFIED = "qualified"
     QUOTED = "quoted"
