@@ -33,6 +33,9 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "automation_settings",
     "availability_slots",
     "bon_items",
+    #: Tâches cochables d'un bon (bons fusionnés « même lieu », main
+    #: 2026-09-15) — lues avec le détail du bon.
+    "bon_tasks",
     "bons_travail",
     "cadence_steps",
     "centris_listings",
