@@ -34,8 +34,17 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { CreateLocataireModal } from "@/components/immobilier/create-locataire-modal";
+import type { FichierAImporter } from "@/components/immobilier/doc-types";
 import {
-  TalFormDropdown
+  DocumentsAImporterZone,
+  importerEnSerie,
+  type ImportResultat
+} from "@/components/immobilier/documents-a-importer";
+import {
+  TalFormDropdown,
+  importDocument,
+  uploadBailDocument
 } from "@/components/immobilier/tal-avis";
 
 type Dossier = {
@@ -1151,12 +1160,6 @@ function LierLocataireModal({
     return new Date().toISOString().slice(0, 10);
   })();
 
-  const [nom, setNom] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const [dateNaissance, setDateNaissance] = useState("");
-  const [nas, setNas] = useState("");
-  const [ancienneAdresse, setAncienneAdresse] = useState("");
   //: Dépôt de l'ANCIEN locataire encore détenu sur ce logement. Phil a
   //: refusé un verrou ici (« ça peut être un petit peu gossant ») : on
   //: le RAPPELLE au bon moment, sans jamais empêcher la relocation.
@@ -1194,32 +1197,45 @@ function LierLocataireModal({
       }
     })();
   }, [d.immeuble_id, d.logement_id]);
-  // Locataire EXISTANT (déjà client) par défaut : le bail s'attache à
-  // sa fiche — zéro doublon. « Nouveau » crée la fiche sur place.
-  const [modeExistant, setModeExistant] = useState(true);
+
+  // Locataire déjà client (liste) — ou créé à l'instant par LA modale
+  // de création (même processus que la page Locataires, retour Phil
+  // 2026-09-15) : il est alors ajouté à la liste et sélectionné.
   const [locatairesDispo, setLocatairesDispo] = useState<
     { id: number; full_name: string }[] | null
   >(null);
   const [locExistantId, setLocExistantId] = useState<number | null>(null);
   const [locSearch, setLocSearch] = useState("");
-  const [employeur, setEmployeur] = useState("");
-  const [revenu, setRevenu] = useState("");
+  const [nouveauId, setNouveauId] = useState<number | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
   const [debut, setDebut] = useState(defaultDebut);
   const [fin, setFin] = useState(addMonthsIso(defaultDebut, 12));
   const [loyer, setLoyer] = useState(
     d.loyer_demande != null ? String(d.loyer_demande) : ""
   );
   const [depot, setDepot] = useState("");
+  // Documents déposés APRÈS la création du bail : « Bail » = LE bail
+  // signé (la carte passe à « Reloué »), le reste au dossier.
+  const [fichiers, setFichiers] = useState<FichierAImporter[]>([]);
+  const [progression, setProgression] = useState<{
+    fait: number;
+    total: number;
+  } | null>(null);
+  const [resultatsImport, setResultatsImport] = useState<
+    ImportResultat[] | null
+  >(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<{
     locataire_id: number;
     bail_id: number;
     immeuble_id: number;
+    bail_signe: boolean;
+    echecs: number;
   } | null>(null);
 
   useEffect(() => {
-    if (!modeExistant || locatairesDispo !== null) return;
+    if (locatairesDispo !== null) return;
     void (async () => {
       try {
         const r = await authedFetch("/api/v1/immobilier/locataires");
@@ -1232,9 +1248,14 @@ function LierLocataireModal({
         setLocatairesDispo([]);
       }
     })();
-  }, [modeExistant, locatairesDispo]);
+  }, [locatairesDispo]);
+
+  const locChoisi = (locatairesDispo || []).find(
+    (l) => l.id === locExistantId
+  );
 
   async function submit() {
+    if (locExistantId == null) return;
     setSaving(true);
     setErr(null);
     try {
@@ -1243,15 +1264,7 @@ function LierLocataireModal({
         {
           method: "POST",
           body: JSON.stringify({
-            locataire_id: modeExistant ? locExistantId : null,
-            locataire_nom: nom.trim(),
-            locataire_email: email.trim() || null,
-            locataire_phone: phone.trim() || null,
-            date_naissance: dateNaissance || null,
-            nas_last4: nas.trim() || null,
-            ancienne_adresse: ancienneAdresse.trim() || null,
-            employeur: employeur.trim() || null,
-            revenu_annuel: revenu.trim() ? Number(revenu) : null,
+            locataire_id: locExistantId,
             date_debut: debut,
             date_fin: fin,
             loyer_mensuel: Number(loyer),
@@ -1263,13 +1276,36 @@ function LierLocataireModal({
         const t = await r.text();
         throw new Error(t.slice(0, 240) || `HTTP ${r.status}`);
       }
-      setDone(
-        (await r.json()) as {
-          locataire_id: number;
-          bail_id: number;
-          immeuble_id: number;
-        }
-      );
+      const res = (await r.json()) as {
+        locataire_id: number;
+        bail_id: number;
+        immeuble_id: number;
+      };
+      let bailSigne = false;
+      let echecs = 0;
+      if (fichiers.length > 0) {
+        const out = await importerEnSerie(
+          fichiers,
+          (f) =>
+            f.type === "bail"
+              ? uploadBailDocument({
+                  bailId: res.bail_id,
+                  file: f.file,
+                  dateEntree: debut
+                })
+              : importDocument({
+                  file: f.file,
+                  type: f.type,
+                  locataireId: res.locataire_id,
+                  bailId: res.bail_id
+                }),
+          (fait, total) => setProgression({ fait, total })
+        );
+        setResultatsImport(out);
+        bailSigne = out.some((x) => x.fichier.type === "bail" && !x.erreur);
+        echecs = out.filter((x) => x.erreur).length;
+      }
+      setDone({ ...res, bail_signe: bailSigne, echecs });
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -1294,15 +1330,32 @@ function LierLocataireModal({
         {done ? (
           <div className="space-y-3 p-5 text-sm text-white/80">
             <p className="flex items-center gap-2 font-semibold text-emerald-300">
-              <Check className="h-4 w-4" /> Locataire lié — bail proposé
-              créé.
+              <Check className="h-4 w-4" />{" "}
+              {done.bail_signe
+                ? "Locataire lié — bail signé au dossier."
+                : "Locataire lié — bail proposé créé."}
             </p>
-            <p className="rounded-lg border border-fuchsia-400/30 bg-fuchsia-500/10 px-3 py-2 text-xs text-fuchsia-200">
-              La carte passe à « Bail en signature ». Dès que le bail
-              signé est en main (PDF du gestionnaire, ou bientôt notre
-              système de signature), joins-le : c&apos;est ce qui fait
-              passer la carte à « Reloué ».
-            </p>
+            {done.echecs > 0 ? (
+              <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                {done.echecs} document{done.echecs > 1 ? "s" : ""} n&apos;
+                {done.echecs > 1 ? "ont" : "a"} pas pu être déposé
+                {done.echecs > 1 ? "s" : ""} — importe-les depuis la fiche du
+                locataire.
+              </p>
+            ) : null}
+            {done.bail_signe ? (
+              <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+                Le bail signé est au dossier : la carte passe à
+                « Reloué » et l&apos;unité est considérée louée.
+              </p>
+            ) : (
+              <p className="rounded-lg border border-fuchsia-400/30 bg-fuchsia-500/10 px-3 py-2 text-xs text-fuchsia-200">
+                La carte passe à « Bail en signature ». Dès que le bail
+                signé est en main (PDF du gestionnaire, ou bientôt notre
+                système de signature), joins-le : c&apos;est ce qui fait
+                passer la carte à « Reloué ».
+              </p>
+            )}
             <div className="flex flex-col gap-1.5 text-xs">
               <Link
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1313,65 +1366,79 @@ function LierLocataireModal({
               </Link>
             </div>
             <div className="flex flex-wrap justify-end gap-2 border-t border-brand-800 pt-3">
-              <button
-                type="button"
-                onClick={onDone}
-                className="btn-secondary btn-sm"
-              >
-                Plus tard
-              </button>
-              <button
-                type="button"
-                onClick={() => onImporterBail(done.bail_id)}
-                className="btn-accent btn-sm"
-              >
-                <FileSignature className="h-4 w-4" /> Joindre le bail
-                signé maintenant
-              </button>
+              {done.bail_signe ? (
+                <button
+                  type="button"
+                  onClick={onDone}
+                  className="btn-accent btn-sm"
+                >
+                  Fermer
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={onDone}
+                    className="btn-secondary btn-sm"
+                  >
+                    Plus tard
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onImporterBail(done.bail_id)}
+                    className="btn-accent btn-sm"
+                  >
+                    <FileSignature className="h-4 w-4" /> Joindre le bail
+                    signé maintenant
+                  </button>
+                </>
+              )}
             </div>
           </div>
         ) : (
           <div className="grid gap-3 p-5">
             <p className="rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
-              Choisis un locataire déjà client ou crée sa fiche sur
-              place. Son bail est créé en « proposé » — rien n&apos;est
-              envoyé au locataire, rien n&apos;est créé sans ton accord.
+              Choisis un locataire déjà client, ou crée sa fiche (même
+              formulaire que la page Locataires). Son bail est créé en
+              « proposé » — rien n&apos;est envoyé au locataire, rien
+              n&apos;est créé sans ton accord.
             </p>
-            <div className="flex gap-1.5">
-              <button
-                type="button"
-                onClick={() => setModeExistant(true)}
-                className={`rounded-md border px-2.5 py-1 text-xs font-semibold ${
-                  modeExistant
-                    ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
-                    : "border-brand-700 text-white/50 hover:bg-brand-900"
-                }`}
-              >
-                Locataire existant (déjà client)
-              </button>
-              <button
-                type="button"
-                onClick={() => setModeExistant(false)}
-                className={`rounded-md border px-2.5 py-1 text-xs font-semibold ${
-                  !modeExistant
-                    ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
-                    : "border-brand-700 text-white/50 hover:bg-brand-900"
-                }`}
-              >
-                Nouveau locataire
-              </button>
-            </div>
-            {modeExistant ? (
-              <div className="grid gap-2">
-                <label className="text-[11px] font-semibold text-white/60">
-                  Rechercher le locataire
-                  <input
-                    value={locSearch}
-                    onChange={(e) => setLocSearch(e.target.value)}
-                    placeholder="Nom du locataire déjà client…"
-                    className={`${INPUT_CLS} mt-0.5 block w-full`}
-                  />
-                </label>
+            <div className="grid gap-2">
+              <div className="flex items-center gap-2">
+                <input
+                  value={locSearch}
+                  onChange={(e) => setLocSearch(e.target.value)}
+                  placeholder="Rechercher un locataire déjà client…"
+                  className={`${INPUT_CLS} flex-1`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowCreate(true)}
+                  className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/25"
+                  title="Ouvre la fiche de création complète (même processus que la page Locataires)"
+                >
+                  <UserPlus className="h-3.5 w-3.5" /> Nouveau locataire
+                </button>
+              </div>
+              {locChoisi ? (
+                <p className="flex items-center gap-2 rounded-md border border-emerald-400/40 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-200">
+                  <Check className="h-3.5 w-3.5" />
+                  <span className="min-w-0 truncate font-semibold">
+                    {locChoisi.full_name}
+                  </span>
+                  {nouveauId === locChoisi.id ? (
+                    <span className="badge badge-emerald">nouvelle fiche</span>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => setLocExistantId(null)}
+                    className="ml-auto text-white/50 hover:text-white"
+                    title="Changer de locataire"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </p>
+              ) : (
                 <div className="max-h-40 overflow-y-auto rounded-lg border border-brand-800">
                   {(locatairesDispo || [])
                     .filter((l) =>
@@ -1385,11 +1452,7 @@ function LierLocataireModal({
                         key={l.id}
                         type="button"
                         onClick={() => setLocExistantId(l.id)}
-                        className={`block w-full px-3 py-1.5 text-left text-xs ${
-                          locExistantId === l.id
-                            ? "bg-emerald-500/20 font-semibold text-emerald-200"
-                            : "text-white/75 hover:bg-brand-900"
-                        }`}
+                        className="block w-full px-3 py-1.5 text-left text-xs text-white/75 hover:bg-brand-900"
                       >
                         {l.full_name}
                       </button>
@@ -1400,39 +1463,11 @@ function LierLocataireModal({
                     </p>
                   ) : null}
                 </div>
-                <p className="text-[10px] text-white/40">
-                  Le bail s&apos;attachera à sa fiche existante —
-                  historique conservé, aucun doublon.
-                </p>
-              </div>
-            ) : (
-              <>
-            <label className="text-[11px] font-semibold text-white/60">
-              Nom complet du locataire
-              <input
-                value={nom}
-                onChange={(e) => setNom(e.target.value)}
-                className={`${INPUT_CLS} mt-0.5 block w-full`}
-              />
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              <label className="text-[11px] font-semibold text-white/60">
-                Courriel *
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className={`${INPUT_CLS} mt-0.5 block w-full`}
-                />
-              </label>
-              <label className="text-[11px] font-semibold text-white/60">
-                Téléphone *
-                <input
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className={`${INPUT_CLS} mt-0.5 block w-full`}
-                />
-              </label>
+              )}
+              <p className="text-[10px] text-white/40">
+                Le bail s&apos;attache à sa fiche — historique conservé,
+                aucun doublon.
+              </p>
             </div>
             {depotADue ? (
               /* Rappel, pas verrou : le dépôt de l'ancien locataire est
@@ -1452,62 +1487,6 @@ function LierLocataireModal({
                 n&apos;empêche pas la relocation — mais il lui est dû.
               </p>
             ) : null}
-            <div className="grid grid-cols-2 gap-3">
-              <label className="text-[11px] font-semibold text-white/60">
-                Date de naissance *
-                <input
-                  type="date"
-                  value={dateNaissance}
-                  onChange={(e) => setDateNaissance(e.target.value)}
-                  className={`${INPUT_CLS} mt-0.5 block w-full`}
-                />
-              </label>
-              <label className="text-[11px] font-semibold text-white/60">
-                NAS (4 derniers chiffres)
-                <input
-                  inputMode="numeric"
-                  maxLength={4}
-                  value={nas}
-                  onChange={(e) =>
-                    setNas(e.target.value.replace(/[^0-9]/g, "").slice(0, 4))
-                  }
-                  placeholder="Optionnel"
-                  className={`${INPUT_CLS} mt-0.5 block w-full`}
-                />
-              </label>
-            </div>
-            <label className="text-[11px] font-semibold text-white/60">
-              Ancienne adresse
-              <input
-                value={ancienneAdresse}
-                onChange={(e) => setAncienneAdresse(e.target.value)}
-                placeholder="Adresse actuelle du locataire (avant le déménagement)"
-                className={`${INPUT_CLS} mt-0.5 block w-full`}
-              />
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              <label className="text-[11px] font-semibold text-white/60">
-                Employeur
-                <input
-                  value={employeur}
-                  onChange={(e) => setEmployeur(e.target.value)}
-                  placeholder="Optionnel"
-                  className={`${INPUT_CLS} mt-0.5 block w-full`}
-                />
-              </label>
-              <label className="text-[11px] font-semibold text-white/60">
-                Revenu annuel ($)
-                <input
-                  inputMode="decimal"
-                  value={revenu}
-                  onChange={(e) => setRevenu(e.target.value)}
-                  placeholder="Optionnel"
-                  className={`${INPUT_CLS} mt-0.5 block w-full`}
-                />
-              </label>
-            </div>
-              </>
-            )}
             <div className="grid grid-cols-2 gap-3">
               <label className="text-[11px] font-semibold text-white/60">
                 Début du bail
@@ -1553,6 +1532,14 @@ function LierLocataireModal({
                 />
               </label>
             </div>
+            <DocumentsAImporterZone
+              fichiers={fichiers}
+              onChange={setFichiers}
+              disabled={saving}
+              progression={progression}
+              resultats={resultatsImport}
+              aide="Déposés après la création du bail : le fichier « Bail » devient LE bail signé (la carte passe directement à « Reloué ») ; les autres pièces sont classées au dossier du locataire et du bail."
+            />
             {err ? (
               <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
                 {err}
@@ -1570,12 +1557,7 @@ function LierLocataireModal({
                 type="button"
                 disabled={
                   saving ||
-                  (modeExistant
-                    ? locExistantId == null
-                    : !nom.trim() ||
-                      !email.trim() ||
-                      !phone.trim() ||
-                      !dateNaissance) ||
+                  locExistantId == null ||
                   !debut ||
                   !fin ||
                   loyer.trim() === "" ||
@@ -1595,6 +1577,25 @@ function LierLocataireModal({
           </div>
         )}
       </div>
+
+      {showCreate ? (
+        <CreateLocataireModal
+          documents="differer"
+          zIndexClass="z-[80]"
+          onClose={() => setShowCreate(false)}
+          onSaved={(id, info) => {
+            setShowCreate(false);
+            setLocatairesDispo((prev) => [
+              { id, full_name: info.full_name },
+              ...(prev || []).filter((l) => l.id !== id)
+            ]);
+            setLocExistantId(id);
+            setNouveauId(id);
+            if (info.fichiers.length > 0)
+              setFichiers((prev) => [...prev, ...info.fichiers]);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { DragEvent } from "react";
 import {
   AlertTriangle,
   Check,
@@ -17,8 +18,8 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { ACCEPT_DOCS } from "@/components/immobilier/documents-a-importer";
 import {
-  ImportDocButton,
   importDocument,
   type BailDocument
 } from "@/components/immobilier/tal-avis";
@@ -272,7 +273,6 @@ export function TalDossiersSection({
   const [drafts, setDrafts] = useState<Record<number, Draft>>({});
   const [savingId, setSavingId] = useState<number | null>(null);
   const [docs, setDocs] = useState<Record<number, BailDocument[]>>({});
-  const [ouvert, setOuvert] = useState<Record<number, boolean>>({});
   const [importingId, setImportingId] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
   const [bailChoisi, setBailChoisi] = useState<number | "">("");
@@ -287,10 +287,14 @@ export function TalDossiersSection({
       const rows = (await r.json()) as TalDossier[];
       setDossiers(rows);
       setDrafts(Object.fromEntries(rows.map((d) => [d.id, draftDe(d)])));
+      // Pièces TOUJOURS visibles (retour Phil 2026-09-15) : chargées
+      // avec les dossiers, plus de volet à ouvrir.
+      await Promise.all(rows.map((d) => loadDocs(d.id)));
     } catch (e) {
       setErr(`Dossiers TAL : ${(e as Error).message}`);
       setDossiers([]);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locataireId]);
 
   useEffect(() => {
@@ -308,12 +312,6 @@ export function TalDossiersSection({
     } catch (e) {
       setErr(`Pièces : ${(e as Error).message}`);
     }
-  }
-
-  function toggleDocs(dossierId: number) {
-    const next = !ouvert[dossierId];
-    setOuvert((m) => ({ ...m, [dossierId]: next }));
-    if (next && !docs[dossierId]) void loadDocs(dossierId);
   }
 
   async function save(d: TalDossier) {
@@ -368,20 +366,31 @@ export function TalDossiersSection({
     setChoixBail(true);
   }
 
-  async function importer(dossierId: number, file: File) {
+  /** Dépose une ou plusieurs pièces sur le dossier (en série). */
+  async function importer(dossierId: number, files: File[]) {
+    if (files.length === 0) return;
     setImportingId(dossierId);
     setErr(null);
+    const rates: string[] = [];
+    for (const file of files) {
+      try {
+        await importDocument({
+          file,
+          type: "tal_piece",
+          talDossierId: dossierId
+        });
+      } catch (e) {
+        rates.push(`${file.name} : ${(e as Error).message}`);
+      }
+    }
     try {
-      await importDocument({ file, type: "tal_piece", talDossierId: dossierId });
       await loadDocs(dossierId);
-      setOuvert((m) => ({ ...m, [dossierId]: true }));
       window.dispatchEvent(new Event(DOCS_EVENT));
       await load();
-    } catch (e) {
-      setErr(`Import : ${(e as Error).message}`);
     } finally {
       setImportingId(null);
     }
+    if (rates.length > 0) setErr(`Import : ${rates.join(" · ")}`);
   }
 
   async function ouvrirPdf(docId: number) {
@@ -513,15 +522,6 @@ export function TalDossiersSection({
                       nº {d.numero_dossier}
                     </span>
                   ) : null}
-                  <button
-                    type="button"
-                    onClick={() => toggleDocs(d.id)}
-                    className="ml-auto inline-flex items-center gap-1 text-xs text-accent-500 hover:underline"
-                    title="Pièces rattachées (mise en demeure, avis d'audience, décision…)"
-                  >
-                    <FileText className="h-3.5 w-3.5" />
-                    Pièces ({pieces ? pieces.length : d.nb_documents ?? 0})
-                  </button>
                 </div>
 
                 <div className="mt-2 grid gap-2 sm:grid-cols-3">
@@ -627,55 +627,122 @@ export function TalDossiersSection({
                   </div>
                 ) : null}
 
-                {ouvert[d.id] ? (
-                  <div className="mt-3 border-t border-brand-800 pt-2">
-                    <div className="mb-1.5 flex items-center justify-between gap-2">
-                      <p className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
-                        Pièces du dossier
-                      </p>
-                      <ImportDocButton
-                        label="Importer"
-                        busy={importingId === d.id}
-                        onPick={(f) => void importer(d.id, f)}
-                        title="Rattacher un PDF/JPG/PNG à ce dossier — il reste aussi dans les Documents du locataire"
-                      />
-                    </div>
-                    {!pieces ? (
-                      <p className="text-xs text-white/50">Chargement…</p>
-                    ) : pieces.length === 0 ? (
-                      <p className="text-xs text-white/50">
-                        Aucune pièce — importe la mise en demeure, l&apos;avis
-                        d&apos;audience ou la décision.
-                      </p>
-                    ) : (
-                      <ul className="space-y-1">
-                        {pieces.map((p) => (
-                          <li key={p.id}>
-                            <button
-                              type="button"
-                              onClick={() => void ouvrirPdf(p.id)}
-                              className="inline-flex items-center gap-1.5 text-xs text-accent-500 hover:underline"
-                            >
-                              <FileText className="h-3.5 w-3.5" />
-                              {p.titre}
-                              {p.created_at ? (
-                                <span className="text-white/45">
-                                  · {p.created_at.slice(0, 10)}
-                                </span>
-                              ) : null}
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                ) : null}
+                {/* Pièces du dossier — TOUJOURS visibles, avec la zone
+                    de dépôt ouverte en permanence (retour Phil
+                    2026-09-15 : plus de bouton « pièce jointe » en haut
+                    à droite). */}
+                <div className="mt-3 border-t border-brand-800 pt-2">
+                  <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-white/50">
+                    Pièces du dossier
+                    {pieces ? ` (${pieces.length})` : ""}
+                  </p>
+                  {!pieces ? (
+                    <p className="text-xs text-white/50">Chargement…</p>
+                  ) : pieces.length === 0 ? null : (
+                    <ul className="mb-2 space-y-1">
+                      {pieces.map((p) => (
+                        <li key={p.id}>
+                          <button
+                            type="button"
+                            onClick={() => void ouvrirPdf(p.id)}
+                            className="inline-flex items-center gap-1.5 text-xs text-accent-500 hover:underline"
+                          >
+                            <FileText className="h-3.5 w-3.5" />
+                            {p.titre}
+                            {p.created_at ? (
+                              <span className="text-white/45">
+                                · {p.created_at.slice(0, 10)}
+                              </span>
+                            ) : null}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <ZoneDepotPieceTal
+                    busy={importingId === d.id}
+                    onFiles={(files) => void importer(d.id, files)}
+                  />
+                </div>
               </div>
             );
           })}
         </div>
       )}
     </section>
+  );
+}
+
+// ─── Zone de dépôt d'une pièce TAL (toujours ouverte) ────────────────
+
+function ZoneDepotPieceTal({
+  busy,
+  onFiles
+}: {
+  busy: boolean;
+  onFiles: (files: File[]) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [survol, setSurvol] = useState(false);
+
+  function prendre(list: FileList | null | undefined) {
+    if (!list || busy) return;
+    const files = Array.from(list);
+    if (files.length > 0) onFiles(files);
+  }
+
+  function onDrop(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setSurvol(false);
+    prendre(e.dataTransfer?.files);
+  }
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => !busy && inputRef.current?.click()}
+      onKeyDown={(e) => {
+        if ((e.key === "Enter" || e.key === " ") && !busy) {
+          e.preventDefault();
+          inputRef.current?.click();
+        }
+      }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (!busy) setSurvol(true);
+      }}
+      onDragLeave={() => setSurvol(false)}
+      onDrop={onDrop}
+      title="Rattacher une pièce (PDF/JPG/PNG) à ce dossier — elle reste aussi dans les Documents du locataire"
+      className={`flex cursor-pointer items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs transition ${
+        survol
+          ? "border-accent-500 bg-accent-500/10 text-accent-500"
+          : "border-brand-700 bg-brand-950/40 text-white/55 hover:border-accent-500/60 hover:text-white/80"
+      } ${busy ? "opacity-60" : ""}`}
+    >
+      {busy ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      ) : (
+        <Plus className="h-3.5 w-3.5" />
+      )}
+      <span>
+        {busy
+          ? "Dépôt en cours…"
+          : "Déposer une pièce ici (mise en demeure, avis d'audience, décision…) — glisser ou cliquer"}
+      </span>
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        accept={ACCEPT_DOCS}
+        className="hidden"
+        onChange={(e) => {
+          prendre(e.target.files);
+          e.target.value = "";
+        }}
+      />
+    </div>
   );
 }
 
