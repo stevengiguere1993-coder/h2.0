@@ -42,6 +42,7 @@ from app.schemas.immobilier_extras import (
     TalFormRequest,
     TalFormType,
 )
+from app.services.audit import log_action
 from app.services.automation_state import (
     get_automation_config,
     set_automation_config,
@@ -1318,6 +1319,11 @@ async def annuler_depart(
     await db.flush()
     await recaler_statut_logement(db, bail.logement_id)
     lg = await db.get(Logement, bail.logement_id)
+    await log_action(
+        db, user=user, action="baux.depart_annule",
+        entity_type="baux", entity_id=bail.id,
+        details={"dossier_id": dossier.id, "bail_reactive": reactive},
+    )
     await db.commit()
     log.info(
         "Départ annulé sur le bail %s (dossier %s) par %s",
@@ -1380,6 +1386,11 @@ async def resilier_bail(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Envoi de l'entente échoué : {exc}",
             )
+        await log_action(
+            db, user=user, action="baux.entente_resiliation_envoyee",
+            entity_type="baux", entity_id=bail_id,
+            details={"date_fin": payload.date_fin},
+        )
         await db.commit()
         log.info(
             "Entente de résiliation envoyée (bail %s, fin %s) par %s",
@@ -1411,6 +1422,12 @@ async def resilier_bail(
         date_depart=payload.date_fin,
         source="Résiliation immédiate",
         ouvrir_dossier=payload.ouvrir_relocation,
+    )
+    await log_action(
+        db, user=user, action="baux.resilie",
+        entity_type="baux", entity_id=bail_id,
+        details={"date_fin": payload.date_fin, "status": bail.status,
+                 "relocation_ouverte": payload.ouvrir_relocation},
     )
     await db.commit()
     log.info(
@@ -1500,6 +1517,10 @@ async def annuler_transfert_unite(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc)
         ) from exc
+    await log_action(
+        db, user=user, action="baux.transfert_annule",
+        entity_type="baux", entity_id=bail_id, details=out,
+    )
     await db.commit()
     log.info("Transfert annulé (bail %s) par %s", bail_id, user.email)
     return AnnulerTransfertResult(
@@ -1831,6 +1852,16 @@ async def transferer_unite(
     marquer_prise_en_charge_humaine(dossier)
     await recaler_statut_logement(db, nouveau.id)
 
+    await log_action(
+        db, user=user, action="baux.transfere",
+        entity_type="baux", entity_id=bail.id,
+        details={
+            "nouveau_bail_id": nb.id, "ancien_logement_id": bail.logement_id,
+            "nouveau_logement_id": nouveau.id, "date_transfert": date_transfert,
+            "loyer_mensuel": payload.loyer_mensuel,
+            "depot_transfere": depot_actuel if transfere else 0.0,
+        },
+    )
     await db.commit()
     log.info(
         "Transfert d'unité : bail %s → bail %s (logement %s → %s) par %s",

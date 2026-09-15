@@ -42,6 +42,7 @@ from app.repositories.user import UserRepository
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.user import User
+from app.services.audit import log_action
 from app.services.locatif_demarrage import get_demarrage, set_demarrage
 from app.services.loyer_echeance import paiement_en_retard, seuil_retard
 from app.services.tal_garants import (
@@ -1014,10 +1015,11 @@ async def _bail_actif_chevauchant(
 async def _refuser_si_unite_deja_en_signature(
     db, log_obj, locataire_id: int, date_debut, date_fin, exclure_bail_id=None
 ) -> None:
-    """409 si un bail PROPOSÉ d'un AUTRE locataire chevauche la période
-    sur ce logement : l'unité est déjà en signature — il faut d'abord
-    retirer ce locataire (Locations). Chambres (« louer indéfiniment »)
-    exclues : plusieurs baux y cohabitent par nature."""
+    """409 si un AUTRE locataire est déjà sur ce logement pour la
+    période : bail PROPOSÉ (unité en signature — retirer ce locataire
+    dans Locations) ou bail ACTIF (un seul bail actif par unité — Phil
+    2026-09-15 : déclarer le départ ou décaler le début). Chambres
+    (« louer indéfiniment ») exclues : plusieurs baux y cohabitent."""
     if getattr(log_obj, "location_en_chambres", False):
         return
     q = select(Bail).where(
@@ -1033,18 +1035,52 @@ async def _refuser_si_unite_deja_en_signature(
     if exclure_bail_id is not None:
         q = q.where(Bail.id != exclure_bail_id)
     autre = (await db.execute(q)).scalars().first()
-    if autre is None:
-        return
-    lo = await db.get(Locataire, autre.locataire_id)
-    raise HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail=(
-            "Un bail est déjà en signature sur ce logement pour "
-            f"{lo.full_name if lo else 'un autre locataire'} — retire-le "
-            "d'abord (Locations → carte du logement → « Retirer le "
-            "locataire »), ou joins son bail signé."
-        ),
-    )
+    if autre is not None:
+        lo = await db.get(Locataire, autre.locataire_id)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Un bail est déjà en signature sur ce logement pour "
+                f"{lo.full_name if lo else 'un autre locataire'} — retire-le "
+                "d'abord (Locations → carte du logement → « Retirer le "
+                "locataire »), ou joins son bail signé."
+            ),
+        )
+    # UN SEUL bail actif par unité (Phil 2026-09-15) : un bail (proposé
+    # ou actif) ne peut pas commencer tant que le locataire en place
+    # n'est pas parti — sa fin doit précéder le début du nouveau.
+    if date_debut is not None:
+        q2 = select(Bail).where(
+            Bail.logement_id == log_obj.id,
+            Bail.status == BailStatus.ACTIF.value,
+            Bail.locataire_id != locataire_id,
+            or_(
+                Bail.au_mois.is_(True),
+                Bail.date_fin.is_(None),
+                Bail.date_fin >= date_debut,
+            ),
+        )
+        if date_fin is not None:
+            q2 = q2.where(Bail.date_debut <= date_fin)
+        if exclure_bail_id is not None:
+            q2 = q2.where(Bail.id != exclure_bail_id)
+        occupant = (await db.execute(q2)).scalars().first()
+        if occupant is not None:
+            lo = await db.get(Locataire, occupant.locataire_id)
+            fin_txt = (
+                "au mois (sans date de fin)"
+                if occupant.au_mois
+                else f"jusqu'au {occupant.date_fin}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"{lo.full_name if lo else 'Un locataire'} occupe encore "
+                    f"ce logement (bail {fin_txt}) — un seul bail actif par "
+                    "unité : déclare son départ (« Mettre fin au bail ») ou "
+                    "choisis une date de début après la fin de son bail."
+                ),
+            )
 
 
 async def _consigner_suppression_bail_sortant(db, bail) -> None:
@@ -3288,6 +3324,12 @@ async def create_locataire(
     obj.created_at = _now()
     obj.updated_at = _now()
     db.add(obj)
+    await db.flush()
+    await log_action(
+        db, user=user, action="locataires.created",
+        entity_type="locataires", entity_id=obj.id,
+        details={"full_name": obj.full_name, "email": obj.email},
+    )
     await db.commit()
     await db.refresh(obj)
     return LocataireRead.model_validate(obj)
@@ -3316,9 +3358,15 @@ async def update_locataire(
     if obj is None:
         raise HTTPException(status_code=404, detail="Locataire introuvable.")
     data = payload.model_dump(exclude_unset=True)
+    avant = {k: getattr(obj, k, None) for k in data}
     for k, v in data.items():
         setattr(obj, k, v)
     obj.updated_at = _now()
+    await log_action(
+        db, user=user, action="locataires.updated",
+        entity_type="locataires", entity_id=obj.id,
+        details={"champs": sorted(data), "avant": avant, "apres": data},
+    )
     await db.commit()
     await db.refresh(obj)
     return LocataireRead.model_validate(obj)
@@ -3422,6 +3470,14 @@ async def delete_locataire(
         )
 
         await ouvrir_dossiers_unites_vacantes(db, list(logement_ids))
+    await log_action(
+        db, user=user, action="locataires.deleted",
+        entity_type="locataires", entity_id=locataire_id,
+        details={
+            "full_name": obj.full_name, "force": bool(force),
+            "baux_supprimes": bail_ids,
+        },
+    )
     await db.commit()
 
 
@@ -4361,6 +4417,16 @@ async def create_bail(
 
     await rattacher_pdf_bail_orphelin(db, obj)
     await recaler_statut_logement(db, obj.logement_id)
+    await log_action(
+        db, user=user, action="baux.created",
+        entity_type="baux", entity_id=obj.id,
+        details={
+            "logement_id": obj.logement_id, "locataire_id": obj.locataire_id,
+            "status": obj.status, "date_debut": obj.date_debut,
+            "date_fin": obj.date_fin, "loyer_mensuel": obj.loyer_mensuel,
+            "depot_garantie": obj.depot_garantie,
+        },
+    )
 
     await db.commit()
     await db.refresh(obj)
@@ -4442,6 +4508,21 @@ async def update_bail(
                         f"logement (fin le {chev.date_fin})."
                     ),
                 )
+    # Un bail PROPOSÉ dont on déplace les dates reste soumis à « un seul
+    # bail actif par unité » (Phil 2026-09-15).
+    if obj.status == BailStatus.PROPOSE.value and (
+        "date_debut" in data or "date_fin" in data
+    ):
+        log_g = await db.get(Logement, obj.logement_id)
+        if log_g is not None:
+            await _refuser_si_unite_deja_en_signature(
+                db,
+                log_g,
+                obj.locataire_id,
+                data.get("date_debut", obj.date_debut),
+                data.get("date_fin", obj.date_fin),
+                exclure_bail_id=obj.id,
+            )
     # `jour_echeance` est NOT NULL en base : un `null` explicite dans le
     # payload signifie « ne touche pas », pas « efface » (sinon 500).
     if data.get("jour_echeance") is None:
@@ -4538,6 +4619,14 @@ async def update_bail(
         ):
             refleter_bail_sur_demande(log_obj, float(obj.loyer_mensuel))
 
+    await log_action(
+        db, user=user, action="baux.updated",
+        entity_type="baux", entity_id=obj.id,
+        details={
+            "champs": sorted(data), "apres": data,
+            "status_avant": old_status, "status_apres": obj.status,
+        },
+    )
     await db.commit()
     await db.refresh(obj)
     return BailRead.model_validate(obj)
@@ -4606,11 +4695,15 @@ async def delete_bail(
     # le transfert (l'ancien bail reprend son cours, le dépôt revient).
     if getattr(obj, "transfere_depuis_bail_id", None) is not None:
         try:
-            await annuler_transfert(db, obj, par=getattr(user, "email", None))
+            out_t = await annuler_transfert(db, obj, par=getattr(user, "email", None))
         except AnnulationTransfertImpossible as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail=str(exc)
             ) from exc
+        await log_action(
+            db, user=user, action="baux.transfert_annule",
+            entity_type="baux", entity_id=bail_id, details=out_t,
+        )
         await db.commit()
         return None
     # Le dépôt d'un bail PROPOSÉ jamais entré en vigueur n'est pas « à
@@ -4664,6 +4757,8 @@ async def delete_bail(
         if getattr(doc, "source", "genere") == "importe" and doc.locataire_id:
             doc.bail_id = None
     logement_id = obj.logement_id
+    locataire_id_sup = obj.locataire_id
+    statut_sup = obj.status
     await db.delete(obj)
     await db.flush()
     await recaler_statut_logement(db, logement_id)
@@ -4672,6 +4767,12 @@ async def delete_bail(
     from app.services.locatif_depart import ouvrir_dossiers_unites_vacantes
 
     await ouvrir_dossiers_unites_vacantes(db, [logement_id])
+    await log_action(
+        db, user=user, action="baux.deleted",
+        entity_type="baux", entity_id=bail_id,
+        details={"logement_id": logement_id, "locataire_id": locataire_id_sup,
+                 "status": statut_sup},
+    )
     await db.commit()
 
 
@@ -5061,6 +5162,9 @@ class LoyerOverviewRow(BaseModel):
     prochain_loyer: Optional[float] = None
     prochain_debut: Optional[date] = None
     prochain_statut: Optional[str] = None
+    #: Mois de bascule d'un transfert d'unité : rien n'est dû sur cette
+    #: ligne (le loyer du mois est sur l'ancienne unité).
+    transfert_bascule: bool = False
 
 
 class LoyerOverview(BaseModel):
@@ -5400,6 +5504,17 @@ async def loyers_overview(
             )
         )
         loyer = 0.0 if apres_fin else loyer_bail_ref
+        # Transfert d'unité en cours de mois (Phil 2026-09-15) : le mois
+        # de bascule est dû UNE fois — sur l'ancien bail (qui garde son
+        # mois entier) ; le nouveau bail ne réclame rien ce mois-là.
+        transfert_bascule = bool(
+            getattr(b, "transfere_depuis_bail_id", None)
+            and b.date_debut is not None
+            and b.date_debut.day != 1
+            and month_start == b.date_debut.replace(day=1)
+        )
+        if transfert_bascule and not apres_fin:
+            loyer = 0.0
         if not apres_fin and b.logement_id:
             logements_couverts.add(b.logement_id)
         # DÛ du mois = loyer + frais ponctuels du mois (retour Phil
@@ -5444,6 +5559,11 @@ async def loyers_overview(
             # du bail est passée.
             etat = "partiel" if ps else "retard"
             nb_retards += 1
+        elif transfert_bascule and du_mois <= 0.005 and not ps:
+            # Rien n'est dû sur la nouvelle unité pour le mois de
+            # bascule : la ligne est « à jour », pas « en attente ».
+            etat = "paye"
+            nb_payes += 1
         elif ps and paye_mois >= du_mois - 0.005:
             if solde > 0.005 and not mois_futur:
                 # Le mois affiché est payé, mais le COMPTE du bail ne
@@ -5477,6 +5597,7 @@ async def loyers_overview(
         rows.append(
             LoyerOverviewRow(
                 bail_id=b.id,
+                transfert_bascule=transfert_bascule,
                 tal_dossier_ouvert_le=b.tal_dossier_ouvert_le,
                 garants=[c.full_name for c in contacts_loc],
                 payeur_nom=payeur_de(contacts_loc),
@@ -5937,6 +6058,11 @@ async def declarer_exception_bail(
             raise HTTPException(
                 status.HTTP_409_CONFLICT, str(exc)
             ) from exc
+    await log_action(
+        db, user=user, action="baux.exception_document",
+        entity_type="baux", entity_id=bail.id,
+        details={"motif": bail.sans_document_motif, "status": bail.status},
+    )
     await db.commit()
     return ExceptionBailOut(
         bail_id=bail.id,
