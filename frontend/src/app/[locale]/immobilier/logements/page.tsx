@@ -133,6 +133,9 @@ function DoublonsLogementsBanner() {
       /* diagnostic seulement */
     }
   }, []);
+  //: Lequel garder ? (défaut : le plus ancien) — audit 2026-09-15.
+  const [garderChoix, setGarderChoix] = useState<Record<string, number>>({});
+
   useEffect(() => {
     void charger();
   }, [charger]);
@@ -140,10 +143,11 @@ function DoublonsLogementsBanner() {
 
   async function fusionner(g: DoublonGroupe) {
     const ids = g.logements.map((l) => l.id).sort((a, b) => a - b);
-    const garder = ids[0];
+    const cle = `${g.immeuble_id}-${g.numero}`;
+    const garder = garderChoix[cle] ?? ids[0];
     if (
       !window.confirm(
-        `Fusionner les ${ids.length} logements « ${g.numero} » de ${g.immeuble_name} en un seul (le plus ancien, #${garder}) ? Baux, paiements et documents des doublons seront rattachés au logement conservé.`
+        `Fusionner les ${ids.length} logements « ${g.numero} » de ${g.immeuble_name} en un seul (#${garder}) ? Baux, paiements, documents, dossiers TAL et maintenance des doublons seront rattachés au logement conservé.`
       )
     )
       return;
@@ -198,6 +202,27 @@ function DoublonsLogementsBanner() {
                 )
               </span>
             </span>
+            <select
+              value={String(
+                garderChoix[`${g.immeuble_id}-${g.numero}`] ??
+                  Math.min(...g.logements.map((l) => l.id))
+              )}
+              onChange={(e) =>
+                setGarderChoix((m) => ({
+                  ...m,
+                  [`${g.immeuble_id}-${g.numero}`]: Number(e.target.value)
+                }))
+              }
+              className="rounded-md border border-amber-400/40 bg-brand-950 px-1.5 py-0.5 text-[11px] text-amber-100"
+              title="Logement à conserver (les autres sont fusionnés dedans)"
+            >
+              {g.logements.map((l) => (
+                <option key={l.id} value={l.id}>
+                  garder #{l.id} ({l.status}
+                  {l.nb_baux ? `, ${l.nb_baux} bail` : ""})
+                </option>
+              ))}
+            </select>
             <button
               type="button"
               disabled={busy}

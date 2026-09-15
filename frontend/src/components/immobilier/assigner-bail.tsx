@@ -25,6 +25,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Loader2, Plus, Search, UserPlus, X } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { CreateLocataireModal } from "@/components/immobilier/create-locataire-modal";
 import type { FichierAImporter } from "@/components/immobilier/doc-types";
 import {
   DocumentsAImporterZone,
@@ -147,10 +148,10 @@ function AssignerBailModal({
   const [locataires, setLocataires] = useState<LocataireItem[] | null>(null);
   const [rech, setRech] = useState("");
   const [locChoisi, setLocChoisi] = useState<LocataireItem | null>(null);
-  const [creerNouveau, setCreerNouveau] = useState(false);
-  const [nvNom, setNvNom] = useState("");
-  const [nvEmail, setNvEmail] = useState("");
-  const [nvTel, setNvTel] = useState("");
+  //: « Nouveau locataire » ouvre LA modale de création (même processus
+  //: que la page Locataires : formulaire complet, alerte doublon,
+  //: documents) — retour Phil 2026-09-15.
+  const [showCreate, setShowCreate] = useState(false);
 
   // Côté logement (mode locataire)
   const [immeubles, setImmeubles] = useState<ImmeubleItem[] | null>(null);
@@ -263,7 +264,11 @@ function AssignerBailModal({
     const res = await importerEnSerie(
       liste,
       (f) =>
-        f.type === "bail"
+        // Bail « déjà en vigueur » : le PDF « Bail » devient LE bail
+        // signé (actif). Bail PROPOSÉ : simple pièce liée au bail — c'est
+        // « Joindre le bail signé » (Locations) qui l'activera, le choix
+        // « proposé » de l'usager n'est pas écrasé (audit 2026-09-15).
+        f.type === "bail" && statut === "actif"
           ? uploadBailDocument({ bailId, file: f.file, dateEntree: debut })
           : importDocument({
               file: f.file,
@@ -332,14 +337,10 @@ function AssignerBailModal({
       setErr("La fin du bail doit être après le début.");
       return;
     }
-    let cibleLocataire = locataireId ?? locChoisi?.id ?? null;
+    const cibleLocataire = locataireId ?? locChoisi?.id ?? null;
     const cibleLogement =
       logementId ?? (logId ? parseInt(logId, 10) : null);
-    if (mode === "logement" && creerNouveau && !nvNom.trim()) {
-      setErr("Indique le nom du nouveau locataire.");
-      return;
-    }
-    if (!creerNouveau && cibleLocataire == null) {
+    if (cibleLocataire == null) {
       setErr("Choisis le locataire (ou crée-le).");
       return;
     }
@@ -349,19 +350,6 @@ function AssignerBailModal({
     }
     setBusy(true);
     try {
-      if (mode === "logement" && creerNouveau) {
-        const r = await authedFetch("/api/v1/immobilier/locataires", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            full_name: nvNom.trim(),
-            email: nvEmail.trim() || null,
-            phone: nvTel.trim() || null
-          })
-        });
-        if (!r.ok) throw new Error("Création du locataire impossible.");
-        cibleLocataire = ((await r.json()) as { id: number }).id;
-      }
       const rb = await authedFetch("/api/v1/immobilier/baux", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -388,12 +376,7 @@ function AssignerBailModal({
         );
       }
       const bail = (await rb.json()) as { id: number };
-      if (
-        mode === "logement" &&
-        creerNouveau &&
-        cibleLocataire != null &&
-        fichiers.length > 0
-      ) {
+      if (cibleLocataire != null && fichiers.length > 0) {
         const complet = await deposerDocuments(
           bail.id,
           cibleLocataire,
@@ -444,6 +427,21 @@ function AssignerBailModal({
           </p>
         ) : null}
 
+        {showCreate ? (
+          <CreateLocataireModal
+            documents="differer"
+            zIndexClass="z-[80]"
+            onClose={() => setShowCreate(false)}
+            onSaved={(id, info) => {
+              setShowCreate(false);
+              setLocChoisi({ id, full_name: info.full_name });
+              setRech("");
+              if (info.fichiers.length > 0)
+                setFichiers((prev) => [...prev, ...info.fichiers]);
+            }}
+          />
+        ) : null}
+
         {mode === "logement" ? (
           <div className="space-y-2">
             <label className="text-xs font-medium text-white/60">
@@ -467,44 +465,6 @@ function AssignerBailModal({
                   onClick={() => setLocChoisi(null)}
                 >
                   <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            ) : creerNouveau ? (
-              <div className="space-y-2 rounded-lg border border-brand-800 bg-brand-950/60 p-3">
-                <input
-                  value={nvNom}
-                  onChange={(e) => setNvNom(e.target.value)}
-                  placeholder="Nom complet *"
-                  className="input w-full"
-                />
-                <input
-                  value={nvEmail}
-                  onChange={(e) => setNvEmail(e.target.value)}
-                  placeholder="Courriel"
-                  className="input w-full"
-                />
-                <input
-                  value={nvTel}
-                  onChange={(e) => setNvTel(e.target.value)}
-                  placeholder="Téléphone"
-                  className="input w-full"
-                />
-                <div className="pt-1">
-                  <DocumentsAImporterZone
-                    fichiers={fichiers}
-                    onChange={setFichiers}
-                    disabled={busy || bailCree != null}
-                    progression={progression}
-                    resultats={resultatsImport}
-                    aide="Déposés après la création du bail : le fichier « Bail » devient LE bail signé du dossier (le bail passe actif) ; les autres pièces (règlements, assurance…) sont classées au dossier du locataire et du bail."
-                  />
-                </div>
-                <button
-                  className="text-xs text-white/50 underline hover:text-white disabled:opacity-40"
-                  disabled={busy || bailCree != null}
-                  onClick={() => setCreerNouveau(false)}
-                >
-                  ← choisir un locataire existant
                 </button>
               </div>
             ) : (
@@ -545,7 +505,8 @@ function AssignerBailModal({
                 </div>
                 <button
                   className="inline-flex items-center gap-1 text-xs text-accent-500 hover:underline"
-                  onClick={() => setCreerNouveau(true)}
+                  onClick={() => setShowCreate(true)}
+                  title="Ouvre la fiche de création complète (même processus que la page Locataires)"
                 >
                   <Plus className="h-3 w-3" /> Nouveau locataire
                 </button>
@@ -600,6 +561,17 @@ function AssignerBailModal({
             </div>
           </div>
         )}
+
+        <div className="mt-3">
+          <DocumentsAImporterZone
+            fichiers={fichiers}
+            onChange={setFichiers}
+            disabled={busy || bailCree != null}
+            progression={progression}
+            resultats={resultatsImport}
+            aide="Déposés après la création du bail. Bail « déjà en vigueur » : le fichier « Bail » devient LE bail signé. Bail « proposé » : il reste une pièce liée, que « Joindre le bail signé » (Locations) activera. Les autres pièces sont classées au dossier du locataire et du bail."
+          />
+        </div>
 
         <div className="mt-4 grid gap-2 sm:grid-cols-2">
           <div>
@@ -701,7 +673,7 @@ function AssignerBailModal({
               <span className="font-semibold text-white">
                 À faire suivre via Locations (proposé)
               </span>{" "}
-              — la carte apparaît au kanban (« Bail à envoyer ») ;
+              — la carte apparaît au kanban (« Bail en signature ») ;
               importe le PDF signé pour rendre le bail actif.
             </span>
           </label>
@@ -771,7 +743,7 @@ function AssignerBailModal({
             )}
             {enCoursImport
               ? `Import des documents ${texteProgression(progression)}…`
-              : mode === "logement" && creerNouveau && fichiers.length > 0
+              : fichiers.length > 0
                 ? `Créer le bail + ${fichiers.length} document${fichiers.length > 1 ? "s" : ""}`
                 : "Créer le bail et assigner"}
           </button>

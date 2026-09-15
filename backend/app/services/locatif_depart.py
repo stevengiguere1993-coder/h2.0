@@ -45,6 +45,7 @@ from app.models.immobilier import (
     BailRenouvellement,
     BailStatus,
     Immeuble,
+    Locataire,
     LocationDossier,
     LocationDossierStatut,
     Logement,
@@ -68,7 +69,10 @@ DOSSIER_STATUTS_REGLES = (
 LOCATION_STATUTS_LEGACY = {
     "visites": LocationDossierStatut.ANNONCE_PUBLIEE.value,
     "candidat_retenu": LocationDossierStatut.ANNONCE_PUBLIEE.value,
-    "bail_a_envoyer": LocationDossierStatut.BAIL_ENVOYE.value,
+    # Sans bail lié, « bail à envoyer » ne peut pas devenir « bail en
+    # signature » (état interdit) : retour à « Affiché ». Avec un bail
+    # lié, ``normaliser_statut_location`` donne « bail en signature ».
+    "bail_a_envoyer": LocationDossierStatut.ANNONCE_PUBLIEE.value,
 }
 
 
@@ -120,6 +124,16 @@ NOTE_PRISE_EN_CHARGE = "Pris en charge manuellement"
 NOTE_TERMINE_BAIL_SUIVANT = (
     "Terminé automatiquement à l'arrivée du bail suivant"
 )
+#: Marque posée sur un cycle de renouvellement quand un départ le fait
+#: passer à « depart » — suivie du statut précédent (restauré par
+#: « Annuler le départ » / « Annuler le transfert »).
+NOTE_CYCLE_AVANT_DEPART = "Statut avant le départ : "
+#: Marque d'un paiement ré-imputé sur le nouveau bail par un transfert
+#: d'unité (retour en arrière possible).
+NOTE_PAIEMENT_TRANSFERE = "Ré-imputé par le transfert d'unité depuis le bail #"
+#: Note posée sur l'ancien bail quand un transfert le termine, et retirée
+#: si le transfert est annulé.
+NOTE_TERMINE_TRANSFERT = "Terminé par un transfert d'unité vers le logement "
 NOTE_TERMINE_DEPART_ANNONCE = (
     "Terminé automatiquement à l'échéance — départ annoncé "
     "(dossier de relocation actif)"
@@ -275,10 +289,28 @@ async def recaler_statut_logement(
         and (b.au_mois or (b.date_fin is not None and b.date_fin >= today))
         for b in baux
     )
+    # Réservé : un bail (actif ou proposé) qui commence plus tard — OU un
+    # bail PROPOSÉ déjà commencé (locataire en place, bail signé pas
+    # encore joint : transfert d'unité, bail préparé en retard). Sans
+    # ça, l'unité repassait « vacant » au premier recalage alors qu'un
+    # bail est en signature (audit 2026-09-15).
     reserve = any(
-        b.status in (BailStatus.ACTIF.value, BailStatus.PROPOSE.value)
-        and b.date_debut is not None
-        and b.date_debut > today
+        b.date_debut is not None
+        and (
+            (
+                b.status in (BailStatus.ACTIF.value, BailStatus.PROPOSE.value)
+                and b.date_debut > today
+            )
+            or (
+                b.status == BailStatus.PROPOSE.value
+                and b.date_debut <= today
+                and (
+                    b.au_mois
+                    or b.date_fin is None
+                    or b.date_fin >= today
+                )
+            )
+        )
         for b in baux
     )
     if occupe:
@@ -331,11 +363,52 @@ async def _basculer_cycle_en_depart(db: AsyncSession, bail: Bail) -> None:
         if not est_cycle_courant(r, bail.date_fin, today):
             continue
         if r.status != "depart":
+            # Le statut précédent est consigné : « Annuler le départ »
+            # et « Annuler le transfert » le restaurent (sinon le cycle
+            # « depart » terminait le bail à l'échéance alors que le
+            # locataire reste — audit 2026-09-15).
+            r.notes = _append_note(
+                r.notes, f"{NOTE_CYCLE_AVANT_DEPART}{r.status}"
+            )
             r.status = "depart"
             if r.reponse_le is None:
                 r.reponse_le = today
             r.updated_at = _now()
         return
+
+
+async def annuler_cycle_depart(db: AsyncSession, bail: Bail) -> bool:
+    """Inverse de ``_basculer_cycle_en_depart`` : le locataire reste — le
+    cycle « depart » reprend le statut qu'il avait avant (consigné dans
+    ses notes). Retourne True si un cycle a été restauré."""
+    rows = (
+        await db.execute(
+            select(BailRenouvellement).where(
+                BailRenouvellement.bail_id == bail.id,
+                BailRenouvellement.status == "depart",
+            )
+        )
+    ).scalars().all()
+    restaure = False
+    for r in rows:
+        notes = r.notes or ""
+        if NOTE_CYCLE_AVANT_DEPART not in notes:
+            continue
+        idx = notes.rfind(NOTE_CYCLE_AVANT_DEPART)
+        avant = notes[idx + len(NOTE_CYCLE_AVANT_DEPART):].split(chr(10))[0].strip()
+        if not avant:
+            continue
+        r.status = avant
+        r.reponse_le = None
+        # La marque est retirée : un prochain départ en reposera une.
+        lignes = [
+            ligne for ligne in notes.split(chr(10))
+            if not ligne.startswith(NOTE_CYCLE_AVANT_DEPART)
+        ]
+        r.notes = chr(10).join(lignes).strip() or None
+        r.updated_at = _now()
+        restaure = True
+    return restaure
 
 
 async def declarer_depart(
@@ -504,13 +577,16 @@ async def reconduire_tacitement_baux_echus(
     from app.services.bail_renouvellement import est_cycle_courant
 
     today = date.today()
+    # Les baux AU MOIS restent candidats : ils ne se reconduisent jamais
+    # (ils courent par nature) mais un DÉPART annoncé les termine bel et
+    # bien à la date convenue (audit 2026-09-15 : une chambre quittée
+    # par transfert réclamait son loyer à vie).
     candidats = [
         b
         for b in baux
         if b.status == BailStatus.ACTIF.value
         and b.date_fin is not None
         and b.date_fin < today
-        and not b.au_mois
     ]
     if not candidats:
         return False
@@ -569,14 +645,19 @@ async def reconduire_tacitement_baux_echus(
     dirty = False
     for b in candidats:
         lg = log_by_id.get(b.logement_id)
-        if lg is None or getattr(lg, "location_en_chambres", False):
-            continue  # « louer indéfiniment » — jamais de cycle
+        if lg is None:
+            continue
         im = imm_by_id.get(lg.immeuble_id)
         if im is not None and getattr(im, "gestion_externe", None):
             continue  # gestion externe — le tiers décide
+        sans_cycle = bool(b.au_mois) or bool(
+            getattr(lg, "location_en_chambres", False)
+        )
 
         dossier = dossier_by_log.get(b.logement_id)
-        if dossier is not None:
+        if dossier is not None and (
+            not sans_cycle or dossier.bail_id == b.id
+        ):
             # Le départ était annoncé : le bail se termine à sa fin.
             b.status = BailStatus.TERMINE.value
             b.notes = _append_note(b.notes, NOTE_TERMINE_DEPART_ANNONCE)
@@ -592,6 +673,11 @@ async def reconduire_tacitement_baux_echus(
                 "Bail %s terminé à l'échéance (départ annoncé, "
                 "dossier %s)", b.id, dossier.id,
             )
+            continue
+
+        if sans_cycle:
+            # « Louer indéfiniment » / au mois : jamais de reconduction
+            # ni de cycle — et sans départ annoncé, rien à faire.
             continue
 
         last_ren = last_ren_by_bail.get(b.id)
@@ -939,10 +1025,16 @@ async def terminer_baux_echus_avant(
     lg = await db.get(Logement, logement_id)
     if lg is not None and getattr(lg, "location_en_chambres", False):
         return 0
+    # Audit 2026-09-15 : importer en mars le bail signé du locataire qui
+    # arrive le 1er juillet terminait SUR-LE-CHAMP le bail du locataire
+    # encore en place (fin le 30 juin). « Échu » veut dire échu PAR
+    # RAPPORT À AUJOURD'HUI — un bail encore en cours reste actif, la
+    # reconduction lazy le terminera à son échéance (départ annoncé).
+    borne = min(date_debut, date.today())
     q = select(Bail).where(
         Bail.logement_id == logement_id,
         Bail.status == BailStatus.ACTIF.value,
-        Bail.date_fin < date_debut,
+        Bail.date_fin < borne,
     )
     if exclure_bail_id is not None:
         q = q.where(Bail.id != exclure_bail_id)
@@ -1030,6 +1122,14 @@ async def libere_le(
     dossier = await dossier_relocation_actif(db, logement_id)
     if dossier is None:
         return None
+    # Gestion externe : pas de relocation dans Kratos — un dossier
+    # résiduel (avant le recalage qui l'annule) ne doit pas afficher
+    # « libre le … » (audit 2026-09-15).
+    lg_ext = await db.get(Logement, logement_id)
+    if lg_ext is not None:
+        imm_ext = await db.get(Immeuble, lg_ext.immeuble_id)
+        if imm_ext is not None and bool(getattr(imm_ext, "gestion_externe", False)):
+            return None
     if dossier.date_depart is not None:
         return dossier.date_depart
     if dossier.bail_id is not None:
@@ -1037,3 +1137,320 @@ async def libere_le(
         if bail is not None and bail.date_fin is not None:
             return bail.date_fin
     return None
+
+
+# ─── Activation d'un bail proposé (règle UNIQUE) ────────────────────────
+
+
+class ActivationImpossible(ValueError):
+    """Le bail ne peut pas devenir actif (chevauchement…) — message
+    destiné à l'utilisateur."""
+
+
+async def activer_bail_propose(
+    db: AsyncSession, bail: Bail
+) -> Optional[LocationDossier]:
+    """Un bail PROPOSÉ devient ACTIF — par l'import du bail signé, par
+    le rattachement d'un document déjà au dossier, ou par l'exception
+    motivée « aucun bail à joindre ». Une seule règle (audit 2026-09-15 :
+    l'exception laissait le bail proposé à vie) :
+
+    - l'ancien bail ÉCHU du logement se termine (jamais un bail encore
+      en cours) ;
+    - jamais deux baux ACTIFS qui se chevauchent → ActivationImpossible ;
+    - le loyer demandé du logement suit le bail ;
+    - le dossier de relocation lié passe à « Reloué » ;
+    - le statut du logement est recalculé.
+
+    Retourne le dossier de relocation refermé (s'il y en avait un).
+    """
+    if bail.status != BailStatus.PROPOSE.value:
+        return None
+    await terminer_baux_echus_avant(
+        db, bail.logement_id, bail.date_debut, exclure_bail_id=bail.id
+    )
+    chevauche = (
+        await db.execute(
+            select(Bail).where(
+                Bail.logement_id == bail.logement_id,
+                Bail.id != bail.id,
+                Bail.status == BailStatus.ACTIF.value,
+                Bail.date_debut <= bail.date_fin,
+                Bail.date_fin >= bail.date_debut,
+            )
+        )
+    ).scalars().first()
+    if chevauche is not None:
+        raise ActivationImpossible(
+            "Un bail ACTIF chevauche ces dates sur ce logement "
+            f"(fin le {chevauche.date_fin}) — termine-le (résiliation) "
+            "ou corrige les dates du nouveau bail."
+        )
+    bail.status = BailStatus.ACTIF.value
+    bail.updated_at = _now()
+    lg = await db.get(Logement, bail.logement_id)
+    if lg is not None and bail.loyer_mensuel is not None:
+        # Miroir « loyer demandé » (2026-08-13) : bail ACTIF au dossier
+        # → le logement suit le loyer réel du bail.
+        lg.loyer_demande = bail.loyer_mensuel
+    dossier = (
+        await db.execute(
+            select(LocationDossier).where(
+                LocationDossier.nouveau_bail_id == bail.id,
+                LocationDossier.statut.notin_(list(DOSSIER_STATUTS_REGLES)),
+            )
+        )
+    ).scalars().first()
+    if dossier is not None:
+        dossier.statut = LocationDossierStatut.RELOUE.value
+        if dossier.reloue_le is None:
+            dossier.reloue_le = date.today()
+        dossier.updated_at = _now()
+    await db.flush()
+    await recaler_statut_logement(db, bail.logement_id)
+    return dossier
+
+
+# ─── Transfert d'unité : annulation ─────────────────────────────────────
+
+
+class AnnulationTransfertImpossible(ValueError):
+    """Le transfert ne peut plus être défait — message utilisateur."""
+
+
+async def bail_issu_du_transfert(
+    db: AsyncSession, ancien_bail_id: int
+) -> Optional[Bail]:
+    """Le bail créé par le transfert du bail donné (s'il existe encore)."""
+    return (
+        await db.execute(
+            select(Bail).where(
+                Bail.transfere_depuis_bail_id == ancien_bail_id
+            )
+        )
+    ).scalars().first()
+
+
+async def annuler_transfert(
+    db: AsyncSession, nouveau: Bail, *, par: Optional[str] = None
+) -> dict:
+    """Défait un transfert d'unité tant que le nouveau bail n'est ni
+    signé ni actif : le nouveau bail proposé est supprimé, l'ancien
+    bail reprend sa fin (et son statut actif s'il avait été résilié par
+    le transfert), le dépôt redevient détenu sur l'ancien bail, les
+    paiements ré-imputés reviennent, les dossiers de relocation des
+    deux unités sont remis d'aplomb et les logements recalés.
+
+    Utilisé par « Retirer le locataire » (kanban), par la suppression du
+    nouveau bail et par POST /baux/{id}/annuler-transfert. Ne committe
+    pas. Lève AnnulationTransfertImpossible avec un message clair.
+    """
+    if nouveau.transfere_depuis_bail_id is None:
+        raise AnnulationTransfertImpossible(
+            "Ce bail ne vient pas d'un transfert d'unité."
+        )
+    if (
+        nouveau.status != BailStatus.PROPOSE.value
+        or nouveau.document_id is not None
+        or getattr(nouveau, "signed_at", None) is not None
+    ):
+        raise AnnulationTransfertImpossible(
+            "Le nouveau bail est déjà signé ou actif — pour revenir en "
+            "arrière, fais un transfert inverse (ou « Mettre fin au "
+            "bail »)."
+        )
+    from app.models.immobilier import ImmDocument, PaiementLoyer
+
+    ancien = await db.get(Bail, nouveau.transfere_depuis_bail_id)
+    fin_restauree = nouveau.transfert_ancienne_fin or (
+        ancien.date_fin if ancien else None
+    )
+    # Paiements saisis DIRECTEMENT sur le nouveau bail : on ne rase
+    # jamais un historique financier.
+    paiements_nouveau = (
+        await db.execute(
+            select(PaiementLoyer).where(PaiementLoyer.bail_id == nouveau.id)
+        )
+    ).scalars().all()
+    a_reimputer = [
+        p for p in paiements_nouveau
+        if NOTE_PAIEMENT_TRANSFERE in (p.notes or "")
+    ]
+    if len(a_reimputer) != len(paiements_nouveau):
+        raise AnnulationTransfertImpossible(
+            "Des paiements ont été enregistrés sur le nouveau bail — "
+            "retire-les d'abord (page Paiements)."
+        )
+    if ancien is not None and fin_restauree is not None:
+        # L'ancienne unité a-t-elle déjà été relouée sur la période que
+        # l'ancien bail reprendrait ?
+        conflit = (
+            await db.execute(
+                select(Bail).where(
+                    Bail.logement_id == ancien.logement_id,
+                    Bail.id.notin_([ancien.id, nouveau.id]),
+                    Bail.status.in_(
+                        [BailStatus.ACTIF.value, BailStatus.PROPOSE.value]
+                    ),
+                    Bail.date_debut <= fin_restauree,
+                    Bail.date_fin >= nouveau.date_debut,
+                )
+            )
+        ).scalars().first()
+        if conflit is not None:
+            lo = await db.get(Locataire, conflit.locataire_id)
+            raise AnnulationTransfertImpossible(
+                "L'ancienne unité a déjà été relouée "
+                f"({lo.full_name if lo else 'bail #' + str(conflit.id)}) — "
+                "le transfert ne peut plus être annulé."
+            )
+
+    # 1) Nouveau bail : pièces importées conservées sur le locataire,
+    #    documents générés supprimés, renouvellements supprimés.
+    for doc in (
+        await db.execute(
+            select(ImmDocument).where(ImmDocument.bail_id == nouveau.id)
+        )
+    ).scalars().all():
+        if getattr(doc, "source", "genere") == "importe" and doc.locataire_id:
+            doc.bail_id = None
+        else:
+            await db.delete(doc)
+    for r in (
+        await db.execute(
+            select(BailRenouvellement).where(
+                BailRenouvellement.bail_id == nouveau.id
+            )
+        )
+    ).scalars().all():
+        await db.delete(r)
+    for p in a_reimputer:
+        if ancien is not None:
+            p.bail_id = ancien.id
+            lignes = [
+                ligne for ligne in (p.notes or "").split(chr(10))
+                if NOTE_PAIEMENT_TRANSFERE not in ligne
+            ]
+            p.notes = chr(10).join(lignes).strip() or None
+        else:
+            await db.delete(p)
+    nouveau_logement_id = nouveau.logement_id
+    nouveau_id = nouveau.id
+    await db.delete(nouveau)
+    await db.flush()
+
+    # 2) Ancien bail : fin et statut restaurés, dépôt de retour, cycle.
+    ancien_reactive = False
+    if ancien is not None:
+        if fin_restauree is not None:
+            ancien.date_fin = fin_restauree
+        if ancien.status in (
+            BailStatus.RESILIE.value, BailStatus.TERMINE.value
+        ):
+            ancien.status = BailStatus.ACTIF.value
+            ancien_reactive = True
+        if ancien.depot_transfere_vers_bail_id == nouveau_id:
+            ancien.depot_transfere_vers_bail_id = None
+        lignes = [
+            ligne for ligne in (ancien.notes or "").split(chr(10))
+            if not ligne.startswith(NOTE_TERMINE_TRANSFERT)
+        ]
+        ancien.notes = _append_note(
+            chr(10).join(lignes).strip() or None,
+            f"Transfert d'unité annulé le {date.today().isoformat()}"
+            + (f" par {par}" if par else "")
+            + " — le bail reprend son cours.",
+        )
+        ancien.updated_at = _now()
+        await annuler_cycle_depart(db, ancien)
+        # Dossier de relocation ouvert sur l'ancienne unité par le
+        # transfert (bail sortant = l'ancien bail, personne de lié).
+        for d in (
+            await db.execute(
+                select(LocationDossier).where(
+                    LocationDossier.logement_id == ancien.logement_id,
+                    LocationDossier.bail_id == ancien.id,
+                    LocationDossier.statut.notin_(
+                        list(DOSSIER_STATUTS_REGLES)
+                    ),
+                )
+            )
+        ).scalars().all():
+            if d.nouveau_bail_id is None:
+                d.statut = LocationDossierStatut.ANNULE.value
+                d.notes = _append_note(
+                    d.notes, "Transfert d'unité annulé — le locataire reste."
+                )
+                d.updated_at = _now()
+
+    # 3) Nouvelle unité : le dossier lié au bail supprimé se détache.
+    for d in (
+        await db.execute(
+            select(LocationDossier).where(
+                LocationDossier.nouveau_bail_id == nouveau_id
+            )
+        )
+    ).scalars().all():
+        d.nouveau_bail_id = None
+        d.reloue_le = None
+        if (d.notes or "").startswith("Créé automatiquement — transfert"):
+            d.statut = LocationDossierStatut.ANNULE.value
+        elif d.statut in DOSSIER_STATUTS_REGLES:
+            pass
+        else:
+            d.statut = LocationDossierStatut.AVIS_RECU.value
+        d.updated_at = _now()
+
+    await db.flush()
+    if ancien is not None:
+        await recaler_statut_logement(db, ancien.logement_id)
+    await recaler_statut_logement(db, nouveau_logement_id)
+    # Unité redevenue vacante sans dossier → la mutation en ouvre un.
+    await ouvrir_dossiers_unites_vacantes(db, [nouveau_logement_id])
+    log.info(
+        "Transfert d'unité annulé : bail %s supprimé, bail %s restauré",
+        nouveau_id, ancien.id if ancien else None,
+    )
+    return {
+        "nouveau_bail_id": nouveau_id,
+        "ancien_bail_id": ancien.id if ancien else None,
+        "ancien_reactive": ancien_reactive,
+        "ancien_logement_id": ancien.logement_id if ancien else None,
+        "nouveau_logement_id": nouveau_logement_id,
+    }
+
+
+async def rattacher_pdf_bail_orphelin(db: AsyncSession, bail: Bail) -> bool:
+    """Le dernier PDF de type « bail » déposé sur la fiche du locataire
+    SANS bail rattaché (importé à la création, avant que le bail existe)
+    est lié au bail qu'on vient de créer. Bail ACTIF → il devient LE bail
+    au dossier ; bail proposé → simple pièce liée (l'activation reste un
+    geste : « Joindre / Utiliser comme bail signé »). Audit 2026-09-15 :
+    la fiche promettait « il se joint au bail plus tard ». Retourne True
+    si un document a été rattaché."""
+    from app.models.immobilier import ImmDocument
+
+    doc = (
+        await db.execute(
+            select(ImmDocument)
+            .where(
+                ImmDocument.locataire_id == bail.locataire_id,
+                ImmDocument.type == "bail",
+                ImmDocument.bail_id.is_(None),
+                ImmDocument.source == "importe",
+            )
+            .order_by(ImmDocument.created_at.desc(), ImmDocument.id.desc())
+        )
+    ).scalars().first()
+    if doc is None:
+        return False
+    doc.bail_id = bail.id
+    doc.logement_id = bail.logement_id
+    if bail.status == BailStatus.ACTIF.value and bail.document_id is None:
+        bail.document_id = doc.id
+        if not (doc.titre or "").lower().startswith("bail signé"):
+            doc.titre = (
+                f"Bail signé {bail.date_debut.isoformat() if bail.date_debut else ''}"
+            ).strip()
+    log.info("Bail %s : PDF #%s déposé à la création du locataire rattaché", bail.id, doc.id)
+    return True

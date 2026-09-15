@@ -37,7 +37,6 @@ async def recalage_quotidien(db: AsyncSession) -> dict:
             select(Bail).where(
                 Bail.status == BailStatus.ACTIF.value,
                 Bail.date_fin < today,
-                Bail.au_mois.isnot(True),
             )
         )
     ).scalars().all()

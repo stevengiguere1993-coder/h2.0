@@ -1173,6 +1173,26 @@ async def annuler_depart(
             detail="Aucun départ en cours sur ce logement.",
         )
 
+    # Départ issu d'un TRANSFERT D'UNITÉ : le locataire a un nouveau
+    # bail ailleurs — c'est le transfert qu'il faut annuler (audit
+    # 2026-09-15 : l'annulation laissait deux baux et un dépôt fantôme).
+    from app.services.locatif_depart import (
+        annuler_cycle_depart,
+        bail_issu_du_transfert,
+    )
+
+    enfant = await bail_issu_du_transfert(db, bail.id)
+    if enfant is not None:
+        lg_e = await db.get(Logement, enfant.logement_id)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Ce départ vient d'un transfert d'unité vers le logement "
+                f"{lg_e.numero if lg_e else enfant.logement_id}. Pour que "
+                "le locataire reste, annule le transfert : Locations → "
+                "carte du nouveau logement → « Retirer le locataire »."
+            ),
+        )
     engages = (
         LocationDossierStatut.BAIL_ENVOYE.value,
         "bail_a_envoyer",  # ancienne étape, avant migration
@@ -1209,6 +1229,10 @@ async def annuler_depart(
         bail.status = BailStatus.ACTIF.value
         bail.updated_at = datetime.now(timezone.utc)
         reactive = True
+    # Le cycle de renouvellement passé à « depart » reprend son statut
+    # (sinon le bail était terminé à l'échéance alors que le locataire
+    # reste — audit 2026-09-15).
+    await annuler_cycle_depart(db, bail)
 
     await db.flush()
     await recaler_statut_logement(db, bail.logement_id)
@@ -1246,6 +1270,19 @@ async def resilier_bail(
         raise HTTPException(
             status_code=400,
             detail="Seul un bail actif peut être résilié.",
+        )
+    # Bail déjà transféré (fin posée par le transfert) : une entente de
+    # résiliation signée plus tard re-daterait la fin et ferait
+    # chevaucher les deux baux (audit 2026-09-15).
+    from app.services.locatif_depart import bail_issu_du_transfert
+
+    if await bail_issu_du_transfert(db, bail.id) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Ce bail se termine déjà par un transfert d'unité — sa "
+                "date de fin est fixée par le transfert."
+            ),
         )
     # v16 — mode ENTENTE : rien ne se résilie tout de suite. L'entente
     # part pour signature en ligne ; la page Baux passe la ligne en
@@ -1342,6 +1379,55 @@ class TransfererResult(BaseModel):
     depot_transfere: float = 0.0
 
 
+def _append_note_bail(existant: Optional[str], ajout: str) -> str:
+    if not existant:
+        return ajout
+    if ajout in existant:
+        return existant
+    return f"{existant}{chr(10)}{ajout}"
+
+
+class AnnulerTransfertResult(BaseModel):
+    nouveau_bail_id: int
+    ancien_bail_id: Optional[int] = None
+    ancien_reactive: bool = False
+
+
+@router.post(
+    "/baux/{bail_id}/annuler-transfert",
+    response_model=AnnulerTransfertResult,
+)
+async def annuler_transfert_unite(
+    bail_id: int, db: DBSession, user: CurrentUser
+) -> AnnulerTransfertResult:
+    """Défait un transfert d'unité tant que le NOUVEAU bail (``bail_id``)
+    n'est ni signé ni actif : il est supprimé, l'ancien bail reprend sa
+    fin et son cours, le dépôt revient, les dossiers et logements sont
+    remis d'aplomb."""
+    _require_volet(user)
+    nb = await db.get(Bail, bail_id)
+    if nb is None:
+        raise HTTPException(status_code=404, detail="Bail introuvable.")
+    from app.services.locatif_depart import (
+        AnnulationTransfertImpossible,
+        annuler_transfert,
+    )
+
+    try:
+        out = await annuler_transfert(db, nb, par=getattr(user, "email", None))
+    except AnnulationTransfertImpossible as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    await db.commit()
+    log.info("Transfert annulé (bail %s) par %s", bail_id, user.email)
+    return AnnulerTransfertResult(
+        nouveau_bail_id=out["nouveau_bail_id"],
+        ancien_bail_id=out["ancien_bail_id"],
+        ancien_reactive=bool(out["ancien_reactive"]),
+    )
+
+
 def _prochain_30_juin_utile(depuis: date) -> date:
     """Prochain 30 juin avec au moins ~3 mois de bail (même règle que le
     formulaire « Assigner un bail »)."""
@@ -1405,6 +1491,57 @@ async def transferer_unite(
         )
     if await logement_est_externe(db, bail.logement_id):
         raise erreur_externe("pas de bail dans Kratos à transférer.")
+    if nouveau.status == LogementStatus.HORS_LOC.value:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Le logement {nouveau.numero} est hors location — "
+                "remets-le en location avant d'y transférer quelqu'un."
+            ),
+        )
+    from app.services.locatif_depart import (
+        NOTE_PAIEMENT_TRANSFERE,
+        NOTE_TERMINE_TRANSFERT,
+        bail_issu_du_transfert,
+        dossier_relocation_actif,
+    )
+
+    # Un seul transfert par bail : déjà transféré → annuler d'abord.
+    deja = await bail_issu_du_transfert(db, bail.id)
+    if deja is not None:
+        lg_d = await db.get(Logement, deja.logement_id)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Ce bail a déjà été transféré vers le logement "
+                f"{lg_d.numero if lg_d else deja.logement_id} — annule ce "
+                "transfert (Locations → « Retirer le locataire ») avant "
+                "d'en faire un autre."
+            ),
+        )
+    # Entente de résiliation en attente de signature : sa signature
+    # re-daterait la fin du bail après coup.
+    from app.models.immobilier import ImmDocument as _ImmDoc
+
+    entente = (
+        await db.execute(
+            select(_ImmDoc).where(
+                _ImmDoc.bail_id == bail.id,
+                _ImmDoc.type == "avis_resiliation",
+                _ImmDoc.signed_at.is_(None),
+                _ImmDoc.envoye_le.is_not(None),
+            )
+        )
+    ).scalars().first()
+    if entente is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Une entente de résiliation est en attente de signature "
+                "sur ce bail — attends sa signature (ou supprime-la) "
+                "avant un transfert."
+            ),
+        )
 
     date_transfert = payload.date_transfert
     veille = date_transfert - timedelta(days=1)
@@ -1440,6 +1577,8 @@ async def transferer_unite(
             )
         )
     ).scalars().all()
+    today_t = date.today()
+    dossier_nouveau = await dossier_relocation_actif(db, nouveau.id)
     for o in occupants:
         chevauche = bool(o.au_mois) or (
             o.date_fin is not None
@@ -1455,6 +1594,26 @@ async def transferer_unite(
                     f"Le logement {nouveau.numero} est déjà loué ou réservé "
                     f"sur cette période ({lo_o.full_name if lo_o else 'bail #' + str(o.id)}). "
                     "Choisis une autre unité ou une autre date."
+                ),
+            )
+        # Occupant dont le bail finit AVANT le transfert mais qui est
+        # encore là aujourd'hui : son départ doit être acté (sinon il
+        # serait terminé d'office à l'échéance au lieu d'être reconduit
+        # — audit 2026-09-15).
+        if (
+            o.status == BailStatus.ACTIF.value
+            and o.date_fin is not None
+            and o.date_fin >= today_t
+            and (dossier_nouveau is None or dossier_nouveau.bail_id != o.id)
+        ):
+            lo_o = await db.get(Locataire, o.locataire_id)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"{lo_o.full_name if lo_o else 'Le locataire actuel'} "
+                    f"occupe encore le logement {nouveau.numero} (bail "
+                    f"jusqu'au {o.date_fin}) — déclare d'abord son départ "
+                    "(« Mettre fin au bail »), puis refais le transfert."
                 ),
             )
     # Un seul transfert à la fois : un bail proposé du même locataire
@@ -1501,14 +1660,13 @@ async def transferer_unite(
         depot_recu_le=(bail.depot_recu_le if transfere else None),
         depot_detenteur=(bail.depot_detenteur if transfere else None),
         status=BailStatus.PROPOSE.value,
+        # Au mois : imposé par la nouvelle unité (chambre) ou choisi ;
+        # jamais hérité de l'ancien bail (audit 2026-09-15 : une chambre
+        # quittée pour un 4½ donnait un bail au mois sans fin).
         au_mois=(
-            payload.au_mois
-            if payload.au_mois is not None
-            else (
-                True
-                if getattr(nouveau, "location_en_chambres", False)
-                else bail.au_mois
-            )
+            True
+            if getattr(nouveau, "location_en_chambres", False)
+            else (payload.au_mois if payload.au_mois is not None else False)
         ),
         jour_echeance=bail.jour_echeance or 1,
         chauffage_inclus=bool(bail.chauffage_inclus),
@@ -1517,13 +1675,40 @@ async def transferer_unite(
         internet_inclus=bool(bail.internet_inclus),
         notes=notes,
     )
+    nb.transfere_depuis_bail_id = bail.id
+    nb.transfert_ancienne_fin = bail.date_fin
     nb.created_at = now
     nb.updated_at = now
     db.add(nb)
     await db.flush()
     if transfere:
         bail.depot_transfere_vers_bail_id = nb.id
-        bail.updated_at = now
+    bail.notes = _append_note_bail(
+        bail.notes, f"{NOTE_TERMINE_TRANSFERT}{nouveau.numero} (bail #{nb.id})"
+    )
+    bail.updated_at = now
+    # Paiements d'AVANCE sur l'ancien bail pour des mois que le nouveau
+    # bail couvre (audit 2026-09-15 : octobre payé d'avance devenait
+    # invisible) : ré-imputés sur le nouveau bail, avec trace.
+    from app.models.immobilier import PaiementLoyer as _PL
+
+    premier_mois_nouveau = (
+        date_transfert.replace(day=1)
+        if date_transfert.day == 1
+        else (date_transfert.replace(day=28) + timedelta(days=4)).replace(day=1)
+    )
+    for p_av in (
+        await db.execute(
+            select(_PL).where(
+                _PL.bail_id == bail.id,
+                _PL.mois_couvert >= premier_mois_nouveau,
+            )
+        )
+    ).scalars().all():
+        p_av.bail_id = nb.id
+        p_av.notes = _append_note_bail(
+            p_av.notes, f"{NOTE_PAIEMENT_TRANSFERE}{bail.id}"
+        )
 
     # 1) L'ancien bail se termine la veille — cycle unifié (relocation
     #    de l'ancienne unité ouverte, logement recalé, cycle de

@@ -2734,6 +2734,7 @@ function BauxTab({
                                   locataireNom={r.locataire_nom}
                                   immeubleId={r.immeuble_id}
                                   immeubleName={r.immeuble_name}
+                                  logementId={r.logement_id}
                                   logementNumero={r.logement_numero}
                                   loyerActuel={r.loyer_mensuel}
                                   finActuelle={r.date_fin}
@@ -2913,6 +2914,7 @@ type LoyerRow = {
   bail_termine_le?: string | null;
   frais_mois?: { id: number; montant: number; libelle: string }[];
   solde_total?: number;
+  solde_anterieur?: boolean;
 };
 
 // Tri de la liste des paiements : retards en haut, partiels ensuite,
@@ -3408,7 +3410,9 @@ function PaiementsMoisSection({
                     {r.etat === "paye" ? (
                       <span className="badge badge-emerald">Payé</span>
                     ) : r.etat === "partiel" ? (
-                      <span className="badge badge-amber">Partiel</span>
+                      <span className="badge badge-amber">
+                        {r.solde_anterieur ? "Solde antérieur" : "Partiel"}
+                      </span>
                     ) : r.etat === "retard" ? (
                       <span className="badge badge-rose">Retard</span>
                     ) : r.etat === "vacant" ? (
@@ -5931,7 +5935,11 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
     void load();
   }, [load]);
 
-  async function enregistrer(row: PaiementExtRow, montant: number) {
+  async function enregistrer(
+    row: PaiementExtRow,
+    montant: number,
+    cumul = false
+  ) {
     setBusyId(row.logement_id);
     try {
       const r = await authedFetch("/api/v1/immobilier/paiements-externes", {
@@ -5939,7 +5947,8 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
         body: JSON.stringify({
           logement_id: row.logement_id,
           mois,
-          montant
+          montant,
+          cumul
         })
       });
       if (!r.ok)
@@ -5973,8 +5982,10 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
   // solde cumulatif, retour Phil 2026-09-09).
   async function marquerPaye(row: PaiementExtRow) {
     let montant: number;
+    let cumul = false;
     if (row.solde_total > 0) {
       montant = row.solde_total;
+      cumul = true;
     } else if (row.loyer_attendu != null) {
       montant =
         Math.round(
@@ -6166,7 +6177,9 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
                     {r.etat === "paye" ? (
                       <span className="badge badge-emerald">Payé</span>
                     ) : r.etat === "partiel" ? (
-                      <span className="badge badge-amber">Partiel</span>
+                      <span className="badge badge-amber">
+                        {r.solde_anterieur ? "Solde antérieur" : "Partiel"}
+                      </span>
                     ) : r.etat === "retard" ? (
                       <span className="badge badge-rose">Retard</span>
                     ) : r.etat === "attente" ? (

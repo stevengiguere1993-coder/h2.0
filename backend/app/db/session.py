@@ -157,6 +157,8 @@ async def ensure_critical_columns() -> None:
         ("imm_baux", "depot_recu_le", "DATE"),
         ("imm_baux", "depot_detenteur", "VARCHAR(120)"),
         ("imm_baux", "depot_transfere_vers_bail_id", "INTEGER"),
+        ("imm_baux", "transfere_depuis_bail_id", "INTEGER"),
+        ("imm_baux", "transfert_ancienne_fin", "DATE"),
         ("imm_baux", "sans_document_motif", "VARCHAR(255)"),
         ("imm_baux", "sans_document_par", "VARCHAR(255)"),
         ("imm_baux", "sans_document_le", "TIMESTAMP WITH TIME ZONE"),
@@ -308,6 +310,7 @@ async def ensure_critical_columns() -> None:
         ("imm_immeubles", "gestion_externe", "BOOLEAN NOT NULL DEFAULT FALSE"),
         # Gestion externe : nom du locataire sur le logement (2026-09-09).
         ("imm_logements", "locataire_externe_nom", "VARCHAR(255)"),
+        ("imm_logements", "locataire_externe_depuis", "DATE"),
         ("imm_immeubles", "gestionnaire_externe_nom", "VARCHAR(255)"),
         ("imm_immeubles", "gestionnaire_externe_contact", "VARCHAR(255)"),
         # Gestion externe mais maintenance par NOS hommes (2026-07-22).

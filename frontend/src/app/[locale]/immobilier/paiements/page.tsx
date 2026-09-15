@@ -543,7 +543,11 @@ export default function PaiementsPage() {
   // ── Gestion externe : les mêmes gestes, sur le logement ────────────
   // Pas de bail ni de locataire chez nous : on coche ce que le rapport
   // du gestionnaire indique. Ni relance ni frais ponctuel ici.
-  async function enregistrerExterne(row: Row, montant: number) {
+  async function enregistrerExterne(
+    row: Row,
+    montant: number,
+    cumul = false
+  ) {
     if (row.logement_id == null) return;
     setPayingId(busyKey(row));
     try {
@@ -552,7 +556,10 @@ export default function PaiementsPage() {
         body: JSON.stringify({
           logement_id: row.logement_id,
           mois,
-          montant
+          montant,
+          // Solde cumulatif : ventilé sur les mois antérieurs impayés,
+          // le reste sur le mois courant (audit 2026-09-15).
+          cumul
         })
       });
       if (!r.ok)
@@ -576,7 +583,8 @@ export default function PaiementsPage() {
     const solde = row.solde_total ?? 0;
     await enregistrerExterne(
       row,
-      solde > 0 ? solde : restant > 0 ? restant : row.loyer_mensuel
+      solde > 0 ? solde : restant > 0 ? restant : row.loyer_mensuel,
+      solde > 0
     );
   }
 
@@ -1214,6 +1222,17 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                             {" — "}
                             {RELOC_LABEL[r.prochain_statut || ""] ||
                               "à venir"}
+                            {r.prochain_statut === "bail_envoye" &&
+                            r.prochain_debut &&
+                            r.prochain_debut <=
+                              new Date().toISOString().slice(0, 10) ? (
+                              <span
+                                className="ml-1 rounded bg-fuchsia-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-fuchsia-200"
+                                title="Le bail a commencé mais le PDF signé n'est pas encore joint : aucun loyer n'est suivi tant qu'il manque (transfert d'unité, bail préparé en retard)"
+                              >
+                                locataire en place — bail signé à joindre
+                              </span>
+                            ) : null}
                           </div>
                         ) : null}
                       </td>

@@ -72,6 +72,7 @@ async def rendre_vacant_externe(db: AsyncSession, lg: Logement) -> None:
     today = date.today()
     lg.status = LogementStatus.VACANT.value
     lg.locataire_externe_nom = None
+    lg.locataire_externe_depuis = None
     lg.updated_at = _now()
     for b in (
         await db.execute(
@@ -149,6 +150,18 @@ async def refermer_dossiers_reloues(db: AsyncSession) -> int:
         for b in baux:
             if d.bail_id is not None and b.id == d.bail_id:
                 continue  # le bail SORTANT ne reloue pas
+            # Un bail ANTÉRIEUR au dossier n'est jamais « le nouveau
+            # bail » : c'est le bail en place qu'on a oublié de fermer
+            # (audit 2026-09-15 : vacant manuel → reloué avec l'ancien).
+            if (
+                (d.notes or "").startswith("Créé automatiquement")
+                and d.created_at is not None
+                and b.created_at is not None
+                and b.created_at < d.created_at
+                and b.date_debut is not None
+                and b.date_debut <= d.created_at.date()
+            ):
+                continue
             if b.au_mois or b.date_fin is None or b.date_fin >= today:
                 courant = b
         if courant is None:
