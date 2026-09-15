@@ -850,6 +850,12 @@ async def upload_bail_document(
     bail = await db.get(Bail, bail_id)
     if bail is None:
         raise HTTPException(status_code=404, detail="Bail introuvable.")
+    # Gestion EXTERNE : pas de bail dans Kratos (audit 2026-09-15 —
+    # cette porte permettait d'activer un bail sur une unité externe).
+    from app.services.gestion_externe import erreur_externe, logement_est_externe
+
+    if await logement_est_externe(db, bail.logement_id):
+        raise erreur_externe("pas de bail dans Kratos.")
     if au_mois is not None and au_mois.strip() != "":
         bail.au_mois = au_mois.strip().lower() in ("true", "1", "oui")
     ancien = bail.document_id
@@ -866,90 +872,7 @@ async def upload_bail_document(
         logement_id=bail.logement_id,
         remplace_document_id=ancien,
     )
-    bail.document_id = obj.id
-    # Bail signé importé : un bail « proposé » devient ACTIF, et le
-    # dossier de relocation lié passe à « Reloué » — partout, le
-    # logement est considéré loué par ce locataire (retour Phil
-    # 2026-07-31).
-    if bail.status == "propose":
-        # Garde-fou C4 (2026-08-13) : un bail ACTIF déjà ÉCHU sur ce
-        # logement (sa fin précède le début du nouveau) est terminé
-        # automatiquement — sinon les deux coexistent et le suivi des
-        # loyers double la ligne.
-        from app.services.locatif_depart import terminer_baux_echus_avant
-
-        await terminer_baux_echus_avant(
-            db, bail.logement_id, bail.date_debut, exclure_bail_id=bail.id
-        )
-        # Jamais deux baux ACTIFS qui se chevauchent sur le même
-        # logement (audit 2026-07-31).
-        chevauche = (
-            await db.execute(
-                select(Bail).where(
-                    Bail.logement_id == bail.logement_id,
-                    Bail.id != bail.id,
-                    Bail.status == "actif",
-                    Bail.date_debut <= bail.date_fin,
-                    Bail.date_fin >= bail.date_debut,
-                )
-            )
-        ).scalars().first()
-        if chevauche is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "Un bail ACTIF chevauche ces dates sur ce logement "
-                    f"(fin le {chevauche.date_fin}) — termine-le "
-                    "(résiliation) ou corrige les dates du nouveau "
-                    "bail avant d'importer."
-                ),
-            )
-        bail.status = "actif"
-    try:
-        from app.models.immobilier import (
-            LocationDossier,
-            LocationDossierStatut,
-            Logement,
-        )
-
-        # Miroir « loyer demandé » (2026-08-13) : bail ACTIF au dossier
-        # → le logement occupé suit le loyer réel du bail.
-        if bail.status == "actif" and bail.loyer_mensuel is not None:
-            lg_sync = await db.get(Logement, bail.logement_id)
-            if lg_sync is not None:
-                lg_sync.loyer_demande = bail.loyer_mensuel
-
-        from app.services.locatif_depart import (
-            DOSSIER_STATUTS_REGLES,
-            recaler_statut_logement,
-        )
-
-        dossier_reloc = (
-            (
-                await db.execute(
-                    select(LocationDossier).where(
-                        LocationDossier.nouveau_bail_id == bail.id,
-                        LocationDossier.statut.notin_(
-                            list(DOSSIER_STATUTS_REGLES)
-                        ),
-                    )
-                )
-            )
-            .scalars()
-            .first()
-        )
-        if dossier_reloc is not None:
-            dossier_reloc.statut = LocationDossierStatut.RELOUE.value
-            if dossier_reloc.reloue_le is None:
-                dossier_reloc.reloue_le = _now().date()
-        # Règle UNIQUE du statut du logement (M2/M3, audit 2026-08-13) :
-        # le service recalcule occupé/réservé/vacant d'après les baux.
-        if bail.logement_id:
-            await recaler_statut_logement(db, bail.logement_id)
-    except Exception:  # noqa: BLE001 — best-effort
-        log.exception(
-            "Transition relocation après import du bail %s", bail_id
-        )
+    await _poser_document_courant(db, bail, obj)
     await db.commit()
     await db.refresh(obj)
     log.info(
@@ -957,6 +880,91 @@ async def upload_bail_document(
         bail_id, obj.id, ancien,
     )
     return _doc_read(obj)
+
+
+async def _poser_document_courant(db, bail: Bail, obj: ImmDocument) -> None:
+    """LE bail signé est au dossier : pointeur courant, et un bail
+    « proposé » devient ACTIF par la règle unique (dossier de relocation
+    → reloué, logement recalé). Partagé par l'import et le rattachement
+    d'un document déjà déposé."""
+    from app.services.locatif_depart import (
+        ActivationImpossible,
+        activer_bail_propose,
+    )
+
+    bail.document_id = obj.id
+    bail.updated_at = _now()
+    try:
+        await activer_bail_propose(db, bail)
+    except ActivationImpossible as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+
+
+class RattacherDocumentIn(BaseModel):
+    document_id: int
+
+
+@router.post(
+    "/baux/{bail_id}/document/rattacher", response_model=DocumentRead
+)
+async def rattacher_bail_document(
+    bail_id: int,
+    payload: RattacherDocumentIn,
+    db: DBSession,
+    user: CurrentUser,
+) -> DocumentRead:
+    """Un PDF de bail DÉJÀ déposé (à la création du locataire, avant que
+    son bail existe) devient LE bail signé de ce bail — sans le
+    re-téléverser (audit 2026-09-15 : la fiche promettait « il se joint
+    au bail plus tard » et rien ne le permettait). Même effets que
+    l'import : bail proposé → actif, dossier → reloué, logement recalé."""
+    _require_volet(user)
+    bail = await db.get(Bail, bail_id)
+    if bail is None:
+        raise HTTPException(status_code=404, detail="Bail introuvable.")
+    doc = await db.get(ImmDocument, payload.document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document introuvable.")
+    if doc.bail_id not in (None, bail.id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ce document est déjà rattaché à un autre bail.",
+        )
+    if doc.locataire_id not in (None, bail.locataire_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ce document appartient à un autre locataire.",
+        )
+    if getattr(doc, "source", "genere") != "importe":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Seule une pièce importée (PDF signé) peut devenir le bail au dossier.",
+        )
+    from app.services.gestion_externe import erreur_externe, logement_est_externe
+
+    if await logement_est_externe(db, bail.logement_id):
+        raise erreur_externe("pas de bail dans Kratos.")
+    ancien = bail.document_id
+    doc.bail_id = bail.id
+    doc.locataire_id = bail.locataire_id
+    doc.logement_id = bail.logement_id
+    doc.type = "bail"
+    if ancien and ancien != doc.id:
+        doc.remplace_document_id = ancien
+    if not (doc.titre or "").lower().startswith("bail signé"):
+        doc.titre = (
+            f"Bail signé {bail.date_debut.isoformat() if bail.date_debut else ''}"
+        ).strip()
+    await _poser_document_courant(db, bail, doc)
+    await db.commit()
+    await db.refresh(doc)
+    log.info(
+        "Bail %s : document #%s rattaché comme bail signé par %s",
+        bail_id, doc.id, user.email,
+    )
+    return _doc_read(doc)
 
 
 @router.post(

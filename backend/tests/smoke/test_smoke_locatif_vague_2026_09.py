@@ -158,10 +158,19 @@ def test_externe_portes_fermees_et_depart(client, auth_headers, run):
         f"/api/v1/immobilier/logements/{lg1}", headers=auth_headers,
         json={"status": "vacant"},
     )
+    # Un solde impayé traîne (bail résiduel jamais marqué payé) : le
+    # départ exige une confirmation explicite (audit 2026-09-15).
+    if r.status_code == 409:
+        assert "confirme" in r.json()["detail"].lower()
+        r = client.patch(
+            f"/api/v1/immobilier/logements/{lg1}?confirmer=true",
+            headers=auth_headers, json={"status": "vacant"},
+        )
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["status"] == "vacant"
     assert body["locataire_externe_nom"] is None
+    assert "solde impayé" in (body.get("notes") or "").lower()
 
     async def _check():
         async with TestSessionLocal() as s:

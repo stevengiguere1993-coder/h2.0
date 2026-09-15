@@ -64,6 +64,7 @@ from app.models.sous_traitant import SousTraitant
 from app.models.immobilier import (
     Bail,
     BailRenouvellement,
+    ImmDocument,
     DepenseImmeuble,
     BailStatus,
     Evaluation,
@@ -923,12 +924,72 @@ async def update_immeuble(
     payload: ImmeubleUpdate,
     db: DBSession,
     user: CurrentUser,
+    force: bool = False,
 ) -> ImmeubleRead:
     _require_volet(user)
     obj = await _get_immeuble_or_404(db, immeuble_id)
-    for k, v in payload.model_dump(exclude_unset=True).items():
+    data_imm = payload.model_dump(exclude_unset=True)
+    etait_externe = bool(getattr(obj, "gestion_externe", False))
+    devient_externe = data_imm.get("gestion_externe")
+    # Externe → interne : les unités « occupées » par un simple nom n'ont
+    # pas de bail — la nuit, le recalage les mettrait toutes « vacant »
+    # (audit 2026-09-15). On refuse tant que les baux n'existent pas,
+    # sauf ?force=true (les noms sont alors effacés).
+    if etait_externe and devient_externe is False:
+        today_i = _now().date()
+        occupes = (
+            await db.execute(
+                select(Logement).where(
+                    Logement.immeuble_id == immeuble_id,
+                    Logement.status == LogementStatus.OCCUPE.value,
+                )
+            )
+        ).scalars().all()
+        sans_bail = []
+        for lg_o in occupes:
+            b_o = (
+                await db.execute(
+                    select(Bail).where(
+                        Bail.logement_id == lg_o.id,
+                        Bail.status == BailStatus.ACTIF.value,
+                        Bail.date_debut <= today_i,
+                    )
+                )
+            ).scalars().first()
+            if b_o is None:
+                sans_bail.append(lg_o)
+        if sans_bail and not force:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Repasser en gestion interne exige un bail pour chaque "
+                    "unité occupée — sans bail : "
+                    + ", ".join(
+                        f"{lg_o.numero}"
+                        + (f" ({lg_o.locataire_externe_nom})" if lg_o.locataire_externe_nom else "")
+                        for lg_o in sans_bail[:12]
+                    )
+                    + (" …" if len(sans_bail) > 12 else "")
+                    + ". Crée leurs baux d'abord (ou force=true pour "
+                    "repartir de zéro : les noms seront effacés)."
+                ),
+            )
+        if sans_bail and force:
+            for lg_o in sans_bail:
+                lg_o.locataire_externe_nom = None
+                lg_o.locataire_externe_depuis = None
+                lg_o.status = LogementStatus.VACANT.value
+                lg_o.updated_at = _now()
+    for k, v in data_imm.items():
         setattr(obj, k, v)
     obj.updated_at = _now()
+    # Interne → externe : les dossiers de relocation actifs n'ont plus
+    # de sens (« Occupé · libre le 30 juin » sur une unité externe).
+    if devient_externe is True and not etait_externe:
+        await db.flush()
+        from app.services.gestion_externe import annuler_dossiers_externes
+
+        await annuler_dossiers_externes(db)
     await db.commit()
     await db.refresh(obj)
     return _immeuble_to_read(obj)
@@ -950,31 +1011,40 @@ async def _bail_actif_chevauchant(
     return (await db.execute(q)).scalars().first()
 
 
-async def _recaler_logement_apres_bail(db, logement_id: int) -> None:
-    """Statut du logement recalculé d'après ses baux restants."""
-    from app.services.loyer_effectif import refleter_bail_sur_demande
-
-    lg = await db.get(Logement, logement_id)
-    if lg is None:
+async def _refuser_si_unite_deja_en_signature(
+    db, log_obj, locataire_id: int, date_debut, date_fin, exclure_bail_id=None
+) -> None:
+    """409 si un bail PROPOSÉ d'un AUTRE locataire chevauche la période
+    sur ce logement : l'unité est déjà en signature — il faut d'abord
+    retirer ce locataire (Locations). Chambres (« louer indéfiniment »)
+    exclues : plusieurs baux y cohabitent par nature."""
+    if getattr(log_obj, "location_en_chambres", False):
         return
-    actif = (
-        await db.execute(
-            select(Bail).where(
-                Bail.logement_id == logement_id,
-                Bail.status == BailStatus.ACTIF.value,
-            )
+    q = select(Bail).where(
+        Bail.logement_id == log_obj.id,
+        Bail.status == BailStatus.PROPOSE.value,
+        Bail.locataire_id != locataire_id,
+    )
+    if date_debut is not None and date_fin is not None:
+        q = q.where(
+            or_(Bail.date_fin.is_(None), Bail.date_fin >= date_debut),
+            Bail.date_debut <= date_fin,
         )
-    ).scalars().first()
-    if actif is not None:
-        lg.status = LogementStatus.OCCUPE.value
-        # Le « loyer demandé » suit le bail tant que c'est loué (retour
-        # client 2026-08-14) — sinon il pourrit (1 000 $ posé à la
-        # création vs 1 600 $ payé douze ans plus tard).
-        if actif.loyer_mensuel is not None:
-            refleter_bail_sur_demande(lg, float(actif.loyer_mensuel))
-    elif lg.status == LogementStatus.OCCUPE.value:
-        lg.status = LogementStatus.VACANT.value
-    lg.updated_at = _now()
+    if exclure_bail_id is not None:
+        q = q.where(Bail.id != exclure_bail_id)
+    autre = (await db.execute(q)).scalars().first()
+    if autre is None:
+        return
+    lo = await db.get(Locataire, autre.locataire_id)
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            "Un bail est déjà en signature sur ce logement pour "
+            f"{lo.full_name if lo else 'un autre locataire'} — retire-le "
+            "d'abord (Locations → carte du logement → « Retirer le "
+            "locataire »), ou joins son bail signé."
+        ),
+    )
 
 
 async def _consigner_suppression_bail_sortant(db, bail) -> None:
@@ -2277,7 +2347,9 @@ async def create_logement(
 def _cle_numero(numero: Optional[str]) -> str:
     """Clé de comparaison d'un numéro de logement : casse, espaces et
     tirets ignorés (« 8906 - C », « 8906-C », « 8906 c » = le même)."""
-    return "".join(ch for ch in (numero or "").lower() if ch.isalnum())
+    cle = "".join(ch for ch in (numero or "").lower() if ch.isalnum())
+    # « 04 » et « 4 » sont le même logement (audit 2026-09-15).
+    return re.sub(r"^0+(?=\d)", "", cle)
 
 
 class LogementDoublonGroupe(BaseModel):
@@ -2378,16 +2450,61 @@ async def fusionner_logements(
                 status_code=422,
                 detail="On ne fusionne que des logements du même immeuble.",
             )
-    from app.models.immobilier import ImmDocument, LocationDossier
+    from app.models.bon_travail import BonTravail
+    from app.models.immobilier import (
+        FactureExterne,
+        ImmDocument,
+        ImmTalDossier,
+        LocationDossier,
+        MaintenanceOrdre,
+    )
+    from app.services.locatif_depart import (
+        DOSSIER_STATUTS_REGLES,
+        recaler_statut_logement,
+    )
+
+    # Deux baux ACTIFS qui se chevaucheraient après fusion → refus
+    # (sinon la ligne Paiements double — audit 2026-09-15).
+    actifs_garder = (
+        await db.execute(
+            select(Bail).where(
+                Bail.logement_id == garder.id,
+                Bail.status == BailStatus.ACTIF.value,
+            )
+        )
+    ).scalars().all()
+    for d in doublons:
+        for b_d in (
+            await db.execute(
+                select(Bail).where(
+                    Bail.logement_id == d.id,
+                    Bail.status == BailStatus.ACTIF.value,
+                )
+            )
+        ).scalars().all():
+            for b_g in actifs_garder:
+                if (
+                    b_g.locataire_id != b_d.locataire_id
+                    and (b_g.date_fin is None or b_d.date_debut is None or b_g.date_fin >= b_d.date_debut)
+                    and (b_d.date_fin is None or b_g.date_debut is None or b_d.date_fin >= b_g.date_debut)
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=(
+                            "Les deux logements ont un bail ACTIF sur la même "
+                            "période — termine d'abord un des deux baux "
+                            "(page Baux → « Mettre fin au bail »)."
+                        ),
+                    )
 
     for d in doublons:
         await db.execute(
             update(Bail).where(Bail.logement_id == d.id).values(logement_id=garder.id)
         )
-        # Paiements externes : le mois est unique par logement → on garde
-        # la ligne du conservé si elle existe déjà.
+        # Paiements externes : le mois est unique par logement → les
+        # montants du même mois s'ADDITIONNENT (rien n'est jeté).
         existants = {
-            p.mois_couvert
+            p.mois_couvert: p
             for p in (
                 await db.execute(
                     select(PaiementExterne).where(PaiementExterne.logement_id == garder.id)
@@ -2399,17 +2516,34 @@ async def fusionner_logements(
                 select(PaiementExterne).where(PaiementExterne.logement_id == d.id)
             )
         ).scalars().all():
-            if p.mois_couvert in existants:
+            pg = existants.get(p.mois_couvert)
+            if pg is not None:
+                att_g = float(pg.loyer_attendu) if pg.loyer_attendu is not None else None
+                att_d = float(p.loyer_attendu) if p.loyer_attendu is not None else None
+                recu_g = float(pg.montant) if pg.montant is not None else (att_g or 0.0)
+                recu_d = float(p.montant) if p.montant is not None else (att_d or 0.0)
+                pg.montant = round(recu_g + recu_d, 2)
+                if pg.loyer_attendu is None and att_d is not None:
+                    pg.loyer_attendu = att_d
+                if pg.paye_le is None:
+                    pg.paye_le = p.paye_le
                 await db.delete(p)
             else:
                 p.logement_id = garder.id
-                existants.add(p.mois_couvert)
+                existants[p.mois_couvert] = p
         await db.execute(
             update(ImmDocument).where(ImmDocument.logement_id == d.id).values(logement_id=garder.id)
         )
         await db.execute(
             update(LocationDossier).where(LocationDossier.logement_id == d.id).values(logement_id=garder.id)
         )
+        for modele in (FactureExterne, MaintenanceOrdre, ImmTalDossier, BonTravail):
+            try:
+                await db.execute(
+                    update(modele).where(modele.logement_id == d.id).values(logement_id=garder.id)
+                )
+            except Exception:  # noqa: BLE001 — table absente dans ce déploiement
+                pass
         try:
             from app.models.immobilier import Releve31
 
@@ -2425,12 +2559,85 @@ async def fusionner_logements(
             garder.locataire_externe_nom = d.locataire_externe_nom
         if garder.status == LogementStatus.VACANT.value and d.status == LogementStatus.OCCUPE.value:
             garder.status = LogementStatus.OCCUPE.value
+            if getattr(d, "locataire_externe_depuis", None) and not garder.locataire_externe_depuis:
+                garder.locataire_externe_depuis = d.locataire_externe_depuis
         await db.flush()
         await db.delete(d)
+    await db.flush()
+    # Un seul dossier de relocation ACTIF : le plus récent reste, les
+    # autres sont annulés avec une note.
+    actifs = (
+        await db.execute(
+            select(LocationDossier)
+            .where(
+                LocationDossier.logement_id == garder.id,
+                LocationDossier.statut.notin_(list(DOSSIER_STATUTS_REGLES)),
+            )
+            .order_by(LocationDossier.created_at.desc(), LocationDossier.id.desc())
+        )
+    ).scalars().all()
+    for dsr in actifs[1:]:
+        dsr.statut = "annule"
+        note_f = "Annulé automatiquement : fusion de logements en double."
+        dsr.notes = f"{dsr.notes}{chr(10)}{note_f}" if dsr.notes else note_f
+        dsr.updated_at = _now()
     garder.updated_at = _now()
+    await recaler_statut_logement(db, garder.id)
     await db.commit()
     await db.refresh(garder)
     return LogementRead.model_validate(garder)
+
+
+async def _figer_attendu_mois_passes(db, lg, ancien_loyer: float, user) -> None:
+    """Gestion externe, changement de loyer attendu : chaque mois passé
+    sans ligne (depuis la borne de l'immeuble et l'arrivée du locataire)
+    reçoit une ligne « attendu figé à l'ancien loyer, rien reçu »."""
+    from app.api.v1.endpoints.immobilier_gestion_externe import _mois_suivant
+    demarrage = await get_demarrage()
+    log_ids_imm = [
+        r[0]
+        for r in (
+            await db.execute(
+                select(Logement.id).where(Logement.immeuble_id == lg.immeuble_id)
+            )
+        ).all()
+    ]
+    borne = (
+        await db.execute(
+            select(func.min(PaiementExterne.mois_couvert)).where(
+                PaiementExterne.logement_id.in_(log_ids_imm),
+                PaiementExterne.mois_couvert >= demarrage,
+            )
+        )
+    ).scalar_one_or_none()
+    if borne is None:
+        return
+    existants = {
+        p.mois_couvert
+        for p in (
+            await db.execute(
+                select(PaiementExterne).where(PaiementExterne.logement_id == lg.id)
+            )
+        ).scalars().all()
+    }
+    depuis = getattr(lg, "locataire_externe_depuis", None)
+    depuis_m = depuis.replace(day=1) if depuis is not None else None
+    mois_courant = _now().date().replace(day=1)
+    m = max(borne, demarrage)
+    while m < mois_courant:
+        if m not in existants and (depuis_m is None or m >= depuis_m):
+            db.add(
+                PaiementExterne(
+                    logement_id=lg.id,
+                    mois_couvert=m,
+                    loyer_attendu=ancien_loyer,
+                    montant=0.0,
+                    paye_le=None,
+                    created_by_email=getattr(user, "email", None),
+                    created_at=_now(),
+                )
+            )
+        m = _mois_suivant(m)
 
 
 @router.patch("/logements/{logement_id}", response_model=LogementRead)
@@ -2439,6 +2646,7 @@ async def update_logement(
     payload: LogementUpdate,
     db: DBSession,
     user: CurrentUser,
+    confirmer: bool = False,
 ) -> LogementRead:
     _require_volet(user)
     obj = await db.get(Logement, logement_id)
@@ -2446,9 +2654,117 @@ async def update_logement(
         raise HTTPException(status_code=404, detail="Logement introuvable.")
     etait_indefini = bool(getattr(obj, "location_en_chambres", False))
     data = payload.model_dump(exclude_unset=True)
+    from app.services.gestion_externe import immeuble_est_externe
+
+    externe = await immeuble_est_externe(db, obj.immeuble_id)
+    ancien_nom_ext = obj.locataire_externe_nom
+    ancien_status = obj.status
+    ancien_loyer = (
+        float(obj.loyer_demande) if obj.loyer_demande is not None else None
+    )
+    # Interne : « vacant » à la main alors qu'un bail ACTIF couvre
+    # aujourd'hui → le bon geste est « Départ » (le bail se ferme) ;
+    # sinon la nuit recale « occupé » et le dossier auto se referme sur
+    # l'ancien bail (audit 2026-09-15).
+    if (
+        not externe
+        and data.get("status") == LogementStatus.VACANT.value
+        and ancien_status != LogementStatus.VACANT.value
+    ):
+        today_v = _now().date()
+        b_actif = (
+            await db.execute(
+                select(Bail).where(
+                    Bail.logement_id == logement_id,
+                    Bail.status == BailStatus.ACTIF.value,
+                    Bail.date_debut <= today_v,
+                    or_(
+                        Bail.au_mois.is_(True),
+                        Bail.date_fin.is_(None),
+                        Bail.date_fin >= today_v,
+                    ),
+                )
+            )
+        ).scalars().first()
+        if b_actif is not None:
+            lo_v = await db.get(Locataire, b_actif.locataire_id)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"{lo_v.full_name if lo_v else 'Un locataire'} a encore "
+                    "un bail actif sur ce logement — déclare son départ "
+                    "(« Mettre fin au bail », page Baux) : le bail se ferme "
+                    "et le logement devient vacant à la bonne date."
+                ),
+            )
+    # Externe : « Départ » avec un solde impayé → confirmation explicite
+    # (le solde est consigné, il ne s'évapore pas en silence).
+    if (
+        externe
+        and data.get("status") == LogementStatus.VACANT.value
+        and ancien_status != LogementStatus.VACANT.value
+    ):
+        from app.api.v1.endpoints.immobilier_gestion_externe import (
+            _rows_externes,
+        )
+
+        rows_ext = await _rows_externes(
+            db, [obj], _now().date().replace(day=1)
+        )
+        solde_ext = float(rows_ext[0].solde_total) if rows_ext else 0.0
+        if solde_ext > 0.005:
+            if not confirmer:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"Solde impayé de {solde_ext:,.0f} $ sur cette "
+                        "unité — confirme le départ (le solde sera "
+                        "consigné dans les notes du logement)."
+                    ).replace(",", " "),
+                )
+            marque = (
+                f"Départ le {_now().date().isoformat()} de "
+                f"{ancien_nom_ext or 'locataire externe'} avec un solde "
+                f"impayé de {solde_ext:.2f} $ (confirmé par "
+                f"{getattr(user, 'email', None) or 'un gestionnaire'})."
+            )
+            obj.notes = f"{obj.notes}{chr(10)}{marque}" if obj.notes else marque
     for k, v in data.items():
         setattr(obj, k, v)
     obj.updated_at = _now()
+    if externe:
+        nouveau_nom = (obj.locataire_externe_nom or "").strip()
+        # Date d'arrivée du locataire externe : posée quand un nom
+        # apparaît ou que l'unité passe « occupé » ; conservée si le
+        # nom est seulement corrigé.
+        # Un nom saisi sur une unité DÉJÀ occupée = le locataire en
+        # place (saisie initiale) : sa dette antérieure reste la sienne.
+        if (
+            nouveau_nom
+            and not (ancien_nom_ext or "").strip()
+            and ancien_status == LogementStatus.VACANT.value
+        ):
+            obj.locataire_externe_depuis = _now().date()
+            obj.status = LogementStatus.OCCUPE.value
+        elif (
+            data.get("status") == LogementStatus.OCCUPE.value
+            and ancien_status == LogementStatus.VACANT.value
+        ):
+            obj.locataire_externe_depuis = _now().date()
+        # Hausse / baisse du loyer attendu : les mois passés non réglés
+        # gardent l'ANCIEN attendu (ligne « attendu figé » sans
+        # versement) — audit 2026-09-15.
+        nouveau_loyer = (
+            float(obj.loyer_demande) if obj.loyer_demande is not None else None
+        )
+        if (
+            "loyer_demande" in data
+            and ancien_loyer is not None
+            and nouveau_loyer is not None
+            and abs(nouveau_loyer - ancien_loyer) > 0.005
+            and ancien_status == LogementStatus.OCCUPE.value
+        ):
+            await _figer_attendu_mois_passes(db, obj, ancien_loyer, user)
     # « Louer indéfiniment (chambre) » qu'on COCHE : les baux en cours du
     # logement basculent AU MOIS (même loyer à l'infini, hors des
     # renouvellements). Qu'on DÉCOCHE : on ne touche à rien — le
@@ -2756,6 +3072,9 @@ async def list_locataires(
                         Bail.date_fin.is_(None),
                         Bail.date_fin >= _now().date(),
                     ),
+                    # Un bail « déjà en vigueur » qui commence dans deux
+                    # mois n'héberge personne aujourd'hui (audit 2026-09-15).
+                    Bail.date_debut <= _now().date(),
                 )
                 .order_by(Bail.date_debut.asc())
             )
@@ -2896,6 +3215,7 @@ async def locataires_doublons(
             .where(
                 Bail.locataire_id.in_([lo.id for lo, _m in trouves]),
                 Bail.status == BailStatus.ACTIF.value,
+                Bail.date_debut <= _now().date(),
             )
             .order_by(Bail.date_debut.asc())
         )
@@ -3090,8 +3410,10 @@ async def delete_locataire(
         await db.delete(b)
     await db.delete(obj)
     await db.flush()
+    from app.services.locatif_depart import recaler_statut_logement
+
     for lg_id in logement_ids:
-        await _recaler_logement_apres_bail(db, lg_id)
+        await recaler_statut_logement(db, lg_id)
     # M9a : logements redevenus vacants sans dossier actif → la
     # mutation ouvre les dossiers (plus de création dans un GET).
     if logement_ids:
@@ -3744,22 +4066,30 @@ async def depots_overview(
             transfere_depuis = (
                 transfere_depuis.numero if transfere_depuis else None
             )
+        cible_transfert = getattr(b, "depot_transfere_vers_bail_id", None)
+        if cible_transfert and cible_transfert not in baux_par_id:
+            # Le bail cible n'existe plus (transfert annulé à la main,
+            # bail supprimé) : le pointeur ne vaut plus rien — le dépôt
+            # est toujours sur CE bail (audit 2026-09-15).
+            if await db.get(Bail, cible_transfert) is None:
+                cible_transfert = None
         if montant <= 0:
-            # Bail sans dépôt : on n'affiche que les ACTIFS, comme ligne
-            # « à saisir » — les baux passés sans dépôt n'apportent rien.
-            if b.status != BailStatus.ACTIF.value:
+            # Bail sans dépôt : on n'affiche que les ACTIFS (et les
+            # proposés — audit 2026-09-15 : on saisit souvent le dépôt
+            # avant l'entrée), comme ligne « à saisir ».
+            if b.status not in (
+                BailStatus.ACTIF.value, BailStatus.PROPOSE.value
+            ):
                 continue
             statut = "aucun"
         elif b.depot_rendu_le is not None:
             statut = "rendu"
             total_rendu += montant
-        elif getattr(b, "depot_transfere_vers_bail_id", None):
+        elif cible_transfert:
             # Transfert d'unité : l'argent dort sur le NOUVEAU bail (qui
             # a sa propre ligne « détenu ») — ici, rien à rendre.
             statut = "transfere"
-            transfere_vers = await _numero_logement_du_bail(
-                b.depot_transfere_vers_bail_id
-            )
+            transfere_vers = await _numero_logement_du_bail(cible_transfert)
         elif b.status in a_rendre_status and (
             any(
                 nb.id != b.id and nb.locataire_id != b.locataire_id
@@ -3896,6 +4226,14 @@ async def create_bail(
         raise HTTPException(
             status_code=422, detail="Statut de bail invalide."
         )
+    # Audit 2026-09-15 : un 2e bail (proposé ou actif) pour un AUTRE
+    # locataire alors qu'un bail est déjà EN SIGNATURE sur l'unité
+    # restait invisible (kanban et page Baux ne montraient que le
+    # premier) — refus explicite qui dit quoi faire.
+    if payload.status in (BailStatus.ACTIF.value, BailStatus.PROPOSE.value):
+        await _refuser_si_unite_deja_en_signature(
+            db, log_obj, payload.locataire_id, payload.date_debut, payload.date_fin
+        )
     # Jamais deux baux ACTIFS qui se chevauchent (audit 2026-07-31).
     if payload.status == BailStatus.ACTIF.value:
         # Garde-fou C4 (2026-08-13) : un bail ACTIF déjà ÉCHU (fin avant
@@ -3929,13 +4267,16 @@ async def create_bail(
     obj.updated_at = _now()
     db.add(obj)
 
-    # Met à jour le statut du logement automatiquement
+    # Statut du logement : règle UNIQUE du service (recalé plus bas) —
+    # un bail « déjà en vigueur » qui commence dans deux mois donne
+    # « réservé », pas « occupé » de force (audit 2026-09-15).
     if obj.status == BailStatus.ACTIF.value:
-        log_obj.status = LogementStatus.OCCUPE.value
         # Le « loyer demandé » suit le bail tant que c'est loué (retour
         # client 2026-08-14) — le prix de la prochaine location se
         # décide à la relocation, prérempli avec le loyer courant.
-        if obj.loyer_mensuel is not None:
+        if obj.loyer_mensuel is not None and (
+            obj.date_debut is None or obj.date_debut <= _now().date()
+        ):
             from app.services.loyer_effectif import (
                 refleter_bail_sur_demande,
             )
@@ -3961,12 +4302,11 @@ async def create_bail(
             _d.statut = "reloue"
             if _d.reloue_le is None:
                 _d.reloue_le = _now().date()
-            if _d.nouveau_bail_id is None:
-                _d.nouveau_bail_id = obj.id
+            # Le bail ACTIF qui arrive est LE nouveau bail du dossier
+            # (audit 2026-09-15 : un proposé concurrent restait le
+            # « locataire lié » de la carte « Reloué »).
+            _d.nouveau_bail_id = obj.id
             _d.updated_at = _now()
-    elif obj.status == BailStatus.PROPOSE.value:
-        log_obj.status = LogementStatus.RESERVE.value
-        log_obj.updated_at = _now()
 
     # Interconnexion kanban Locations (v16) : un bail « proposé » crée
     # ou rattache le dossier de relocation du logement — la page Baux
@@ -4010,6 +4350,17 @@ async def create_bail(
 
             marquer_prise_en_charge_humaine(dossier)
         dossier.updated_at = _now()
+
+    # Règle UNIQUE du statut du logement (audit 2026-09-15) + PDF « bail »
+    # déposé sur la fiche avant que le bail existe → rattaché.
+    await db.flush()
+    from app.services.locatif_depart import (
+        rattacher_pdf_bail_orphelin,
+        recaler_statut_logement,
+    )
+
+    await rattacher_pdf_bail_orphelin(db, obj)
+    await recaler_statut_logement(db, obj.logement_id)
 
     await db.commit()
     await db.refresh(obj)
@@ -4109,41 +4460,69 @@ async def update_bail(
             db, obj, tal_miroir, getattr(user, "email", None)
         )
 
-    # Sync statut logement si bail terminé/résilié
-    if (
-        old_status == BailStatus.ACTIF.value
-        and obj.status in (BailStatus.TERMINE.value, BailStatus.RESILIE.value)
-    ):
-        log_obj = await db.get(Logement, obj.logement_id)
-        if log_obj is not None:
-            log_obj.status = LogementStatus.VACANT.value
-            # Miroir « loyer demandé » (2026-08-13) : logement VACANT →
-            # le prix affiché pour la relocation (dossier Locations)
-            # fait foi s'il existe ; sinon on garde le dernier loyer.
-            from app.services.locatif_depart import (
-                dossier_relocation_actif,
-                ouvrir_dossiers_unites_vacantes,
+    # Statut du logement : règle UNIQUE du service (audit 2026-09-15 —
+    # les assignations directes laissaient un logement « réservé » à vie
+    # après un proposé terminé, ou « occupé » sur un bail futur).
+    if old_status != obj.status:
+        from app.services.locatif_depart import (
+            DOSSIER_STATUTS_REGLES,
+            dossier_relocation_actif,
+            ouvrir_dossiers_unites_vacantes,
+            recaler_statut_logement,
+        )
+
+        if old_status == BailStatus.PROPOSE.value and obj.status in (
+            BailStatus.TERMINE.value, BailStatus.RESILIE.value
+        ):
+            # Un bail proposé qu'on ferme : le dossier de relocation
+            # qui le portait redevient « À louer » (plus de carte
+            # « Bail en signature » sur un bail terminé).
+            from app.models.immobilier import LocationDossier
+
+            for dsr in (
+                await db.execute(
+                    select(LocationDossier).where(
+                        LocationDossier.nouveau_bail_id == obj.id,
+                        LocationDossier.statut.notin_(
+                            list(DOSSIER_STATUTS_REGLES)
+                        ),
+                    )
+                )
+            ).scalars().all():
+                dsr.nouveau_bail_id = None
+                dsr.statut = "avis_recu"
+                dsr.reloue_le = None
+                dsr.updated_at = _now()
+        await db.flush()
+        await recaler_statut_logement(db, obj.logement_id)
+        if obj.status in (BailStatus.TERMINE.value, BailStatus.RESILIE.value):
+            # Gestion externe : un bail résiduel qu'on ferme = départ
+            # (unité vacante, nom effacé) — audit 2026-09-15.
+            from app.services.gestion_externe import (
+                logement_est_externe,
+                rendre_vacant_externe,
             )
 
-            dossier = await dossier_relocation_actif(db, obj.logement_id)
-            if dossier is not None and dossier.loyer_demande is not None:
-                log_obj.loyer_demande = dossier.loyer_demande
-            log_obj.updated_at = _now()
+            if await logement_est_externe(db, obj.logement_id):
+                lg_x = await db.get(Logement, obj.logement_id)
+                if lg_x is not None:
+                    await rendre_vacant_externe(db, lg_x)
+        if (
+            old_status == BailStatus.ACTIF.value
+            and obj.status in (BailStatus.TERMINE.value, BailStatus.RESILIE.value)
+        ):
+            log_obj = await db.get(Logement, obj.logement_id)
+            if log_obj is not None and log_obj.status == LogementStatus.VACANT.value:
+                # Miroir « loyer demandé » (2026-08-13) : logement VACANT →
+                # le prix affiché pour la relocation (dossier Locations)
+                # fait foi s'il existe ; sinon on garde le dernier loyer.
+                dossier = await dossier_relocation_actif(db, obj.logement_id)
+                if dossier is not None and dossier.loyer_demande is not None:
+                    log_obj.loyer_demande = dossier.loyer_demande
+                log_obj.updated_at = _now()
             # M9a : la mutation qui rend le logement vacant ouvre le
             # dossier de relocation (plus de création dans un GET).
-            await ouvrir_dossiers_unites_vacantes(
-                db, [obj.logement_id]
-            )
-    elif (
-        old_status != BailStatus.ACTIF.value
-        and obj.status == BailStatus.ACTIF.value
-    ):
-        # Réactivation (termine→actif) : le logement redevient occupé
-        # (audit 2026-07-31).
-        log_obj = await db.get(Logement, obj.logement_id)
-        if log_obj is not None:
-            log_obj.status = LogementStatus.OCCUPE.value
-            log_obj.updated_at = _now()
+            await ouvrir_dossiers_unites_vacantes(db, [obj.logement_id])
 
     # Le « loyer demandé » suit le bail tant que c'est loué (retour
     # client 2026-08-14) : corriger le loyer du bail ACTIF réaligne le
@@ -4202,11 +4581,49 @@ async def delete_bail(
                 "pour une vraie fin de bail (l'historique est conservé)."
             ),
         )
+    from app.services.locatif_depart import (
+        AnnulationTransfertImpossible,
+        annuler_transfert,
+        bail_issu_du_transfert,
+        recaler_statut_logement,
+    )
+
+    # Bail SOURCE d'un transfert d'unité : on n'efface pas l'origine du
+    # dépôt et du nouveau bail — annuler le transfert d'abord.
+    enfant = await bail_issu_du_transfert(db, obj.id)
+    if enfant is not None:
+        lg_e = await db.get(Logement, enfant.logement_id)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Ce bail a été transféré vers le logement "
+                f"{lg_e.numero if lg_e else enfant.logement_id} — annule "
+                "d'abord le transfert (carte du nouveau logement dans "
+                "Locations → « Retirer le locataire »)."
+            ),
+        )
+    # Bail ISSU d'un transfert (proposé, pas signé) : supprimer = annuler
+    # le transfert (l'ancien bail reprend son cours, le dépôt revient).
+    if getattr(obj, "transfere_depuis_bail_id", None) is not None:
+        try:
+            await annuler_transfert(db, obj, par=getattr(user, "email", None))
+        except AnnulationTransfertImpossible as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+            ) from exc
+        await db.commit()
+        return None
+    # Le dépôt d'un bail PROPOSÉ jamais entré en vigueur n'est pas « à
+    # rendre » : même règle que « Retirer le locataire » (audit
+    # 2026-09-15 : 409 d'un côté, autorisé de l'autre).
     if (
         obj.depot_garantie is not None
         and float(obj.depot_garantie) > 0
         and obj.depot_rendu_le is None
         and getattr(obj, "depot_transfere_vers_bail_id", None) is None
+        and not (
+            obj.status == BailStatus.PROPOSE.value and obj.document_id is None
+        )
     ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -4236,10 +4653,20 @@ async def delete_bail(
     # suppression, on recopie les infos utiles qu'il n'a pas encore
     # (fill-only) + une note de traçabilité.
     await _consigner_suppression_bail_sortant(db, obj)
+    # Les pièces IMPORTÉES du locataire (pièce d'identité, assurance,
+    # règlements…) survivent au bail : elles restent sur sa fiche
+    # (audit 2026-09-15 : la cascade les effaçait).
+    for doc in (
+        await db.execute(
+            select(ImmDocument).where(ImmDocument.bail_id == obj.id)
+        )
+    ).scalars().all():
+        if getattr(doc, "source", "genere") == "importe" and doc.locataire_id:
+            doc.bail_id = None
     logement_id = obj.logement_id
     await db.delete(obj)
     await db.flush()
-    await _recaler_logement_apres_bail(db, logement_id)
+    await recaler_statut_logement(db, logement_id)
     # M9a : si le logement vient de redevenir vacant sans dossier de
     # relocation actif, la mutation en ouvre un (plus de GET créateur).
     from app.services.locatif_depart import ouvrir_dossiers_unites_vacantes
@@ -4456,7 +4883,14 @@ async def create_paiement(
             float(derniere.montant or 0) + montant_total, 2
         )
     if obj is None:
-        raise HTTPException(status_code=400, detail="Montant invalide.")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Montant invalide — ou le mois visé est après la fin de "
+                "ce bail (locataire transféré ou parti : enregistre le "
+                "paiement sur son bail courant)."
+            ),
+        )
 
     # Mettre à jour le score du locataire (basique : % paiements à temps)
     # — uniquement sur l'historique qui compte (depuis le démarrage).
@@ -4949,11 +5383,21 @@ async def loyers_overview(
         # Mois APRÈS la fin d'un bail terminé (retour client 2026-08-14) :
         # rien n'est attendu pour le mois affiché lui-même — la ligne
         # n'existe que pour la DETTE (solde > 0) du locataire parti.
+        # Vaut aussi pour un bail encore ACTIF dont la fin est posée
+        # avant le mois affiché (départ / transfert à venir — audit
+        # 2026-09-15 : octobre réclamait le loyer de l'ancienne unité).
         apres_fin = (
-            b.status
-            in (BailStatus.RESILIE.value, BailStatus.TERMINE.value)
-            and b.date_fin is not None
+            b.date_fin is not None
             and b.date_fin < month_start
+            and not b.au_mois
+            and (
+                b.status
+                in (
+                    BailStatus.RESILIE.value,
+                    BailStatus.TERMINE.value,
+                    BailStatus.ACTIF.value,
+                )
+            )
         )
         loyer = 0.0 if apres_fin else loyer_bail_ref
         if not apres_fin and b.logement_id:
@@ -5478,6 +5922,21 @@ async def declarer_exception_bail(
     bail.sans_document_motif = payload.motif.strip()[:255]
     bail.sans_document_par = getattr(user, "email", None)
     bail.sans_document_le = _now()
+    # L'exception vaut bail au dossier : un bail proposé devient ACTIF
+    # par la règle unique (dossier → reloué, logement recalé). Audit
+    # 2026-09-15 : sans ça, le locataire n'entrait jamais dans Paiements.
+    if bail.status == BailStatus.PROPOSE.value:
+        from app.services.locatif_depart import (
+            ActivationImpossible,
+            activer_bail_propose,
+        )
+
+        try:
+            await activer_bail_propose(db, bail)
+        except ActivationImpossible as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, str(exc)
+            ) from exc
     await db.commit()
     return ExceptionBailOut(
         bail_id=bail.id,

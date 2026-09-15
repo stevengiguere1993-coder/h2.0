@@ -311,6 +311,13 @@ class Logement(Base, TimestampUpdateMixin):
     locataire_externe_nom: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
+    #: Depuis quand ce locataire (externe) occupe l'unité — posé quand
+    #: le nom est saisi / l'unité passe « occupé », effacé au départ.
+    #: Les mois de vacance qui précèdent ne comptent pas comme impayés
+    #: (audit 2026-09-15 : dette fantôme héritée). Colonne additive.
+    locataire_externe_depuis: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
+    )
 
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
@@ -681,6 +688,17 @@ class Bail(Base, TimestampUpdateMixin):
     #: additive → ensure_critical_columns.
     depot_transfere_vers_bail_id: Mapped[Optional[int]] = mapped_column(
         Integer, nullable=True
+    )
+    #: TRANSFERT D'UNITÉ (audit 2026-09-15) : ce bail (le NOUVEAU) a été
+    #: créé par le transfert du bail ``transfere_depuis_bail_id`` ; la
+    #: fin que l'ancien bail avait AVANT le transfert est mémorisée pour
+    #: pouvoir annuler le transfert proprement. Colonnes additives →
+    #: ensure_critical_columns.
+    transfere_depuis_bail_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    transfert_ancienne_fin: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
     )
 
     #: Bail AU MOIS (chambres, retour Phil 2026-07-28) : reconduction

@@ -310,6 +310,7 @@ export function TableauSuiviBaux({
                                       locataireNom={r.locataire_nom}
                                       immeubleId={r.immeuble_id}
                                       immeubleName={r.immeuble_name}
+                                      logementId={r.logement_id}
                                       logementNumero={r.logement_numero}
                                       loyerActuel={r.loyer_mensuel}
                                       finActuelle={r.date_fin}

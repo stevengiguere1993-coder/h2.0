@@ -77,6 +77,7 @@ _STATUT_DEPOT = {
     "a_rendre": "À rendre",
     "rendu": "Rendu",
     "aucun": "Aucun dépôt saisi",
+    "transfere": "Transféré",
 }
 _STATUT_LOGEMENT = {
     "occupe": "Occupé",
@@ -348,7 +349,7 @@ async def export_paiements(
                     m,
                     r.immeuble_name,
                     r.logement_numero,
-                    None,
+                    r.locataire_nom,
                     None,
                     None,
                     True,
@@ -357,7 +358,7 @@ async def export_paiements(
                     0.0,
                     r.montant_paye,
                     r.paye_le,
-                    float(r.solde_total),
+                    round(max(0.0, float(r.loyer_mensuel) - float(r.montant_paye or 0)), 2),
                     float(r.solde_total),
                     _ETAT_PAIEMENT.get(r.etat, r.etat),
                     None,
@@ -706,6 +707,7 @@ _COLONNES_DEPOTS = [
     "Reçu le",
     "Détenteur",
     "Rendu le",
+    "Transfert d'unité",
     "Bail début",
     "Bail fin",
     "Bail ID",
@@ -737,6 +739,15 @@ async def export_depots(
             r.depot_recu_le,
             r.depot_detenteur,
             r.depot_rendu_le,
+            (
+                f"vers log. {r.transfere_vers_logement}"
+                if r.transfere_vers_logement
+                else (
+                    f"du log. {r.transfere_depuis_logement}"
+                    if r.transfere_depuis_logement
+                    else None
+                )
+            ),
             r.date_debut,
             r.date_fin,
             r.bail_id,
@@ -962,6 +973,51 @@ async def _zip_response(
     )
 
 
+async def _logement_visible_ou_403(db, user, logement_id: int) -> None:
+    """Employé restreint : le logement doit être dans un immeuble qui lui
+    est affecté (audit 2026-09-15 : les zips n'étaient pas gardés)."""
+    visible = await visible_immeuble_ids(db, user)
+    if visible is None:
+        return
+    lg = await db.get(Logement, logement_id)
+    if lg is None or lg.immeuble_id not in visible:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Accès à cet immeuble non autorisé.",
+        )
+
+
+async def _locataire_visible_ou_403(db, user, locataire_id: int) -> None:
+    """Employé restreint : au moins un bail du locataire dans un immeuble
+    affecté (un locataire sans bail reste lisible)."""
+    visible = await visible_immeuble_ids(db, user)
+    if visible is None:
+        return
+    logs = [
+        r[0]
+        for r in (
+            await db.execute(
+                select(Bail.logement_id).where(Bail.locataire_id == locataire_id)
+            )
+        ).all()
+    ]
+    if not logs:
+        return
+    imms = {
+        r[0]
+        for r in (
+            await db.execute(
+                select(Logement.immeuble_id).where(Logement.id.in_(logs))
+            )
+        ).all()
+    }
+    if not (imms & set(visible)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Accès à ce locataire non autorisé.",
+        )
+
+
 @router.get("/baux/{bail_id}/documents.zip")
 async def zip_bail_documents(
     bail_id: int,
@@ -971,8 +1027,10 @@ async def zip_bail_documents(
 ) -> Response:
     """Tous les documents d'un bail, à plat."""
     _require_volet(user)
-    if await db.get(Bail, bail_id) is None:
+    bail_z = await db.get(Bail, bail_id)
+    if bail_z is None:
         raise HTTPException(status_code=404, detail="Bail introuvable.")
+    await _logement_visible_ou_403(db, user, bail_z.logement_id)
     docs = _filtrer_categorie(
         await _docs_sans_blob(db, ImmDocument.bail_id == bail_id), categorie
     )
@@ -995,6 +1053,7 @@ async def zip_locataire_documents(
     loc = await db.get(Locataire, locataire_id)
     if loc is None:
         raise HTTPException(status_code=404, detail="Locataire introuvable.")
+    await _locataire_visible_ou_403(db, user, locataire_id)
     bail_ids = {
         r[0]
         for r in (
@@ -1029,6 +1088,7 @@ async def zip_logement_documents(
     lg = await db.get(Logement, logement_id)
     if lg is None:
         raise HTTPException(status_code=404, detail="Logement introuvable.")
+    await _logement_visible_ou_403(db, user, logement_id)
     bail_ids = {
         r[0]
         for r in (

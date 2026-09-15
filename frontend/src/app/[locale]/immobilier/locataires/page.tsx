@@ -136,7 +136,7 @@ export default function LocatairesPage() {
         setImmeubleLocataireIds(
           new Set(
             baux
-              .filter((b) => b.status === "actif")
+              .filter((b) => b.status === "actif" || b.status === "propose")
               .map((b) => b.locataire_id)
           )
         );

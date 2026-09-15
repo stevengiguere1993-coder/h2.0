@@ -142,6 +142,7 @@ class LogementBase(BaseModel):
     loyer_demande: Optional[float] = Field(default=None, ge=0)
     #: Gestion externe : nom du locataire (facultatif, sans fiche).
     locataire_externe_nom: Optional[str] = Field(default=None, max_length=255)
+    locataire_externe_depuis: Optional[date] = None
     notes: Optional[str] = None
 
 
@@ -161,6 +162,7 @@ class LogementUpdate(BaseModel):
     status: Optional[str] = Field(default=None, max_length=16)
     loyer_demande: Optional[float] = Field(default=None, ge=0)
     locataire_externe_nom: Optional[str] = Field(default=None, max_length=255)
+    locataire_externe_depuis: Optional[date] = None
     notes: Optional[str] = None
 
 
@@ -482,6 +484,9 @@ class BailRead(BailBase):
     depot_rendu_le: Optional[date] = None
     #: Transfert d'unité : le dépôt a suivi le locataire sur ce bail-là.
     depot_transfere_vers_bail_id: Optional[int] = None
+    #: Ce bail vient d'un transfert d'unité (bail d'origine).
+    transfere_depuis_bail_id: Optional[int] = None
+    transfert_ancienne_fin: Optional[date] = None
     #: Dossier TAL ouvert (non-paiement).
     tal_dossier_ouvert_le: Optional[date] = None
     created_at: datetime

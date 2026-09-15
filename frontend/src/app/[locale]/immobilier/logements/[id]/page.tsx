@@ -209,15 +209,31 @@ function LocataireExterneActions({
     setValeur(nom ?? nomBail ?? "");
   }, [nom, nomBail]);
 
-  async function patch(body: Record<string, unknown>) {
+  async function patch(body: Record<string, unknown>, confirmer = false) {
     setBusy(true);
     setMsg(null);
     try {
-      const r = await authedFetch(`/api/v1/immobilier/logements/${logementId}`, {
-        method: "PATCH",
-        body: JSON.stringify(body)
-      });
-      if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+      const r = await authedFetch(
+        `/api/v1/immobilier/logements/${logementId}${confirmer ? "?confirmer=true" : ""}`,
+        { method: "PATCH", body: JSON.stringify(body) }
+      );
+      if (!r.ok) {
+        const t = await r.json().catch(() => null);
+        const detail = (t && (t.detail || t.message)) || `HTTP ${r.status}`;
+        // Départ avec un solde impayé : le serveur demande une
+        // confirmation explicite (le solde est consigné, pas oublié).
+        if (
+          r.status === 409 &&
+          !confirmer &&
+          /confirme/i.test(String(detail)) &&
+          window.confirm(`${detail}\n\nConfirmer le départ ?`)
+        ) {
+          setBusy(false);
+          await patch(body, true);
+          return;
+        }
+        throw new Error(String(detail).slice(0, 200));
+      }
       onDone();
     } catch (e) {
       setMsg((e as Error).message || "Échec.");

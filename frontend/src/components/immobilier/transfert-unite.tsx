@@ -88,6 +88,7 @@ export function TransfertUniteButton({
   locataireNom,
   immeubleId,
   immeubleName,
+  logementId,
   logementNumero,
   loyerActuel,
   finActuelle,
@@ -99,6 +100,8 @@ export function TransfertUniteButton({
   locataireNom?: string | null;
   immeubleId: number;
   immeubleName?: string | null;
+  /** Logement actuel — exclu de la liste par son id. */
+  logementId?: number | null;
   logementNumero?: string | null;
   loyerActuel?: number | null;
   finActuelle?: string | null;
@@ -130,6 +133,7 @@ export function TransfertUniteButton({
           locataireNom={locataireNom}
           immeubleId={immeubleId}
           immeubleName={immeubleName}
+          logementId={logementId}
           logementNumero={logementNumero}
           loyerActuel={loyerActuel}
           finActuelle={finActuelle}
@@ -149,6 +153,7 @@ function TransfertUniteModal({
   locataireNom,
   immeubleId,
   immeubleName,
+  logementId: logementIdActuel,
   logementNumero,
   loyerActuel,
   finActuelle,
@@ -159,6 +164,7 @@ function TransfertUniteModal({
   locataireNom?: string | null;
   immeubleId: number;
   immeubleName?: string | null;
+  logementId?: number | null;
   logementNumero?: string | null;
   loyerActuel?: number | null;
   finActuelle?: string | null;
@@ -181,6 +187,9 @@ function TransfertUniteModal({
   const [depotActuel, setDepotActuel] = useState<number | null>(null);
   const [depotSuit, setDepotSuit] = useState(true);
   const [depotNouveau, setDepotNouveau] = useState("");
+  //: Bail au mois : imposé par une chambre, sinon au choix (jamais
+  //: hérité de l'ancien bail — audit 2026-09-15).
+  const [auMois, setAuMois] = useState(false);
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -251,6 +260,9 @@ function TransfertUniteModal({
   }, [immId]);
 
   const logementChoisi = (logements || []).find((l) => l.id === logementId);
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const datePassee = Boolean(dateTransfert && dateTransfert < todayIso);
+  const pasLePremier = Boolean(dateTransfert && !dateTransfert.endsWith("-01"));
 
   async function submit() {
     if (logementId == null) return;
@@ -273,13 +285,16 @@ function TransfertUniteModal({
                 : depotNouveau.trim()
                   ? Number(depotNouveau)
                   : null,
+            au_mois: logementChoisi?.location_en_chambres ? true : auMois,
             notes: notes.trim() || null
           })
         }
       );
       if (!r.ok) {
-        const t = await r.text();
-        throw new Error(t.slice(0, 260) || `HTTP ${r.status}`);
+        const t = await r.json().catch(() => null);
+        throw new Error(
+          (t && (t.detail || t.message)) || `Erreur ${r.status}`
+        );
       }
       setDone((await r.json()) as TransfertResult);
     } catch (e) {
@@ -443,9 +458,16 @@ function TransfertUniteModal({
                 Nouveau logement
                 <select
                   value={logementId == null ? "" : String(logementId)}
-                  onChange={(e) =>
-                    setLogementId(e.target.value ? Number(e.target.value) : null)
-                  }
+                  onChange={(e) => {
+                    const id = e.target.value ? Number(e.target.value) : null;
+                    setLogementId(id);
+                    // Le loyer demandé de la nouvelle unité prévaut
+                    // (audit 2026-09-15) ; sinon on garde le loyer actuel.
+                    const l = (logements || []).find((x) => x.id === id);
+                    if (l && l.loyer_demande != null)
+                      setLoyer(String(l.loyer_demande));
+                    if (l?.location_en_chambres) setAuMois(true);
+                  }}
                   className={`${INPUT_CLS} mt-0.5 block w-full`}
                 >
                   <option value="">
@@ -454,9 +476,13 @@ function TransfertUniteModal({
                   {(logements || [])
                     .filter(
                       (l) =>
+                        l.status !== "hors_location" &&
                         !(
-                          immId === immeubleId &&
-                          String(l.numero ?? "") === String(logementNumero ?? "")
+                          logementIdActuel != null
+                            ? l.id === logementIdActuel
+                            : immId === immeubleId &&
+                              String(l.numero ?? "") ===
+                                String(logementNumero ?? "")
                         )
                     )
                     .map((l) => (
@@ -474,8 +500,21 @@ function TransfertUniteModal({
             {logementChoisi && logementChoisi.status !== "vacant" ? (
               <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100/85">
                 Ce logement n&apos;est pas vacant aujourd&apos;hui : le
-                transfert passera seulement si personne n&apos;y a de bail
-                sur la période.
+                transfert passera seulement si le locataire actuel a un
+                départ déclaré avant la date du transfert.
+              </p>
+            ) : null}
+            {datePassee ? (
+              <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100/85">
+                Date passée : l&apos;ancien bail sera résilié tout de suite
+                et les loyers depuis cette date seront attendus sur le
+                nouveau bail dès que son PDF signé sera joint.
+              </p>
+            ) : pasLePremier ? (
+              <p className="rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2 text-[11px] text-white/55">
+                Transfert en cours de mois : le mois de bascule est compté
+                en entier sur les deux baux (pas de prorata automatique) —
+                ajuste par un frais ou un crédit si besoin.
               </p>
             ) : null}
             <div className="grid grid-cols-2 gap-3">
@@ -552,6 +591,23 @@ function TransfertUniteModal({
                 />
               </label>
             ) : null}
+            <label className="flex items-start gap-2 text-[11px] font-semibold text-white/60">
+              <input
+                type="checkbox"
+                checked={Boolean(logementChoisi?.location_en_chambres) || auMois}
+                disabled={Boolean(logementChoisi?.location_en_chambres)}
+                onChange={(e) => setAuMois(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Bail au mois
+                <span className="block font-normal text-white/40">
+                  {logementChoisi?.location_en_chambres
+                    ? "Imposé : ce logement est loué en chambres."
+                    : "Loyer figé, reconduction automatique, hors des renouvellements."}
+                </span>
+              </span>
+            </label>
             <label className="text-[11px] font-semibold text-white/60">
               Note (optionnel)
               <input

@@ -17,6 +17,7 @@ import {
 } from "react";
 import {
   Eye,
+  FileSignature,
   FileDown,
   Loader2,
   Mail,
@@ -72,72 +73,14 @@ export type BailDocument = {
   tal_dossier_id?: number | null;
 };
 
-/** Téléverse un document au dossier (bouton « Importer »). */
-export async function importDocument(opts: {
-  file: File;
-  type?: string;
-  titre?: string;
-  bailId?: number;
-  locataireId?: number;
-  logementId?: number;
-  immeubleId?: number;
-  /** Rattache la pièce à un dossier TAL (bail/locataire déduits). */
-  talDossierId?: number;
-}): Promise<BailDocument> {
-  const fd = new FormData();
-  fd.append("file", opts.file);
-  fd.append("type", opts.type || "autre");
-  if (opts.titre) fd.append("titre", opts.titre);
-  if (opts.bailId != null) fd.append("bail_id", String(opts.bailId));
-  if (opts.locataireId != null)
-    fd.append("locataire_id", String(opts.locataireId));
-  if (opts.logementId != null)
-    fd.append("logement_id", String(opts.logementId));
-  if (opts.immeubleId != null)
-    fd.append("immeuble_id", String(opts.immeubleId));
-  if (opts.talDossierId != null)
-    fd.append("tal_dossier_id", String(opts.talDossierId));
-  const r = await authedFetch("/api/v1/immobilier/documents/import", {
-    method: "POST",
-    body: fd
-  });
-  const d = await r.json().catch(() => null);
-  if (!r.ok) {
-    throw new Error((d && (d.detail || d.message)) || `Erreur ${r.status}`);
-  }
-  return d as BailDocument;
-}
+// Appels d'API des documents (import, bail signé) — dans leur propre
+// module pour que fin-bail.tsx puisse les utiliser sans cycle d'import.
+import {
+  importDocument,
+  uploadBailDocument
+} from "@/components/immobilier/documents-api";
 
-/**
- * Téléverse LE bail signé d'un bail (POST /baux/{id}/document) : pose
- * `bail.document_id`, active un bail « proposé », referme le dossier de
- * relocation et recale le logement. ⚠️ Jamais `/documents/import` pour
- * ce cas — là, un « bail » n'est qu'une pièce au dossier.
- */
-export async function uploadBailDocument(opts: {
-  bailId: number;
-  file: File;
-  /** AAAA-MM-JJ — entrée en vigueur (titre « Bail signé … »). */
-  dateEntree?: string;
-  /** true = marque le bail « au mois » (chambres). */
-  auMois?: boolean;
-}): Promise<BailDocument> {
-  const fd = new FormData();
-  fd.append("file", opts.file);
-  if (opts.dateEntree) fd.append("date_entree", opts.dateEntree);
-  // Coché seulement : on n'écrase pas un réglage existant quand la case
-  // reste vide.
-  if (opts.auMois) fd.append("au_mois", "true");
-  const r = await authedFetch(
-    `/api/v1/immobilier/baux/${opts.bailId}/document`,
-    { method: "POST", body: fd }
-  );
-  const d = await r.json().catch(() => null);
-  if (!r.ok) {
-    throw new Error((d && (d.detail || d.message)) || `Erreur ${r.status}`);
-  }
-  return d as BailDocument;
-}
+export { importDocument, uploadBailDocument };
 
 /**
  * Bouton « Importer » réutilisable (input fichier caché).
@@ -1302,16 +1245,53 @@ function fmtDateTime(iso: string | null): string {
 export function DocsList({
   docs,
   onChanged,
-  emptyText
+  emptyText,
+  rattacherA = []
 }: {
   docs: BailDocument[];
   onChanged: () => void;
   emptyText?: string;
+  /** Baux qui attendent leur bail signé : un PDF « Bail » déposé sans
+   *  bail (à la création du locataire) peut y être rattaché sans le
+   *  re-téléverser (audit 2026-09-15). */
+  rattacherA?: { id: number; label: string }[];
 }) {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [editDoc, setEditDoc] = useState<BailDocument | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
+
+  async function rattacher(d: BailDocument, bailId: number, label: string) {
+    if (
+      !window.confirm(
+        `Utiliser « ${d.titre} » comme LE bail signé${
+          rattacherA.length > 1 ? ` de ${label}` : ""
+        } ? Le bail devient actif et le logement est considéré loué.`
+      )
+    )
+      return;
+    setBusyId(d.id);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${bailId}/document/rattacher`,
+        { method: "POST", body: JSON.stringify({ document_id: d.id }) }
+      );
+      if (!r.ok) {
+        const t = await r.json().catch(() => null);
+        throw new Error(
+          (t && (t.detail || t.message)) || `Erreur ${r.status}`
+        );
+      }
+      setFlash("Bail signé au dossier — le bail est actif.");
+      window.dispatchEvent(new Event(DOCS_EVENT));
+      onChanged();
+    } catch (e) {
+      setErr(`Rattachement échoué : ${(e as Error).message}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   async function voir(d: BailDocument) {
     setBusyId(d.id);
@@ -1517,6 +1497,24 @@ export function DocsList({
                         {d.envoye_le ? "Renvoyer" : "Envoyer"}
                       </button>
                     ) : null}
+                    {d.source === "importe" &&
+                    d.type === "bail" &&
+                    d.bail_id == null
+                      ? rattacherA.map((b) => (
+                          <button
+                            key={b.id}
+                            type="button"
+                            onClick={() => void rattacher(d, b.id, b.label)}
+                            disabled={busyId === d.id}
+                            className="btn-accent btn-xs"
+                            title="Ce PDF devient LE bail signé du bail (sans le re-téléverser)"
+                          >
+                            <FileSignature className="h-3 w-3" />
+                            Utiliser comme bail signé
+                            {rattacherA.length > 1 ? ` · ${b.label}` : ""}
+                          </button>
+                        ))
+                      : null}
                     {!d.signed_at ? (
                       <button
                         type="button"
@@ -1558,9 +1556,21 @@ export function DocumentsSection({
 }: {
   locataireId?: number;
   logementId?: number;
-  /** Baux depuis lesquels générer un document (libellé affiché si >1). */
-  bails: { id: number; label: string }[];
+  /** Baux depuis lesquels générer un document (libellé affiché si >1).
+   *  `status`/`document_id` (facultatifs) servent à proposer « Utiliser
+   *  comme bail signé » sur un PDF « Bail » déposé sans bail. */
+  bails: {
+    id: number;
+    label: string;
+    status?: string | null;
+    document_id?: number | null;
+  }[];
 }) {
+  const rattacherA = bails.filter(
+    (b) =>
+      b.status === "propose" ||
+      (b.status === "actif" && b.document_id == null)
+  );
   const [docs, setDocs] = useState<BailDocument[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -1686,6 +1696,7 @@ export function DocumentsSection({
         <DocsList
           docs={docs}
           onChanged={() => void load()}
+          rattacherA={rattacherA}
           emptyText="Aucun document au dossier — importe un fichier (bouton « Importer ») ou génère un avis avec « Générer ▾ ». Les documents signés en ligne arrivent ici automatiquement."
         />
       )}

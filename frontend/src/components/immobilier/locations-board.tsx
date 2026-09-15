@@ -42,10 +42,14 @@ import {
   type ImportResultat
 } from "@/components/immobilier/documents-a-importer";
 import {
-  TalFormDropdown,
   importDocument,
   uploadBailDocument
-} from "@/components/immobilier/tal-avis";
+} from "@/components/immobilier/documents-api";
+import {
+  JOUR_ECHEANCE_DEFAUT,
+  JourEcheanceField
+} from "@/components/immobilier/fin-bail";
+import { TalFormDropdown } from "@/components/immobilier/tal-avis";
 
 type Dossier = {
   id: number;
@@ -1214,6 +1218,9 @@ function LierLocataireModal({
     d.loyer_demande != null ? String(d.loyer_demande) : ""
   );
   const [depot, setDepot] = useState("");
+  const [depotRecuLe, setDepotRecuLe] = useState("");
+  const [depotDetenteur, setDepotDetenteur] = useState("");
+  const [jourEcheance, setJourEcheance] = useState(JOUR_ECHEANCE_DEFAUT);
   // Documents déposés APRÈS la création du bail : « Bail » = LE bail
   // signé (la carte passe à « Reloué »), le reste au dossier.
   const [fichiers, setFichiers] = useState<FichierAImporter[]>([]);
@@ -1268,7 +1275,10 @@ function LierLocataireModal({
             date_debut: debut,
             date_fin: fin,
             loyer_mensuel: Number(loyer),
-            depot_garantie: depot.trim() ? Number(depot) : null
+            depot_garantie: depot.trim() ? Number(depot) : null,
+            depot_recu_le: depotRecuLe || null,
+            depot_detenteur: depotDetenteur.trim() || null,
+            jour_echeance: jourEcheance
           })
         }
       );
@@ -1531,6 +1541,34 @@ function LierLocataireModal({
                   className={`${INPUT_CLS} mt-0.5 block w-full`}
                 />
               </label>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-[11px] font-semibold text-white/60">
+                Dépôt reçu le
+                <input
+                  type="date"
+                  value={depotRecuLe}
+                  onChange={(e) => setDepotRecuLe(e.target.value)}
+                  className={`${INPUT_CLS} mt-0.5 block w-full`}
+                />
+              </label>
+              <label className="text-[11px] font-semibold text-white/60">
+                Dépôt détenu par
+                <input
+                  value={depotDetenteur}
+                  onChange={(e) => setDepotDetenteur(e.target.value)}
+                  placeholder="ex. MGV Développement"
+                  className={`${INPUT_CLS} mt-0.5 block w-full`}
+                />
+              </label>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <JourEcheanceField
+                value={jourEcheance}
+                onChange={setJourEcheance}
+                labelClassName="text-[11px] font-semibold text-white/60"
+                selectClassName={`${INPUT_CLS} mt-0.5 block w-full`}
+              />
             </div>
             <DocumentsAImporterZone
               fichiers={fichiers}

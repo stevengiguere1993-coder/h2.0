@@ -559,6 +559,7 @@ async def update_dossier(
             in (
                 LocationDossierStatut.AVIS_RECU.value,
                 LocationDossierStatut.ANNONCE_PUBLIEE.value,
+                LocationDossierStatut.ANNULE.value,
             )
             and obj.nouveau_bail_id is not None
         ):
@@ -602,6 +603,20 @@ async def update_dossier(
                     "vraiment aucun bail à joindre, déclare une "
                     "exception motivée.",
                 )
+            # Exception motivée : le bail proposé devient ACTIF par la
+            # règle unique (audit 2026-09-15 — il restait proposé à vie).
+            if nb is not None and nb.status == BailStatus.PROPOSE.value:
+                from app.services.locatif_depart import (
+                    ActivationImpossible,
+                    activer_bail_propose,
+                )
+
+                try:
+                    await activer_bail_propose(db, nb)
+                except ActivationImpossible as exc:
+                    raise HTTPException(
+                        status.HTTP_409_CONFLICT, str(exc)
+                    ) from exc
         if obj.reloue_le is None:
             obj.reloue_le = _now().date()
         # Règle UNIQUE du statut du logement (M2, audit 2026-08-13) :
@@ -684,6 +699,11 @@ class ConvertirRequest(BaseModel):
     date_fin: date
     loyer_mensuel: float = Field(..., ge=0)
     depot_garantie: Optional[float] = Field(default=None, ge=0)
+    #: Même bail qu'ailleurs (audit 2026-09-15) : réception du dépôt,
+    #: détenteur, jour d'échéance du loyer.
+    depot_recu_le: Optional[date] = None
+    depot_detenteur: Optional[str] = Field(default=None, max_length=120)
+    jour_echeance: Optional[int] = Field(default=None, ge=1, le=28)
 
 
 class ConvertirResult(BaseModel):
@@ -769,6 +789,25 @@ async def convertir_dossier(
     lg = await db.get(Logement, dossier.logement_id)
     if lg is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Logement introuvable.")
+    # Gestion EXTERNE : pas de bail dans Kratos (audit 2026-09-15).
+    from app.services.gestion_externe import erreur_externe, immeuble_est_externe
+
+    if await immeuble_est_externe(db, lg.immeuble_id):
+        raise erreur_externe("pas de bail dans Kratos.")
+    # Unité déjà en signature pour quelqu'un d'autre (bail proposé
+    # créé depuis la page Baux, non lié à ce dossier) → même refus.
+    from app.api.v1.endpoints.immobilier import (
+        _refuser_si_unite_deja_en_signature,
+    )
+
+    if locataire_id_effectif is not None:
+        await _refuser_si_unite_deja_en_signature(
+            db, lg, locataire_id_effectif, payload.date_debut, payload.date_fin
+        )
+    else:
+        await _refuser_si_unite_deja_en_signature(
+            db, lg, -1, payload.date_debut, payload.date_fin
+        )
 
     now = _now()
 
@@ -807,6 +846,9 @@ async def convertir_dossier(
         date_fin=payload.date_fin,
         loyer_mensuel=payload.loyer_mensuel,
         depot_garantie=payload.depot_garantie,
+        depot_recu_le=payload.depot_recu_le,
+        depot_detenteur=(payload.depot_detenteur or "").strip() or None,
+        jour_echeance=payload.jour_echeance or 1,
         status="propose",
         # « Louer indéfiniment (chambre) » : le logement impose le bail
         # AU MOIS — loyer figé, aucun renouvellement (Phil 2026-08-13).
@@ -823,10 +865,19 @@ async def convertir_dossier(
 
     dossier.nouveau_bail_id = bail.id
     dossier.updated_at = now
-    # Réservé = bail à signer pas encore commencé (le passage à
-    # « occupé » suit le cycle normal du bail).
-    lg.status = LogementStatus.RESERVE.value
     immeuble_id = lg.immeuble_id
+    # PDF « Bail » déposé sur la fiche AVANT que le bail existe : il
+    # suit le bail (pièce liée, sans activer — « Joindre le bail signé »
+    # ou « Utiliser comme bail signé » l'activeront). Audit 2026-09-15.
+    from app.services.locatif_depart import (
+        rattacher_pdf_bail_orphelin,
+        recaler_statut_logement,
+    )
+
+    await rattacher_pdf_bail_orphelin(db, bail)
+    # Statut du logement : règle UNIQUE (réservé, sans flip-flop la nuit).
+    await db.flush()
+    await recaler_statut_logement(db, lg.id)
 
     # Locataire lié, bail proposé : la carte passe à « Bail en
     # signature ».
@@ -921,7 +972,17 @@ async def _supprimer_bail_et_locataire_crees(db, dossier) -> None:
                 select(ImmDocument).where(ImmDocument.bail_id == bail.id)
             )
         ).scalars().all():
-            await db.delete(doc)
+            # Les pièces IMPORTÉES du locataire (pièce d'identité,
+            # assurance, règlements…) restent sur sa fiche ; seuls les
+            # documents générés pour ce bail (consentement…) partent
+            # avec lui (audit 2026-09-15).
+            if (
+                getattr(doc, "source", "genere") == "importe"
+                and doc.locataire_id
+            ):
+                doc.bail_id = None
+            else:
+                await db.delete(doc)
         for r in (
             await db.execute(
                 select(BailRenouvellement).where(
@@ -989,6 +1050,28 @@ async def desistement_candidat(
             status.HTTP_409_CONFLICT,
             "Aucun locataire lié à ce dossier.",
         )
+    # Bail créé par un TRANSFERT D'UNITÉ : le retirer = annuler le
+    # transfert (l'ancien bail reprend son cours, le dépôt revient) —
+    # audit 2026-09-15 : le locataire se retrouvait sans logement et le
+    # dépôt disparaissait de tous les totaux.
+    bail_lie = await db.get(Bail, dossier.nouveau_bail_id)
+    if bail_lie is not None and getattr(
+        bail_lie, "transfere_depuis_bail_id", None
+    ):
+        from app.services.locatif_depart import (
+            AnnulationTransfertImpossible,
+            annuler_transfert,
+        )
+
+        try:
+            await annuler_transfert(
+                db, bail_lie, par=getattr(user, "email", None)
+            )
+        except AnnulationTransfertImpossible as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        await db.commit()
+        obj = await _dossier_or_404(db, dossier_id)
+        return await _to_row(db, obj)
     await _supprimer_bail_et_locataire_crees(db, dossier)
     dossier.reloue_le = None
     dossier.statut = LocationDossierStatut.AVIS_RECU.value

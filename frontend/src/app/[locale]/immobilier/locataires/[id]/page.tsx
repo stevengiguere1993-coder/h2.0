@@ -1248,7 +1248,9 @@ export default function LocataireDetailPage({
                 id: b.id,
                 label: `${b.immeuble_name}${
                   b.logement_numero ? ` · ${b.logement_numero}` : ""
-                }`
+                }`,
+                status: b.status,
+                document_id: b.document_id ?? null
               }))}
             />
 

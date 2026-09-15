@@ -322,4 +322,4 @@ def test_un_seul_transfert_a_la_fois(client, auth_headers, run):
         headers=auth_headers, json={**base, "nouveau_logement_id": lg3},
     )
     assert r2.status_code == 409, r2.text
-    assert "proposé" in r2.text.lower()
+    assert "transf" in r2.text.lower()

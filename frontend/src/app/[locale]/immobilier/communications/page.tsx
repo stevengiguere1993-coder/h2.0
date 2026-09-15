@@ -55,6 +55,8 @@ type Destinataire = {
   logement?: string | null;
   //: Dû du mois courant (loyer + frais − payé) — bouton « Retards ».
   du_mois?: number;
+  //: « actif » ou « propose » (bail en signature).
+  bail_status?: string;
 };
 
 type ImmeubleBloc = {
@@ -352,9 +354,14 @@ export default function CommunicationsPage() {
 
   // « Écrire à ce locataire » depuis sa fiche : ?locataire_id=N →
   // pré-coché en chip dès que les destinataires sont chargés.
+  const [locIntrouvable, setLocIntrouvable] = useState(false);
   useEffect(() => {
     const lid = Number(searchParams.get("locataire_id") || "");
     if (!lid || !blocs) return;
+    const trouve = blocs.some((b) =>
+      b.locataires.some((x) => x.locataire_id === lid)
+    );
+    setLocIntrouvable(!trouve);
     setLocSel((prev) => {
       if (prev.has(lid)) return prev;
       for (const b of blocs) {
@@ -620,6 +627,9 @@ export default function CommunicationsPage() {
             // n'est qu'un raccourci de sélection à l'écran).
             immeuble_ids: [],
             locataire_ids: effectifs.map((l) => l.locataire_id),
+            // Les BAUX cochés : un locataire à deux baux reçoit le
+            // courriel du bon logement (audit 2026-09-15).
+            bail_ids: effectifs.map((l) => l.bail_id),
             sujet: type === "libre" ? sujet : undefined,
             corps: type === "libre" ? corps : undefined,
             mois: type === "rappel_paiement" ? `${mois}-01` : undefined,
@@ -779,6 +789,13 @@ export default function CommunicationsPage() {
               c&apos;est leur gestionnaire qui communique avec ses
               locataires.
             </p>
+            {locIntrouvable ? (
+              <p className="mb-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                Ce locataire n&apos;a ni bail actif ni bail en signature
+                dans un immeuble géré par nous : on ne peut pas lui
+                écrire d&apos;ici (les destinataires sont les baux).
+              </p>
+            ) : null}
 
             {blocs === null ? (
               <div className="flex items-center gap-2 py-6 text-xs text-white/50">
@@ -922,6 +939,14 @@ export default function CommunicationsPage() {
                                   {l.logement ? `${l.logement} · ` : ""}
                                   {l.nom}
                                 </span>
+                                {l.bail_status === "propose" ? (
+                                  <span
+                                    className="shrink-0 rounded bg-violet-500/15 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-violet-300"
+                                    title="Bail en signature — pas encore en place"
+                                  >
+                                    bail en signature
+                                  </span>
+                                ) : null}
                                 {(l.du_mois ?? 0) > 0.005 ? (
                                   <span
                                     className="shrink-0 text-[10px] font-semibold text-rose-300"

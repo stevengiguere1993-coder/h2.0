@@ -264,7 +264,11 @@ function AssignerBailModal({
     const res = await importerEnSerie(
       liste,
       (f) =>
-        f.type === "bail"
+        // Bail « déjà en vigueur » : le PDF « Bail » devient LE bail
+        // signé (actif). Bail PROPOSÉ : simple pièce liée au bail — c'est
+        // « Joindre le bail signé » (Locations) qui l'activera, le choix
+        // « proposé » de l'usager n'est pas écrasé (audit 2026-09-15).
+        f.type === "bail" && statut === "actif"
           ? uploadBailDocument({ bailId, file: f.file, dateEntree: debut })
           : importDocument({
               file: f.file,
@@ -565,7 +569,7 @@ function AssignerBailModal({
             disabled={busy || bailCree != null}
             progression={progression}
             resultats={resultatsImport}
-            aide="Déposés après la création du bail : le fichier « Bail » devient LE bail signé du dossier (le bail passe actif) ; les autres pièces (règlements, assurance…) sont classées au dossier du locataire et du bail."
+            aide="Déposés après la création du bail. Bail « déjà en vigueur » : le fichier « Bail » devient LE bail signé. Bail « proposé » : il reste une pièce liée, que « Joindre le bail signé » (Locations) activera. Les autres pièces sont classées au dossier du locataire et du bail."
           />
         </div>
 
@@ -669,7 +673,7 @@ function AssignerBailModal({
               <span className="font-semibold text-white">
                 À faire suivre via Locations (proposé)
               </span>{" "}
-              — la carte apparaît au kanban (« Bail à envoyer ») ;
+              — la carte apparaît au kanban (« Bail en signature ») ;
               importe le PDF signé pour rendre le bail actif.
             </span>
           </label>
