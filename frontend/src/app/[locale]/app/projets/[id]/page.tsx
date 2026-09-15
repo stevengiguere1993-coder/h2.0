@@ -3392,18 +3392,53 @@ function PlanificationTab({
 
       {/* Floating bucket for tasks not tied to a phase. */}
       <section className="rounded-xl border border-brand-800 bg-brand-900/40 p-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-white/60">
             Tâches sans phase ({unplaced.length})
           </h3>
-          <button
-            type="button"
-            onClick={() => addTask(null)}
-            disabled={busyTask === "new"}
-            className="btn-secondary text-xs disabled:opacity-60"
-          >
-            <Plus className="mr-1.5 h-3.5 w-3.5" /> Ajouter
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={async () => {
+                // Chaque item de la soumission signée devient une
+                // tâche cochable (le moment du « terminé » est
+                // enregistré). Idempotent : pas de doublons.
+                setBusyTask("new");
+                try {
+                  const r = await authedFetch(
+                    `/api/v1/projects/${projectId}/tasks/import-soumission`,
+                    { method: "POST" }
+                  );
+                  if (!r.ok) {
+                    const b = (await r.json().catch(() => null)) as {
+                      detail?: string;
+                    } | null;
+                    throw new Error(b?.detail || `http_${r.status}`);
+                  }
+                  await load();
+                } catch (e) {
+                  setErr(
+                    `Import du devis échoué : ${(e as Error).message}`
+                  );
+                } finally {
+                  setBusyTask(null);
+                }
+              }}
+              disabled={busyTask === "new"}
+              className="btn-secondary text-xs disabled:opacity-60"
+              title="Crée une tâche par item de la soumission signée du projet"
+            >
+              Importer le devis
+            </button>
+            <button
+              type="button"
+              onClick={() => addTask(null)}
+              disabled={busyTask === "new"}
+              className="btn-secondary text-xs disabled:opacity-60"
+            >
+              <Plus className="mr-1.5 h-3.5 w-3.5" /> Ajouter
+            </button>
+          </div>
         </div>
         {unplaced.length > 0 ? (
           <ul className="mt-3 space-y-2">
@@ -3537,11 +3572,11 @@ function PhaseCard({
   ]);
 
   // Dérive la durée actuelle (en jours décimaux) selon le mode.
-  // « Journée complète » = 1 jour fixe (pas de N jours configurable).
-  // Pour planifier sur plusieurs jours, l'utilisateur crée plusieurs
-  // phases — chaque phase = une journée (ou un créneau) précis.
+  // « Journée complète » = N jours CONSÉCUTIFS (champ « Nombre de
+  // jours ») — une étape peut s'étaler sur plusieurs dates de suite.
+  // Pour des dates SÉPARÉES, on crée plusieurs phases.
   const currentDuration: number | null = (() => {
-    if (fullDay) return 1;
+    if (fullDay) return Math.max(1, Math.round(Number(daysPart)) || 1);
     if (!startTime || !endTime) return null;
     const [sh, sm] = startTime.split(":").map(Number);
     const [eh, em] = endTime.split(":").map(Number);
@@ -3550,12 +3585,18 @@ function PhaseCard({
     return diffMin / 60 / 8; // 8 h = 1 jour
   })();
 
-  const endDate =
-    startDate && fullDay
-      ? startDate // 1 journée = même jour
-      : startDate && !fullDay
-        ? startDate
-        : null;
+  // Fin (calculée) en mode journée complète : début + (N − 1) jours.
+  const endDate = (() => {
+    if (!startDate) return null;
+    if (!fullDay) return startDate;
+    const n = Math.max(1, Math.round(Number(daysPart)) || 1);
+    const d = new Date(`${startDate}T00:00:00`);
+    d.setDate(d.getDate() + (n - 1));
+    const y = d.getFullYear();
+    const mo = String(d.getMonth() + 1).padStart(2, "0");
+    const da = String(d.getDate()).padStart(2, "0");
+    return `${y}-${mo}-${da}`;
+  })();
 
   // Persiste les changements (mode + jours/heures) en un seul patch
   // pour éviter les races (ex. on bascule full→partial : on doit
@@ -3634,9 +3675,15 @@ function PhaseCard({
                     setFullDay(next);
                     // Persiste tout de suite le mode pour que la
                     // ligne s'aligne sur le serveur. Journée complète
-                    // = 1 j sec, créneau = duration calculée.
+                    // = N jours (champ), créneau = duration calculée.
                     if (next) {
-                      onPatch({ start_time: null, duration_days: 1 });
+                      onPatch({
+                        start_time: null,
+                        duration_days: Math.max(
+                          1,
+                          Math.round(Number(daysPart)) || 1
+                        )
+                      });
                     } else {
                       const [sh, sm] = startTime.split(":").map(Number);
                       const [eh, em] = endTime.split(":").map(Number);
@@ -3652,7 +3699,24 @@ function PhaseCard({
                 />
                 Journée complète
               </label>
-              {fullDay ? null : (
+              {fullDay ? (
+                <label className="mt-2 block text-[11px] uppercase tracking-wider text-white/40">
+                  Nombre de jours (consécutifs)
+                  <input
+                    type="number"
+                    min="1"
+                    max="365"
+                    step="1"
+                    value={daysPart}
+                    onChange={(e) => setDaysPart(e.target.value)}
+                    onBlur={persist}
+                    className="mt-1 w-28 rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white"
+                  />
+                  <span className="ml-2 normal-case text-white/40">
+                    Pour des dates séparées, crée une phase par bloc.
+                  </span>
+                </label>
+              ) : (
                 <div className="mt-2 grid grid-cols-2 gap-2">
                   <label className="text-[11px] uppercase tracking-wider text-white/40">
                     Heure début

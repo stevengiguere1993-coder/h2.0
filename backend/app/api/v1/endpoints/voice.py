@@ -22,6 +22,7 @@ import os
 import json
 from datetime import datetime, timezone
 from typing import List, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -262,6 +263,17 @@ def _outbound_bridge_url(call_id: int) -> str:
     return (
         f"{_secretary_base_url()}"
         f"/api/v1/voice/twilio/outbound-bridge?call_id={int(call_id)}"
+    )
+
+
+def _outbound_dial_result_url(call_id: int) -> str:
+    """Action du <Dial> sortant : Twilio POST ici à la fin du Dial avec
+    le DialCallStatus, ce qui nous permet de détecter « la cible n'a pas
+    répondu » et de classer un prospect « À rappeler » (point 2,
+    retour 2026-09-12)."""
+    return (
+        f"{_secretary_base_url()}"
+        f"/api/v1/voice/twilio/outbound-dial-result?call_id={int(call_id)}"
     )
 
 
@@ -3134,10 +3146,19 @@ async def twilio_sdk_outbound(request: Request) -> Response:
     # visibles dans Twilio Console (Voice → Logs → Recordings) et
     # serviront de base pour la transcription verbatim (étape
     # suivante : callback + service de transcription).
+    # action= : à la fin du Dial, Twilio nous poste le DialCallStatus —
+    # c'est ce qui permet de classer un prospect « À rappeler » quand il
+    # ne répond pas (le SDK ne crée pas de Call en DB, on passe donc la
+    # cible en query-string).
+    dial_action = (
+        f"{_secretary_base_url()}/api/v1/voice/twilio/"
+        f"outbound-dial-result?target={quote(_normalize_e164(to) or to)}"
+    )
     twiml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
         f'<Dial callerId="{os.getenv("TWILIO_PHONE_NUMBER", "")}" '
+        f'action="{dial_action}" method="POST" '
         # timeout=40s : laisse le temps à la messagerie vocale du
         # destinataire de décrocher (souvent ~25-30 s) avant que Twilio
         # n'abandonne. À 20 s, notre ligne raccrochait avant la boîte
@@ -3933,12 +3954,99 @@ async def _twilio_outbound_bridge_impl(request: Request, db: DBSession) -> Respo
     twiml = provider.build_forward_response(
         forward_to_e164=target,
         caller_id=caller_id,
+        # Résultat du Dial : détecte « pas de réponse » côté cible pour
+        # classer automatiquement un prospect « À rappeler » + SMS/courriel.
+        action_url=_outbound_dial_result_url(call.id) if call else None,
         record=True,
         recording_status_callback_url=(
             f"{_secretary_base_url()}/api/v1/voice/twilio/status"
         ),
     )
     return Response(content=twiml, media_type="application/xml")
+
+
+@router.post(
+    "/twilio/outbound-dial-result",
+    summary="Résultat du <Dial> sortant : prospect sans réponse → À rappeler",
+    response_class=Response,
+)
+async def twilio_outbound_dial_result(
+    request: Request, db: DBSession
+) -> Response:
+    """Twilio POST ici à la fin du <Dial> d'un appel SORTANT (click-to-call
+    REST via `call_id`, ou Voice SDK via `target`).
+
+    Si la cible n'a pas répondu (no-answer / busy / failed / canceled) et
+    qu'elle correspond à un prospect (demande de contact), on le classe
+    « À rappeler » + SMS/courriel automatiques — point 2 du retour
+    2026-09-12. Voir app/services/prospect_rappel.py.
+    """
+    try:
+        return await _twilio_outbound_dial_result_impl(request, db)
+    except HTTPException as _http_exc:
+        log.warning(
+            "outbound-dial-result rejected: %d %s",
+            _http_exc.status_code, _http_exc.detail,
+        )
+        return Response(content="<Response/>", media_type="application/xml")
+    except Exception:
+        log.exception("twilio_outbound_dial_result failed")
+        return Response(content="<Response/>", media_type="application/xml")
+
+
+async def _twilio_outbound_dial_result_impl(
+    request: Request, db: DBSession
+) -> Response:
+    params = await _validate_twilio_signature(request)
+    provider = _twilio_provider()
+    dial_status = (params.get("DialCallStatus") or "").lower()
+
+    call = None
+    call_id_raw = request.query_params.get("call_id", "")
+    if call_id_raw.isdigit():
+        call = (
+            await db.execute(
+                select(Call).where(Call.id == int(call_id_raw))
+            )
+        ).scalar_one_or_none()
+
+    target = _normalize_e164(
+        request.query_params.get("target", "")
+        or (call.to_e164 if call is not None else "")
+    )
+
+    # Répondu : rien à faire ici — la conversation a eu lieu (le résumé /
+    # la transcription passent par /twilio/status comme avant).
+    if dial_status in ("answered", "completed"):
+        return Response(content="<Response/>", media_type="application/xml")
+
+    # Pas de réponse côté cible.
+    if call is not None:
+        call.status = "no-answer"
+        if call.ended_at is None:
+            call.ended_at = datetime.now(timezone.utc)
+        await db.flush()
+
+    handled = False
+    if target:
+        from app.services.prospect_rappel import handle_missed_prospect_call
+
+        handled = await handle_missed_prospect_call(
+            db, target_e164=target, call=call
+        )
+
+    # C'est NOTRE côté (l'interne qui a lancé l'appel) qui entend ce
+    # message — la cible n'a jamais décroché.
+    if handled:
+        twiml = provider.build_say_and_hangup(
+            say=(
+                "La personne n'a pas répondu. Le prospect a été classé "
+                "à rappeler, et un message lui a été envoyé."
+            ),
+            lang="fr-CA",
+        )
+        return Response(content=twiml, media_type="application/xml")
+    return Response(content="<Response/>", media_type="application/xml")
 
 
 @router.post(

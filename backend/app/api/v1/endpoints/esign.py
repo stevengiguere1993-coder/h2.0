@@ -706,7 +706,26 @@ async def patch_signer(
     if signer is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Signataire introuvable.")
     doc = await _load_doc(db, signer.document_id)
-    _require_draft(doc)
+    # Le COURRIEL (et nom/téléphone) d'un signataire reste modifiable
+    # APRÈS l'envoi, tant que CE signataire n'a pas signé : corriger une
+    # faute de courriel n'oblige plus à refaire tout le processus
+    # (retour 2026-09-12, point 8). Un signataire qui a DÉJÀ signé est
+    # verrouillé. L'ordre et l'auth SMS restent réservés au brouillon.
+    is_draft = doc.status == EsignDocumentStatus.DRAFT.value
+    if not is_draft:
+        if signer.signed_at is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Ce signataire a déjà signé — ses coordonnées sont "
+                "verrouillées.",
+            )
+        if data.order_index is not None or data.require_sms_auth is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Après l'envoi, seuls le courriel, le nom et le téléphone "
+                "d'un signataire non signé sont modifiables.",
+            )
+    old_email = (signer.email or "").strip().lower()
     if data.first_name is not None:
         signer.first_name = data.first_name.strip()[:100]
     if data.last_name is not None:
@@ -724,6 +743,33 @@ async def patch_signer(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Numéro de téléphone requis pour l'authentification SMS.",
         )
+    await db.flush()
+    # Document déjà ENVOYÉ + courriel changé → on renvoie l'invitation
+    # (même jeton, l'ancien lien reste le sien) à la nouvelle adresse.
+    if (
+        not is_draft
+        and data.email is not None
+        and (signer.email or "").strip().lower() != old_email
+        and signer.sent_at is not None
+    ):
+        try:
+            ent_name = await _entreprise_name(db, doc.entreprise_id)
+            await send_signer_invitation(db, doc, signer, ent_name)
+            await _add_event(
+                db,
+                doc,
+                "signer_email_change",
+                signer=signer,
+                detail=(
+                    f"Courriel corrigé : {old_email} → {signer.email} — "
+                    "invitation renvoyée."
+                ),
+            )
+        except Exception:  # noqa: BLE001 — la correction reste enregistrée
+            log.exception(
+                "Renvoi d'invitation après changement de courriel échoué "
+                "(signer %s)", signer.id,
+            )
     await db.flush()
     await db.refresh(signer)
     return SignerRead.model_validate(signer)

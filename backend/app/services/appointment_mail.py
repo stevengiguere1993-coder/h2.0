@@ -228,15 +228,15 @@ async def send_appointment_assignee_invite(
     html = f"""\
 <div style="font-family:Helvetica,Arial,sans-serif;color:#111;line-height:1.5;max-width:640px">
   <p>Bonjour {assignee.full_name.split(' ')[0] or assignee.full_name},</p>
-  <p>Tu as été assigné·e à ce rendez-vous :</p>
+  <p>Vous avez été assigné·e à ce rendez-vous :</p>
   <div style="padding:12px 16px;background:#f4f1ec;border-left:3px solid #d89b3c;margin:12px 0">
     <p style="margin:0 0 4px 0"><strong>{event.title}</strong></p>
     <p style="margin:4px 0"><strong>Quand :</strong> {_fmt(event.start_at)}</p>
     {loc_line}
     {prospect_block}
   </div>
-  <p>L'invitation est jointe à ce courriel (.ics) — clique dessus pour
-  l'ajouter à ton calendrier (Outlook, Gmail, Apple).</p>
+  <p>L'invitation est jointe à ce courriel (.ics) — cliquez dessus pour
+  l'ajouter à votre calendrier (Outlook, Gmail, Apple).</p>
   <p style="margin-top:24px;color:#555;font-size:12px">
     Horizon Services Immobiliers
   </p>
@@ -307,8 +307,8 @@ async def send_appointment_owner_invite(
     {loc_line}
     {prospect_block}
   </div>
-  <p>L'invitation est jointe à ce courriel (.ics) — clique dessus pour
-  l'ajouter à ton agenda (Outlook, Gmail, Apple).</p>
+  <p>L'invitation est jointe à ce courriel (.ics) — cliquez dessus pour
+  l'ajouter à votre agenda (Outlook, Gmail, Apple).</p>
   <p style="margin-top:24px;color:#555;font-size:12px">
     Horizon Services Immobiliers
   </p>

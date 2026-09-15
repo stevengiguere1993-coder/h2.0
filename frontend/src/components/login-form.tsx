@@ -370,9 +370,6 @@ export function LoginForm() {
                   propriétaire, campagnes de contact.
                 </span>
               </span>
-              <span className="absolute right-3 top-3 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
-                En développement
-              </span>
             </button>
           ) : null}
 
@@ -397,9 +394,6 @@ export function LoginForm() {
                 Pipeline du closer, clients et projets de développement de
                 plateformes.
               </span>
-            </span>
-            <span className="absolute right-3 top-3 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
-              En développement
             </span>
           </button>
           ) : null}
@@ -426,9 +420,6 @@ export function LoginForm() {
                   pulse, suivi de projets.
                 </span>
               </span>
-              <span className="absolute right-3 top-3 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
-                En développement
-              </span>
             </button>
           ) : null}
 
@@ -450,9 +441,6 @@ export function LoginForm() {
                   valorisation, documents.
                 </span>
               </span>
-              <span className="absolute right-3 top-3 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
-                En développement
-              </span>
             </button>
           ) : null}
 
@@ -473,9 +461,6 @@ export function LoginForm() {
                   Portail investisseurs : capital, valeur live, projection
                   KPI, activité 30 jours.
                 </span>
-              </span>
-              <span className="absolute right-3 top-3 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
-                En développement
               </span>
             </button>
           ) : null}

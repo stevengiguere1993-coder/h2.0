@@ -65,6 +65,19 @@ type Bon = {
 type SousTraitant = { id: number; full_name: string };
 type UserOption = { id: number; email: string; full_name?: string | null };
 
+// Tâche cochable du bon (retour 2026-09-12, point 12) : saisie à la main
+// ou héritée d'un bon fusionné (source_bon_reference = sa référence).
+type BonTask = {
+  id: number;
+  bon_id: number;
+  position: number;
+  title: string;
+  done: boolean;
+  done_at: string | null;
+  done_by_user_id: number | null;
+  source_bon_reference: string | null;
+};
+
 type Item = {
   id: number;
   bon_id: number;
@@ -115,6 +128,24 @@ const STATUS_LABELS: Record<string, string> = {
   complete_a_refacturer: "Complété · à refacturer",
   facture: "Facturé"
 };
+
+// Statuts où un bon peut encore fusionner / être fusionné (point 12).
+const FUSION_OPEN_STATUSES = [
+  "draft",
+  "accepte_a_planifier",
+  "planifie",
+  "sent"
+];
+
+// Clé de comparaison d'adresses pour proposer la fusion : casse,
+// accents, espaces et ponctuation ignorés.
+function normalizeAddress(addr: string | null | undefined): string {
+  return (addr || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/g, "");
+}
 
 const LEGACY_STATUSES = ["draft", "sent", "signed", "cancelled"];
 const INTERNAL_STATUSES = [
@@ -212,6 +243,13 @@ export default function BonDetailPage() {
     bill: 55,
     marge: 10
   });
+  // Tâches cochables + fusion des bons du même lieu (point 12).
+  const [tasks, setTasks] = useState<BonTask[]>([]);
+  const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [taskBusy, setTaskBusy] = useState<number | "new" | null>(null);
+  const [fusionCandidates, setFusionCandidates] = useState<Bon[]>([]);
+  const [fusionSel, setFusionSel] = useState<number[]>([]);
+  const [fusionBusy, setFusionBusy] = useState(false);
 
   const isInternal = (b?.kind ?? "construction") === "interne";
 
@@ -299,6 +337,180 @@ export default function BonDetailPage() {
       cancelled = true;
     };
   }, []);
+
+  // Tâches cochables du bon (point 12).
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authedFetch(`/api/v1/bons-travail/${id}/tasks`);
+        if (r.ok && !cancelled) setTasks((await r.json()) as BonTask[]);
+      } catch {
+        /* section tâches simplement vide */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  // Bons encore ouverts au MÊME lieu → candidats à la fusion (point 12).
+  useEffect(() => {
+    if (!b?.address || !FUSION_OPEN_STATUSES.includes(b.status)) {
+      setFusionCandidates([]);
+      return;
+    }
+    let cancelled = false;
+    const key = normalizeAddress(b.address);
+    if (!key) return;
+    (async () => {
+      try {
+        const all = await fetchAllPages<Bon>("/api/v1/bons-travail");
+        if (cancelled) return;
+        setFusionCandidates(
+          all.filter(
+            (o) =>
+              o.id !== b.id &&
+              FUSION_OPEN_STATUSES.includes(o.status) &&
+              normalizeAddress(o.address) === key
+          )
+        );
+      } catch {
+        /* pas de proposition de fusion */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [b?.id, b?.address, b?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function addTask() {
+    const title = newTaskTitle.trim();
+    if (!title) return;
+    setTaskBusy("new");
+    try {
+      const res = await authedFetch(`/api/v1/bons-travail/${id}/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          position: tasks.length
+            ? Math.max(...tasks.map((t) => t.position)) + 1
+            : 0
+        })
+      });
+      if (!res.ok) throw new Error();
+      const created = (await res.json()) as BonTask;
+      setTasks((prev) => [...prev, created]);
+      setNewTaskTitle("");
+    } catch {
+      setError("Ajout de la tâche échoué.");
+    } finally {
+      setTaskBusy(null);
+    }
+  }
+
+  async function toggleTask(task: BonTask) {
+    setTaskBusy(task.id);
+    try {
+      const res = await authedFetch(
+        `/api/v1/bons-travail/${id}/tasks/${task.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ done: !task.done })
+        }
+      );
+      if (!res.ok) throw new Error();
+      const upd = (await res.json()) as BonTask;
+      setTasks((prev) => prev.map((t) => (t.id === upd.id ? upd : t)));
+      // La dernière coche peut avoir auto-classé le bon « Complété — à
+      // refacturer » : on relit le bon pour refléter le statut.
+      const br = await authedFetch(`/api/v1/bons-travail/${id}`);
+      if (br.ok) setB((await br.json()) as Bon);
+    } catch {
+      setError("Mise à jour de la tâche échouée.");
+    } finally {
+      setTaskBusy(null);
+    }
+  }
+
+  async function removeTask(taskId: number) {
+    setTaskBusy(taskId);
+    try {
+      const res = await authedFetch(
+        `/api/v1/bons-travail/${id}/tasks/${taskId}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204) throw new Error();
+      setTasks((prev) => prev.filter((t) => t.id !== taskId));
+      const br = await authedFetch(`/api/v1/bons-travail/${id}`);
+      if (br.ok) setB((await br.json()) as Bon);
+    } catch {
+      setError("Suppression de la tâche échouée.");
+    } finally {
+      setTaskBusy(null);
+    }
+  }
+
+  async function doFusion() {
+    if (!b || fusionSel.length === 0) return;
+    const refs = fusionCandidates
+      .filter((c) => fusionSel.includes(c.id))
+      .map((c) => c.reference)
+      .join(", ");
+    const ok = await confirm({
+      title: "Fusionner les bons ?",
+      description:
+        `Les bons ${refs} seront fusionnés dans ${b.reference} : chacun ` +
+        "devient une tâche à cocher, leurs lignes et leurs punchs suivent, " +
+        "puis ils sont annulés (trace conservée).",
+      confirmLabel: "Fusionner",
+      success: true
+    });
+    if (!ok) return;
+    setFusionBusy(true);
+    try {
+      const res = await authedFetch(
+        `/api/v1/bons-travail/${id}/fusionner`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ source_bon_ids: fusionSel })
+        }
+      );
+      if (!res.ok) {
+        const detail = (await res.json().catch(() => null)) as {
+          detail?: string;
+        } | null;
+        throw new Error(detail?.detail || `http_${res.status}`);
+      }
+      // Recharge tout : bon, tâches, lignes, punchs, candidats.
+      const [bRes, tRes, iRes, pRes] = await Promise.all([
+        authedFetch(`/api/v1/bons-travail/${id}`),
+        authedFetch(`/api/v1/bons-travail/${id}/tasks`),
+        authedFetch(`/api/v1/bons-travail/${id}/items`),
+        authedFetch(`/api/v1/bons-travail/${id}/punches`)
+      ]);
+      if (bRes.ok) setB((await bRes.json()) as Bon);
+      if (tRes.ok) setTasks((await tRes.json()) as BonTask[]);
+      if (iRes.ok) setItems((await iRes.json()) as Item[]);
+      if (pRes.ok) setPunches((await pRes.json()) as BonPunch[]);
+      setFusionSel([]);
+      setFusionCandidates((prev) =>
+        prev.filter((c) => !fusionSel.includes(c.id))
+      );
+    } catch (e) {
+      setError(
+        e instanceof Error && e.message && !e.message.startsWith("http_")
+          ? e.message
+          : "Fusion échouée."
+      );
+    } finally {
+      setFusionBusy(false);
+    }
+  }
 
   const itemsTotal = useMemo(
     () => +items.reduce((sum, it) => sum + Number(it.total || 0), 0).toFixed(2),
@@ -1171,6 +1383,175 @@ export default function BonDetailPage() {
                 </div>
               </section>
             ) : null}
+
+            {/* Tâches cochables (point 12) : à faire au même endroit — une
+                par bon fusionné ou saisies à la main. Toutes cochées →
+                bon interne auto-classé « Complété · à refacturer ». */}
+            <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-brand-800 px-5 py-4">
+                <div>
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Tâches à faire
+                  </h2>
+                  <p className="mt-1 text-xs text-white/50">
+                    Cochez au fur et à mesure.
+                    {isInternal
+                      ? " Quand tout est coché, le bon passe automatiquement à « Complété · à refacturer » (le classement manuel reste possible)."
+                      : ""}
+                  </p>
+                </div>
+                {tasks.length > 0 ? (
+                  <span className="text-xs font-semibold text-white/70">
+                    {tasks.filter((t) => t.done).length}/{tasks.length} complétée
+                    {tasks.filter((t) => t.done).length > 1 ? "s" : ""}
+                  </span>
+                ) : null}
+              </div>
+              <div className="px-5 py-4">
+                {tasks.length === 0 ? (
+                  <p className="text-sm text-white/50">
+                    Aucune tâche pour l&apos;instant. Ajoutez-en une, ou
+                    fusionnez les bons du même lieu ci-dessous.
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {tasks.map((t) => (
+                      <li
+                        key={t.id}
+                        className="flex items-start gap-3 rounded-lg border border-brand-800 bg-brand-900/60 px-3 py-2"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={t.done}
+                          disabled={taskBusy === t.id}
+                          onChange={() => void toggleTask(t)}
+                          className="mt-1 h-4 w-4 accent-emerald-500"
+                          aria-label={`Tâche : ${t.title}`}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p
+                            className={`text-sm ${
+                              t.done
+                                ? "text-white/40 line-through"
+                                : "text-white"
+                            }`}
+                          >
+                            {t.title}
+                          </p>
+                          <p className="text-[11px] text-white/40">
+                            {t.source_bon_reference
+                              ? `Bon d'origine : ${t.source_bon_reference}`
+                              : null}
+                            {t.source_bon_reference && t.done_at ? " · " : null}
+                            {t.done_at
+                              ? `Complétée le ${new Date(t.done_at).toLocaleString("fr-CA", { dateStyle: "medium", timeStyle: "short" })}`
+                              : null}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void removeTask(t.id)}
+                          disabled={taskBusy === t.id}
+                          className="rounded p-1 text-white/40 hover:bg-red-500/10 hover:text-red-300"
+                          title="Supprimer la tâche"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="mt-3 flex gap-2">
+                  <input
+                    value={newTaskTitle}
+                    onChange={(e) => setNewTaskTitle(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void addTask();
+                      }
+                    }}
+                    placeholder="Nouvelle tâche… (ex. Resserrer la poignée)"
+                    className="input flex-1"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void addTask()}
+                    disabled={taskBusy === "new" || !newTaskTitle.trim()}
+                    className="btn-accent text-sm"
+                  >
+                    {taskBusy === "new" ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Plus className="h-4 w-4" />
+                    )}
+                    <span className="ml-1">Ajouter</span>
+                  </button>
+                </div>
+
+                {fusionCandidates.length > 0 ? (
+                  <div className="mt-5 rounded-lg border border-amber-500/40 bg-amber-500/5 p-4">
+                    <p className="text-sm font-semibold text-amber-200">
+                      {fusionCandidates.length} autre
+                      {fusionCandidates.length > 1 ? "s" : ""} bon
+                      {fusionCandidates.length > 1 ? "s" : ""} ouvert
+                      {fusionCandidates.length > 1 ? "s" : ""} au même lieu
+                    </p>
+                    <p className="mt-1 text-xs text-white/60">
+                      Fusionnez-les dans ce bon : chacun devient une tâche à
+                      cocher, ses lignes et ses punchs suivent, puis il est
+                      annulé (trace conservée).
+                    </p>
+                    <ul className="mt-3 space-y-1.5">
+                      {fusionCandidates.map((c) => (
+                        <li key={c.id} className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            id={`fusion-${c.id}`}
+                            checked={fusionSel.includes(c.id)}
+                            onChange={(e) =>
+                              setFusionSel((prev) =>
+                                e.target.checked
+                                  ? [...prev, c.id]
+                                  : prev.filter((x) => x !== c.id)
+                              )
+                            }
+                            className="h-4 w-4 accent-amber-500"
+                          />
+                          <label
+                            htmlFor={`fusion-${c.id}`}
+                            className="cursor-pointer text-sm text-white"
+                          >
+                            <span className="font-mono text-xs text-white/60">
+                              {c.reference}
+                            </span>{" "}
+                            {c.title}{" "}
+                            <span className="text-xs text-white/50">
+                              ({STATUS_LABELS[c.status] || c.status})
+                            </span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                    <button
+                      type="button"
+                      onClick={() => void doFusion()}
+                      disabled={fusionBusy || fusionSel.length === 0}
+                      className="btn-accent mt-3 text-sm"
+                    >
+                      {fusionBusy ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />{" "}
+                          Fusion…
+                        </>
+                      ) : (
+                        <>Fusionner dans ce bon ({fusionSel.length})</>
+                      )}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </section>
 
             {isInternal ? (
               <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">

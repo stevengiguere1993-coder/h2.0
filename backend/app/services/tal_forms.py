@@ -570,6 +570,7 @@ def render_lettre_courriel(
     form_type: str,
     ctx: TalContext,
     gabarit: Optional[dict] = None,
+    signature: Optional[str] = None,
 ) -> tuple[str, str]:
     """Rend une lettre sans signature en COURRIEL : (sujet, corps texte).
 
@@ -592,8 +593,15 @@ def render_lettre_courriel(
     corps = "\n\n".join(
         _remplir(str(p)) for p in paragraphes if str(p).strip()
     )
+    # Signature = l'EXPÉDITEUR configuré (ex. « Kyle — Gestion
+    # Horizon ») quand il est fourni — le locateur légal ({locateur}
+    # dans le texte) n'est pas forcément celui qui écrit, et signer
+    # « Horizon Services Immobiliers » par-dessus le profil de Kyle
+    # était incohérent (retour 2026-09-12, point 16).
     return _remplir(str(titre)), enveloppe_courriel(
-        variables.get("locataire"), corps, variables.get("locateur")
+        variables.get("locataire"),
+        corps,
+        (signature or "").strip() or variables.get("locateur"),
     )
 
 

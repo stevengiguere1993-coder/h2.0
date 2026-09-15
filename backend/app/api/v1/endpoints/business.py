@@ -407,7 +407,15 @@ def make_crud_router(
             if model is Soumission:
                 data.reference = await next_soumission_number(db)
             elif model is Facture:
-                data.reference = await next_facture_number(db)
+                # BROUILLON = référence PROVISOIRE (« BR-… ») : le vrai
+                # numéro n'est attribué qu'à l'envoi / première sortie du
+                # brouillon — pas de trous dans la séquence QuickBooks si
+                # la facture traîne ou est supprimée (audit).
+                from app.services.numbering import (
+                    provisional_facture_reference,
+                )
+
+                data.reference = provisional_facture_reference()
             elif model is PurchaseOrder:
                 data.reference = await next_po_number(db)
             elif model is BonTravail:
@@ -529,6 +537,79 @@ def make_crud_router(
 
             _bproj = await _ensure_bp(db, obj)
             _asyncio_bon.create_task(_push_bp(int(_bproj.id)))
+        # RDV créé depuis l'AGENDA (construction) : les courriels partent
+        # AUTOMATIQUEMENT — invitation .ics à l'employé assigné, et
+        # confirmation au prospect si l'événement est lié à une demande
+        # CRM. Avant, seul le endpoint /appointments (fiche CRM) le
+        # faisait : un RDV organisé depuis l'agenda devait être « poussé »
+        # à la main (retour 2026-09-12, point 6). Les congés sont exclus
+        # (courriel dédié déjà envoyé par le flux congés).
+        if (
+            model is AgendaEvent
+            and (getattr(obj, "event_type", "") or "") != "conge"
+            and (
+                getattr(obj, "assignee_id", None)
+                or getattr(obj, "contact_request_id", None)
+            )
+        ):
+            import asyncio as _asyncio_rdv
+
+            async def _rdv_mails_auto(event_id: int) -> None:
+                # La tâche part pendant la requête : on laisse sa
+                # transaction se commiter avant de relire l'événement.
+                await _asyncio_rdv.sleep(2)
+                from app.db.session import AsyncSessionLocal as _ASL
+
+                try:
+                    async with _ASL() as fdb:
+                        ev = await fdb.get(AgendaEvent, event_id)
+                        if ev is None:
+                            return
+                        from app.models.contact_request import (
+                            ContactRequest as _CRrdv,
+                        )
+                        from app.models.employe import Employe as _EmpRdv
+                        from app.services.appointment_mail import (
+                            resolve_employe_email,
+                            send_appointment_assignee_invite,
+                            send_new_appointment_emails,
+                        )
+
+                        if ev.contact_request_id:
+                            pr = await fdb.get(
+                                _CRrdv, ev.contact_request_id
+                            )
+                            if pr is not None:
+                                await send_new_appointment_emails(pr, ev)
+                        if ev.assignee_id:
+                            emp = await fdb.get(_EmpRdv, ev.assignee_id)
+                            if emp is not None:
+                                dest = await resolve_employe_email(
+                                    fdb, emp
+                                )
+                                await send_appointment_assignee_invite(
+                                    emp, ev, None, email_override=dest
+                                )
+                        await fdb.commit()
+                except Exception:  # noqa: BLE001
+                    import logging as _logging
+
+                    _logging.getLogger(__name__).exception(
+                        "Courriels RDV auto (event %s) échoués", event_id
+                    )
+
+            _asyncio_rdv.create_task(_rdv_mails_auto(int(obj.id)))
+        # Bon de travail INTERNE au même lieu qu'un bon encore ouvert :
+        # fusion AUTOMATIQUE (retour 2026-09-13, « ils auraient dû être
+        # mergés ensemble ») — l'ancien bon devient des tâches cochables
+        # du nouveau, ses lignes/punchs/photos suivent, il est annulé
+        # avec trace. Best-effort : n'empêche jamais la création.
+        if model is BonTravail and getattr(obj, "kind", None) == "interne":
+            from app.api.v1.endpoints.bon_tasks import (
+                auto_fusionner_meme_lieu,
+            )
+
+            await auto_fusionner_meme_lieu(db, obj)
         # Bon de travail INTERNE : prévenir les gestionnaires (manager+)
         # qu'un nouveau bon d'entretien a été créé — qu'il provienne du
         # pôle Construction ou du miroir Gestion locative.
@@ -824,6 +905,19 @@ def make_crud_router(
             ):
                 obj.issued_at = datetime.now(timezone.utc)
                 await db.flush()
+            # Numéro DÉFINITIF : toute sortie de l'état brouillon (même
+            # sans passer par « Envoyer » — ex. marquée payée à la main)
+            # remplace la référence provisoire « BR-… » par le prochain
+            # numéro de la séquence.
+            if new_status not in (
+                FactureStatus.DRAFT.value,
+                FactureStatus.VOID.value,
+            ):
+                from app.services.numbering import (
+                    ensure_facture_number as _ensure_no,
+                )
+
+                await _ensure_no(db, obj)
             # Push LIVE : TOUTE modification enregistrée d'une facture
             # ÉMISE (envoyée/payée/en retard) est reflétée immédiatement
             # dans QB — montants, projet, échéance… — sans bouton. Les
@@ -917,6 +1011,14 @@ def make_crud_router(
             if model is Punch
             else ""
         )
+        # Facture supprimée dans Kratos → l'Invoice QB liée est ANNULÉE
+        # (void), jamais supprimée : elle reste à 0 $ dans la piste
+        # d'audit et la numérotation QB (retour 2026-09-12, point 10).
+        _fa_qbo_invoice_id = (
+            str(getattr(obj, "qbo_invoice_id", None) or "").strip()
+            if model is Facture
+            else ""
+        )
         await crud.delete(obj)
         if _punch_ta_id:
             import asyncio as _asyncio
@@ -926,6 +1028,14 @@ def make_crud_router(
             )
 
             _asyncio.create_task(delete_time_activity_now(_punch_ta_id))
+        if _fa_qbo_invoice_id:
+            import asyncio as _asyncio_void
+
+            from app.services.facture_qbo import void_qbo_invoice_now
+
+            _asyncio_void.create_task(
+                void_qbo_invoice_now(_fa_qbo_invoice_id)
+            )
         from app.services.audit import log_action as _log_action
 
         await _log_action(

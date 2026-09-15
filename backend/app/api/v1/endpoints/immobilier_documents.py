@@ -235,6 +235,33 @@ async def list_logement_documents(
 
 
 @router.get(
+    "/immeubles/{immeuble_id}/documents",
+    response_model=List[DocumentRead],
+)
+async def list_immeuble_documents(
+    immeuble_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    categorie: str = "tout",
+) -> List[DocumentRead]:
+    """Documents rattachés DIRECTEMENT à l'immeuble (règlement
+    d'immeuble importé, certificats…). Les documents des baux/logements
+    restent sur leurs fiches respectives. ``categorie=dossier`` exclut
+    les simples communications."""
+    _require_volet(user)
+    rows = (
+        await db.execute(
+            select(ImmDocument)
+            .where(ImmDocument.immeuble_id == immeuble_id)
+            .order_by(ImmDocument.created_at.desc(), ImmDocument.id.desc())
+        )
+    ).scalars().all()
+    if categorie == "dossier":
+        rows = [d for d in rows if _est_dossier(d)]
+    return [_doc_read(d) for d in rows]
+
+
+@router.get(
     "/locataires/{locataire_id}/documents",
     response_model=List[DocumentRead],
 )
@@ -879,6 +906,24 @@ async def upload_bail_document(
         "Bail %s : document courant → #%s (ancien #%s)",
         bail_id, obj.id, ancien,
     )
+    # Nouveau locataire : le consentement aux communications se signe
+    # « avec le bail » (retour 2026-09-12, point 7) — l'invitation part
+    # automatiquement à l'import du bail signé, une seule fois (jamais
+    # renvoyée si déjà envoyée, signée ou refusée). Best-effort.
+    try:
+        from app.api.v1.endpoints.immobilier_extras import (
+            envoyer_consentement_si_jamais_envoye,
+        )
+
+        if await envoyer_consentement_si_jamais_envoye(db, bail.id, user):
+            log.info(
+                "Consentement communications envoyé auto (bail %s, "
+                "import du bail signé)", bail.id,
+            )
+    except Exception:  # noqa: BLE001 — l'import du bail prime
+        log.exception(
+            "Envoi auto du consentement après import du bail %s", bail_id
+        )
     return _doc_read(obj)
 
 

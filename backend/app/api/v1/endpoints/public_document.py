@@ -55,6 +55,13 @@ class PublicDocument(BaseModel):
     #: v8 — raison de l'échec d'envoi de la copie (déboguer le « je ne
     #: la reçois pas » de Phil).
     copie_erreur: Optional[str] = None
+    #: Signature de PLUSIEURS documents (retour 2026-09-12, point 7) :
+    #: quand d'autres documents envoyés au même locataire attendent
+    #: encore sa signature (ex. bail + consentement aux communications),
+    #: la page publique enchaîne — « document suivant » après la
+    #: signature de celui-ci.
+    documents_en_attente: int = 0
+    document_suivant_token: Optional[str] = None
     company_name: str = "Horizon Services Immobiliers"
     company_email: str = "info@immohorizon.com"
 
@@ -186,6 +193,39 @@ async def _to_public(db: AsyncSession, doc: ImmDocument) -> PublicDocument:
                 refuse_le = doc.refuse_le.date()
             elif doc.signed_at is None:
                 refus_possible = True
+    # Signature de plusieurs documents (retour 2026-09-12, point 7) :
+    # les AUTRES documents envoyés à ce locataire (ou sur ce bail) qui
+    # attendent encore sa signature — le prochain est proposé sur la
+    # page une fois celui-ci signé (bail + consentement, etc.).
+    en_attente = 0
+    suivant_token = None
+    try:
+        crit = None
+        if doc.locataire_id:
+            crit = ImmDocument.locataire_id == doc.locataire_id
+        elif doc.bail_id:
+            crit = ImmDocument.bail_id == doc.bail_id
+        if crit is not None:
+            autres = (
+                await db.execute(
+                    select(
+                        ImmDocument.id, ImmDocument.signature_token
+                    ).where(
+                        crit,
+                        ImmDocument.id != doc.id,
+                        ImmDocument.signature_token.is_not(None),
+                        ImmDocument.envoye_le.is_not(None),
+                        ImmDocument.signed_at.is_(None),
+                        ImmDocument.refuse_le.is_(None),
+                        ImmDocument.type.not_in(SIGNATURE_NON_REQUISE),
+                    ).order_by(ImmDocument.id.asc())
+                )
+            ).all()
+            en_attente = len(autres)
+            if autres:
+                suivant_token = autres[0][1]
+    except Exception:  # noqa: BLE001 — l'enchaînement ne casse jamais la page
+        log.exception("Calcul des documents en attente échoué (doc %s)", doc.id)
     return PublicDocument(
         titre=doc.titre,
         type=doc.type,
@@ -199,6 +239,8 @@ async def _to_public(db: AsyncSession, doc: ImmDocument) -> PublicDocument:
         choix_requis=choix_requis,
         choix=choix,
         repute_accepte_le=repute_accepte_le,
+        documents_en_attente=en_attente,
+        document_suivant_token=suivant_token,
     )
 
 

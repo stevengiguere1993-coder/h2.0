@@ -701,6 +701,15 @@ export default function PunchGestionPage() {
             <span className="text-white/50">Total </span>
             <span className="font-bold text-white">
               {fmtHm(totalHours)}
+            </span>{" "}
+            {/* Décimal à côté du h min — c'est le format des taux
+                horaires et de la facturation. */}
+            <span className="text-white/60">
+              ({totalHours.toLocaleString("fr-CA", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+              })}{" "}
+              h)
             </span>
           </div>
         </div>
