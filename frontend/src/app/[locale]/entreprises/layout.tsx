@@ -391,7 +391,13 @@ export default function EntreprisesLayout({
             }}
           >
             <ConfirmProvider>
-              <main className="flex-1 overflow-x-hidden">
+              {/* overflow-x-CLIP (pas hidden) : hidden fait de <main>
+                  un conteneur de défilement, ce qui DÉSACTIVE tout
+                  position:sticky à l'intérieur — le panneau de
+                  l'éditeur de signature ne suivait pas le document
+                  (retour 2026-09-16). clip coupe pareil le débordement
+                  horizontal sans casser sticky. */}
+              <main className="flex-1 overflow-x-clip">
                 {allowed ? <AccessGuard>{children}</AccessGuard> : <NoAccess />}
               </main>
               {/* Kratos + ThemeToggle intégrés dans QGTopbar/EntreprisesTopbar.
