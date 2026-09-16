@@ -489,23 +489,41 @@ export default function SignatureDocPage() {
   }
 
   async function cancelDoc() {
+    // « Retour » comme bouton de fermeture : avec le libellé par défaut,
+    // le dialogue montrait DEUX boutons « Annuler » — celui qui ferme et
+    // celui qui annule le document. L'utilisateur cliquait « Annuler »
+    // (fermeture) et « rien ne se passait » (retour 2026-09-16).
     if (
       !(await confirm({
         title: "Annuler ce document ?",
         description:
           "Les liens de signature seront désactivés. Cette action est " +
           "irréversible.",
-        confirmLabel: "Annuler le document",
+        confirmLabel: "Oui, annuler le document",
+        cancelLabel: "Retour",
         destructive: true
       }))
     ) {
       return;
     }
+    setBanner(null);
     const res = await authedFetch(
       `/api/v1/esign/documents/${docId}/cancel`,
       { method: "POST" }
     );
-    if (res.ok) await load();
+    if (res.ok) {
+      setBanner(
+        "Document annulé — les liens de signature sont désactivés."
+      );
+      await load();
+      return;
+    }
+    const body = await res.json().catch(() => null);
+    setBanner(
+      typeof body?.detail === "string"
+        ? body.detail
+        : `Annulation échouée (erreur ${res.status}).`
+    );
   }
 
   async function deleteDoc() {
