@@ -1080,11 +1080,14 @@ export default function SignatureDocPage() {
           </div>
 
           {/* ---------- Colonne latérale ----------
-              sticky : elle SUIT le défilement (un document de 32 pages
-              ne force plus à remonter pour changer de signataire ou
-              d'outil). self-start est requis dans une grille pour que
-              sticky fonctionne ; elle scrolle elle-même si trop haute. */}
-          <div className="space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:self-start xl:overflow-y-auto xl:pr-1">
+              FIXE à l'écran (sticky), SANS défilement interne (retour
+              2026-09-16) : elle ne contient que l'essentiel du
+              placement — signataires + zones (+ suivi une fois envoyé)
+              — pour tenir dans la hauteur d'écran. Les réglages
+              d'envoi (message, options, observateurs, annexes) vivent
+              SOUS le document. self-start requis pour sticky en
+              grille. */}
+          <div className="space-y-4 xl:sticky xl:top-4 xl:self-start">
             {/* Signataires */}
             <div
               className="rounded-2xl border p-4"
@@ -1268,6 +1271,17 @@ export default function SignatureDocPage() {
               </div>
             ) : null}
 
+            {/* Suivi (documents envoyés / complétés / refusés) */}
+            {!isDraft ? (
+              <SuiviPanel doc={doc} />
+            ) : null}
+          </div>
+        </div>
+
+        {/* ---------- Réglages d'envoi & pièces (sous le document,
+            retirés du panneau collant pour qu'il tienne à l'écran
+            sans défilement interne — retour 2026-09-16) ---------- */}
+        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
             {/* Message courriel (brouillon) */}
             {isDraft ? (
               <div
@@ -1509,12 +1523,6 @@ export default function SignatureDocPage() {
                 ) : null}
               </div>
             ) : null}
-
-            {/* Suivi (documents envoyés / complétés / refusés) */}
-            {!isDraft ? (
-              <SuiviPanel doc={doc} />
-            ) : null}
-          </div>
         </div>
       </div>
 
