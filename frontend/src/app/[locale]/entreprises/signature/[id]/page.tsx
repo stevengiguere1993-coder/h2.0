@@ -439,7 +439,10 @@ export default function SignatureDocPage() {
         description:
           "Chaque signataire recevra un courriel avec son lien personnel. " +
           "Le document ne sera plus modifiable.",
-        confirmLabel: "Envoyer"
+        confirmLabel: "Envoyer",
+        // Action positive (envoi) → bouton VERT, pas le rouge destructif
+        // par défaut du dialogue (retour 2026-09-16).
+        success: true
       }))
     ) {
       return;
