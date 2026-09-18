@@ -603,6 +603,8 @@ class AchatRead(_Base):
     receipt_image_content_type: Optional[str] = None
     payment_method: Optional[str] = None
     qbo_bill_id: Optional[str] = None
+    #: Dépense importée de QB (pull des coûts) : Id QB de la Purchase.
+    qbo_purchase_id: Optional[str] = None
     qbo_doc_number: Optional[str] = None
     notes: Optional[str]
     is_billable: bool = True
