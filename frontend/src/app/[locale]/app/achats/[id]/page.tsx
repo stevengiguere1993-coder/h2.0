@@ -82,6 +82,9 @@ type Project = {
   // "construction" (projet régulier) ou "bon_travail" (projet porteur
   // d'un bon de travail — son nom contient le numéro « BT-… »).
   kind?: string | null;
+  // "contrat" | "estime" | "forfaitaire" — pilote le défaut « à
+  // refacturer » quand on rattache l'achat à ce projet.
+  billing_kind?: string | null;
 };
 type Fournisseur = { id: number; name: string };
 
@@ -557,7 +560,19 @@ export default function AchatDetailPage() {
                           bons.some((b) => String(b.project_id) === v) ||
                           projects.find((p) => String(p.id) === v)?.kind ===
                             "bon_travail";
-                        if (estBon && !a?.invoiced_at) setIsBillable(true);
+                        if (!a?.invoiced_at) {
+                          if (estBon) {
+                            setIsBillable(true);
+                          } else {
+                            // Projet régulier : CONTRAT → coché ; estimé /
+                            // forfaitaire → décoché (le prix donné couvre
+                            // les dépenses). Décochable / cochable ensuite.
+                            const bk = projects.find(
+                              (p) => String(p.id) === v
+                            )?.billing_kind;
+                            if (bk) setIsBillable(bk === "contrat");
+                          }
+                        }
                         // Bon SANS projet porteur : on le garantit à la
                         // sélection (même mécanique que le formulaire
                         // de nouvelle dépense), puis on rattache le
