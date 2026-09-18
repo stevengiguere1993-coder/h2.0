@@ -52,11 +52,17 @@ async def correct_billable_for_contract_projects(db: AsyncSession) -> int:
         .join(Soumission, Soumission.id == Project.soumission_id)
         .where(Soumission.kind == "contract")
     )
+    # Mini-projets de BONS DE TRAVAIL (retour 2026-09-18) : les matériaux
+    # d'un bon sont refacturés en temps & matériel → refacturables par
+    # défaut, sans avoir à cocher la case à la main (couvre aussi les
+    # coûts importés de QB avant cette règle).
+    bon_project_ids = select(Project.id).where(Project.kind == "bon_travail")
 
     result = await db.execute(
         update(Achat)
         .where(
-            Achat.project_id.in_(billable_project_ids),
+            Achat.project_id.in_(billable_project_ids)
+            | Achat.project_id.in_(bon_project_ids),
             Achat.is_billable.is_(False),
             Achat.invoiced_at.is_(None),
             # ⚠️ Ne JAMAIS re-cocher une dépense décochée à la main :
