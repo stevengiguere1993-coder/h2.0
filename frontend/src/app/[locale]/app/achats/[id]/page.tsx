@@ -70,6 +70,7 @@ type Achat = {
   qbo_doc_number: string | null;
   payment_method: string | null;
   is_billable: boolean;
+  billable_manual?: boolean;
   markup_percent: number | null;
   invoiced_at: string | null;
   facture_item_id: number | null;
@@ -215,12 +216,19 @@ export default function AchatDetailPage() {
           authedFetch("/api/v1/employes?limit=500&volet=construction"),
           authedFetch("/api/v1/bons-travail?limit=500")
         ]);
-        if (bRes.ok && !cancelled)
-          setBons(
-            ((await bRes.json()) as BonMini[]).filter(
+        const bonsAll = bRes.ok
+          ? ((await bRes.json()) as BonMini[]).filter(
               (b) => b.status !== "cancelled"
             )
-          );
+          : [];
+        const psBase = pRes.ok ? ((await pRes.json()) as Project[]) : [];
+        const psBons = bpRes.ok ? ((await bpRes.json()) as Project[]) : [];
+        const seenP = new Set(psBase.map((x) => x.id));
+        const projAll = [...psBase, ...psBons.filter((x) => !seenP.has(x.id))];
+        if (!cancelled) {
+          setBons(bonsAll);
+          setProjects(projAll);
+        }
         if (!aRes.ok) throw new Error(`http_${aRes.status}`);
         const data = (await aRes.json()) as Achat;
         if (cancelled) return;
@@ -268,7 +276,22 @@ export default function AchatDetailPage() {
             setTotal(sum ? sum.toFixed(2) : "");
           }
         }
-        setIsBillable(data.is_billable !== false);
+        // Case « à refacturer » à l'OUVERTURE (retour 2026-09-18) : sans
+        // choix manuel enregistré et hors achat déjà facturé, elle suit la
+        // cible — bon de travail / contrat → cochée ; estimé ou forfaitaire
+        // → décochée. Toujours modifiable ensuite.
+        let billable = data.is_billable !== false;
+        if (!data.billable_manual && !data.invoiced_at && data.project_id) {
+          const pid = data.project_id;
+          const projCible = projAll.find((p) => p.id === pid);
+          const estBon =
+            bonsAll.some((b) => b.project_id === pid) ||
+            projCible?.kind === "bon_travail";
+          if (estBon) billable = true;
+          else if (projCible?.billing_kind)
+            billable = projCible.billing_kind === "contrat";
+        }
+        setIsBillable(billable);
         // Achat refacturable sans majoration enregistrée → on affiche
         // 10 % par défaut (modifiable ; 0 = coûtant). Couvre les achats
         // existants créés avant le défaut backend.
@@ -288,12 +311,6 @@ export default function AchatDetailPage() {
         setReceiptUrl(data.receipt_url || "");
         setNotes(data.notes || "");
         setPaymentMethod(data.payment_method || "");
-        if (pRes.ok) {
-          const psBase = (await pRes.json()) as Project[];
-          const psBons = bpRes.ok ? ((await bpRes.json()) as Project[]) : [];
-          const seen = new Set(psBase.map((x) => x.id));
-          setProjects([...psBase, ...psBons.filter((x) => !seen.has(x.id))]);
-        }
         if (frRes.ok) setFournisseurs((await frRes.json()) as Fournisseur[]);
         if (eRes.ok) setEmployes((await eRes.json()) as Employe[]);
       } catch {
