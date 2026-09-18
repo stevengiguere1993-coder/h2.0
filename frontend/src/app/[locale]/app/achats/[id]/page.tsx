@@ -548,6 +548,16 @@ export default function AchatDetailPage() {
                       id="ap"
                       value={projectId}
                       onChange={(v) => {
+                        // Rattaché à un BON DE TRAVAIL → « à refacturer »
+                        // coché d'office (temps & matériel), décochable
+                        // ensuite (retour 2026-09-18). Jamais sur un achat
+                        // déjà versé sur une facture.
+                        const estBon =
+                          v.startsWith("bon:") ||
+                          bons.some((b) => String(b.project_id) === v) ||
+                          projects.find((p) => String(p.id) === v)?.kind ===
+                            "bon_travail";
+                        if (estBon && !a?.invoiced_at) setIsBillable(true);
                         // Bon SANS projet porteur : on le garantit à la
                         // sélection (même mécanique que le formulaire
                         // de nouvelle dépense), puis on rattache le
