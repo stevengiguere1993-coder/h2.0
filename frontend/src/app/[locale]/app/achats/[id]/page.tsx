@@ -83,6 +83,17 @@ type Project = {
 };
 type Fournisseur = { id: number; name: string };
 
+// Bon de travail proposé dans le sélecteur « Projet / Bon de travail »
+// (retour 2026-09-18 : la fiche d'un achat ne listait que les projets —
+// un bon sans mini-projet porteur n'apparaissait jamais).
+type BonMini = {
+  id: number;
+  reference: string;
+  title: string;
+  status: string;
+  project_id?: number | null;
+};
+
 const STATUS_LABELS: Record<string, string> = {
   received: "À payer",
   paid: "Payé",
@@ -114,6 +125,7 @@ export default function AchatDetailPage() {
 
   const [a, setA] = useState<Achat | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [bons, setBons] = useState<BonMini[]>([]);
   const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
   const [employes, setEmployes] = useState<Employe[]>([]);
   const [loading, setLoading] = useState(true);
@@ -187,12 +199,19 @@ export default function AchatDetailPage() {
       setLoading(true);
       setError(null);
       try {
-        const [aRes, pRes, frRes, eRes] = await Promise.all([
+        const [aRes, pRes, frRes, eRes, bRes] = await Promise.all([
           authedFetch(`/api/v1/achats/${id}`),
           authedFetch("/api/v1/projects?limit=500"),
           authedFetch("/api/v1/fournisseurs?limit=500"),
-          authedFetch("/api/v1/employes?limit=500&volet=construction")
+          authedFetch("/api/v1/employes?limit=500&volet=construction"),
+          authedFetch("/api/v1/bons-travail?limit=500")
         ]);
+        if (bRes.ok && !cancelled)
+          setBons(
+            ((await bRes.json()) as BonMini[]).filter(
+              (b) => b.status !== "cancelled"
+            )
+          );
         if (!aRes.ok) throw new Error(`http_${aRes.status}`);
         const data = (await aRes.json()) as Achat;
         if (cancelled) return;
@@ -517,7 +536,34 @@ export default function AchatDetailPage() {
                     <SearchSelect
                       id="ap"
                       value={projectId}
-                      onChange={setProjectId}
+                      onChange={(v) => {
+                        // Bon SANS projet porteur : on le garantit à la
+                        // sélection (même mécanique que le formulaire
+                        // de nouvelle dépense), puis on rattache le
+                        // reçu à ce projet.
+                        if (v.startsWith("bon:")) {
+                          void (async () => {
+                            const r = await authedFetch(
+                              `/api/v1/bons-travail/${Number(
+                                v.slice(4)
+                              )}/ensure-project`,
+                              { method: "POST" }
+                            );
+                            if (r.ok) {
+                              const j = (await r.json()) as {
+                                project_id: number;
+                              };
+                              setProjectId(String(j.project_id));
+                            } else {
+                              setError(
+                                "Impossible de préparer le projet du bon — réessaie."
+                              );
+                            }
+                          })();
+                          return;
+                        }
+                        setProjectId(v);
+                      }}
                       emptyLabel="— Aucun —"
                       placeholder="Choisis ou tape pour chercher…"
                       options={[
@@ -528,8 +574,26 @@ export default function AchatDetailPage() {
                             label: projectLabel(p),
                             group: "Projets"
                           })),
+                        // TOUS les bons (retour 2026-09-18) — même ceux
+                        // sans mini-projet porteur : il est créé à la
+                        // sélection. Un bon avec projet pointe droit
+                        // dessus (valeur = id du projet).
+                        ...bons.map((b) => ({
+                          value: b.project_id
+                            ? String(b.project_id)
+                            : `bon:${b.id}`,
+                          label: `${b.reference} — ${b.title}`,
+                          group: "Bons de travail"
+                        })),
+                        // Filet : mini-projets de bons orphelins (bon
+                        // supprimé/annulé) pour que la valeur d'un achat
+                        // déjà rattaché reste affichable.
                         ...projects
-                          .filter((p) => p.kind === "bon_travail")
+                          .filter(
+                            (p) =>
+                              p.kind === "bon_travail" &&
+                              !bons.some((b) => b.project_id === p.id)
+                          )
                           .map((p) => ({
                             value: String(p.id),
                             label: p.name,
