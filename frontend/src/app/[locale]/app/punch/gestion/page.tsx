@@ -256,10 +256,13 @@ export default function PunchGestionPage() {
       setLoading(true);
       setError(null);
       try {
-        const [pRes, eRes, prRes, csRes, bRes, clRes] = await Promise.all([
+        // /projects sans `kind` exclut les mini-projets des bons de
+        // travail → chargés à part (retour 2026-09-18).
+        const [pRes, eRes, prRes, bprRes, csRes, bRes, clRes] = await Promise.all([
           authedFetch("/api/v1/punch?limit=500"),
           authedFetch("/api/v1/employes?limit=500&volet=construction"),
           authedFetch("/api/v1/projects?limit=500"),
+          authedFetch("/api/v1/projects?kind=bon_travail&limit=500"),
           authedFetch("/api/v1/contact?limit=500"),
           authedFetch("/api/v1/bons-travail?limit=500"),
           authedFetch("/api/v1/clients?limit=500")
@@ -267,7 +270,10 @@ export default function PunchGestionPage() {
         if (!pRes.ok) throw new Error(`http_${pRes.status}`);
         const ps = (await pRes.json()) as Punch[];
         const es = eRes.ok ? ((await eRes.json()) as Employe[]) : [];
-        const prs = prRes.ok ? ((await prRes.json()) as Project[]) : [];
+        const prsBase = prRes.ok ? ((await prRes.json()) as Project[]) : [];
+        const prsBons = bprRes.ok ? ((await bprRes.json()) as Project[]) : [];
+        const prsSeen = new Set(prsBase.map((x) => x.id));
+        const prs = [...prsBase, ...prsBons.filter((x) => !prsSeen.has(x.id))];
         const css = csRes.ok ? ((await csRes.json()) as Prospect[]) : [];
         const bs = bRes.ok ? ((await bRes.json()) as BonMini[]) : [];
         const cls = clRes.ok ? ((await clRes.json()) as ClientMini[]) : [];

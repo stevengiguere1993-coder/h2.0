@@ -10,6 +10,7 @@ ignoré. Idempotent : dédup par `qbo_bill_id` / `qbo_purchase_id`.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -148,6 +149,17 @@ async def _fournisseur_id_for(
     fourn_by_name[key] = int(f.id)
     log.info("Fournisseur créé depuis QB : %s (#%s)", f.name, f.id)
     return int(f.id)
+
+
+_KRATOS_SOURCE_RE = re.compile(r"Source:\s*Horizon h2\.0 Achat #(\d+)", re.I)
+
+
+def _kratos_source_achat_id(txn: dict) -> Optional[int]:
+    """Id de l'achat Kratos d'ORIGINE d'une transaction QB poussée par
+    Kratos (mémo privé posé par achat_qbo._private_note), sinon None."""
+    note = str(txn.get("PrivateNote") or "")
+    m = _KRATOS_SOURCE_RE.search(note)
+    return int(m.group(1)) if m else None
 
 
 def _txn_description(txn: dict) -> Optional[str]:
@@ -672,6 +684,12 @@ async def pull_project_costs_from_qbo(
         # majoré). ESTIMÉ et FORFAITAIRE → NON refacturable : le prix donné
         # au client couvre les dépenses, on ne les refacture pas par défaut
         # (cochable à la main au besoin).
+        # Mini-projet d'un BON DE TRAVAIL : les coûts y sont refacturés en
+        # temps & matériel — refacturables par défaut, sinon l'import du bon
+        # dans une facture (is_billable=True) les ignorait (retour
+        # 2026-09-18, achat Plancher Économique sur BT-26-018).
+        if (getattr(proj, "kind", None) or "") == "bon_travail":
+            return True
         return bk == "contrat"
 
     now = datetime.now(timezone.utc)
@@ -685,8 +703,48 @@ async def pull_project_costs_from_qbo(
         "skipped_no_project": 0,
         "paid_synced": 0,
         "reconciled_synced": 0,
+        # Origine Kratos (mémo « Source: Horizon h2.0 Achat #N ») :
+        # lien réparé sur l'achat source / doublon évité.
+        "relinked_kratos": 0,
+        "skipped_kratos_origin": 0,
     }
     preview: list[dict] = []
+
+    async def _kratos_origin_handled(txn: dict, qid: str, ttype: str) -> bool:
+        """Transaction POUSSÉE depuis Kratos (mémo « Source: Horizon h2.0
+        Achat #N ») : si l'achat N existe encore, on ne recrée JAMAIS un
+        doublon — on répare son lien QB s'il l'a perdu, sinon on saute.
+        S'il a été supprimé côté Kratos, la transaction vit dans QB →
+        import normal (retour 2026-09-18 : #468 ré-importé en #481)."""
+        src_id = _kratos_source_achat_id(txn)
+        if not src_id:
+            return False
+        src = await db.get(Achat, src_id)
+        if src is None:
+            return False
+        vendor_n = (
+            (txn.get("VendorRef") or txn.get("EntityRef") or {}).get("name")
+        )
+        if not (src.qbo_bill_id or src.qbo_purchase_id):
+            if not dry_run:
+                src.qbo_bill_id = qid
+                if not src.qbo_doc_number and txn.get("DocNumber"):
+                    src.qbo_doc_number = str(txn.get("DocNumber"))
+                await db.flush()
+            stats["relinked_kratos"] += 1
+            preview.append(
+                {"type": ttype, "qbo_id": qid, "amount": _num(txn.get("TotalAmt")),
+                 "vendor": vendor_n, "status": "relie_achat_source",
+                 "achat_id": src.id}
+            )
+        else:
+            stats["skipped_kratos_origin"] += 1
+            preview.append(
+                {"type": ttype, "qbo_id": qid, "amount": _num(txn.get("TotalAmt")),
+                 "vendor": vendor_n, "status": "origine_kratos",
+                 "achat_id": src.id}
+            )
+        return True
 
     # ── Bills (factures fournisseurs à payer) ──
     for b in bills:
@@ -877,6 +935,8 @@ async def pull_project_costs_from_qbo(
                 {"type": "bill", "qbo_id": bid, "amount": total,
                  "vendor": vendor, "status": pv_status}
             )
+            continue
+        if await _kratos_origin_handled(b, bid, "bill"):
             continue
         proj = _project_for_txn(b, proj_by_job)
         if proj is None:
@@ -1109,6 +1169,8 @@ async def pull_project_costs_from_qbo(
                  "vendor": vendor,
                  "status": "rapproche_maj" if updated else "deja_importe"}
             )
+            continue
+        if await _kratos_origin_handled(p, pid, "purchase"):
             continue
         proj = _project_for_txn(p, proj_by_job)
         if proj is None:

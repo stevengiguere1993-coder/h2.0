@@ -65,6 +65,8 @@ type Achat = {
   notes: string | null;
   created_at: string;
   qbo_bill_id: string | null;
+  // Dépense IMPORTÉE de QB (pull) : l'Id QB vit ici, pas dans qbo_bill_id.
+  qbo_purchase_id?: string | null;
   qbo_doc_number: string | null;
   payment_method: string | null;
   is_billable: boolean;
@@ -199,9 +201,13 @@ export default function AchatDetailPage() {
       setLoading(true);
       setError(null);
       try {
-        const [aRes, pRes, frRes, eRes, bRes] = await Promise.all([
+        // /projects sans `kind` exclut les mini-projets des bons → on les
+        // charge à part pour que la valeur d'un achat déjà rattaché à un
+        // bon reste affichable (retour 2026-09-18).
+        const [aRes, pRes, bpRes, frRes, eRes, bRes] = await Promise.all([
           authedFetch(`/api/v1/achats/${id}`),
           authedFetch("/api/v1/projects?limit=500"),
+          authedFetch("/api/v1/projects?kind=bon_travail&limit=500"),
           authedFetch("/api/v1/fournisseurs?limit=500"),
           authedFetch("/api/v1/employes?limit=500&volet=construction"),
           authedFetch("/api/v1/bons-travail?limit=500")
@@ -279,7 +285,12 @@ export default function AchatDetailPage() {
         setReceiptUrl(data.receipt_url || "");
         setNotes(data.notes || "");
         setPaymentMethod(data.payment_method || "");
-        if (pRes.ok) setProjects((await pRes.json()) as Project[]);
+        if (pRes.ok) {
+          const psBase = (await pRes.json()) as Project[];
+          const psBons = bpRes.ok ? ((await bpRes.json()) as Project[]) : [];
+          const seen = new Set(psBase.map((x) => x.id));
+          setProjects([...psBase, ...psBons.filter((x) => !seen.has(x.id))]);
+        }
         if (frRes.ok) setFournisseurs((await frRes.json()) as Fournisseur[]);
         if (eRes.ok) setEmployes((await eRes.json()) as Employe[]);
       } catch {
@@ -1047,12 +1058,16 @@ function AchatQboPushButton({
     }
   }
 
-  if (achat.qbo_bill_id) {
+  // Un achat IMPORTÉ de QB (pull) ne porte que qbo_purchase_id : il est
+  // déjà dans QuickBooks — proposer « Envoyer vers QuickBooks » était
+  // trompeur (retour 2026-09-18).
+  const qbId = achat.qbo_bill_id || achat.qbo_purchase_id;
+  if (qbId) {
     return (
       <div className="flex flex-col items-start gap-1">
         <div className="inline-flex items-center gap-2 self-start rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5 text-sm font-medium text-emerald-300">
           <CheckCircle2 className="h-4 w-4" />
-          {qbLabel} ✓ #{achat.qbo_bill_id}
+          {qbLabel} ✓ #{qbId}
         </div>
         <button
           type="button"
