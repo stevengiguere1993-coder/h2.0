@@ -370,8 +370,22 @@ def _local_name_of(row: dict) -> str:
     return seg.strip().lower()
 
 
+async def _sibling_targets(db: AsyncSession, project: Project) -> list[str]:
+    """Cibles principales des autres projets du même client (délégué au
+    résolveur principal pour partager exactement les mêmes règles)."""
+    from app.services.qbo_project_resolve import _other_projects_targets
+
+    return await _other_projects_targets(db, project)
+
+
 async def _resolve_converted_job_id(
-    qbo, project: Project, parent_id: str, active_ids: Optional[set[str]]
+    qbo,
+    project: Project,
+    parent_id: str,
+    active_ids: Optional[set[str]],
+    *,
+    taken: Optional[set[str]] = None,
+    others: Optional[list[str]] = None,
 ) -> Optional[str]:
     """Si `project.qbo_job_id` est PÉRIMÉ (sous-client converti en PROJET
     dans QB, ancien id supprimé), retrouve le nouvel id sous le client
@@ -382,7 +396,17 @@ async def _resolve_converted_job_id(
 
     `active_ids` = ensemble des Customer.Id ACTIFS (résolu une fois) pour
     éviter une requête QB par projet ; None = on ne sait pas → on ne
-    répare pas (prudent)."""
+    répare pas (prudent). `taken` = ids QB portés par d'AUTRES projets
+    Kratos (jamais adoptés) ; `others` = cibles principales des autres
+    projets du même client (mêmes règles que le résolveur principal :
+    un client à plusieurs chantiers n'adopte que par correspondance de
+    nom, jamais par « c'est le seul »)."""
+    from app.services.qbo_project_resolve import (
+        _best_level,
+        _norm,
+        _project_targets,
+    )
+
     jid = (getattr(project, "qbo_job_id", None) or "").strip()
     if not jid or active_ids is None:
         return None
@@ -392,32 +416,30 @@ async def _resolve_converted_job_id(
         subs = await qbo.find_subcustomers(parent_id)
     except Exception:  # noqa: BLE001
         return None
-    targets = [
-        t
-        for t in (
-            (getattr(project, "address", None) or "").strip().lower(),
-            (project.name or "").strip().lower(),
-        )
-        if t
-    ]
+    taken = taken or set()
+    others = list(others or [])
+    targets = _project_targets(project)
+    best: tuple[int, Optional[str]] = (0, None)
+    usable = 0
     for row in subs:
-        if not row.get("Id"):
+        rid = str(row.get("Id") or "")
+        if not rid or rid in taken:
             continue
-        ln = _local_name_of(row)
-        if not ln:
+        usable += 1
+        ln = _norm(_local_name_of(row))
+        mine = _best_level(ln, targets)
+        if mine == 0:
             continue
-        for t in targets:
-            if (
-                ln == t
-                or ln.startswith(t)
-                or t.startswith(ln)
-                or t in ln
-                or ln in t
-            ):
-                return str(row["Id"])
-    usable = [r for r in subs if r.get("Id")]
-    if len(usable) == 1:
-        return str(usable[0]["Id"])
+        if mine < 3 and _best_level(ln, others) > 0:
+            continue
+        if mine > best[0]:
+            best = (mine, rid)
+    if best[1]:
+        return best[1]
+    if usable == 1 and not others:
+        return str(
+            next(r["Id"] for r in subs if str(r.get("Id") or "") not in taken)
+        )
     return None
 
 
@@ -506,9 +528,7 @@ async def pull_project_costs_from_qbo(
     try:
         active_ids = {
             str(c["Id"])
-            for c in await qbo.query(
-                "SELECT Id FROM Customer MAXRESULTS 1000"
-            )
+            for c in await qbo.query_all("SELECT Id FROM Customer")
             if c.get("Id")
         }
     except Exception:  # noqa: BLE001
@@ -538,8 +558,15 @@ async def pull_project_costs_from_qbo(
             newid = None
             if parent:
                 try:
+                    _taken = {
+                        str(_resolved.get(q.id) or q.qbo_job_id or "")
+                        for q in _projects
+                        if q.id != p.id
+                    } - {""}
+                    _others = await _sibling_targets(db, p)
                     newid = await _resolve_converted_job_id(
-                        qbo, p, str(parent), active_ids
+                        qbo, p, str(parent), active_ids,
+                        taken=_taken, others=_others,
                     )
                 except Exception:  # noqa: BLE001
                     newid = None
@@ -553,9 +580,24 @@ async def pull_project_costs_from_qbo(
         if _repaired and not dry_run:
             await db.flush()
         # Reconstruit le mapping avec les ids réparés (couvre le converti).
-        proj_by_job = {
-            _resolved[p.id]: p for p in _projects if _resolved.get(p.id)
-        }
+        # Deux projets Kratos sur le MÊME id QB = lien erroné quelque part :
+        # on n'importe rien pour eux (sinon « dernier gagne » et les coûts
+        # atterrissent sur le mauvais chantier) et on le journalise.
+        _by_job: dict[str, list[Project]] = {}
+        for p in _projects:
+            if _resolved.get(p.id):
+                _by_job.setdefault(_resolved[p.id], []).append(p)
+        proj_by_job = {}
+        for _jid, _ps in _by_job.items():
+            if len(_ps) == 1:
+                proj_by_job[_jid] = _ps[0]
+            else:
+                log.warning(
+                    "Pull coûts QB : sous-client %s porté par %s projets "
+                    "Kratos (%s) — ignoré jusqu'à correction du lien "
+                    "(bouton « Vérifier dans QuickBooks » sur la fiche).",
+                    _jid, len(_ps), ", ".join(str(q.id) for q in _ps),
+                )
     # Repli CLIENT MÈRE : une facture QB imputée au customer PARENT (pas
     # au sous-client/projet) n'était JAMAIS importée (« sans_projet »,
     # cas Atlant #177 imputée « 2020 St-Thimothee inc. »). Quand la fiche

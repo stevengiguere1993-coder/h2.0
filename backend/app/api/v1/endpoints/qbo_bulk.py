@@ -407,6 +407,25 @@ async def link_project(
     if proj is None:
         return {"error": f"Projet {data.project_id} introuvable."}
     jid = (data.qbo_job_id or "").strip() or None
+    if jid:
+        # Un sous-client QB = UN projet Kratos : sinon les pulls (coûts,
+        # factures) ne savent plus à quel chantier imputer.
+        holder = (
+            await db.execute(
+                select(Project).where(
+                    Project.qbo_job_id == jid, Project.id != proj.id
+                )
+            )
+        ).scalars().first()
+        if holder is not None:
+            return {
+                "error": (
+                    f"Ce projet QuickBooks est déjà relié au projet Kratos "
+                    f"#{holder.id} « {holder.name} ». Délie-le d'abord."
+                ),
+                "project_id": proj.id,
+                "qbo_job_id": proj.qbo_job_id,
+            }
     proj.qbo_job_id = jid
     await db.flush()
     return {"project_id": proj.id, "qbo_job_id": proj.qbo_job_id}
