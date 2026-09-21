@@ -102,6 +102,23 @@ async def create_project(
         db, project.responsible_user_id
     )
 
+    # Sous-client QuickBooks créé dès maintenant sous le client mère
+    # (retour 2026-09-21) — tâche de fond qui attend le commit.
+    if project.client_id:
+        try:
+            import asyncio as _asyncio_job
+
+            from app.services.bon_project import push_project_qbo_job_now
+
+            _asyncio_job.create_task(push_project_qbo_job_now(int(project.id)))
+        except Exception:  # noqa: BLE001
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "push sous-client QB non bloquant a échoué (projet #%s)",
+                project.id,
+            )
+
     # Alerte commis comptable : sous-client QBO à convertir en Projet.
     try:
         from app.services.project_qbo_notify import notify_new_project_for_qbo
@@ -371,6 +388,16 @@ async def update_project(
     # factures du projet qui n'ont pas encore de client — la facture
     # d'un BT porte toujours le client du BT (retour Phil 2026-08-18).
     if "client_id" in data.model_fields_set and project.client_id:
+        # Client posé/changé après coup → sous-client QB garanti sous ce
+        # client (retour 2026-09-21), comme à la création.
+        try:
+            import asyncio as _asyncio_job
+
+            from app.services.bon_project import push_project_qbo_job_now
+
+            _asyncio_job.create_task(push_project_qbo_job_now(int(project.id)))
+        except Exception:  # noqa: BLE001
+            pass
         try:
             from app.models.bon_travail import BonTravail as _BT
             from app.models.facture import (

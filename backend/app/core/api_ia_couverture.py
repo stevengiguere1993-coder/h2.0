@@ -226,6 +226,10 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "service_template_items",
     "service_templates",
     "sold_comparables",
+    #: Avenants (change orders) d'un devis accepté (retour 2026-09-15) —
+    #: lus via GET /soumissions/{id}/avenants et l'état du contrat
+    #: (/projects/{id}/etat-contrat), tous deux dans kratos_api_catalogue.
+    "soumission_avenants",
     "soumission_items",
     "soumissions",
     "sous_traitant_timesheets",

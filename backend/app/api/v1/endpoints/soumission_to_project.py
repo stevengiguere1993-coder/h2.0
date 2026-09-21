@@ -199,6 +199,28 @@ async def provision_project_for_soumission(
     # comptable pour convertir le sous-client QBO en Projet. Le backfill
     # de démarrage passe notify_qbo=False : pas d'alerte rétroactive.
     if notify_qbo:
+        # Sous-client QuickBooks du projet créé DÈS MAINTENANT sous le
+        # client mère (retour 2026-09-21) — plus d'attente de la première
+        # facture/du premier coût. Tâche de fond qui attend le commit de
+        # la requête (même mécanique que les bons de travail).
+        if project.client_id:
+            try:
+                import asyncio as _asyncio_job
+
+                from app.services.bon_project import (
+                    push_project_qbo_job_now,
+                )
+
+                _asyncio_job.create_task(
+                    push_project_qbo_job_now(int(project.id))
+                )
+            except Exception:  # noqa: BLE001
+                import logging
+
+                logging.getLogger(__name__).exception(
+                    "push sous-client QB non bloquant a échoué (projet #%s)",
+                    project.id,
+                )
         try:
             from app.services.project_qbo_notify import (
                 notify_new_project_for_qbo,
