@@ -224,10 +224,13 @@ async def resolve_project_customer_id(
         if _name_matches(ln, targets):
             return await _adopt(row)
 
-    # 2) Un SEUL sous-client / projet sous ce parent → c'est forcément lui
-    # (cas courant : 1 client = 1 projet), même s'il a été renommé.
+    # 2) Un SEUL sous-client / projet sous ce parent → c'est forcément lui,
+    # même s'il a été renommé — UNIQUEMENT si ce projet est le seul projet
+    # Kratos de ce client (l'hypothèse « 1 client = 1 projet » de la règle
+    # doit être vraie). Un client à plusieurs chantiers n'adopte que par
+    # correspondance de nom/adresse : chaque chantier a son sous-client.
     usable = [r for r in subs if r.get("Id")]
-    if len(usable) == 1:
+    if len(usable) == 1 and not others:
         return await _adopt(usable[0])
 
     # 3) Aucun sous-client → on CRÉE le projet QB (même logique que la
