@@ -53,6 +53,8 @@ type Project = {
   awaiting_signature?: boolean;
   has_signed_bon?: boolean;
   correction_bon_draft?: boolean;
+  qbo_job_id?: string | null;
+  qbo_sync_error?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -146,6 +148,12 @@ export default function ProjectDetailPage() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [convertingToFacture, setConvertingToFacture] = useState(false);
+  // Liaison QuickBooks (sous-client sous le client mère) — action
+  // explicite avec résultat visible (retour 2026-09-21).
+  const [qboSyncing, setQboSyncing] = useState(false);
+  const [qboMsg, setQboMsg] = useState<{ ok: boolean; text: string } | null>(
+    null
+  );
   const [factureModalOpen, setFactureModalOpen] = useState(false);
   // État du contrat (facturation progressive) : contrat courant avec
   // avenants, facturé à date, acompte — affiché dans le dialogue de
@@ -347,6 +355,43 @@ export default function ProjectDetailPage() {
     } catch (e) {
       setP(prev);
       setError(`Changement de statut échoué : ${(e as Error).message}`);
+    }
+  }
+
+  async function syncQbo() {
+    setQboSyncing(true);
+    setQboMsg(null);
+    try {
+      const res = await authedFetch(`/api/v1/projects/${id}/qbo/sync`, {
+        method: "POST"
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        detail?: string;
+        message?: string;
+        job_name?: string;
+        parent_name?: string;
+      };
+      if (!res.ok) {
+        setQboMsg({
+          ok: false,
+          text: body.detail || "Liaison QuickBooks échouée."
+        });
+      } else {
+        const where = body.job_name
+          ? ` (${body.job_name})`
+          : body.parent_name
+            ? ` (sous ${body.parent_name})`
+            : "";
+        setQboMsg({
+          ok: true,
+          text: `${body.message || "Projet lié à QuickBooks."}${where}`
+        });
+      }
+      await reloadProject();
+    } catch (e) {
+      setQboMsg({ ok: false, text: (e as Error).message });
+    } finally {
+      setQboSyncing(false);
     }
   }
 
@@ -587,6 +632,58 @@ export default function ProjectDetailPage() {
                 acceptée (prix fixe), heures punchées (T&amp;M), achats du
                 projet.
               </p>
+            </div>
+
+            {/* QuickBooks : sous-client du projet sous le client mère */}
+            <div className="mt-4 rounded-lg border border-brand-800 bg-brand-900/60 px-4 py-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="min-w-0 flex-1 text-sm">
+                  <span className="font-semibold text-white">QuickBooks</span>
+                  {p.qbo_job_id ? (
+                    <span className="ml-2 inline-flex items-center gap-1 text-emerald-300">
+                      <CheckCircle2 className="h-4 w-4" />
+                      Sous-client lié (id {p.qbo_job_id})
+                    </span>
+                  ) : (
+                    <span className="ml-2 text-amber-300">
+                      Pas encore de sous-client QuickBooks pour ce projet.
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={syncQbo}
+                  disabled={qboSyncing || !p.client_id}
+                  title={
+                    !p.client_id
+                      ? "Choisis d'abord le client du projet (onglet Résumé)."
+                      : undefined
+                  }
+                  className="btn-outline-accent btn-sm"
+                >
+                  {qboSyncing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : null}
+                  {p.qbo_job_id
+                    ? "Vérifier dans QuickBooks"
+                    : "Créer dans QuickBooks"}
+                </button>
+              </div>
+              {qboMsg ? (
+                <p
+                  className={
+                    qboMsg.ok
+                      ? "mt-2 text-sm text-emerald-300"
+                      : "mt-2 text-sm text-rose-300"
+                  }
+                >
+                  {qboMsg.text}
+                </p>
+              ) : p.qbo_sync_error ? (
+                <p className="mt-2 text-sm text-rose-300">
+                  Dernier échec QuickBooks : {p.qbo_sync_error}
+                </p>
+              ) : null}
             </div>
 
             {/* Header KPIs */}

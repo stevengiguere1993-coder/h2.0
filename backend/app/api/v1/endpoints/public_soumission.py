@@ -252,13 +252,18 @@ async def _auto_send_deposit_facture(facture_id: int) -> None:
             exc_info=True,
         )
         return
-    # Facture maintenant ENVOYÉE → on la pousse vers QBO (si auto-sync ON).
+    # Facture maintenant ENVOYÉE → on la pousse vers QBO. Push DÉLIBÉRÉ
+    # (non conditionné à l'interrupteur de migration `qbo_auto_sync`),
+    # comme l'envoi manuel d'une facture depuis sa fiche : une facture
+    # d'acompte envoyée au client doit exister dans QuickBooks (retour
+    # 2026-09-21 — l'acompte du 1616 Saint-Alexandre n'y était pas).
+    # Idempotent (qbo_invoice_id) ; l'échec est persisté sur la facture.
     try:
-        from app.services.qbo_auto_sync import autopush_facture
+        from app.services.qbo_auto_sync import push_facture_now
 
-        await autopush_facture(facture_id)
+        await push_facture_now(facture_id)
     except Exception:  # noqa: BLE001
-        log.warning("Autopush QBO acompte %s échoué", facture_id)
+        log.warning("Push QBO acompte %s échoué", facture_id)
 
 
 @router.post(

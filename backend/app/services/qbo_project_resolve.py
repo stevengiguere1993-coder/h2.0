@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.project import Project
@@ -42,18 +43,48 @@ async def _is_active_customer(qbo, cid: str) -> bool:
         return True
 
 
+async def _job_ids_used_by_other_projects(
+    db: AsyncSession, project: Project
+) -> set[str]:
+    """Ids QB déjà portés par d'AUTRES projets Kratos : on ne les adopte
+    jamais (retour 2026-09-21 : sinon un second projet du même client
+    « prenait » le sous-client du premier et n'apparaissait jamais dans
+    QuickBooks sous son propre nom)."""
+    try:
+        rows = (
+            await db.execute(
+                select(Project.qbo_job_id).where(
+                    Project.id != project.id,
+                    Project.qbo_job_id.is_not(None),
+                )
+            )
+        ).scalars().all()
+        return {str(r).strip() for r in rows if r}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
 async def resolve_project_customer_id(
     qbo,
     db: AsyncSession,
     project: Project,
     parent_customer_id: str,
+    report: Optional[dict] = None,
 ) -> str:
     """Retourne l'Id QB à utiliser comme CustomerRef pour ce projet, en
     réparant `qbo_job_id` si le sous-client a été converti en projet QB.
-    Repli : client parent."""
+    Repli : client parent. ``report`` (optionnel) reçoit ``action`` :
+    ``deja_lie`` | ``adopte`` | ``cree`` | ``parent``."""
+    def _note(action: str) -> None:
+        if report is not None:
+            report["action"] = action
+
     jid = (getattr(project, "qbo_job_id", None) or "").strip()
     if jid and await _is_active_customer(qbo, jid):
+        _note("deja_lie")
         return jid
+
+    taken = await _job_ids_used_by_other_projects(db, project)
 
     # Liste des sous-clients / projets sous le parent.
     try:
@@ -88,7 +119,11 @@ async def resolve_project_customer_id(
         if new_id != jid:
             project.qbo_job_id = new_id
             await db.flush()
+        _note("adopte")
         return new_id
+
+    # Jamais adopter un sous-client déjà lié à un autre projet Kratos.
+    subs = [r for r in subs if str(r.get("Id") or "") not in taken]
 
     # 1) Match par NOM (adresse / nom de projet), tolérant aux renommages :
     # égalité, préfixe, ou inclusion (scopé au même parent → sûr).
@@ -137,6 +172,7 @@ async def resolve_project_customer_id(
             if new_id:
                 project.qbo_job_id = new_id
                 await db.flush()
+                _note("cree")
                 return new_id
         except Exception as exc:  # noqa: BLE001
             log.warning(
@@ -147,4 +183,5 @@ async def resolve_project_customer_id(
             )
 
     # 4) Rien d'identifiable → client parent (suivi assuré par la ClassRef).
+    _note("parent")
     return str(parent_customer_id)

@@ -110,6 +110,7 @@ from app.api.v1.endpoints import (
     user_roles,
     users,
     project_billables,
+    project_qbo,
     project_finances,
     project_members,
     project_phases,
@@ -281,6 +282,7 @@ api_router.include_router(project_members.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(project_finances.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(project_punches.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(project_billables.router, dependencies=DEP_CONSTRUCTION)
+api_router.include_router(project_qbo.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(subcontractor_contracts.router)
 api_router.include_router(projects.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(contact.router)
