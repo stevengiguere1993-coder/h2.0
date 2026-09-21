@@ -69,9 +69,13 @@ async def ensure_bon_project(
 
 async def push_bon_qbo_job_now(project_id: int) -> None:
     """Arrière-plan (session fraîche) : crée/répare le SOUS-CLIENT QB du
-    projet lié au bon, sous le client mère. Best-effort : sans client ou
-    sans QBO configuré, on ne fait rien (le push de la première facture /
-    du premier coût le créera de toute façon via le même resolveur)."""
+    projet, sous le client mère. Vaut pour le mini-projet d'un BON comme
+    pour un PROJET DE CONSTRUCTION (retour 2026-09-21 : le projet 1616
+    Saint-Alexandre n'apparaissait pas sous Jean-François Croteau dans
+    QuickBooks — rien ne créait le sous-client avant la première facture
+    ou le premier coût poussé, eux-mêmes gatés par l'interrupteur
+    d'auto-sync). Best-effort : sans client ou sans QBO configuré, on ne
+    fait rien. Alias lisible : ``push_project_qbo_job_now``."""
     try:
         import asyncio
 
@@ -164,3 +168,8 @@ async def push_bon_qbo_job_now(project_id: int) -> None:
         log.warning(
             "push_bon_qbo_job_now projet %s : %s", project_id, exc
         )
+
+
+# Nom générique : même mécanique pour un projet de construction créé
+# depuis une soumission acceptée ou à la main (retour 2026-09-21).
+push_project_qbo_job_now = push_bon_qbo_job_now
