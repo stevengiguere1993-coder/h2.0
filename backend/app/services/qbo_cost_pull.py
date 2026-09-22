@@ -550,14 +550,16 @@ async def pull_project_costs_from_qbo(
     # puis pour chaque projet dont l'id est périmé on retrouve le nouvel id
     # sous le client parent (par nom/adresse). Best-effort, borné.
     active_ids: Optional[set[str]] = None
+    _cust_rows: list[dict] = []
     try:
-        active_ids = {
-            str(c["Id"])
-            for c in await qbo.query_all("SELECT Id FROM Customer")
-            if c.get("Id")
-        }
+        _cust_rows = [
+            c for c in await qbo.query_all("SELECT * FROM Customer")
+            if isinstance(c, dict) and c.get("Id")
+        ]
+        active_ids = {str(c["Id"]) for c in _cust_rows}
     except Exception:  # noqa: BLE001
         active_ids = None
+        _cust_rows = []
     if active_ids is not None and _projects:
         from app.models.client import Client as _ClientM
 
@@ -654,8 +656,7 @@ async def pull_project_costs_from_qbo(
         (await db.execute(select(Project))).scalars().all()
     )
 
-    def _norm_cls(s: str) -> str:
-        return " ".join((s or "").strip().lower().split())
+    from app.services.qbo_project_resolve import _norm as _norm_cls
 
     _class_exact: dict[str, Project] = {}
     _class_rows: list[tuple[str, Project]] = []
@@ -677,10 +678,115 @@ async def pull_project_costs_from_qbo(
         hit = _class_exact.get(c)
         if hit is not None:
             return hit
+        # Tolérance (classe = adresse tronquée) seulement si UN SEUL
+        # projet correspond : « 9085 avenue millen » désigne plusieurs
+        # logements → on ne devine pas.
+        hits: list[Project] = []
         for _k, _cp in _class_rows:
-            if _k.startswith(c) or c.startswith(_k) or c in _k or _k in c:
-                return _cp
-        return None
+            if _k.startswith(c + " ") or c.startswith(_k + " "):
+                if all(h.id != _cp.id for h in hits):
+                    hits.append(_cp)
+        return hits[0] if len(hits) == 1 else None
+
+    # Résolution par NOM des sous-clients QB référencés par les lignes mais
+    # reliés à AUCUN projet Kratos (retour 2026-09-22 : Atlant #173, ligne
+    # « 9085, Avenue Millen — logement 3 » posée dans QB sur le sous-client
+    # du bon Frigidaire, bon sans mini-projet → la part n'arrivait jamais).
+    # Nom local du sous-client = adresse ou nom d'un projet (ou l'adresse
+    # d'un bon sans projet → on crée son mini-projet), même client mère
+    # de préférence ; le lien est PERSISTÉ (qbo_job_id) pour la suite.
+    try:
+        _sub_by_id = {str(r.get("Id")): r for r in _cust_rows}
+        _wanted: set[str] = set()
+        for _t in list(bills) + list(purchases):
+            _wanted |= _txn_customer_refs(_t)
+        _wanted -= set(proj_by_job.keys())
+        _wanted &= set(_sub_by_id.keys())
+        if _wanted:
+            from app.models.bon_travail import BonTravail as _BonM
+            from app.models.client import Client as _ClientN
+            from app.services.bon_project import ensure_bon_project
+
+            _held_ids = {
+                str(_p.qbo_job_id) for _p in _class_projects if _p.qbo_job_id
+            }
+            _qb_of_client: dict[int, str] = {
+                int(_cid): str(_q or "")
+                for _cid, _q in (
+                    await db.execute(
+                        select(_ClientN.id, _ClientN.qbo_customer_id).where(
+                            _ClientN.qbo_customer_id.is_not(None)
+                        )
+                    )
+                ).all()
+            }
+            _bons_sans_projet = list(
+                (
+                    await db.execute(
+                        select(_BonM).where(_BonM.project_id.is_(None))
+                    )
+                ).scalars().all()
+            )
+            for _cref in sorted(_wanted):
+                _row = _sub_by_id[_cref]
+                _parent = str((_row.get("ParentRef") or {}).get("value") or "")
+                if not _parent:
+                    continue  # client mère, pas un sous-client
+                _ln = _norm_cls(_local_name_of(_row))
+                if not _ln:
+                    continue
+
+                def _same_parent(cid: Optional[int]) -> bool:
+                    return bool(cid) and _qb_of_client.get(int(cid)) == _parent
+
+                _cands = [
+                    _p for _p in _class_projects
+                    if not _p.qbo_job_id
+                    and (_norm_cls(_p.address) == _ln or _norm_cls(_p.name) == _ln)
+                ]
+                _pref = [_p for _p in _cands if _same_parent(_p.client_id)]
+                _cands = _pref or _cands
+                _target: Optional[Project] = None
+                if _cands:
+                    _target = max(_cands, key=lambda _p: int(_p.id))
+                    if len(_cands) > 1:
+                        log.warning(
+                            "Pull coûts QB : sous-client %s « %s » correspond "
+                            "à %s projets sans lien QB — le plus récent (#%s) "
+                            "est relié.", _cref, _local_name_of(_row),
+                            len(_cands), _target.id,
+                        )
+                else:
+                    _bc = [
+                        _b for _b in _bons_sans_projet
+                        if _norm_cls(_b.address) == _ln
+                    ]
+                    _bp = [_b for _b in _bc if _same_parent(_b.client_id)]
+                    _bc = _bp or _bc
+                    if _bc:
+                        _bon = max(_bc, key=lambda _b: int(_b.id))
+                        if not dry_run:
+                            _target = await ensure_bon_project(db, _bon)
+                            _class_projects.append(_target)
+                            _bons_sans_projet.remove(_bon)
+                            log.info(
+                                "Pull coûts QB : mini-projet #%s créé pour le "
+                                "bon %s (sous-client %s « %s »).",
+                                _target.id, _bon.reference, _cref,
+                                _local_name_of(_row),
+                            )
+                if _target is None or _cref in _held_ids:
+                    continue
+                if not dry_run:
+                    _target.qbo_job_id = _cref
+                    _held_ids.add(_cref)
+                proj_by_job[_cref] = _target
+            if not dry_run:
+                await db.flush()
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "Résolution par nom des sous-clients QB échouée", exc_info=True
+        )
 
     # Refs QB du client (parent + sous-clients) : ne garder que ses
     # dépenses dans l'aperçu détaillé scopé.
