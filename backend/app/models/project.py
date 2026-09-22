@@ -99,6 +99,10 @@ class Project(Base):
         String(64), nullable=True
     )
 
+    #: Dernier motif d'échec de liaison QuickBooks (sous-client), affiché
+    #: sur la fiche projet ; vidé au succès (retour 2026-09-21).
+    qbo_sync_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 

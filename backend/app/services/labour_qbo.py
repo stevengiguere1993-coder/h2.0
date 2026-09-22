@@ -118,7 +118,11 @@ async def sync_project_labour_to_qbo(
             f"Compte de contrepartie main-d'œuvre introuvable : {clr_name}"
         )
 
-    customer_id = str(project.qbo_job_id) if project.qbo_job_id else None
+    # Sous-client QB RÉSOLU (lien périmé / erroné réparé, jamais celui
+    # d'un autre chantier) plutôt que l'id brut mémorisé.
+    from app.services.labour_time_qbo import _resolve_project_customer
+
+    customer_id = await _resolve_project_customer(qbo, db, project)
     class_id = None
     class_name = (
         (getattr(project, "address", None) or "").strip()

@@ -75,6 +75,11 @@ class FactureItemCreate(BaseModel):
     quantity: float = Field(default=1, ge=0)
     unit_price: float = Field(default=0, ge=0)
     kind: str = Field(default="service", pattern=_KIND_PATTERN)
+    #: Ligne manuelle rattachée à une LIGNE DU DEVIS (projet à contrat) :
+    #: son montant compte alors dans le « facturé à date » de cet item —
+    #: sinon marquer la ligne « extra » pour ne pas fausser l'avancement
+    #: (retour 2026-09-15).
+    soumission_item_id: Optional[int] = Field(default=None, gt=0)
 
 
 class FactureItemUpdate(BaseModel):
@@ -295,6 +300,30 @@ async def create_item(
         )
     ).scalars().all()
     next_pos = (max(existing) + 1) if existing else 0
+    # Rattachement à une ligne du devis : validé contre la soumission du
+    # projet de la facture (jamais un item d'un autre devis).
+    sm_item_id = None
+    if data.soumission_item_id and data.kind == "service":
+        from app.models.project import Project as _ProjLink
+        from app.models.soumission_item import SoumissionItem as _SmItLink
+
+        proj = (
+            await db.get(_ProjLink, fa.project_id)
+            if fa.project_id
+            else None
+        )
+        it_sm = await db.get(_SmItLink, int(data.soumission_item_id))
+        if (
+            proj is None
+            or it_sm is None
+            or it_sm.soumission_id != proj.soumission_id
+        ):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Cette ligne de devis n'appartient pas au projet de "
+                "la facture.",
+            )
+        sm_item_id = it_sm.id
     item = FactureItem(
         facture_id=facture_id,
         position=next_pos,
@@ -304,6 +333,7 @@ async def create_item(
         unit_price=unit_price,
         total=total,
         kind=data.kind,
+        soumission_item_id=sm_item_id,
     )
     db.add(item)
     await db.flush()

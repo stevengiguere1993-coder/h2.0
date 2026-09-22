@@ -63,6 +63,7 @@ class ProjectRead(BaseModel):
     responsible_name: Optional[str] = None
     status: str
     qbo_job_id: Optional[str] = None
+    qbo_sync_error: Optional[str] = None
     address: Optional[str]
     description: Optional[str]
     notes: Optional[str]

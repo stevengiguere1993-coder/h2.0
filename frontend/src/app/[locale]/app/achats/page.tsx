@@ -226,15 +226,23 @@ export default function AchatsPage() {
       setLoading(true);
       setError(null);
       try {
-        const [aRes, pRes, frRes, stRes] = await Promise.all([
+        // /projects sans `kind` EXCLUT les mini-projets porteurs des
+        // bons de travail : on les charge à part, sinon la colonne
+        // « Projet / Bon » affichait « — » et le filtre « Bons de
+        // travail » restait vide (retour 2026-09-18).
+        const [aRes, pRes, bpRes, frRes, stRes] = await Promise.all([
           authedFetch("/api/v1/achats?limit=500"),
           authedFetch("/api/v1/projects?limit=500"),
+          authedFetch("/api/v1/projects?kind=bon_travail&limit=500"),
           authedFetch("/api/v1/fournisseurs?limit=500"),
           authedFetch("/api/v1/sous-traitants?limit=500")
         ]);
         if (!aRes.ok) throw new Error(`http_${aRes.status}`);
         const as = (await aRes.json()) as Achat[];
-        const ps = pRes.ok ? ((await pRes.json()) as Project[]) : [];
+        const psBase = pRes.ok ? ((await pRes.json()) as Project[]) : [];
+        const psBons = bpRes.ok ? ((await bpRes.json()) as Project[]) : [];
+        const seenIds = new Set(psBase.map((x) => x.id));
+        const ps = [...psBase, ...psBons.filter((x) => !seenIds.has(x.id))];
         const frs = frRes.ok ? ((await frRes.json()) as Fournisseur[]) : [];
         const sts = stRes.ok
           ? ((await stRes.json()) as SousTraitant[])

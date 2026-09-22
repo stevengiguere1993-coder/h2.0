@@ -603,9 +603,15 @@ class AchatRead(_Base):
     receipt_image_content_type: Optional[str] = None
     payment_method: Optional[str] = None
     qbo_bill_id: Optional[str] = None
+    #: Dépense importée de QB (pull des coûts) : Id QB de la Purchase.
+    qbo_purchase_id: Optional[str] = None
     qbo_doc_number: Optional[str] = None
     notes: Optional[str]
     is_billable: bool = True
+    #: Choix MANUEL de la case « à refacturer » (verrou contre les
+    #: automatismes) — la fiche n'applique le défaut selon la cible que
+    #: si ce verrou est absent.
+    billable_manual: bool = False
     markup_percent: Optional[float] = None
     invoiced_at: Optional[datetime] = None
     facture_item_id: Optional[int] = None

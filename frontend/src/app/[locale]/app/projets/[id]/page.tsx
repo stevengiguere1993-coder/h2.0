@@ -53,6 +53,8 @@ type Project = {
   awaiting_signature?: boolean;
   has_signed_bon?: boolean;
   correction_bon_draft?: boolean;
+  qbo_job_id?: string | null;
+  qbo_sync_error?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -69,6 +71,31 @@ const STATUS_CLASS: Record<string, string> = {
   in_progress: "badge-blue",
   suspended: "badge-amber",
   delivered: "badge-emerald"
+};
+
+// État de la facturation progressive du contrat (avenants, acompte…).
+type EtatContrat = {
+  contrat_base: number;
+  avenants_impact: number;
+  contrat_courant: number;
+  facture_a_date: number;
+  extras_factures: number;
+  acompte_recu: number;
+  acompte_applique: number;
+  acompte_restant: number;
+  solde_a_facturer: number;
+  pct_avancement: number;
+  surfactures: string[];
+  lignes: {
+    item_id: number;
+    description: string;
+    au_contrat: number;
+    facture: number;
+    restant: number;
+    pct: number;
+    retire: boolean;
+    avenant: string | null;
+  }[];
 };
 
 type TabId =
@@ -121,7 +148,17 @@ export default function ProjectDetailPage() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [convertingToFacture, setConvertingToFacture] = useState(false);
+  // Liaison QuickBooks (sous-client sous le client mère) — action
+  // explicite avec résultat visible (retour 2026-09-21).
+  const [qboSyncing, setQboSyncing] = useState(false);
+  const [qboMsg, setQboMsg] = useState<{ ok: boolean; text: string } | null>(
+    null
+  );
   const [factureModalOpen, setFactureModalOpen] = useState(false);
+  // État du contrat (facturation progressive) : contrat courant avec
+  // avenants, facturé à date, acompte — affiché dans le dialogue de
+  // création de facture pour choisir le bon % en pleine connaissance.
+  const [etatContrat, setEtatContrat] = useState<EtatContrat | null>(null);
   const [includeSoumission, setIncludeSoumission] = useState(true);
   const [soumissionMode, setSoumissionMode] = useState<"pct" | "amount">("pct");
   const [soumissionPct, setSoumissionPct] = useState("100");
@@ -321,6 +358,43 @@ export default function ProjectDetailPage() {
     }
   }
 
+  async function syncQbo() {
+    setQboSyncing(true);
+    setQboMsg(null);
+    try {
+      const res = await authedFetch(`/api/v1/projects/${id}/qbo/sync`, {
+        method: "POST"
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        detail?: string;
+        message?: string;
+        job_name?: string;
+        parent_name?: string;
+      };
+      if (!res.ok) {
+        setQboMsg({
+          ok: false,
+          text: body.detail || "Liaison QuickBooks échouée."
+        });
+      } else {
+        const where = body.job_name
+          ? ` (${body.job_name})`
+          : body.parent_name
+            ? ` (sous ${body.parent_name})`
+            : "";
+        setQboMsg({
+          ok: true,
+          text: `${body.message || "Projet lié à QuickBooks."}${where}`
+        });
+      }
+      await reloadProject();
+    } catch (e) {
+      setQboMsg({ ok: false, text: (e as Error).message });
+    } finally {
+      setQboSyncing(false);
+    }
+  }
+
   async function saveAll() {
     if (!p) return;
     setSaving(true);
@@ -365,6 +439,20 @@ export default function ProjectDetailPage() {
     setOnlyApproved(true);
     setDueInDays("0");
     setFactureModalOpen(true);
+    // État du contrat — best-effort, le dialogue s'affiche sans lui.
+    setEtatContrat(null);
+    if (p.soumission_id) {
+      void (async () => {
+        try {
+          const r = await authedFetch(
+            `/api/v1/projects/${id}/etat-contrat`
+          );
+          if (r.ok) setEtatContrat((await r.json()) as EtatContrat);
+        } catch {
+          /* encadré simplement absent */
+        }
+      })();
+    }
   }
 
   async function createFacture() {
@@ -546,6 +634,58 @@ export default function ProjectDetailPage() {
               </p>
             </div>
 
+            {/* QuickBooks : sous-client du projet sous le client mère */}
+            <div className="mt-4 rounded-lg border border-brand-800 bg-brand-900/60 px-4 py-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="min-w-0 flex-1 text-sm">
+                  <span className="font-semibold text-white">QuickBooks</span>
+                  {p.qbo_job_id ? (
+                    <span className="ml-2 inline-flex items-center gap-1 text-emerald-300">
+                      <CheckCircle2 className="h-4 w-4" />
+                      Sous-client lié (id {p.qbo_job_id})
+                    </span>
+                  ) : (
+                    <span className="ml-2 text-amber-300">
+                      Pas encore de sous-client QuickBooks pour ce projet.
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={syncQbo}
+                  disabled={qboSyncing || !p.client_id}
+                  title={
+                    !p.client_id
+                      ? "Choisis d'abord le client du projet (onglet Résumé)."
+                      : undefined
+                  }
+                  className="btn-outline-accent btn-sm"
+                >
+                  {qboSyncing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : null}
+                  {p.qbo_job_id
+                    ? "Vérifier dans QuickBooks"
+                    : "Créer dans QuickBooks"}
+                </button>
+              </div>
+              {qboMsg ? (
+                <p
+                  className={
+                    qboMsg.ok
+                      ? "mt-2 text-sm text-emerald-300"
+                      : "mt-2 text-sm text-rose-300"
+                  }
+                >
+                  {qboMsg.text}
+                </p>
+              ) : p.qbo_sync_error ? (
+                <p className="mt-2 text-sm text-rose-300">
+                  Dernier échec QuickBooks : {p.qbo_sync_error}
+                </p>
+              ) : null}
+            </div>
+
             {/* Header KPIs */}
             <section className="mt-6 grid gap-3 sm:grid-cols-3">
               <Kpi
@@ -688,6 +828,68 @@ export default function ProjectDetailPage() {
               toi-même chaque ligne. Tu pourras de toute façon ajuster
               manuellement sur la fiche.
             </p>
+
+            {etatContrat ? (
+              <div className="mt-4 rounded-lg border border-brand-800 bg-brand-900 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-accent-500">
+                  État du contrat
+                </p>
+                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3">
+                  <div>
+                    <span className="text-white/50">Contrat courant</span>
+                    <p className="font-semibold text-white">
+                      {fmtMoney(etatContrat.contrat_courant)}
+                      {etatContrat.avenants_impact !== 0 ? (
+                        <span className="ml-1 font-normal text-white/50">
+                          (base {fmtMoney(etatContrat.contrat_base)}
+                          {etatContrat.avenants_impact > 0 ? " +" : " −"}
+                          {fmtMoney(Math.abs(etatContrat.avenants_impact))}{" "}
+                          d&apos;avenants)
+                        </span>
+                      ) : null}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-white/50">Facturé à date</span>
+                    <p className="font-semibold text-white">
+                      {fmtMoney(etatContrat.facture_a_date)}{" "}
+                      <span className="font-normal text-white/50">
+                        ({etatContrat.pct_avancement} %)
+                      </span>
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-white/50">Solde à facturer</span>
+                    <p className="font-semibold text-emerald-300">
+                      {fmtMoney(etatContrat.solde_a_facturer)}
+                    </p>
+                  </div>
+                  {etatContrat.acompte_recu > 0 ? (
+                    <div className="col-span-2 sm:col-span-3">
+                      <span className="text-white/50">Acompte</span>
+                      <p className="text-white/80">
+                        {fmtMoney(etatContrat.acompte_recu)} reçu ·{" "}
+                        {fmtMoney(etatContrat.acompte_applique)} déjà
+                        déduit ·{" "}
+                        <strong className="text-white">
+                          {fmtMoney(etatContrat.acompte_restant)} restant
+                        </strong>
+                        {etatContrat.acompte_restant > 0
+                          ? " — déduit automatiquement au prorata sur cette facture (ligne « Moins acompte appliqué », modifiable)."
+                          : ""}
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
+                {etatContrat.surfactures.length > 0 ? (
+                  <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] text-amber-200">
+                    {etatContrat.surfactures.map((s, i) => (
+                      <p key={i}>⚠ {s}</p>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
             <div className="mt-5 space-y-3">
               <label className="flex items-start gap-3 rounded-lg border border-brand-800 bg-brand-900 p-3 text-sm text-white/80">

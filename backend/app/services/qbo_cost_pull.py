@@ -10,6 +10,7 @@ ignoré. Idempotent : dédup par `qbo_bill_id` / `qbo_purchase_id`.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -148,6 +149,17 @@ async def _fournisseur_id_for(
     fourn_by_name[key] = int(f.id)
     log.info("Fournisseur créé depuis QB : %s (#%s)", f.name, f.id)
     return int(f.id)
+
+
+_KRATOS_SOURCE_RE = re.compile(r"Source:\s*Horizon h2\.0 Achat #(\d+)", re.I)
+
+
+def _kratos_source_achat_id(txn: dict) -> Optional[int]:
+    """Id de l'achat Kratos d'ORIGINE d'une transaction QB poussée par
+    Kratos (mémo privé posé par achat_qbo._private_note), sinon None."""
+    note = str(txn.get("PrivateNote") or "")
+    m = _KRATOS_SOURCE_RE.search(note)
+    return int(m.group(1)) if m else None
 
 
 def _txn_description(txn: dict) -> Optional[str]:
@@ -358,8 +370,22 @@ def _local_name_of(row: dict) -> str:
     return seg.strip().lower()
 
 
+async def _sibling_targets(db: AsyncSession, project: Project) -> list[str]:
+    """Cibles principales des autres projets du même client (délégué au
+    résolveur principal pour partager exactement les mêmes règles)."""
+    from app.services.qbo_project_resolve import _other_projects_targets
+
+    return await _other_projects_targets(db, project)
+
+
 async def _resolve_converted_job_id(
-    qbo, project: Project, parent_id: str, active_ids: Optional[set[str]]
+    qbo,
+    project: Project,
+    parent_id: str,
+    active_ids: Optional[set[str]],
+    *,
+    taken: Optional[set[str]] = None,
+    others: Optional[list[str]] = None,
 ) -> Optional[str]:
     """Si `project.qbo_job_id` est PÉRIMÉ (sous-client converti en PROJET
     dans QB, ancien id supprimé), retrouve le nouvel id sous le client
@@ -370,7 +396,17 @@ async def _resolve_converted_job_id(
 
     `active_ids` = ensemble des Customer.Id ACTIFS (résolu une fois) pour
     éviter une requête QB par projet ; None = on ne sait pas → on ne
-    répare pas (prudent)."""
+    répare pas (prudent). `taken` = ids QB portés par d'AUTRES projets
+    Kratos (jamais adoptés) ; `others` = cibles principales des autres
+    projets du même client (mêmes règles que le résolveur principal :
+    un client à plusieurs chantiers n'adopte que par correspondance de
+    nom, jamais par « c'est le seul »)."""
+    from app.services.qbo_project_resolve import (
+        _best_level,
+        _norm,
+        _project_targets,
+    )
+
     jid = (getattr(project, "qbo_job_id", None) or "").strip()
     if not jid or active_ids is None:
         return None
@@ -380,32 +416,30 @@ async def _resolve_converted_job_id(
         subs = await qbo.find_subcustomers(parent_id)
     except Exception:  # noqa: BLE001
         return None
-    targets = [
-        t
-        for t in (
-            (getattr(project, "address", None) or "").strip().lower(),
-            (project.name or "").strip().lower(),
-        )
-        if t
-    ]
+    taken = taken or set()
+    others = list(others or [])
+    targets = _project_targets(project)
+    best: tuple[int, Optional[str]] = (0, None)
+    usable = 0
     for row in subs:
-        if not row.get("Id"):
+        rid = str(row.get("Id") or "")
+        if not rid or rid in taken:
             continue
-        ln = _local_name_of(row)
-        if not ln:
+        usable += 1
+        ln = _norm(_local_name_of(row))
+        mine = _best_level(ln, targets)
+        if mine == 0:
             continue
-        for t in targets:
-            if (
-                ln == t
-                or ln.startswith(t)
-                or t.startswith(ln)
-                or t in ln
-                or ln in t
-            ):
-                return str(row["Id"])
-    usable = [r for r in subs if r.get("Id")]
-    if len(usable) == 1:
-        return str(usable[0]["Id"])
+        if mine < 3 and _best_level(ln, others) > 0:
+            continue
+        if mine > best[0]:
+            best = (mine, rid)
+    if best[1]:
+        return best[1]
+    if usable == 1 and not others:
+        return str(
+            next(r["Id"] for r in subs if str(r.get("Id") or "") not in taken)
+        )
     return None
 
 
@@ -480,9 +514,34 @@ async def pull_project_costs_from_qbo(
     if client_id is not None:
         pstmt = pstmt.where(Project.client_id == client_id)
     _projects = list((await db.execute(pstmt)).scalars().all())
-    proj_by_job: dict[str, Project] = {
-        str(p.qbo_job_id): p for p in _projects
-    }
+
+    _collisions_signalees: set[str] = set()
+
+    def _map_sans_collision(paires: list[tuple[str, Project]]) -> dict[str, Project]:
+        """Un sous-client QB porté par DEUX projets Kratos = lien erroné
+        quelque part : on n'importe rien pour eux (sinon « dernier
+        gagne » et les coûts atterrissent sur le mauvais chantier)."""
+        groupes: dict[str, list[Project]] = {}
+        for jid_, p_ in paires:
+            if jid_:
+                groupes.setdefault(jid_, []).append(p_)
+        out: dict[str, Project] = {}
+        for jid_, ps_ in groupes.items():
+            if len(ps_) == 1:
+                out[jid_] = ps_[0]
+            elif jid_ not in _collisions_signalees:
+                _collisions_signalees.add(jid_)
+                log.warning(
+                    "Pull coûts QB : sous-client %s porté par %s projets "
+                    "Kratos (%s) — ignoré jusqu'à correction du lien "
+                    "(bouton « Vérifier dans QuickBooks » sur la fiche).",
+                    jid_, len(ps_), ", ".join(str(q.id) for q in ps_),
+                )
+        return out
+
+    proj_by_job: dict[str, Project] = _map_sans_collision(
+        [(str(p.qbo_job_id or ""), p) for p in _projects]
+    )
 
     # RÉPARATION des qbo_job_id PÉRIMÉS (sous-client converti en projet QB) :
     # sans ça, les coûts du projet converti pointent vers le nouvel id, que
@@ -494,9 +553,7 @@ async def pull_project_costs_from_qbo(
     try:
         active_ids = {
             str(c["Id"])
-            for c in await qbo.query(
-                "SELECT Id FROM Customer MAXRESULTS 1000"
-            )
+            for c in await qbo.query_all("SELECT Id FROM Customer")
             if c.get("Id")
         }
     except Exception:  # noqa: BLE001
@@ -526,8 +583,15 @@ async def pull_project_costs_from_qbo(
             newid = None
             if parent:
                 try:
+                    _taken = {
+                        str(_resolved.get(q.id) or q.qbo_job_id or "")
+                        for q in _projects
+                        if q.id != p.id
+                    } - {""}
+                    _others = await _sibling_targets(db, p)
                     newid = await _resolve_converted_job_id(
-                        qbo, p, str(parent), active_ids
+                        qbo, p, str(parent), active_ids,
+                        taken=_taken, others=_others,
                     )
                 except Exception:  # noqa: BLE001
                     newid = None
@@ -541,9 +605,9 @@ async def pull_project_costs_from_qbo(
         if _repaired and not dry_run:
             await db.flush()
         # Reconstruit le mapping avec les ids réparés (couvre le converti).
-        proj_by_job = {
-            _resolved[p.id]: p for p in _projects if _resolved.get(p.id)
-        }
+        proj_by_job = _map_sans_collision(
+            [(_resolved.get(p.id) or "", p) for p in _projects]
+        )
     # Repli CLIENT MÈRE : une facture QB imputée au customer PARENT (pas
     # au sous-client/projet) n'était JAMAIS importée (« sans_projet »,
     # cas Atlant #177 imputée « 2020 St-Thimothee inc. »). Quand la fiche
@@ -672,6 +736,12 @@ async def pull_project_costs_from_qbo(
         # majoré). ESTIMÉ et FORFAITAIRE → NON refacturable : le prix donné
         # au client couvre les dépenses, on ne les refacture pas par défaut
         # (cochable à la main au besoin).
+        # Mini-projet d'un BON DE TRAVAIL : les coûts y sont refacturés en
+        # temps & matériel — refacturables par défaut, sinon l'import du bon
+        # dans une facture (is_billable=True) les ignorait (retour
+        # 2026-09-18, achat Plancher Économique sur BT-26-018).
+        if (getattr(proj, "kind", None) or "") == "bon_travail":
+            return True
         return bk == "contrat"
 
     now = datetime.now(timezone.utc)
@@ -685,8 +755,48 @@ async def pull_project_costs_from_qbo(
         "skipped_no_project": 0,
         "paid_synced": 0,
         "reconciled_synced": 0,
+        # Origine Kratos (mémo « Source: Horizon h2.0 Achat #N ») :
+        # lien réparé sur l'achat source / doublon évité.
+        "relinked_kratos": 0,
+        "skipped_kratos_origin": 0,
     }
     preview: list[dict] = []
+
+    async def _kratos_origin_handled(txn: dict, qid: str, ttype: str) -> bool:
+        """Transaction POUSSÉE depuis Kratos (mémo « Source: Horizon h2.0
+        Achat #N ») : si l'achat N existe encore, on ne recrée JAMAIS un
+        doublon — on répare son lien QB s'il l'a perdu, sinon on saute.
+        S'il a été supprimé côté Kratos, la transaction vit dans QB →
+        import normal (retour 2026-09-18 : #468 ré-importé en #481)."""
+        src_id = _kratos_source_achat_id(txn)
+        if not src_id:
+            return False
+        src = await db.get(Achat, src_id)
+        if src is None:
+            return False
+        vendor_n = (
+            (txn.get("VendorRef") or txn.get("EntityRef") or {}).get("name")
+        )
+        if not (src.qbo_bill_id or src.qbo_purchase_id):
+            if not dry_run:
+                src.qbo_bill_id = qid
+                if not src.qbo_doc_number and txn.get("DocNumber"):
+                    src.qbo_doc_number = str(txn.get("DocNumber"))
+                await db.flush()
+            stats["relinked_kratos"] += 1
+            preview.append(
+                {"type": ttype, "qbo_id": qid, "amount": _num(txn.get("TotalAmt")),
+                 "vendor": vendor_n, "status": "relie_achat_source",
+                 "achat_id": src.id}
+            )
+        else:
+            stats["skipped_kratos_origin"] += 1
+            preview.append(
+                {"type": ttype, "qbo_id": qid, "amount": _num(txn.get("TotalAmt")),
+                 "vendor": vendor_n, "status": "origine_kratos",
+                 "achat_id": src.id}
+            )
+        return True
 
     # ── Bills (factures fournisseurs à payer) ──
     for b in bills:
@@ -877,6 +987,8 @@ async def pull_project_costs_from_qbo(
                 {"type": "bill", "qbo_id": bid, "amount": total,
                  "vendor": vendor, "status": pv_status}
             )
+            continue
+        if await _kratos_origin_handled(b, bid, "bill"):
             continue
         proj = _project_for_txn(b, proj_by_job)
         if proj is None:
@@ -1109,6 +1221,8 @@ async def pull_project_costs_from_qbo(
                  "vendor": vendor,
                  "status": "rapproche_maj" if updated else "deja_importe"}
             )
+            continue
+        if await _kratos_origin_handled(p, pid, "purchase"):
             continue
         proj = _project_for_txn(p, proj_by_job)
         if proj is None:

@@ -110,6 +110,7 @@ from app.api.v1.endpoints import (
     user_roles,
     users,
     project_billables,
+    project_qbo,
     project_finances,
     project_members,
     project_phases,
@@ -163,6 +164,7 @@ from app.api.v1.endpoints import (
     qbo_webhook,
     search,
     contract_sign,
+    soumission_avenants,
     soumission_items,
     soumission_qbo,
     soumission_send,
@@ -280,6 +282,7 @@ api_router.include_router(project_members.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(project_finances.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(project_punches.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(project_billables.router, dependencies=DEP_CONSTRUCTION)
+api_router.include_router(project_qbo.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(subcontractor_contracts.router)
 api_router.include_router(projects.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(contact.router)
@@ -377,6 +380,7 @@ api_router.include_router(sous_traitants_router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(sous_traitant_timesheets_router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(note_templates_router)
 api_router.include_router(soumissions_router, dependencies=DEP_CONSTRUCTION)
+api_router.include_router(soumission_avenants.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(soumission_items.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(soumission_qbo.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(soumission_send.router, dependencies=DEP_CONSTRUCTION)
