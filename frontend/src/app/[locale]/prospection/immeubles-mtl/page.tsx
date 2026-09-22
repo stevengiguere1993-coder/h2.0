@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Building2,
   CheckCircle2,
@@ -82,6 +82,20 @@ export default function ImmeublesMtlPage() {
   const [presetIdx, setPresetIdx] = useState(3); // 20+ par défaut
   const [minLogements, setMinLogements] = useState<string>("20");
   const [maxLogements, setMaxLogements] = useState<string>("");
+  //: Valeurs APPLIQUÉES (débouncées) des champs numériques. Taper « 12 »
+  //: envoyait une requête pour « 1 » puis une pour « 12 » ; la première
+  //: (lente, ~900 k lignes) revenait APRÈS la seconde et écrasait le
+  //: résultat — « 6 donne 329, 12 en donne plus » (Phil 2026-09-22).
+  const [filtresNum, setFiltresNum] = useState({
+    minLogements: "20",
+    maxLogements: "",
+    minAnnee: "",
+    maxAnnee: ""
+  });
+  //: Numéro de la dernière requête lancée : une réponse plus vieille est
+  //: ignorée, et la requête précédente est annulée.
+  const reqSeq = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
   const [minAnnee, setMinAnnee] = useState<string>("");
   const [maxAnnee, setMaxAnnee] = useState<string>("");
   const [rueSearch, setRueSearch] = useState<string>("");
@@ -120,6 +134,11 @@ export default function ImmeublesMtlPage() {
     const p = SIZE_PRESETS[i];
     setMinLogements(p.min != null ? String(p.min) : "");
     setMaxLogements(p.max != null ? String(p.max) : "");
+    setFiltresNum((f) => ({
+      ...f,
+      minLogements: p.min != null ? String(p.min) : "",
+      maxLogements: p.max != null ? String(p.max) : ""
+    }));
     setOffset(0);
   }
 
@@ -127,10 +146,12 @@ export default function ImmeublesMtlPage() {
   //: l'export CSV, sans limit/offset).
   const paramsFiltres = useCallback(() => {
     const params = new URLSearchParams();
-    if (minLogements) params.set("min_logements", minLogements);
-    if (maxLogements) params.set("max_logements", maxLogements);
-    if (minAnnee) params.set("min_annee", minAnnee);
-    if (maxAnnee) params.set("max_annee", maxAnnee);
+    if (filtresNum.minLogements)
+      params.set("min_logements", filtresNum.minLogements);
+    if (filtresNum.maxLogements)
+      params.set("max_logements", filtresNum.maxLogements);
+    if (filtresNum.minAnnee) params.set("min_annee", filtresNum.minAnnee);
+    if (filtresNum.maxAnnee) params.set("max_annee", filtresNum.maxAnnee);
     if (rueSearchDebounced.trim())
       params.set("nom_rue_contains", rueSearchDebounced.trim());
     for (const code of selectedCodes) params.append("codes_utilisation", code);
@@ -138,10 +159,7 @@ export default function ImmeublesMtlPage() {
     if (arrondissement) params.set("arrondissement", arrondissement);
     return params;
   }, [
-    minLogements,
-    maxLogements,
-    minAnnee,
-    maxAnnee,
+    filtresNum,
     rueSearchDebounced,
     selectedCodes,
     distanceBand,
@@ -166,14 +184,20 @@ export default function ImmeublesMtlPage() {
   }
 
   const load = useCallback(async () => {
+    const seq = ++reqSeq.current;
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
-      if (minLogements) params.set("min_logements", minLogements);
-      if (maxLogements) params.set("max_logements", maxLogements);
-      if (minAnnee) params.set("min_annee", minAnnee);
-      if (maxAnnee) params.set("max_annee", maxAnnee);
+      if (filtresNum.minLogements)
+        params.set("min_logements", filtresNum.minLogements);
+      if (filtresNum.maxLogements)
+        params.set("max_logements", filtresNum.maxLogements);
+      if (filtresNum.minAnnee) params.set("min_annee", filtresNum.minAnnee);
+      if (filtresNum.maxAnnee) params.set("max_annee", filtresNum.maxAnnee);
       if (rueSearchDebounced.trim())
         params.set("nom_rue_contains", rueSearchDebounced.trim());
       // codes_utilisation : multi-valeur, FastAPI accepte
@@ -188,25 +212,28 @@ export default function ImmeublesMtlPage() {
       params.set("offset", String(offset));
 
       const res = await authedFetch(
-        `/api/v1/prospection/mtl-properties?${params}`
+        `/api/v1/prospection/mtl-properties?${params}`,
+        { signal: ctrl.signal }
       );
       if (!res.ok) {
         const t = await res.text();
         throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
       }
       const data = (await res.json()) as ListResponse;
+      // Une réponse d'une requête plus ancienne n'écrase jamais la
+      // dernière (les filtres ont changé entre-temps).
+      if (seq !== reqSeq.current) return;
       setProperties(data.properties);
       setTotal(data.total);
     } catch (e) {
+      if ((e as Error).name === "AbortError") return;
+      if (seq !== reqSeq.current) return;
       setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (seq === reqSeq.current) setLoading(false);
     }
   }, [
-    minLogements,
-    maxLogements,
-    minAnnee,
-    maxAnnee,
+    filtresNum,
     rueSearchDebounced,
     selectedCodes,
     sortBy,
@@ -225,6 +252,22 @@ export default function ImmeublesMtlPage() {
     }, 350);
     return () => clearTimeout(id);
   }, [rueSearch]);
+
+  // Même délai pour les bornes numériques : on interroge la table (~1 M
+  // lignes) une fois la saisie terminée, pas à chaque chiffre.
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setFiltresNum((f) =>
+        f.minLogements === minLogements &&
+        f.maxLogements === maxLogements &&
+        f.minAnnee === minAnnee &&
+        f.maxAnnee === maxAnnee
+          ? f
+          : { minLogements, maxLogements, minAnnee, maxAnnee }
+      );
+    }, 350);
+    return () => clearTimeout(id);
+  }, [minLogements, maxLogements, minAnnee, maxAnnee]);
 
   // Charge la liste des arrondissements de Montréal une fois au mount.
   useEffect(() => {
