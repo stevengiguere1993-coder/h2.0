@@ -22,8 +22,25 @@ class FactureSendError(Exception):
     pass
 
 
+def _ref_courriel(fa: Facture) -> str:
+    """Référence AFFICHABLE dans un courriel : jamais la référence
+    provisoire « BR-… » (ceinture de sécurité — le numéro définitif est
+    normalement attribué avant tout envoi, retour 2026-09-16)."""
+    from app.services.numbering import is_provisional_facture_reference
+
+    ref = (fa.reference or "").strip()
+    if not ref or is_provisional_facture_reference(ref):
+        log.error(
+            "Facture %s : référence provisoire « %s » au moment de "
+            "l'envoi — le numéro aurait dû être attribué avant.",
+            fa.id, ref,
+        )
+        return ""
+    return ref
+
+
 def _default_subject(fa: Facture) -> str:
-    ref = fa.reference or ""
+    ref = _ref_courriel(fa)
     return f"Facture {ref} — Horizon Services Immobiliers".strip(" —")
 
 
@@ -68,7 +85,8 @@ def _default_body_html(fa: Facture, intro: Optional[str]) -> str:
   <p style="margin:0 0 16px 0">Bonjour,</p>
   {intro_html}
   <p style="margin:0 0 16px 0">
-    Vous trouverez ci-joint la facture <strong>{fa.reference}</strong>.
+    Vous trouverez ci-joint la facture
+    <strong>{_ref_courriel(fa) or ""}</strong>.
   </p>
   {total_line}
   {due_line}

@@ -265,6 +265,16 @@ export default function SignatureDocPage() {
 
   const isDraft = doc?.status === "brouillon";
 
+  // Échap = quitte le mode placement (l'outil reste actif entre les
+  // clics pour poser plusieurs boîtes — voir onPlace).
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setActiveTool(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   /* --------------------------- Chargement --------------------------- */
 
   const load = useCallback(async () => {
@@ -429,7 +439,10 @@ export default function SignatureDocPage() {
         description:
           "Chaque signataire recevra un courriel avec son lien personnel. " +
           "Le document ne sera plus modifiable.",
-        confirmLabel: "Envoyer"
+        confirmLabel: "Envoyer",
+        // Action positive (envoi) → bouton VERT, pas le rouge destructif
+        // par défaut du dialogue (retour 2026-09-16).
+        success: true
       }))
     ) {
       return;
@@ -479,41 +492,93 @@ export default function SignatureDocPage() {
   }
 
   async function cancelDoc() {
+    // « Retour » comme bouton de fermeture : avec le libellé par défaut,
+    // le dialogue montrait DEUX boutons « Annuler » — celui qui ferme et
+    // celui qui annule le document. L'utilisateur cliquait « Annuler »
+    // (fermeture) et « rien ne se passait » (retour 2026-09-16).
     if (
       !(await confirm({
         title: "Annuler ce document ?",
         description:
           "Les liens de signature seront désactivés. Cette action est " +
           "irréversible.",
-        confirmLabel: "Annuler le document",
+        confirmLabel: "Oui, annuler le document",
+        cancelLabel: "Retour",
         destructive: true
       }))
     ) {
       return;
     }
+    setBanner(null);
     const res = await authedFetch(
       `/api/v1/esign/documents/${docId}/cancel`,
       { method: "POST" }
     );
-    if (res.ok) await load();
+    if (res.ok) {
+      setBanner(
+        "Document annulé — les liens de signature sont désactivés."
+      );
+      await load();
+      return;
+    }
+    const body = await res.json().catch(() => null);
+    setBanner(
+      typeof body?.detail === "string"
+        ? body.detail
+        : `Annulation échouée (erreur ${res.status}).`
+    );
   }
 
   async function deleteDoc() {
+    // Un document ENVOYÉ doit être annulé avant suppression (le backend
+    // refuse sinon en 409) : on le fait pour l'utilisateur, en une seule
+    // confirmation — « supprimer ne fonctionnait pas » venait de ce 409
+    // silencieux (retour 2026-09-16).
+    const enCours = doc?.status === "envoye";
     if (
       !(await confirm({
         title: "Supprimer ce document ?",
-        description: "Le PDF et son historique seront supprimés.",
+        description: enCours
+          ? "Le document est en cours de signature : il sera d'abord " +
+            "ANNULÉ (les liens des signataires cesseront de fonctionner), " +
+            "puis supprimé avec son historique."
+          : "Le PDF et son historique seront supprimés.",
         confirmLabel: "Supprimer",
         destructive: true
       }))
     ) {
       return;
     }
+    setBanner(null);
+    if (enCours) {
+      const cRes = await authedFetch(
+        `/api/v1/esign/documents/${docId}/cancel`,
+        { method: "POST" }
+      );
+      if (!cRes.ok) {
+        const body = await cRes.json().catch(() => null);
+        setBanner(
+          typeof body?.detail === "string"
+            ? body.detail
+            : "Annulation avant suppression échouée."
+        );
+        return;
+      }
+    }
     const res = await authedFetch(`/api/v1/esign/documents/${docId}`, {
       method: "DELETE"
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (res.ok) router.push("/entreprises/signature" as any);
+    if (res.ok) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      router.push("/entreprises/signature" as any);
+      return;
+    }
+    const body = await res.json().catch(() => null);
+    setBanner(
+      typeof body?.detail === "string"
+        ? body.detail
+        : `Suppression échouée (erreur ${res.status}).`
+    );
   }
 
   async function saveAsTemplate() {
@@ -611,7 +676,17 @@ export default function SignatureDocPage() {
     const res = await authedFetch(`/api/v1/esign/attachments/${id}`, {
       method: "DELETE"
     });
-    if (res.ok) await load();
+    if (res.ok) {
+      await load();
+      return;
+    }
+    // Erreur visible plutôt qu'un clic qui « ne fait rien ».
+    const body = await res.json().catch(() => null);
+    setBanner(
+      typeof body?.detail === "string"
+        ? body.detail
+        : "Suppression de l'annexe échouée."
+    );
   }
 
   async function openAttachment(id: number) {
@@ -989,7 +1064,10 @@ export default function SignatureDocPage() {
                     };
                     updateFields([...fields, nf]);
                     setSelectedFieldId(nf.id);
-                    setActiveTool(null);
+                    // L'outil RESTE actif : on peut placer plusieurs
+                    // boîtes (initiales sur chaque page…) sans
+                    // resélectionner personne + type à chaque fois.
+                    // Échap ou re-clic sur l'outil pour arrêter.
                   }}
                   onSelect={setSelectedFieldId}
                   onChange={(f) =>
@@ -1004,8 +1082,14 @@ export default function SignatureDocPage() {
             )}
           </div>
 
-          {/* ---------- Colonne latérale ---------- */}
-          <div className="space-y-4">
+          {/* ---------- Colonne latérale ----------
+              Elle SUIT le document (sticky — nécessite le
+              overflow-x-clip posé sur le <main> du layout QG) ET porte
+              sa PROPRE barre de défilement pour atteindre message /
+              options / observateurs / annexes sans quitter la page
+              (retour 2026-09-16, 2ᵉ passe). self-start requis pour
+              sticky en grille. */}
+          <div className="space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:self-start xl:overflow-y-auto xl:pr-1">
             {/* Signataires */}
             <div
               className="rounded-2xl border p-4"
@@ -1120,8 +1204,11 @@ export default function SignatureDocPage() {
                 </div>
                 <p className="mt-2 text-[11px] leading-relaxed text-[var(--qg-text-soft)]">
                   Choisissez une zone puis cliquez sur la page à
-                  l&apos;endroit voulu. Glissez pour déplacer, poignée en
-                  bas à droite pour redimensionner.
+                  l&apos;endroit voulu — l&apos;outil reste actif : cliquez
+                  autant de fois qu&apos;il faut de boîtes (ex. initiales
+                  sur chaque page). Échap ou re-clic sur l&apos;outil pour
+                  arrêter. Glissez pour déplacer, poignée en bas à droite
+                  pour redimensionner.
                 </p>
 
                 {selectedField ? (
@@ -1434,6 +1521,7 @@ export default function SignatureDocPage() {
             ) : null}
           </div>
         </div>
+
       </div>
 
       {signerModal ? (

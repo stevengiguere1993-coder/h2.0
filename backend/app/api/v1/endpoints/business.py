@@ -456,13 +456,20 @@ def make_crud_router(
                 from app.models.project import Project as _ProjBill
                 from app.models.soumission import Soumission as _SoumBill
 
-                _soum_id = (
+                _proj_row = (
                     await db.execute(
-                        _sel_bill(_ProjBill.soumission_id).where(
-                            _ProjBill.id == obj.project_id
-                        )
+                        _sel_bill(
+                            _ProjBill.soumission_id, _ProjBill.kind
+                        ).where(_ProjBill.id == obj.project_id)
                     )
-                ).scalar_one_or_none()
+                ).first()
+                _soum_id = _proj_row[0] if _proj_row else None
+                # Mini-projet d'un BON DE TRAVAIL : matériaux refacturés en
+                # temps & matériel → refacturables par défaut (retour
+                # 2026-09-18), quel que soit le devis.
+                _is_bon_proj = bool(
+                    _proj_row and (_proj_row[1] or "") == "bon_travail"
+                )
                 _kind = (
                     (
                         await db.execute(
@@ -474,7 +481,11 @@ def make_crud_router(
                     if _soum_id
                     else None
                 )
-                if _kind != "contract" and obj.is_billable:
+                if (
+                    _kind != "contract"
+                    and not _is_bon_proj
+                    and obj.is_billable
+                ):
                     obj.is_billable = False
             await db.flush()
         # Auto-push QBO pour tout Achat créé « actif » (reçu OU déjà payé) →

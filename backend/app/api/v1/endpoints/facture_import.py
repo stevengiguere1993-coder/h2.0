@@ -177,7 +177,10 @@ async def import_into_facture(
                 sm_items = (
                     await db.execute(
                         select(SoumissionItem)
-                        .where(SoumissionItem.soumission_id == sm.id)
+                        .where(
+                            SoumissionItem.soumission_id == sm.id,
+                            SoumissionItem.retire_par_avenant_id.is_(None),
+                        )
                         .order_by(SoumissionItem.position.asc(), SoumissionItem.id.asc())
                     )
                 ).scalars().all()

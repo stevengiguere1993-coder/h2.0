@@ -406,6 +406,27 @@ class QuickBooksClient:
                 return val
         return []
 
+    async def query_all(
+        self, sql: str, *, page: int = 1000, max_pages: int = 20
+    ) -> List[Dict[str, Any]]:
+        """Comme ``query`` mais PAGINE (STARTPOSITION / MAXRESULTS) jusqu'à
+        épuisement. QBO plafonne une page à 1000 lignes : au-delà de 1000
+        clients + sous-clients, un simple ``MAXRESULTS 1000`` rendait les
+        sous-clients récents invisibles (doublons refusés, repli silencieux
+        sur le client parent). ``sql`` ne doit contenir ni STARTPOSITION ni
+        MAXRESULTS."""
+        out: List[Dict[str, Any]] = []
+        start = 1
+        for _ in range(max_pages):
+            rows = await self.query(
+                f"{sql} STARTPOSITION {start} MAXRESULTS {page}"
+            )
+            out.extend(rows)
+            if len(rows) < page:
+                break
+            start += page
+        return out
+
     async def graphql(
         self,
         query: str,
@@ -490,7 +511,7 @@ class QuickBooksClient:
         if not target:
             return None
         try:
-            rows = await self.query("SELECT * FROM Customer MAXRESULTS 1000")
+            rows = await self.query_all("SELECT * FROM Customer")
         except Exception:  # noqa: BLE001
             return None
         matches = []
@@ -639,7 +660,7 @@ class QuickBooksClient:
         filtre donc PAS sur Job (sinon on rate les projets convertis et le
         coût retombe sur le client parent). On compare nom / nom complet.
         """
-        rows = await self.query("SELECT * FROM Customer MAXRESULTS 1000")
+        rows = await self.query_all("SELECT * FROM Customer")
         target = (project_name or "").strip().lower()
         if not target:
             return None
@@ -665,7 +686,7 @@ class QuickBooksClient:
         (ParentRef non queryable → filtre Python). Sert à retrouver le projet
         converti même s'il a été RENOMMÉ (le nom ne correspond plus à
         l'adresse/au nom Kratos)."""
-        rows = await self.query("SELECT * FROM Customer MAXRESULTS 1000")
+        rows = await self.query_all("SELECT * FROM Customer")
         return [
             row
             for row in rows
@@ -752,8 +773,8 @@ class QuickBooksClient:
         On retourne id, nom affiché, nom complet (« Parent:Projet ») et le
         parent (id + nom) pour que l'UI puisse grouper par client.
         """
-        rows = await self.query(
-            "SELECT * FROM Customer WHERE Job = true MAXRESULTS 1000"
+        rows = await self.query_all(
+            "SELECT * FROM Customer WHERE Job = true"
         )
         out: List[Dict[str, Any]] = []
         for row in rows:

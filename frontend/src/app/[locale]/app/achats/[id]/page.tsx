@@ -65,9 +65,12 @@ type Achat = {
   notes: string | null;
   created_at: string;
   qbo_bill_id: string | null;
+  // Dépense IMPORTÉE de QB (pull) : l'Id QB vit ici, pas dans qbo_bill_id.
+  qbo_purchase_id?: string | null;
   qbo_doc_number: string | null;
   payment_method: string | null;
   is_billable: boolean;
+  billable_manual?: boolean;
   markup_percent: number | null;
   invoiced_at: string | null;
   facture_item_id: number | null;
@@ -80,8 +83,22 @@ type Project = {
   // "construction" (projet régulier) ou "bon_travail" (projet porteur
   // d'un bon de travail — son nom contient le numéro « BT-… »).
   kind?: string | null;
+  // "contrat" | "estime" | "forfaitaire" — pilote le défaut « à
+  // refacturer » quand on rattache l'achat à ce projet.
+  billing_kind?: string | null;
 };
 type Fournisseur = { id: number; name: string };
+
+// Bon de travail proposé dans le sélecteur « Projet / Bon de travail »
+// (retour 2026-09-18 : la fiche d'un achat ne listait que les projets —
+// un bon sans mini-projet porteur n'apparaissait jamais).
+type BonMini = {
+  id: number;
+  reference: string;
+  title: string;
+  status: string;
+  project_id?: number | null;
+};
 
 const STATUS_LABELS: Record<string, string> = {
   received: "À payer",
@@ -114,6 +131,7 @@ export default function AchatDetailPage() {
 
   const [a, setA] = useState<Achat | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [bons, setBons] = useState<BonMini[]>([]);
   const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
   const [employes, setEmployes] = useState<Employe[]>([]);
   const [loading, setLoading] = useState(true);
@@ -187,12 +205,30 @@ export default function AchatDetailPage() {
       setLoading(true);
       setError(null);
       try {
-        const [aRes, pRes, frRes, eRes] = await Promise.all([
+        // /projects sans `kind` exclut les mini-projets des bons → on les
+        // charge à part pour que la valeur d'un achat déjà rattaché à un
+        // bon reste affichable (retour 2026-09-18).
+        const [aRes, pRes, bpRes, frRes, eRes, bRes] = await Promise.all([
           authedFetch(`/api/v1/achats/${id}`),
           authedFetch("/api/v1/projects?limit=500"),
+          authedFetch("/api/v1/projects?kind=bon_travail&limit=500"),
           authedFetch("/api/v1/fournisseurs?limit=500"),
-          authedFetch("/api/v1/employes?limit=500&volet=construction")
+          authedFetch("/api/v1/employes?limit=500&volet=construction"),
+          authedFetch("/api/v1/bons-travail?limit=500")
         ]);
+        const bonsAll = bRes.ok
+          ? ((await bRes.json()) as BonMini[]).filter(
+              (b) => b.status !== "cancelled"
+            )
+          : [];
+        const psBase = pRes.ok ? ((await pRes.json()) as Project[]) : [];
+        const psBons = bpRes.ok ? ((await bpRes.json()) as Project[]) : [];
+        const seenP = new Set(psBase.map((x) => x.id));
+        const projAll = [...psBase, ...psBons.filter((x) => !seenP.has(x.id))];
+        if (!cancelled) {
+          setBons(bonsAll);
+          setProjects(projAll);
+        }
         if (!aRes.ok) throw new Error(`http_${aRes.status}`);
         const data = (await aRes.json()) as Achat;
         if (cancelled) return;
@@ -240,7 +276,22 @@ export default function AchatDetailPage() {
             setTotal(sum ? sum.toFixed(2) : "");
           }
         }
-        setIsBillable(data.is_billable !== false);
+        // Case « à refacturer » à l'OUVERTURE (retour 2026-09-18) : sans
+        // choix manuel enregistré et hors achat déjà facturé, elle suit la
+        // cible — bon de travail / contrat → cochée ; estimé ou forfaitaire
+        // → décochée. Toujours modifiable ensuite.
+        let billable = data.is_billable !== false;
+        if (!data.billable_manual && !data.invoiced_at && data.project_id) {
+          const pid = data.project_id;
+          const projCible = projAll.find((p) => p.id === pid);
+          const estBon =
+            bonsAll.some((b) => b.project_id === pid) ||
+            projCible?.kind === "bon_travail";
+          if (estBon) billable = true;
+          else if (projCible?.billing_kind)
+            billable = projCible.billing_kind === "contrat";
+        }
+        setIsBillable(billable);
         // Achat refacturable sans majoration enregistrée → on affiche
         // 10 % par défaut (modifiable ; 0 = coûtant). Couvre les achats
         // existants créés avant le défaut backend.
@@ -260,7 +311,6 @@ export default function AchatDetailPage() {
         setReceiptUrl(data.receipt_url || "");
         setNotes(data.notes || "");
         setPaymentMethod(data.payment_method || "");
-        if (pRes.ok) setProjects((await pRes.json()) as Project[]);
         if (frRes.ok) setFournisseurs((await frRes.json()) as Fournisseur[]);
         if (eRes.ok) setEmployes((await eRes.json()) as Employe[]);
       } catch {
@@ -517,7 +567,56 @@ export default function AchatDetailPage() {
                     <SearchSelect
                       id="ap"
                       value={projectId}
-                      onChange={setProjectId}
+                      onChange={(v) => {
+                        // Rattaché à un BON DE TRAVAIL → « à refacturer »
+                        // coché d'office (temps & matériel), décochable
+                        // ensuite (retour 2026-09-18). Jamais sur un achat
+                        // déjà versé sur une facture.
+                        const estBon =
+                          v.startsWith("bon:") ||
+                          bons.some((b) => String(b.project_id) === v) ||
+                          projects.find((p) => String(p.id) === v)?.kind ===
+                            "bon_travail";
+                        if (!a?.invoiced_at) {
+                          if (estBon) {
+                            setIsBillable(true);
+                          } else {
+                            // Projet régulier : CONTRAT → coché ; estimé /
+                            // forfaitaire → décoché (le prix donné couvre
+                            // les dépenses). Décochable / cochable ensuite.
+                            const bk = projects.find(
+                              (p) => String(p.id) === v
+                            )?.billing_kind;
+                            if (bk) setIsBillable(bk === "contrat");
+                          }
+                        }
+                        // Bon SANS projet porteur : on le garantit à la
+                        // sélection (même mécanique que le formulaire
+                        // de nouvelle dépense), puis on rattache le
+                        // reçu à ce projet.
+                        if (v.startsWith("bon:")) {
+                          void (async () => {
+                            const r = await authedFetch(
+                              `/api/v1/bons-travail/${Number(
+                                v.slice(4)
+                              )}/ensure-project`,
+                              { method: "POST" }
+                            );
+                            if (r.ok) {
+                              const j = (await r.json()) as {
+                                project_id: number;
+                              };
+                              setProjectId(String(j.project_id));
+                            } else {
+                              setError(
+                                "Impossible de préparer le projet du bon — réessaie."
+                              );
+                            }
+                          })();
+                          return;
+                        }
+                        setProjectId(v);
+                      }}
                       emptyLabel="— Aucun —"
                       placeholder="Choisis ou tape pour chercher…"
                       options={[
@@ -528,8 +627,26 @@ export default function AchatDetailPage() {
                             label: projectLabel(p),
                             group: "Projets"
                           })),
+                        // TOUS les bons (retour 2026-09-18) — même ceux
+                        // sans mini-projet porteur : il est créé à la
+                        // sélection. Un bon avec projet pointe droit
+                        // dessus (valeur = id du projet).
+                        ...bons.map((b) => ({
+                          value: b.project_id
+                            ? String(b.project_id)
+                            : `bon:${b.id}`,
+                          label: `${b.reference} — ${b.title}`,
+                          group: "Bons de travail"
+                        })),
+                        // Filet : mini-projets de bons orphelins (bon
+                        // supprimé/annulé) pour que la valeur d'un achat
+                        // déjà rattaché reste affichable.
                         ...projects
-                          .filter((p) => p.kind === "bon_travail")
+                          .filter(
+                            (p) =>
+                              p.kind === "bon_travail" &&
+                              !bons.some((b) => b.project_id === p.id)
+                          )
                           .map((p) => ({
                             value: String(p.id),
                             label: p.name,
@@ -983,12 +1100,16 @@ function AchatQboPushButton({
     }
   }
 
-  if (achat.qbo_bill_id) {
+  // Un achat IMPORTÉ de QB (pull) ne porte que qbo_purchase_id : il est
+  // déjà dans QuickBooks — proposer « Envoyer vers QuickBooks » était
+  // trompeur (retour 2026-09-18).
+  const qbId = achat.qbo_bill_id || achat.qbo_purchase_id;
+  if (qbId) {
     return (
       <div className="flex flex-col items-start gap-1">
         <div className="inline-flex items-center gap-2 self-start rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5 text-sm font-medium text-emerald-300">
           <CheckCircle2 className="h-4 w-4" />
-          {qbLabel} ✓ #{achat.qbo_bill_id}
+          {qbLabel} ✓ #{qbId}
         </div>
         <button
           type="button"
