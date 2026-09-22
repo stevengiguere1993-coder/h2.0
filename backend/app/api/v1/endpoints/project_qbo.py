@@ -39,6 +39,8 @@ class ProjectQboSyncResult(BaseModel):
     job_name: str
     #: deja_lie | adopte | cree
     action: str
+    #: Projet Kratos qui portait ce sous-client à tort (lien transféré).
+    transfere_de: Optional[int] = None
     message: Optional[str] = None
 
 
@@ -78,4 +80,9 @@ async def sync_project_qbo(
         "adopte": "Sous-client QuickBooks existant retrouvé et relié.",
         "cree": "Sous-client QuickBooks créé sous le client mère.",
     }.get(res["action"], "Projet lié à QuickBooks.")
+    if res.get("transfere_de"):
+        libelle += (
+            f" Ce sous-client était relié à tort au projet "
+            f"#{res['transfere_de']} — lien transféré."
+        )
     return ProjectQboSyncResult(message=libelle, **res)

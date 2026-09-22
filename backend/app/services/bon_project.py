@@ -172,6 +172,7 @@ async def ensure_project_qbo_job(db: AsyncSession, proj: Project) -> dict:
         "parent_name": (cust.get("DisplayName") or client.name),
         "job_name": job_name,
         "action": action,
+        "transfere_de": report.get("transfere_de"),
     }
 
 

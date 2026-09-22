@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.client import Client
 from app.models.facture import Facture
 from app.models.project import Project
+from app.services.qbo_project_resolve import resolve_project_customer_id
 
 log = logging.getLogger(__name__)
 
@@ -239,24 +240,21 @@ async def run_migration(
         job_by_project: dict[int, Optional[str]] = {}
         for p in projects:
             try:
-                if not p.qbo_job_id:
-                    # Identité du projet = son ADRESSE (pas le nom interne
-                    # qui peut contenir le nom du client).
-                    start = (
-                        p.created_at.date().isoformat()
-                        if getattr(p, "created_at", None)
-                        else None
+                # Même résolveur que les factures / coûts / bons : un
+                # sous-client PAR projet, nom = adresse (nom pour un bon
+                # de travail), jamais celui d'un autre chantier du client
+                # (retour 2026-09-21), lien existant vérifié.
+                _before = p.qbo_job_id
+                _rep: dict = {}
+                jid = await resolve_project_customer_id(
+                    qbo, db, p, str(customer_id), report=_rep
+                )
+                if _rep.get("action") == "parent" or jid == str(customer_id):
+                    raise QuickBooksError(
+                        "sous-client QB impossible à créer (voir journal)"
                     )
-                    job = await qbo.ensure_project(
-                        parent_customer_id=customer_id,
-                        project_name=(p.address or p.name),
-                        start_date=start,
-                    )
-                    jid = str(job.get("Id") or "")
-                    if jid:
-                        p.qbo_job_id = jid
-                        await db.flush()
-                        res["projects"]["linked"] += 1
+                if jid != _before:
+                    res["projects"]["linked"] += 1
                 job_by_project[p.id] = p.qbo_job_id
             except Exception as exc:  # noqa: BLE001
                 res["projects"]["errors"] += 1
