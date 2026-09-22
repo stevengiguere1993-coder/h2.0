@@ -514,9 +514,34 @@ async def pull_project_costs_from_qbo(
     if client_id is not None:
         pstmt = pstmt.where(Project.client_id == client_id)
     _projects = list((await db.execute(pstmt)).scalars().all())
-    proj_by_job: dict[str, Project] = {
-        str(p.qbo_job_id): p for p in _projects
-    }
+
+    _collisions_signalees: set[str] = set()
+
+    def _map_sans_collision(paires: list[tuple[str, Project]]) -> dict[str, Project]:
+        """Un sous-client QB porté par DEUX projets Kratos = lien erroné
+        quelque part : on n'importe rien pour eux (sinon « dernier
+        gagne » et les coûts atterrissent sur le mauvais chantier)."""
+        groupes: dict[str, list[Project]] = {}
+        for jid_, p_ in paires:
+            if jid_:
+                groupes.setdefault(jid_, []).append(p_)
+        out: dict[str, Project] = {}
+        for jid_, ps_ in groupes.items():
+            if len(ps_) == 1:
+                out[jid_] = ps_[0]
+            elif jid_ not in _collisions_signalees:
+                _collisions_signalees.add(jid_)
+                log.warning(
+                    "Pull coûts QB : sous-client %s porté par %s projets "
+                    "Kratos (%s) — ignoré jusqu'à correction du lien "
+                    "(bouton « Vérifier dans QuickBooks » sur la fiche).",
+                    jid_, len(ps_), ", ".join(str(q.id) for q in ps_),
+                )
+        return out
+
+    proj_by_job: dict[str, Project] = _map_sans_collision(
+        [(str(p.qbo_job_id or ""), p) for p in _projects]
+    )
 
     # RÉPARATION des qbo_job_id PÉRIMÉS (sous-client converti en projet QB) :
     # sans ça, les coûts du projet converti pointent vers le nouvel id, que
@@ -580,24 +605,9 @@ async def pull_project_costs_from_qbo(
         if _repaired and not dry_run:
             await db.flush()
         # Reconstruit le mapping avec les ids réparés (couvre le converti).
-        # Deux projets Kratos sur le MÊME id QB = lien erroné quelque part :
-        # on n'importe rien pour eux (sinon « dernier gagne » et les coûts
-        # atterrissent sur le mauvais chantier) et on le journalise.
-        _by_job: dict[str, list[Project]] = {}
-        for p in _projects:
-            if _resolved.get(p.id):
-                _by_job.setdefault(_resolved[p.id], []).append(p)
-        proj_by_job = {}
-        for _jid, _ps in _by_job.items():
-            if len(_ps) == 1:
-                proj_by_job[_jid] = _ps[0]
-            else:
-                log.warning(
-                    "Pull coûts QB : sous-client %s porté par %s projets "
-                    "Kratos (%s) — ignoré jusqu'à correction du lien "
-                    "(bouton « Vérifier dans QuickBooks » sur la fiche).",
-                    _jid, len(_ps), ", ".join(str(q.id) for q in _ps),
-                )
+        proj_by_job = _map_sans_collision(
+            [(_resolved.get(p.id) or "", p) for p in _projects]
+        )
     # Repli CLIENT MÈRE : une facture QB imputée au customer PARENT (pas
     # au sous-client/projet) n'était JAMAIS importée (« sans_projet »,
     # cas Atlant #177 imputée « 2020 St-Thimothee inc. »). Quand la fiche

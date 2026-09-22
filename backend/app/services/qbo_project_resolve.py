@@ -36,15 +36,19 @@ log = logging.getLogger(__name__)
 _SEP_RE = re.compile(r"[\s,;:·—–\-_/()\[\]#.'’«»\"|]+")
 
 
-async def _is_active_customer(qbo, cid: str) -> bool:
+async def _customer_row(qbo, cid: str):
+    """Lit le Customer QB ``cid`` (id échappé). Retourne le dict, None
+    s'il n'existe plus (converti / supprimé), ou ``False`` si QB n'a pas
+    répondu (on ne conclut rien : le lien est conservé tel quel)."""
     try:
-        rows = await qbo.query(
-            f"SELECT Id FROM Customer WHERE Id = '{cid}' MAXRESULTS 1"
-        )
-        return bool(rows)
+        return await qbo.get_customer(str(cid).replace("'", "''"))
     except Exception:  # noqa: BLE001
-        # En cas d'échec de la vérif, on suppose valide pour ne pas casser.
-        return True
+        return False
+
+
+async def _is_active_customer(qbo, cid: str) -> bool:
+    row = await _customer_row(qbo, cid)
+    return row is False or bool(row)
 
 
 def _norm(value: Optional[str]) -> str:
@@ -91,14 +95,22 @@ def _project_targets(project: Project) -> list[str]:
     """Noms (normalisés) sous lesquels ce projet peut exister dans QB :
     adresse du chantier et nom du projet ; le nom d'abord pour un bon de
     travail car il porte le n° de BT."""
-    _prefer_name = (getattr(project, "kind", "") or "") == "bon_travail"
-    _name_t = _norm(project.name)
-    _addr_t = _norm(getattr(project, "address", None))
-    return [
-        t
-        for t in ((_name_t, _addr_t) if _prefer_name else (_addr_t, _name_t))
-        if t
-    ]
+    return _targets_of(
+        getattr(project, "kind", None), getattr(project, "address", None),
+        project.name,
+    )
+
+
+def _targets_of(kind: Optional[str], address: Optional[str], name: Optional[str]) -> list[str]:
+    """Cibles d'un projet : adresse puis nom pour un projet régulier ;
+    pour un BON DE TRAVAIL, le NOM seulement (il porte le n° de BT),
+    l'adresse n'étant qu'un repli si le nom est vide — sinon un bon à
+    l'adresse d'un chantier régulier adopterait le sous-client de ce
+    chantier (audit 2026-09-21)."""
+    n, a = _norm(name), _norm(address)
+    if (kind or "") == "bon_travail":
+        return [t for t in (n or a,) if t]
+    return [t for t in (a, n) if t]
 
 
 def _primary_target(kind: Optional[str], address: Optional[str], name: Optional[str]) -> str:
@@ -167,10 +179,7 @@ async def _links_of_other_projects(
         jid = (jid or "").strip()
         if not jid:
             continue
-        _prefer_name = (kind or "") == "bon_travail"
-        n, a = _norm(name), _norm(addr)
-        targets = [t for t in ((n, a) if _prefer_name else (a, n)) if t]
-        out[jid] = (int(pid), targets)
+        out[jid] = (int(pid), _targets_of(kind, addr, name))
     return out
 
 
@@ -181,28 +190,32 @@ async def _job_ids_used_by_other_projects(
 
 
 async def _lien_errone(
-    qbo, db: AsyncSession, project: Project, jid: str,
-    links: Optional[dict[str, tuple[int, list[str]]]] = None,
+    db: AsyncSession,
+    project: Project,
+    jid: str,
+    row: dict,
+    *,
+    parent_customer_id: str,
+    links: dict[str, tuple[int, list[str]]],
+    others: list[str],
 ) -> bool:
     """Vrai si le sous-client QB actuellement lié appartient visiblement
     à un AUTRE chantier :
+    - il est sous un AUTRE client mère que celui du projet (projet
+      rattaché à un nouveau client) ;
     - porté aussi par un autre projet Kratos → le garde celui dont le nom
       QB correspond le mieux ; à égalité (deux projets à la MÊME
       adresse), le plus ancien (id le plus petit) le garde ;
-    - sinon, son nom correspond MIEUX à un autre projet du même client
-      qu'à celui-ci (ex. « 710 rue legendre est » lié au projet
-      « … · App 1 » alors que le projet « 710 rue legendre est » existe).
+    - sinon, son nom correspond MIEUX (égalité ou préfixe, jamais une
+      simple inclusion) à un autre projet du même client qu'à celui-ci
+      (ex. « 710 rue legendre est » lié au projet « … · App 1 » alors que
+      le projet « 710 rue legendre est » existe).
     Un simple renommage côté QB sans conflit ne compte pas comme erreur."""
-    try:
-        row = await qbo.get_customer(jid)
-    except Exception:  # noqa: BLE001
-        return False
-    if not row:
-        return False
+    parent_of_row = str((row.get("ParentRef") or {}).get("value") or "")
+    if parent_of_row and parent_of_row != str(parent_customer_id):
+        return True
     ln = _norm(_local_name_of(row))
     mine = _best_level(ln, _project_targets(project))
-    if links is None:
-        links = await _links_of_other_projects(db, project)
     held = links.get(jid)
     if held is not None:
         holder_id, holder_targets = held
@@ -214,7 +227,8 @@ async def _lien_errone(
         return int(project.id) > holder_id
     if mine == 3:
         return False
-    return _best_level(ln, await _other_projects_targets(db, project)) > mine
+    sib = _best_level(ln, others)
+    return sib >= 2 and sib > mine
 
 
 def _local_name_of(row) -> str:
@@ -247,15 +261,29 @@ async def resolve_project_customer_id(
     others = await _other_projects_targets(db, project)
 
     jid = (getattr(project, "qbo_job_id", None) or "").strip()
-    if jid and await _is_active_customer(qbo, jid):
-        if not await _lien_errone(qbo, db, project, jid, links):
+    if jid == str(parent_customer_id):
+        # Lié au client MÈRE lui-même (ancien repli mémorisé, liaison
+        # manuelle) : ce n'est pas un sous-client → on repart.
+        jid = ""
+    if jid:
+        row = await _customer_row(qbo, jid)
+        if row is False:
+            # QB injoignable : on ne conclut rien, on garde le lien.
             _note("deja_lie")
             return jid
-        log.warning(
-            "Projet %s « %s » : le sous-client QB lié (%s) appartient à un "
-            "autre chantier — lien oublié, on repart de l'adresse.",
-            project.id, project.name, jid,
-        )
+        if row and not await _lien_errone(
+            db, project, jid, row,
+            parent_customer_id=str(parent_customer_id),
+            links=links, others=others,
+        ):
+            _note("deja_lie")
+            return jid
+        if row:
+            log.warning(
+                "Projet %s « %s » : le sous-client QB lié (%s) appartient à "
+                "un autre chantier ou client — lien oublié, on repart de "
+                "l'adresse.", project.id, project.name, jid,
+            )
         project.qbo_job_id = None
         await db.flush()
         jid = ""
@@ -309,13 +337,13 @@ async def resolve_project_customer_id(
         if held is not None:
             holder_id, holder_targets = held
             theirs = _best_level(ln, holder_targets)
-            if not (mine == 3 and theirs < 3):
+            if not (mine > theirs and mine >= 2):
                 taken_names.add(ln)
                 continue
             to_unlink[rid] = holder_id
         if mine == 0:
             continue
-        if mine < 3 and _best_level(ln, others) > 0:
+        if mine < 3 and _best_level(ln, others) >= mine:
             continue
         candidates.append((mine, row))
 
@@ -336,6 +364,8 @@ async def resolve_project_customer_id(
                 .where(Project.id == holder_id, Project.qbo_job_id == rid)
                 .values(qbo_job_id=None)
             )
+            if report is not None:
+                report["transfere_de"] = holder_id
         return await _adopt(best)
 
     # 2) Un SEUL sous-client / projet sous ce parent → c'est forcément lui,
@@ -368,11 +398,18 @@ async def resolve_project_customer_id(
             or (project.name or "").strip()
         )
     if base:
-        variants: list[str] = [base]
+        # DisplayName QB ≤ 100 caractères : le suffixe distinctif doit
+        # SURVIVRE à la troncature, sinon les variantes se confondent.
+        def _with_suffix(suffix: str) -> str:
+            keep = max(1, 100 - len(suffix))
+            return base[:keep].rstrip() + suffix
+
+        variants: list[str] = [base[:100].rstrip()]
         pname = (project.name or "").strip()
         if pname and _norm(pname) != _norm(base):
-            variants.append(f"{base} — {pname}")
-        variants.append(f"{base} (#{project.id})")
+            variants.append(_with_suffix(f" — {pname}"[:40]))
+        variants.append(_with_suffix(f" (#{project.id})"))
+        variants = list(dict.fromkeys(v for v in variants if v))
         existing_ids = {str(r.get("Id") or "") for r in subs}
         start = (
             project.created_at.date().isoformat()
@@ -385,7 +422,7 @@ async def resolve_project_customer_id(
             try:
                 job = await qbo.ensure_project(
                     parent_customer_id=str(parent_customer_id),
-                    project_name=name[:100],
+                    project_name=name,
                     start_date=start,
                 )
             except Exception as exc:  # noqa: BLE001
