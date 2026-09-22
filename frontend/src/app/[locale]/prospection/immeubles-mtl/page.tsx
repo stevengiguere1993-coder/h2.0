@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Building2,
   CheckCircle2,
+  Download,
   ExternalLink,
   Eye,
   Loader2,
@@ -16,6 +17,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { telechargerExport } from "@/components/immobilier/bouton-export";
 import { authedFetch } from "@/lib/auth";
 import { useProspectionLayout } from "../layout";
 
@@ -119,6 +121,48 @@ export default function ImmeublesMtlPage() {
     setMinLogements(p.min != null ? String(p.min) : "");
     setMaxLogements(p.max != null ? String(p.max) : "");
     setOffset(0);
+  }
+
+  //: Filtres courants → paramètres d'API (partagés par la liste et
+  //: l'export CSV, sans limit/offset).
+  const paramsFiltres = useCallback(() => {
+    const params = new URLSearchParams();
+    if (minLogements) params.set("min_logements", minLogements);
+    if (maxLogements) params.set("max_logements", maxLogements);
+    if (minAnnee) params.set("min_annee", minAnnee);
+    if (maxAnnee) params.set("max_annee", maxAnnee);
+    if (rueSearchDebounced.trim())
+      params.set("nom_rue_contains", rueSearchDebounced.trim());
+    for (const code of selectedCodes) params.append("codes_utilisation", code);
+    if (distanceBand) params.set("distance_band", distanceBand);
+    if (arrondissement) params.set("arrondissement", arrondissement);
+    return params;
+  }, [
+    minLogements,
+    maxLogements,
+    minAnnee,
+    maxAnnee,
+    rueSearchDebounced,
+    selectedCodes,
+    distanceBand,
+    arrondissement
+  ]);
+
+  const [exporting, setExporting] = useState(false);
+  async function exporterCsv() {
+    setExporting(true);
+    setError(null);
+    try {
+      const p = paramsFiltres();
+      await telechargerExport(
+        `/api/v1/prospection/mtl-properties/export.csv?${p}`,
+        `kratos_roles-fonciers_${new Date().toISOString().slice(0, 10)}.csv`
+      );
+    } catch (e) {
+      setError(`Export : ${(e as Error).message}`);
+    } finally {
+      setExporting(false);
+    }
   }
 
   const load = useCallback(async () => {
@@ -280,6 +324,20 @@ export default function ImmeublesMtlPage() {
             <option value="40_to_50">40-50 km de MTL</option>
             <option value="over_50">&gt; 50 km de MTL</option>
           </select>
+          <button
+            type="button"
+            onClick={() => void exporterCsv()}
+            disabled={exporting}
+            title={`Télécharge en CSV (Excel) les ${total.toLocaleString("fr-CA")} propriétés qui matchent les filtres — avec les propriétaires déjà identifiés. Sans filtre : tout le Québec (gros fichier).`}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-950 px-3 py-2 text-sm font-medium text-white transition hover:border-accent-500 disabled:opacity-60"
+          >
+            {exporting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="h-4 w-4" />
+            )}
+            {exporting ? "Export en cours…" : "Exporter en CSV"}
+          </button>
           {/* Filtre arrondissement (visible quand mtl_only ou Tout le Québec
               + des arrondissements existent en DB). */}
           {arrondissementsList.length > 0 ? (

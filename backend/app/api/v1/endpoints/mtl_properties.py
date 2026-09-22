@@ -13,12 +13,16 @@ Pour chaque propriété trouvée, on peut :
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 import unicodedata
+from datetime import date as _date
 from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 
 log = logging.getLogger(__name__)
 from pydantic import BaseModel, ConfigDict, Field
@@ -121,57 +125,22 @@ def _full_addr(p: MontrealPropertyUnit) -> str:
     return " ".join(x for x in parts if x).strip()
 
 
-# --------------------------- Endpoints ---------------------------
-
-
-@router.get("", response_model=ListResponse)
-async def list_properties(
-    db: DBSession,
-    _: CurrentUser,
-    min_logements: Optional[int] = Query(default=None, ge=0),
-    max_logements: Optional[int] = Query(default=None, ge=0),
-    min_annee: Optional[int] = Query(default=None, ge=1700),
-    max_annee: Optional[int] = Query(default=None, le=2100),
-    min_superficie_terrain: Optional[float] = Query(default=None, ge=0),
-    municipalite: Optional[str] = Query(default=None),
-    region: Optional[str] = Query(
-        default=None,
-        pattern="^(mtl-island|laval|rive-sud|rive-nord)$",
-        description="Filtre par région. mtl-island = île de Montréal "
-        "(MTL + arrondissements), laval, rive-sud, rive-nord.",
-    ),
-    distance_band: Optional[str] = Query(
-        default=None,
-        pattern="^(mtl_only|under_30|30_to_40|40_to_50|over_50)$",
-        description="Filtre par distance depuis le centre-ville MTL : "
-        "mtl_only (île de Montréal seulement), under_30 (< 30 km), "
-        "30_to_40, 40_to_50, over_50 (> 50 km).",
-    ),
-    nom_rue_contains: Optional[str] = Query(default=None),
-    arrondissement: Optional[str] = Query(
-        default=None,
-        description="Filtre par arrondissement de la Ville de Montréal "
-        "(ex: « Le Plateau-Mont-Royal », « Ville-Marie »). Ne s'applique "
-        "qu'aux unités avec municipalite='Montréal'.",
-    ),
-    codes_utilisation: Optional[List[str]] = Query(
-        default=None,
-        description="Liste de codes d'utilisation à inclure. "
-        "Ex: ?codes_utilisation=1000&codes_utilisation=1099 pour "
-        "logements unifamiliaux + multi.",
-    ),
-    sort_by: str = Query(
-        default="nombre_logement_desc",
-        pattern="^(nombre_logement_desc|nombre_logement_asc|"
-        "annee_construction_asc|annee_construction_desc|"
-        "superficie_terrain_desc|matricule_asc)$",
-    ),
-    limit: int = Query(default=200, ge=1, le=1000),
-    offset: int = Query(default=0, ge=0),
-) -> ListResponse:
-    """Filtre + paginate. Ne retourne JAMAIS plus de 1000 lignes
-    par requête (sinon le navigateur crash sur 500k objets)."""
-
+def _filtres_mtl(
+    *,
+    min_logements: Optional[int] = None,
+    max_logements: Optional[int] = None,
+    min_annee: Optional[int] = None,
+    max_annee: Optional[int] = None,
+    min_superficie_terrain: Optional[float] = None,
+    municipalite: Optional[str] = None,
+    region: Optional[str] = None,
+    distance_band: Optional[str] = None,
+    nom_rue_contains: Optional[str] = None,
+    arrondissement: Optional[str] = None,
+    codes_utilisation: Optional[List[str]] = None,
+) -> list:
+    """Conditions SQL des filtres de la page « Immeubles MTL » — UNE
+    seule implémentation pour la liste, le compte et l'export CSV."""
     # On bâtit la liste des conditions une seule fois pour les
     # appliquer à la requête principale ET au count.
     filters = []
@@ -355,6 +324,74 @@ async def list_properties(
             else:
                 filters.append(MontrealPropertyUnit.matricule.is_(None))
 
+    return filters
+
+
+# --------------------------- Endpoints ---------------------------
+
+
+@router.get("", response_model=ListResponse)
+async def list_properties(
+    db: DBSession,
+    _: CurrentUser,
+    min_logements: Optional[int] = Query(default=None, ge=0),
+    max_logements: Optional[int] = Query(default=None, ge=0),
+    min_annee: Optional[int] = Query(default=None, ge=1700),
+    max_annee: Optional[int] = Query(default=None, le=2100),
+    min_superficie_terrain: Optional[float] = Query(default=None, ge=0),
+    municipalite: Optional[str] = Query(default=None),
+    region: Optional[str] = Query(
+        default=None,
+        pattern="^(mtl-island|laval|rive-sud|rive-nord)$",
+        description="Filtre par région. mtl-island = île de Montréal "
+        "(MTL + arrondissements), laval, rive-sud, rive-nord.",
+    ),
+    distance_band: Optional[str] = Query(
+        default=None,
+        pattern="^(mtl_only|under_30|30_to_40|40_to_50|over_50)$",
+        description="Filtre par distance depuis le centre-ville MTL : "
+        "mtl_only (île de Montréal seulement), under_30 (< 30 km), "
+        "30_to_40, 40_to_50, over_50 (> 50 km).",
+    ),
+    nom_rue_contains: Optional[str] = Query(default=None),
+    arrondissement: Optional[str] = Query(
+        default=None,
+        description="Filtre par arrondissement de la Ville de Montréal "
+        "(ex: « Le Plateau-Mont-Royal », « Ville-Marie »). Ne s'applique "
+        "qu'aux unités avec municipalite='Montréal'.",
+    ),
+    codes_utilisation: Optional[List[str]] = Query(
+        default=None,
+        description="Liste de codes d'utilisation à inclure. "
+        "Ex: ?codes_utilisation=1000&codes_utilisation=1099 pour "
+        "logements unifamiliaux + multi.",
+    ),
+    sort_by: str = Query(
+        default="nombre_logement_desc",
+        pattern="^(nombre_logement_desc|nombre_logement_asc|"
+        "annee_construction_asc|annee_construction_desc|"
+        "superficie_terrain_desc|matricule_asc)$",
+    ),
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> ListResponse:
+    """Filtre + paginate. Ne retourne JAMAIS plus de 1000 lignes
+    par requête (sinon le navigateur crash sur 500k objets)."""
+
+    filters = _filtres_mtl(
+        min_logements=min_logements,
+        max_logements=max_logements,
+        min_annee=min_annee,
+        max_annee=max_annee,
+        min_superficie_terrain=min_superficie_terrain,
+        municipalite=municipalite,
+        region=region,
+        distance_band=distance_band,
+        nom_rue_contains=nom_rue_contains,
+        arrondissement=arrondissement,
+        codes_utilisation=codes_utilisation,
+    )
+
     stmt = select(MontrealPropertyUnit)
     for f in filters:
         stmt = stmt.where(f)
@@ -427,6 +464,171 @@ async def list_properties(
             d.superficie_batiment = float(d.superficie_batiment)
         out.append(d)
     return ListResponse(total=total, properties=out)
+
+
+_COLONNES_EXPORT = [
+    "Matricule",
+    "Adresse",
+    "Numéro civique (début)",
+    "Numéro civique (fin)",
+    "Rue",
+    "Suite",
+    "Municipalité",
+    "Arrondissement",
+    "Région",
+    "Nombre de logements",
+    "Année de construction",
+    "Code d'utilisation",
+    "Utilisation",
+    "Catégorie",
+    "Superficie terrain (m²)",
+    "Superficie bâtiment (m²)",
+    "Propriétaires",
+    "Inscription des propriétaires",
+    "Propriétaires vérifiés le",
+    "Déjà un lead",
+]
+
+
+def _noms_proprietaires(owners_json: Optional[str]) -> Tuple[str, str]:
+    """« Nom 1 | Nom 2 » et leurs dates d'inscription, depuis le cache
+    EvalWeb (best-effort, jamais d'exception)."""
+    if not owners_json:
+        return "", ""
+    try:
+        data = json.loads(owners_json)
+    except Exception:  # noqa: BLE001
+        return "", ""
+    noms, dates = [], []
+    for o in data or []:
+        if not isinstance(o, dict) or not o.get("name"):
+            continue
+        noms.append(str(o.get("name")).strip())
+        dates.append(str(o.get("inscription_date") or "").strip())
+    return " | ".join(noms), " | ".join(dates)
+
+
+@router.get("/export.csv")
+async def export_properties_csv(
+    db: DBSession,
+    _: CurrentUser,
+    min_logements: Optional[int] = Query(default=None, ge=0),
+    max_logements: Optional[int] = Query(default=None, ge=0),
+    min_annee: Optional[int] = Query(default=None, ge=1700),
+    max_annee: Optional[int] = Query(default=None, le=2100),
+    min_superficie_terrain: Optional[float] = Query(default=None, ge=0),
+    municipalite: Optional[str] = Query(default=None),
+    region: Optional[str] = Query(
+        default=None, pattern="^(mtl-island|laval|rive-sud|rive-nord)$"
+    ),
+    distance_band: Optional[str] = Query(
+        default=None,
+        pattern="^(mtl_only|under_30|30_to_40|40_to_50|over_50)$",
+    ),
+    nom_rue_contains: Optional[str] = Query(default=None),
+    arrondissement: Optional[str] = Query(default=None),
+    codes_utilisation: Optional[List[str]] = Query(default=None),
+) -> StreamingResponse:
+    """TOUTES les unités qui matchent les filtres, en CSV (BOM + « ; »,
+    lisible dans Excel), en flux : ~940 000 lignes passent sans
+    charger la base en mémoire (demande Phil 2026-09-22 : « donne-moi
+    ce fichier »). Mêmes filtres que la page ; tri par matricule."""
+    filters = _filtres_mtl(
+        min_logements=min_logements,
+        max_logements=max_logements,
+        min_annee=min_annee,
+        max_annee=max_annee,
+        min_superficie_terrain=min_superficie_terrain,
+        municipalite=municipalite,
+        region=region,
+        distance_band=distance_band,
+        nom_rue_contains=nom_rue_contains,
+        arrondissement=arrondissement,
+        codes_utilisation=codes_utilisation,
+    )
+    # Matricules déjà en lead (quelques milliers) — chargés une fois.
+    deja_leads = {
+        m
+        for (m,) in (
+            await db.execute(
+                select(ProspectionLead.matricule).where(
+                    ProspectionLead.matricule.is_not(None),
+                    ProspectionLead.archived.is_(False),
+                )
+            )
+        ).all()
+        if m
+    }
+
+    from app.db.session import AsyncSessionLocal
+
+    def _ligne(p: MontrealPropertyUnit) -> list:
+        noms, dates = _noms_proprietaires(p.owners_json)
+        return [
+            p.matricule,
+            _full_addr(p) or "",
+            p.civique_debut or "",
+            p.civique_fin or "",
+            p.nom_rue or "",
+            p.suite_debut or "",
+            p.municipalite or "",
+            p.arrondissement or "",
+            p.region or "",
+            p.nombre_logement if p.nombre_logement is not None else "",
+            p.annee_construction if p.annee_construction is not None else "",
+            p.code_utilisation or "",
+            p.libelle_utilisation or "",
+            p.categorie_uef or "",
+            float(p.superficie_terrain) if p.superficie_terrain is not None else "",
+            float(p.superficie_batiment) if p.superficie_batiment is not None else "",
+            noms,
+            dates,
+            (
+                p.owners_fetched_at.date().isoformat()
+                if p.owners_fetched_at
+                else ""
+            ),
+            "oui" if p.matricule in deja_leads else "non",
+        ]
+
+    async def _flux():
+        # Session DÉDIÉE : celle de la requête est refermée avant que
+        # le flux ne coule (dépendance FastAPI avec yield).
+        buf = io.StringIO()
+        w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
+        w.writerow(_COLONNES_EXPORT)
+        yield "\ufeff" + buf.getvalue()
+        dernier = ""
+        async with AsyncSessionLocal() as s:
+            while True:
+                stmt = select(MontrealPropertyUnit)
+                for f in filters:
+                    stmt = stmt.where(f)
+                stmt = (
+                    stmt.where(MontrealPropertyUnit.matricule > dernier)
+                    .order_by(MontrealPropertyUnit.matricule.asc())
+                    .limit(5000)
+                )
+                rows = (await s.execute(stmt)).scalars().all()
+                if not rows:
+                    break
+                buf = io.StringIO()
+                w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
+                for p in rows:
+                    w.writerow(_ligne(p))
+                yield buf.getvalue()
+                dernier = rows[-1].matricule
+                s.expunge_all()
+
+    nom = f"kratos_roles-fonciers_{_date.today().isoformat()}.csv"
+    return StreamingResponse(
+        _flux(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{nom}"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 class UtilisationType(BaseModel):
