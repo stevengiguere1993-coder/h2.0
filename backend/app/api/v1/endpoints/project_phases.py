@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import date, datetime, time
 from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, select
 
@@ -618,3 +618,29 @@ async def list_all_phases(
         )
         for r in rows
     ]
+
+
+@router.get(
+    "/{project_id}/planification-client.pdf",
+    summary="PDF client de la planification (phases + dates, agenda)",
+)
+async def planification_client_pdf(
+    project_id: int, db: DBSession, user: CurrentUser
+) -> Response:
+    """Version CLIENT de l'onglet Planification : phases avec dates
+    prévues (début → fin, durée) et agenda mois par mois — sans heures,
+    sans coûts, sans assignés, sans notes internes (retour 2026-09-23).
+    À télécharger puis envoyer au client."""
+    from app.services.planification_pdf import render_planification_client_pdf
+
+    await _ensure_project_visible(db, project_id, user)
+    rendered = await render_planification_client_pdf(db, project_id)
+    if rendered is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+    project, pdf_bytes = rendered
+    filename = f"planification-projet-{project.id}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )

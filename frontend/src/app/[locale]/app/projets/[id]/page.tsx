@@ -3399,6 +3399,28 @@ function PlanificationTab({
   // #14 — Remet les phases en ordre chronologique (date de début
   // croissante). Les phases sans date passent à la fin. Persiste le
   // nouvel ordre via l'endpoint de réordonnancement.
+  // PDF client : phases + dates prévues + agenda, sans heures ni assignés.
+  const [pdfBusy, setPdfBusy] = useState(false);
+  async function openClientPdf() {
+    if (pdfBusy) return;
+    setPdfBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/planification-client.pdf`
+      );
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      setErr(`Génération du PDF client échouée : ${(e as Error).message}`);
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
   async function sortPhasesByDate() {
     const next = [...phases].sort((a, b) => {
       const da = a.start_date ? new Date(a.start_date).getTime() : Infinity;
@@ -3508,6 +3530,22 @@ function PlanificationTab({
           durée en jours — la fin est calculée automatiquement.
         </p>
         <div className="flex items-center gap-2">
+          {phases.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => openClientPdf()}
+              disabled={pdfBusy}
+              className="btn-secondary btn-sm disabled:opacity-60"
+              title="PDF pour le client : phases et dates prévues avec agenda, sans heures ni assignés"
+            >
+              {pdfBusy ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FileText className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              PDF client
+            </button>
+          ) : null}
           {phases.length > 1 ? (
             <button
               type="button"
