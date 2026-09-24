@@ -1262,7 +1262,18 @@ class FinanceResults:
                 "amount": self.best_refi_amount,
                 "program": self.best_refi_program,
             },
+            # Sept. 2026 (Phil : « je veux tout tout tout voir ») — trace
+            # LISIBLE de chaque calcul (formule avec les nombres réels,
+            # valeur, provenance), affichée telle quelle dans l'onglet
+            # « Détails des calculs ». Jamais bloquante (None si erreur).
+            "details_calculs": _trace_calculs(self),
         }
+
+
+def _trace_calculs(res: "FinanceResults"):
+    from app.services.lead_analysis_trace import trace_sure
+
+    return trace_sure(res)
 
 
 def _dataclass_to_dict(d) -> dict:

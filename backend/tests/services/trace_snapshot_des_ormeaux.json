@@ -1,0 +1,1262 @@
+[
+ {
+  "section": "1 · Données de la fiche",
+  "label": "Prix d'achat (acte de vente)",
+  "formule": null,
+  "valeur": "4 750 000 $",
+  "source": "fiche"
+ },
+ {
+  "section": "1 · Données de la fiche",
+  "label": "Nombre de logements",
+  "formule": null,
+  "valeur": "24",
+  "source": "fiche"
+ },
+ {
+  "section": "1 · Données de la fiche",
+  "label": "Revenus bruts annuels (fiche)",
+  "formule": null,
+  "valeur": "301 476 $",
+  "source": "fiche"
+ },
+ {
+  "section": "1 · Données de la fiche",
+  "label": "Loyer moyen actuel ($/mois)",
+  "formule": "301 476 $ ÷ 12 ÷ 24 log.",
+  "valeur": "1 047 $",
+  "source": "calcul"
+ },
+ {
+  "section": "1 · Données de la fiche",
+  "label": "Taxes municipales",
+  "formule": null,
+  "valeur": "22 556 $",
+  "source": "fiche"
+ },
+ {
+  "section": "1 · Données de la fiche",
+  "label": "Taxes scolaires",
+  "formule": null,
+  "valeur": "2 347 $",
+  "source": "fiche"
+ },
+ {
+  "section": "1 · Données de la fiche",
+  "label": "Assurances",
+  "formule": null,
+  "valeur": "12 163 $",
+  "source": "fiche"
+ },
+ {
+  "section": "1 · Données de la fiche",
+  "label": "Énergie (base, avant réduction)",
+  "formule": null,
+  "valeur": "762 $",
+  "source": "fiche"
+ },
+ {
+  "section": "1 · Données de la fiche",
+  "label": "Autres dépenses",
+  "formule": null,
+  "valeur": "40 346 $",
+  "source": "fiche"
+ },
+ {
+  "section": "1 · Données de la fiche",
+  "label": "Travaux estimés",
+  "formule": null,
+  "valeur": "240 000 $",
+  "source": "fiche"
+ },
+ {
+  "section": "1 · Données de la fiche",
+  "label": "Frais de développement",
+  "formule": null,
+  "valeur": "0 $",
+  "source": "fiche"
+ },
+ {
+  "section": "1 · Données de la fiche",
+  "label": "Frais de négociations",
+  "formule": null,
+  "valeur": "0 $",
+  "source": "fiche"
+ },
+ {
+  "section": "1 · Données de la fiche",
+  "label": "Stratégie d'acquisition",
+  "formule": null,
+  "valeur": "Prêteur B + optimisation + refinancement",
+  "source": "fiche"
+ },
+ {
+  "section": "1 · Données de la fiche",
+  "label": "Durée du projet (phase prêteur B)",
+  "formule": null,
+  "valeur": "2 an(s)",
+  "source": "fiche"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "TGA (taux global d'actualisation)",
+  "formule": null,
+  "valeur": "4 %",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Taux d'intérêt à l'achat",
+  "formule": null,
+  "valeur": "4,4 %",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Taux d'intérêt au refinancement",
+  "formule": null,
+  "valeur": "4,4 %",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Taux du prêteur B pendant le projet",
+  "formule": null,
+  "valeur": "8 %",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Mise de fonds prêteur B",
+  "formule": null,
+  "valeur": "20 %",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Taux d'inoccupation",
+  "formule": null,
+  "valeur": "3 %",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Réduction d'énergie au refi",
+  "formule": null,
+  "valeur": "0 %",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "WiFi ajouté au refi",
+  "formule": null,
+  "valeur": "oui",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Thermopompes ajoutées (APH)",
+  "formule": null,
+  "valeur": "0",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Logements ajoutés au refi",
+  "formule": null,
+  "valeur": "0",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Loyer abordable (APH 100 pts, $/mois)",
+  "formule": null,
+  "valeur": "1 000 $",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Ratio de logements abordables (APH 100 pts)",
+  "formule": null,
+  "valeur": "40 %",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Barème — seuil petit / grand immeuble",
+  "formule": "24 logements ≥ 12 → tarifs « grand immeuble »",
+  "valeur": "12 logements",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Barème — concierge ($/logement/an)",
+  "formule": "petit 215 $ · grand 365 $",
+  "valeur": "365 $",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Barème — entretien ($/logement/an)",
+  "formule": null,
+  "valeur": "610 $",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Barème — gestion (% des revenus)",
+  "formule": "petit 4,25 % · grand 5 %",
+  "valeur": "5 %",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Barème — autres normalisations (% des revenus)",
+  "formule": null,
+  "valeur": "1 %",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Barème — WiFi",
+  "formule": "5 $/logement/mois + internet fixe 120 $/mois",
+  "valeur": "5 $ + 120 $",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Barème — thermopompe ($/an chacune)",
+  "formule": null,
+  "valeur": "190 $",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Scénario Achat conventionnel",
+  "formule": null,
+  "valeur": "prêt/valeur 75 % · amortissement 25 ans · RCD 1,20",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Scénario SCHL standard",
+  "formule": null,
+  "valeur": "prêt/valeur 85 % · amortissement 35 ans · RCD 1,30",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Scénario SCHL Efficacité énergétique (50 pts)",
+  "formule": null,
+  "valeur": "prêt/valeur 85 % · amortissement 40 ans · RCD 1,10",
+  "source": "paramètre"
+ },
+ {
+  "section": "2 · Paramètres du modèle",
+  "label": "Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "formule": null,
+  "valeur": "prêt/valeur 95 % · amortissement 50 ans · RCD 1,10",
+  "source": "paramètre"
+ },
+ {
+  "section": "3 · Typologie et loyers cibles",
+  "label": "Loyer cible pondéré (H13, $/mois)",
+  "formule": "(24 × 1 500 $ (4.5)) ÷ 24 log. avec prix",
+  "valeur": "1 500 $",
+  "source": "calcul"
+ },
+ {
+  "section": "3 · Typologie et loyers cibles",
+  "label": "Logements abordables (APH 100 pts)",
+  "formule": "arrondi sup. de 40 % × 24",
+  "valeur": "10",
+  "source": "calcul"
+ },
+ {
+  "section": "3 · Typologie et loyers cibles",
+  "label": "Logements au loyer du marché (PDM)",
+  "formule": "24 − 10",
+  "valeur": "14",
+  "source": "calcul"
+ },
+ {
+  "section": "3 · Typologie et loyers cibles",
+  "label": "Loyer moyen PDM ($/mois)",
+  "formule": "moyenne des 14 unités les plus chères de la typologie",
+  "valeur": "1 500 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Revenus totaux",
+  "formule": "revenus bruts de la fiche",
+  "valeur": "301 476 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Loyer moyen ($/mois)",
+  "formule": "301 476 $ ÷ 12 ÷ 24",
+  "valeur": "1 047 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Inoccupation",
+  "formule": "3 % × 301 476 $",
+  "valeur": "9 044 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Taxes municipales",
+  "formule": "fiche 22 556 $",
+  "valeur": "22 556 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Taxes scolaires",
+  "formule": "fiche 2 347 $",
+  "valeur": "2 347 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Assurances",
+  "formule": "fiche 12 163 $",
+  "valeur": "12 163 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Énergie",
+  "formule": "fiche 762 $",
+  "valeur": "762 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Concierge (barème)",
+  "formule": "24 log. × 365 $",
+  "valeur": "8 760 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Entretien (barème)",
+  "formule": "24 log. × 610 $",
+  "valeur": "14 640 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Gestion (barème)",
+  "formule": "5 % × 301 476 $",
+  "valeur": "15 074 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Autres normalisations (barème)",
+  "formule": "1 % × 301 476 $",
+  "valeur": "3 015 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Autres dépenses (fiche)",
+  "formule": "fiche 40 346 $",
+  "valeur": "40 346 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Total des dépenses",
+  "formule": "somme des postes ci-dessus",
+  "valeur": "128 707 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Revenus nets d'opération (RNO)",
+  "formule": "301 476 $ − 128 707 $",
+  "valeur": "172 769 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Valeur économique (TGA)",
+  "formule": "172 769 $ ÷ 4 %",
+  "valeur": "4 319 229 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Prêt maximal selon le TGA",
+  "formule": "4 319 229 $ × 75 %",
+  "valeur": "3 239 422 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Paiement annuel maximal (RCD)",
+  "formule": "172 769 $ ÷ 1,20",
+  "valeur": "143 974 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Prêt maximal selon le RCD",
+  "formule": "valeur actuelle d'un paiement de 11 998 $/mois à 4,4 % sur 25 ans (composition canadienne)",
+  "valeur": "2 189 681 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Valeur économique (RCD)",
+  "formule": "2 189 681 $ ÷ 75 %",
+  "valeur": "2 919 574 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Valeur marchande (prix d'achat)",
+  "formule": null,
+  "valeur": "4 750 000 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Valeur retenue",
+  "formule": "min(4 750 000 $ ; 2 919 574 $ ; 4 319 229 $)",
+  "valeur": "2 919 574 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Financement (prêt accordé)",
+  "formule": "2 919 574 $ × 75 %",
+  "valeur": "2 189 681 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Paiement mensuel",
+  "formule": "prêt 2 189 681 $ à 4,4 % sur 25 ans",
+  "valeur": "11 998 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Cashflow annuel",
+  "formule": "172 769 $ − 12 × 11 998 $",
+  "valeur": "28 795 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4a · Scénario Achat conventionnel",
+  "label": "Mise de fonds nécessaire (prix d'acquisition − prêt)",
+  "formule": "5 605 110 $ − 2 189 681 $",
+  "valeur": "3 415 430 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Nombre de logements au refi",
+  "formule": "24 + 0 ajouté(s)",
+  "valeur": "24",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Revenus totaux",
+  "formule": "1 500 $ × 24 log. × 12",
+  "valeur": "432 000 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Loyer moyen ($/mois)",
+  "formule": "432 000 $ ÷ 12 ÷ 24",
+  "valeur": "1 500 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Inoccupation",
+  "formule": "3 % × 432 000 $",
+  "valeur": "12 960 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Taxes municipales",
+  "formule": "fiche 22 556 $",
+  "valeur": "22 556 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Taxes scolaires",
+  "formule": "fiche 2 347 $",
+  "valeur": "2 347 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Assurances",
+  "formule": "fiche 12 163 $",
+  "valeur": "12 163 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Énergie",
+  "formule": "fiche 762 $ × (1 − 0 %)",
+  "valeur": "762 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Concierge (barème)",
+  "formule": "24 log. × 365 $",
+  "valeur": "8 760 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Entretien (barème)",
+  "formule": "24 log. × 610 $",
+  "valeur": "14 640 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Gestion (barème)",
+  "formule": "5 % × 432 000 $",
+  "valeur": "21 600 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "WiFi (barème)",
+  "formule": "5 $ × 24 log. × 12 + 120 $ × 12",
+  "valeur": "2 880 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Thermopompes (barème, APH seulement)",
+  "formule": "scénario non APH → 0",
+  "valeur": "0 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Autres normalisations (barème)",
+  "formule": "1 % × 432 000 $",
+  "valeur": "4 320 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Autres dépenses (fiche)",
+  "formule": "fiche 40 346 $",
+  "valeur": "40 346 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Total des dépenses",
+  "formule": "somme des postes ci-dessus",
+  "valeur": "143 334 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Revenus nets d'opération (RNO)",
+  "formule": "432 000 $ − 143 334 $",
+  "valeur": "288 666 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Valeur économique (TGA)",
+  "formule": "288 666 $ ÷ 4 %",
+  "valeur": "7 216 650 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Prêt maximal selon le TGA",
+  "formule": "7 216 650 $ × 85 %",
+  "valeur": "6 134 152 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Paiement annuel maximal (RCD)",
+  "formule": "288 666 $ ÷ 1,30",
+  "valeur": "222 051 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Prêt maximal selon le RCD",
+  "formule": "valeur actuelle d'un paiement de 18 504 $/mois à 4,4 % sur 35 ans (composition canadienne)",
+  "valeur": "3 982 520 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Valeur économique (RCD)",
+  "formule": "3 982 520 $ ÷ 85 %",
+  "valeur": "4 685 317 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Valeur retenue",
+  "formule": "min(4 685 317 $ ; 7 216 650 $)",
+  "valeur": "4 685 317 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Financement (prêt accordé)",
+  "formule": "4 685 317 $ × 85 %",
+  "valeur": "3 982 520 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Paiement mensuel",
+  "formule": "prêt 3 982 520 $ à 4,4 % sur 35 ans",
+  "valeur": "18 504 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Cashflow annuel",
+  "formule": "288 666 $ − 12 × 18 504 $",
+  "valeur": "66 615 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4b · Scénario SCHL standard",
+  "label": "Équité à la fin (prêt refi − prix d'acquisition)",
+  "formule": "3 982 520 $ − 5 605 110 $",
+  "valeur": "-1 622 591 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Nombre de logements au refi",
+  "formule": "24 + 0 ajouté(s)",
+  "valeur": "24",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Revenus totaux",
+  "formule": "1 500 $ × 24 log. × 12",
+  "valeur": "432 000 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Loyer moyen ($/mois)",
+  "formule": "432 000 $ ÷ 12 ÷ 24",
+  "valeur": "1 500 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Inoccupation",
+  "formule": "3 % × 432 000 $",
+  "valeur": "12 960 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Taxes municipales",
+  "formule": "fiche 22 556 $",
+  "valeur": "22 556 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Taxes scolaires",
+  "formule": "fiche 2 347 $",
+  "valeur": "2 347 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Assurances",
+  "formule": "fiche 12 163 $",
+  "valeur": "12 163 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Énergie",
+  "formule": "fiche 762 $ × (1 − 0 %)",
+  "valeur": "762 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Concierge (barème)",
+  "formule": "24 log. × 365 $",
+  "valeur": "8 760 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Entretien (barème)",
+  "formule": "24 log. × 610 $",
+  "valeur": "14 640 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Gestion (barème)",
+  "formule": "5 % × 432 000 $",
+  "valeur": "21 600 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "WiFi (barème)",
+  "formule": "5 $ × 24 log. × 12 + 120 $ × 12",
+  "valeur": "2 880 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Thermopompes (barème, APH seulement)",
+  "formule": "0 × 190 $",
+  "valeur": "0 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Autres normalisations (barème)",
+  "formule": "1 % × 432 000 $",
+  "valeur": "4 320 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Autres dépenses (fiche)",
+  "formule": "fiche 40 346 $",
+  "valeur": "40 346 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Total des dépenses",
+  "formule": "somme des postes ci-dessus",
+  "valeur": "143 334 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Revenus nets d'opération (RNO)",
+  "formule": "432 000 $ − 143 334 $",
+  "valeur": "288 666 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Valeur économique (TGA)",
+  "formule": "288 666 $ ÷ 4 %",
+  "valeur": "7 216 650 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Prêt maximal selon le TGA",
+  "formule": "7 216 650 $ × 85 %",
+  "valeur": "6 134 152 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Paiement annuel maximal (RCD)",
+  "formule": "288 666 $ ÷ 1,10",
+  "valeur": "262 424 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Prêt maximal selon le RCD",
+  "formule": "valeur actuelle d'un paiement de 21 869 $/mois à 4,4 % sur 40 ans (composition canadienne)",
+  "valeur": "4 963 195 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Valeur économique (RCD)",
+  "formule": "4 963 195 $ ÷ 85 %",
+  "valeur": "5 839 053 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Valeur retenue",
+  "formule": "min(5 839 053 $ ; 7 216 650 $)",
+  "valeur": "5 839 053 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Financement (prêt accordé)",
+  "formule": "5 839 053 $ × 85 %",
+  "valeur": "4 963 195 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Paiement mensuel",
+  "formule": "prêt 4 963 195 $ à 4,4 % sur 40 ans",
+  "valeur": "21 869 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Cashflow annuel",
+  "formule": "288 666 $ − 12 × 21 869 $",
+  "valeur": "26 242 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
+  "label": "Équité à la fin (prêt refi − prix d'acquisition)",
+  "formule": "4 963 195 $ − 5 605 110 $",
+  "valeur": "-641 915 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Nombre de logements au refi",
+  "formule": "24 + 0 ajouté(s)",
+  "valeur": "24",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Revenus totaux",
+  "formule": "(10 × 1 000 $ + 14 × 1 500 $) × 12",
+  "valeur": "372 000 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Loyer moyen ($/mois)",
+  "formule": "372 000 $ ÷ 12 ÷ 24",
+  "valeur": "1 292 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Inoccupation",
+  "formule": "3 % × 372 000 $",
+  "valeur": "11 160 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Taxes municipales",
+  "formule": "fiche 22 556 $",
+  "valeur": "22 556 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Taxes scolaires",
+  "formule": "fiche 2 347 $",
+  "valeur": "2 347 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Assurances",
+  "formule": "fiche 12 163 $",
+  "valeur": "12 163 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Énergie",
+  "formule": "fiche 762 $ × (1 − 0 %)",
+  "valeur": "762 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Concierge (barème)",
+  "formule": "24 log. × 365 $",
+  "valeur": "8 760 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Entretien (barème)",
+  "formule": "24 log. × 610 $",
+  "valeur": "14 640 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Gestion (barème)",
+  "formule": "5 % × 372 000 $",
+  "valeur": "18 600 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "WiFi (barème)",
+  "formule": "5 $ × 24 log. × 12 + 120 $ × 12",
+  "valeur": "2 880 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Thermopompes (barème, APH seulement)",
+  "formule": "0 × 190 $",
+  "valeur": "0 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Autres normalisations (barème)",
+  "formule": "1 % × 372 000 $",
+  "valeur": "3 720 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Autres dépenses (fiche)",
+  "formule": "fiche 40 346 $",
+  "valeur": "40 346 $",
+  "source": "fiche"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Total des dépenses",
+  "formule": "somme des postes ci-dessus",
+  "valeur": "137 934 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Revenus nets d'opération (RNO)",
+  "formule": "372 000 $ − 137 934 $",
+  "valeur": "234 066 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Valeur économique (TGA)",
+  "formule": "234 066 $ ÷ 4 %",
+  "valeur": "5 851 650 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Prêt maximal selon le TGA",
+  "formule": "5 851 650 $ × 95 %",
+  "valeur": "5 559 068 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Paiement annuel maximal (RCD)",
+  "formule": "234 066 $ ÷ 1,10",
+  "valeur": "212 787 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Prêt maximal selon le RCD",
+  "formule": "valeur actuelle d'un paiement de 17 732 $/mois à 4,4 % sur 50 ans (composition canadienne)",
+  "valeur": "4 326 422 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Valeur économique (RCD)",
+  "formule": "4 326 422 $ ÷ 95 %",
+  "valeur": "4 554 128 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Valeur retenue",
+  "formule": "min(4 554 128 $ ; 5 851 650 $)",
+  "valeur": "4 554 128 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Financement (prêt accordé)",
+  "formule": "4 554 128 $ × 95 %",
+  "valeur": "4 326 422 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Paiement mensuel",
+  "formule": "prêt 4 326 422 $ à 4,4 % sur 50 ans",
+  "valeur": "17 732 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Cashflow annuel",
+  "formule": "234 066 $ − 12 × 17 732 $",
+  "valeur": "21 279 $",
+  "source": "calcul"
+ },
+ {
+  "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
+  "label": "Équité à la fin (prêt refi − prix d'acquisition)",
+  "formule": "4 326 422 $ − 5 605 110 $",
+  "valeur": "-1 278 689 $",
+  "source": "calcul"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Courtier hypothécaire 1",
+  "formule": "1 % × 4 750 000 $ (prix)",
+  "valeur": "47 500 $",
+  "source": "calcul"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Courtier hypothécaire 2 (refi)",
+  "formule": "1 % × prêt du meilleur APH 4 326 422 $",
+  "valeur": "43 264 $",
+  "source": "calcul"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Taxes de bienvenue",
+  "formule": "paliers Montréal : 61 500 $ × 0,5 % + 246 300 $ × 1 % + 244 500 $ × 1,5 % + 552 400 $ × 2 % + 1 031 800 $ × 2,5 % + 976 500 $ × 3,5 % + 1 637 000 $ × 4 %",
+  "valeur": "142 938 $",
+  "source": "calcul"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Évaluateur agréé",
+  "formule": "montant fixe (paramètre)",
+  "valeur": "1 500 $",
+  "source": "paramètre"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Évaluateur agréé 2",
+  "formule": "montant fixe (paramètre)",
+  "valeur": "1 500 $",
+  "source": "paramètre"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Inspection",
+  "formule": "montant fixe (paramètre)",
+  "valeur": "1 700 $",
+  "source": "paramètre"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Avocat",
+  "formule": "montant fixe (paramètre)",
+  "valeur": "4 000 $",
+  "source": "paramètre"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Notaire",
+  "formule": "montant fixe (paramètre)",
+  "valeur": "1 600 $",
+  "source": "paramètre"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Notaire 2",
+  "formule": "montant fixe (paramètre)",
+  "valeur": "1 600 $",
+  "source": "paramètre"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Rapport d'efficacité énergétique",
+  "formule": "montant fixe (paramètre)",
+  "valeur": "4 500 $",
+  "source": "paramètre"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Frais de développement",
+  "formule": "fiche",
+  "valeur": "0 $",
+  "source": "fiche"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Frais de négociations",
+  "formule": "fiche",
+  "valeur": "0 $",
+  "source": "fiche"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Travaux estimés",
+  "formule": "fiche (travaux estimés)",
+  "valeur": "240 000 $",
+  "source": "fiche"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Frais de dossier du prêteur B",
+  "formule": "2 % × prêt initial 3 562 500 $ (4 750 000 $ × 75 %)",
+  "valeur": "71 250 $",
+  "source": "calcul"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Intérêts de portage pendant le projet",
+  "formule": "(1 − 20 %) × (4 750 000 $ + frais finançables 244 500 $) × 8 % × 2 an(s)",
+  "valeur": "639 296 $",
+  "source": "calcul"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Détention",
+  "formule": "réserve saisie sur la fiche",
+  "valeur": "0 $",
+  "source": "fiche"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Revenus nets pendant le projet",
+  "formule": "− RNO à l'achat 172 769 $ × 2 an(s) (négatif = coût, positif = revenus perdus)",
+  "valeur": "-345 538 $",
+  "source": "calcul"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "Total des frais de démarrage",
+  "formule": "somme des postes",
+  "valeur": "855 110 $",
+  "source": "calcul"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "dont payés en cash",
+  "formule": "postes non finançables à 100 % + postes finançables × MDF %",
+  "valeur": "659 510 $",
+  "source": "calcul"
+ },
+ {
+  "section": "5 · Frais de démarrage",
+  "label": "dont ajoutés au prêt du prêteur B",
+  "formule": "postes finançables × (1 − MDF %)",
+  "valeur": "195 600 $",
+  "source": "calcul"
+ },
+ {
+  "section": "6 · Mise de fonds et prêt du prêteur B",
+  "label": "Assise (MDF % × prix)",
+  "formule": "20 % × 4 750 000 $",
+  "valeur": "950 000 $",
+  "source": "calcul"
+ },
+ {
+  "section": "6 · Mise de fonds et prêt du prêteur B",
+  "label": "+ Frais de démarrage payés en cash",
+  "formule": "section 5",
+  "valeur": "659 510 $",
+  "source": "calcul"
+ },
+ {
+  "section": "6 · Mise de fonds et prêt du prêteur B",
+  "label": "= Mise de fonds prêteur B (cash à sortir)",
+  "formule": "950 000 $ + 659 510 $",
+  "valeur": "1 609 510 $",
+  "source": "calcul"
+ },
+ {
+  "section": "6 · Mise de fonds et prêt du prêteur B",
+  "label": "Prêt du prêteur B sur le prix",
+  "formule": "(1 − 20 %) × 4 750 000 $",
+  "valeur": "3 800 000 $",
+  "source": "calcul"
+ },
+ {
+  "section": "6 · Mise de fonds et prêt du prêteur B",
+  "label": "+ Frais financés par le prêteur B",
+  "formule": "section 5",
+  "valeur": "195 600 $",
+  "source": "calcul"
+ },
+ {
+  "section": "6 · Mise de fonds et prêt du prêteur B",
+  "label": "= Prêt du prêteur B total",
+  "formule": "3 800 000 $ + 195 600 $",
+  "valeur": "3 995 600 $",
+  "source": "calcul"
+ },
+ {
+  "section": "6 · Mise de fonds et prêt du prêteur B",
+  "label": "Prix d'acquisition (total dépensé)",
+  "formule": "coût réel 4 750 000 $ + frais de démarrage 855 110 $",
+  "valeur": "5 605 110 $",
+  "source": "calcul"
+ },
+ {
+  "section": "7 · Refinancement et verdict",
+  "label": "SCHL standard — équité à la fin",
+  "formule": "prêt refi 3 982 520 $ − prix d'acquisition 5 605 110 $",
+  "valeur": "-1 622 591 $",
+  "source": "calcul"
+ },
+ {
+  "section": "7 · Refinancement et verdict",
+  "label": "SCHL Efficacité énergétique (50 pts) — équité à la fin",
+  "formule": "prêt refi 4 963 195 $ − prix d'acquisition 5 605 110 $",
+  "valeur": "-641 915 $",
+  "source": "calcul"
+ },
+ {
+  "section": "7 · Refinancement et verdict",
+  "label": "SCHL Abordabilité + Efficacité (100 pts) — équité à la fin",
+  "formule": "prêt refi 4 326 422 $ − prix d'acquisition 5 605 110 $",
+  "valeur": "-1 278 689 $",
+  "source": "calcul"
+ },
+ {
+  "section": "7 · Refinancement et verdict",
+  "label": "Meilleur scénario (automatique)",
+  "formule": "équité la plus élevée",
+  "valeur": "SCHL Efficacité énergétique (50 pts)",
+  "source": "calcul"
+ },
+ {
+  "section": "7 · Refinancement et verdict",
+  "label": "Scénario retenu pour le verdict",
+  "formule": null,
+  "valeur": "SCHL Efficacité énergétique (50 pts)",
+  "source": "calcul"
+ },
+ {
+  "section": "7 · Refinancement et verdict",
+  "label": "Argent dégagé au refinancement",
+  "formule": "équité à la fin du scénario retenu (négatif = il manque du cash)",
+  "valeur": "-641 915 $",
+  "source": "calcul"
+ }
+]
