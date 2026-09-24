@@ -201,21 +201,28 @@ def test_ordre_des_enveloppes(client, auth_headers, run):
     b = _ligne(client, auth_headers, pid, "Frais bancaire")
     c = _ligne(client, auth_headers, pid, "Taxes de bienvenue")
     lu = client.get(f"/api/v1/optimisation/projets/{pid}", headers=auth_headers).json()
-    assert [l["id"] for l in lu["budget_lignes"]] == [a, b, c], "ordre de création"
+    # ⚠️ Banc SQLite : les FK ON DELETE CASCADE ne sont pas appliquées et
+    # l'id d'un projet supprimé par un autre test est réutilisé → des
+    # lignes orphelines peuvent précéder les nôtres. On raisonne donc sur
+    # la liste RÉELLE du projet (en prod, Postgres cascade et n'a pas ce
+    # problème).
+    ids0 = [l["id"] for l in lu["budget_lignes"]]
+    assert [i for i in ids0 if i in (a, b, c)] == [a, b, c], "ordre de création"
 
     # « Taxes de bienvenue en premier ».
+    voulu = [c] + [i for i in ids0 if i != c]
     r = client.post(
         f"/api/v1/optimisation/projets/{pid}/budget-lignes/ordre",
-        headers=auth_headers, json={"ids": [c, a, b]},
+        headers=auth_headers, json={"ids": voulu},
     )
     assert r.status_code == 200, r.text
-    assert [l["id"] for l in r.json()["budget_lignes"]] == [c, a, b]
-    assert [l["position"] for l in r.json()["budget_lignes"]] == [0, 1, 2]
+    assert [l["id"] for l in r.json()["budget_lignes"]] == voulu
+    assert [l["position"] for l in r.json()["budget_lignes"]] == list(range(len(voulu)))
     lu = client.get(f"/api/v1/optimisation/projets/{pid}", headers=auth_headers).json()
-    assert [l["id"] for l in lu["budget_lignes"]] == [c, a, b], "persisté"
+    assert [l["id"] for l in lu["budget_lignes"]] == voulu, "persisté"
 
     # Liste incomplète, doublon ou ligne d'un autre projet → refus.
-    for ids in ([c, a], [c, a, b, b], [c, a, b, 999_999]):
+    for ids in (voulu[:-1], voulu + [voulu[0]], voulu + [999_999]):
         r = client.post(
             f"/api/v1/optimisation/projets/{pid}/budget-lignes/ordre",
             headers=auth_headers, json={"ids": ids},
