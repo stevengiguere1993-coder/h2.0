@@ -341,7 +341,14 @@ export default function FactureDetailPage() {
         setNextReminderAt(isoToDateInput(fd.next_reminder_at));
         setInternalNotes(fd.internal_notes || "");
         setClientNote(fd.client_note || "");
-        setSendSubject(`Facture ${fd.reference}`);
+        // Brouillon : la référence « BR-… » est provisoire, le vrai numéro
+        // est attribué à l'envoi → on laisse le serveur composer l'objet
+        // (« Facture 159 — Horizon… ») plutôt que d'envoyer « BR-… ».
+        setSendSubject(
+          fd.reference && !fd.reference.startsWith("BR-")
+            ? `Facture ${fd.reference}`
+            : ""
+        );
         if (fd.client_id) {
           const cr = await authedFetch(`/api/v1/clients/${fd.client_id}`);
           if (cr.ok && !cancelled) {
@@ -2052,6 +2059,7 @@ export default function FactureDetailPage() {
                   id="s_subj"
                   value={sendSubject}
                   onChange={(e) => setSendSubject(e.target.value)}
+                  placeholder="Facture <n° attribué à l'envoi> — Horizon Services Immobiliers"
                   className="input"
                 />
               </div>

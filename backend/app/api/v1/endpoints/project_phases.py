@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import date, datetime, time
 from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, select
 
@@ -47,6 +47,8 @@ class PhaseCreate(BaseModel):
     # Décimal pour exprimer des heures (ex. 0.5 = ½ journée = 4 h).
     duration_days: Optional[float] = Field(default=None, ge=0, le=3650)
     notes: Optional[str] = None
+    # Budget prévu de la phase ($), optionnel.
+    budget: Optional[float] = Field(default=None, ge=0, le=100_000_000)
     # Legacy scalar fields — toujours acceptés pour compat. Si les
     # listes ci-dessous sont fournies, elles priment.
     assignee_employe_id: Optional[int] = Field(default=None, gt=0)
@@ -63,6 +65,8 @@ class PhaseUpdate(BaseModel):
     # Décimal pour exprimer des heures (ex. 0.5 = ½ journée = 4 h).
     duration_days: Optional[float] = Field(default=None, ge=0, le=3650)
     notes: Optional[str] = None
+    # Budget prévu de la phase ($), optionnel.
+    budget: Optional[float] = Field(default=None, ge=0, le=100_000_000)
     assignee_employe_id: Optional[int] = None
     assignee_sous_traitant_id: Optional[int] = None
     assignee_employe_ids: Optional[List[int]] = None
@@ -93,6 +97,7 @@ class PhaseRead(BaseModel):
     start_time: Optional[time] = None
     duration_days: Optional[float]
     notes: Optional[str]
+    budget: Optional[float] = None
     # Champs scalaires legacy — renseignés au « primary » assignee
     # (= premier employé / sous-traitant de la liste) pour que les
     # vieux consumers continuent de fonctionner.
@@ -216,6 +221,7 @@ def _phase_read(
         start_time=ph.start_time,
         duration_days=ph.duration_days,
         notes=ph.notes,
+        budget=(float(ph.budget) if ph.budget is not None else None),
         assignee_employe_id=primary_emp,
         assignee_sous_traitant_id=primary_st,
         assignee_employe_ids=assignee_employe_ids,
@@ -387,6 +393,7 @@ async def create_phase(
         start_time=data.start_time,
         duration_days=data.duration_days,
         notes=(data.notes.strip() if data.notes else None),
+        budget=data.budget,
         assignee_employe_id=(emp_list[0] if emp_list else None),
         assignee_sous_traitant_id=(st_list[0] if st_list else None),
     )
@@ -618,3 +625,136 @@ async def list_all_phases(
         )
         for r in rows
     ]
+
+
+@router.get(
+    "/{project_id}/planification-client.pdf",
+    summary="PDF client de la planification (phases + dates, agenda)",
+)
+async def planification_client_pdf(
+    project_id: int, db: DBSession, user: CurrentUser
+) -> Response:
+    """Version CLIENT de l'onglet Planification : phases avec dates
+    prévues (début → fin, durée) et agenda mois par mois — sans heures,
+    sans coûts, sans assignés, sans notes internes (retour 2026-09-23).
+    À télécharger puis envoyer au client."""
+    from app.services.planification_pdf import render_planification_client_pdf
+
+    await _ensure_project_visible(db, project_id, user)
+    rendered = await render_planification_client_pdf(db, project_id)
+    if rendered is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+    project, pdf_bytes = rendered
+    filename = f"planification-projet-{project.id}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
+class PlanificationSendResult(BaseModel):
+    sent: bool
+    to: str
+
+
+@router.post(
+    "/{project_id}/planification-client/send",
+    response_model=PlanificationSendResult,
+    summary="Envoyer le PDF client de la planification au client (courriel)",
+)
+async def send_planification_client(
+    project_id: int, db: DBSession, user: CurrentUser
+) -> PlanificationSendResult:
+    """Rend le PDF client (phases + dates prévues + agenda) et l'envoie
+    par courriel au client du projet, en pièce jointe (copie de
+    supervision gérée par le mailer). Rendu synchrone : la réponse
+    confirme l'envoi."""
+    from app.integrations.email_graph import EmailAttachment, get_mailer
+    from app.models.client import Client
+    from app.services.planification_pdf import (
+        phase_bounds,
+        render_planification_client_pdf,
+    )
+
+    project = await _ensure_project_visible(db, project_id, user)
+    if project.client_id is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Ce projet n'a pas de client associé."
+        )
+    client = (
+        await db.execute(select(Client).where(Client.id == project.client_id))
+    ).scalar_one_or_none()
+    if client is None or not (client.email or "").strip():
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Le client n'a pas d'adresse courriel."
+        )
+    mailer = get_mailer()
+    if not mailer.ready:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Le service courriel n'est pas configuré.",
+        )
+    rendered = await render_planification_client_pdf(db, project_id)
+    if rendered is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Impossible de générer la planification."
+        )
+    _project, pdf_bytes = rendered
+
+    # Période couverte (phases datées) pour le corps du courriel.
+    phases = (
+        await db.execute(
+            select(ProjectPhase).where(ProjectPhase.project_id == project_id)
+        )
+    ).scalars().all()
+    bounds = [b for b in (phase_bounds(ph) for ph in phases) if b]
+    is_en = (getattr(client, "language", "fr") or "fr") == "en"
+    periode = ""
+    if bounds:
+        first = min(b[0] for b in bounds).isoformat()
+        last = max(b[1] for b in bounds).isoformat()
+        periode = (
+            f" Work is planned from {first} to {last}."
+            if is_en
+            else f" Les travaux sont prévus du {first} au {last}."
+        )
+    addr = (project.address or project.name or "").strip()
+    pname = (project.name or addr).strip()
+    subject = (
+        f"Schedule ({pname})" if is_en else f"Planification ({pname})"
+    )
+    body = (
+        "<p>Hello,</p><p>Please find attached the planned schedule for "
+        f"your project ({addr}): the phases, their planned dates and a "
+        f"calendar view.{periode}</p><p>These dates are provisional and "
+        "may be adjusted according to weather, deliveries and site "
+        "contingencies. We will keep you informed of any change.</p>"
+        "<p>Horizon Services Immobiliers</p>"
+        if is_en
+        else "<p>Bonjour,</p><p>Vous trouverez ci-joint la planification "
+        f"prévue de votre projet ({addr}) : les phases, leurs dates "
+        f"prévues et une vue agenda.{periode}</p><p>Ces dates sont "
+        "prévisionnelles et peuvent être ajustées selon la météo, les "
+        "livraisons et les imprévus de chantier. Nous vous tiendrons "
+        "informé de tout changement.</p><p>Horizon Services Immobiliers</p>"
+    )
+    try:
+        await mailer.send(
+            to=[client.email.strip()],
+            subject=subject,
+            html_body=body,
+            reply_to=mailer.sender,
+            attachments=[
+                EmailAttachment(
+                    name=f"planification-projet-{project.id}.pdf",
+                    content_bytes=pdf_bytes,
+                    content_type="application/pdf",
+                )
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, f"Échec de l'envoi du courriel : {exc}"
+        )
+    return PlanificationSendResult(sent=True, to=client.email.strip())
