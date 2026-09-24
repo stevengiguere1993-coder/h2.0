@@ -47,6 +47,8 @@ class PhaseCreate(BaseModel):
     # Décimal pour exprimer des heures (ex. 0.5 = ½ journée = 4 h).
     duration_days: Optional[float] = Field(default=None, ge=0, le=3650)
     notes: Optional[str] = None
+    # Budget prévu de la phase ($), optionnel.
+    budget: Optional[float] = Field(default=None, ge=0, le=100_000_000)
     # Legacy scalar fields — toujours acceptés pour compat. Si les
     # listes ci-dessous sont fournies, elles priment.
     assignee_employe_id: Optional[int] = Field(default=None, gt=0)
@@ -63,6 +65,8 @@ class PhaseUpdate(BaseModel):
     # Décimal pour exprimer des heures (ex. 0.5 = ½ journée = 4 h).
     duration_days: Optional[float] = Field(default=None, ge=0, le=3650)
     notes: Optional[str] = None
+    # Budget prévu de la phase ($), optionnel.
+    budget: Optional[float] = Field(default=None, ge=0, le=100_000_000)
     assignee_employe_id: Optional[int] = None
     assignee_sous_traitant_id: Optional[int] = None
     assignee_employe_ids: Optional[List[int]] = None
@@ -93,6 +97,7 @@ class PhaseRead(BaseModel):
     start_time: Optional[time] = None
     duration_days: Optional[float]
     notes: Optional[str]
+    budget: Optional[float] = None
     # Champs scalaires legacy — renseignés au « primary » assignee
     # (= premier employé / sous-traitant de la liste) pour que les
     # vieux consumers continuent de fonctionner.
@@ -216,6 +221,7 @@ def _phase_read(
         start_time=ph.start_time,
         duration_days=ph.duration_days,
         notes=ph.notes,
+        budget=(float(ph.budget) if ph.budget is not None else None),
         assignee_employe_id=primary_emp,
         assignee_sous_traitant_id=primary_st,
         assignee_employe_ids=assignee_employe_ids,
@@ -387,6 +393,7 @@ async def create_phase(
         start_time=data.start_time,
         duration_days=data.duration_days,
         notes=(data.notes.strip() if data.notes else None),
+        budget=data.budget,
         assignee_employe_id=(emp_list[0] if emp_list else None),
         assignee_sous_traitant_id=(st_list[0] if st_list else None),
     )
