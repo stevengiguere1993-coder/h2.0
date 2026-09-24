@@ -644,3 +644,110 @@ async def planification_client_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
+
+
+class PlanificationSendResult(BaseModel):
+    sent: bool
+    to: str
+
+
+@router.post(
+    "/{project_id}/planification-client/send",
+    response_model=PlanificationSendResult,
+    summary="Envoyer le PDF client de la planification au client (courriel)",
+)
+async def send_planification_client(
+    project_id: int, db: DBSession, user: CurrentUser
+) -> PlanificationSendResult:
+    """Rend le PDF client (phases + dates prévues + agenda) et l'envoie
+    par courriel au client du projet, en pièce jointe (copie de
+    supervision gérée par le mailer). Rendu synchrone : la réponse
+    confirme l'envoi."""
+    from app.integrations.email_graph import EmailAttachment, get_mailer
+    from app.models.client import Client
+    from app.services.planification_pdf import (
+        phase_bounds,
+        render_planification_client_pdf,
+    )
+
+    project = await _ensure_project_visible(db, project_id, user)
+    if project.client_id is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Ce projet n'a pas de client associé."
+        )
+    client = (
+        await db.execute(select(Client).where(Client.id == project.client_id))
+    ).scalar_one_or_none()
+    if client is None or not (client.email or "").strip():
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Le client n'a pas d'adresse courriel."
+        )
+    mailer = get_mailer()
+    if not mailer.ready:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Le service courriel n'est pas configuré.",
+        )
+    rendered = await render_planification_client_pdf(db, project_id)
+    if rendered is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Impossible de générer la planification."
+        )
+    _project, pdf_bytes = rendered
+
+    # Période couverte (phases datées) pour le corps du courriel.
+    phases = (
+        await db.execute(
+            select(ProjectPhase).where(ProjectPhase.project_id == project_id)
+        )
+    ).scalars().all()
+    bounds = [b for b in (phase_bounds(ph) for ph in phases) if b]
+    is_en = (getattr(client, "language", "fr") or "fr") == "en"
+    periode = ""
+    if bounds:
+        first = min(b[0] for b in bounds).isoformat()
+        last = max(b[1] for b in bounds).isoformat()
+        periode = (
+            f" Work is planned from {first} to {last}."
+            if is_en
+            else f" Les travaux sont prévus du {first} au {last}."
+        )
+    addr = (project.address or project.name or "").strip()
+    subject = (
+        f"Work schedule — {addr}" if is_en
+        else f"Planification des travaux — {addr}"
+    )
+    body = (
+        "<p>Hello,</p><p>Please find attached the planned schedule for "
+        f"your project ({addr}): the phases, their planned dates and a "
+        f"calendar view.{periode}</p><p>These dates are provisional and "
+        "may be adjusted according to weather, deliveries and site "
+        "contingencies. We will keep you informed of any change.</p>"
+        "<p>Horizon Services Immobiliers</p>"
+        if is_en
+        else "<p>Bonjour,</p><p>Vous trouverez ci-joint la planification "
+        f"prévue de votre projet ({addr}) : les phases, leurs dates "
+        f"prévues et une vue agenda.{periode}</p><p>Ces dates sont "
+        "prévisionnelles et peuvent être ajustées selon la météo, les "
+        "livraisons et les imprévus de chantier. Nous vous tiendrons "
+        "informé de tout changement.</p><p>Horizon Services Immobiliers</p>"
+    )
+    try:
+        await mailer.send(
+            to=[client.email.strip()],
+            subject=subject,
+            html_body=body,
+            reply_to=mailer.sender,
+            attachments=[
+                EmailAttachment(
+                    name=f"planification-projet-{project.id}.pdf",
+                    content_bytes=pdf_bytes,
+                    content_type="application/pdf",
+                )
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, f"Échec de l'envoi du courriel : {exc}"
+        )
+    return PlanificationSendResult(sent=True, to=client.email.strip())

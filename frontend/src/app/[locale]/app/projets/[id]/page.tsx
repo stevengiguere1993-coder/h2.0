@@ -3421,6 +3421,50 @@ function PlanificationTab({
     }
   }
 
+  const [sendingPdf, setSendingPdf] = useState(false);
+  const [pdfMsg, setPdfMsg] = useState<string | null>(null);
+  async function sendClientPdf() {
+    if (sendingPdf) return;
+    const ok = await confirm({
+      title: "Envoyer la planification au client ?",
+      description:
+        "Le client recevra par courriel le PDF des phases et des dates prévues (sans heures ni assignés).",
+      confirmLabel: "Envoyer",
+      cancelLabel: "Annuler",
+      success: true
+    });
+    if (!ok) return;
+    setSendingPdf(true);
+    setPdfMsg(null);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/planification-client/send`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        let detail = `http_${res.status}`;
+        try {
+          const j = (await res.json()) as { detail?: string };
+          if (j.detail) detail = j.detail;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail);
+      }
+      const j = (await res.json()) as { to?: string };
+      setPdfMsg(
+        j.to
+          ? `Planification envoyée à ${j.to}.`
+          : "Planification envoyée au client."
+      );
+    } catch (e) {
+      setErr(`Envoi de la planification échoué : ${(e as Error).message}`);
+    } finally {
+      setSendingPdf(false);
+    }
+  }
+
   async function sortPhasesByDate() {
     const next = [...phases].sort((a, b) => {
       const da = a.start_date ? new Date(a.start_date).getTime() : Infinity;
@@ -3523,6 +3567,12 @@ function PlanificationTab({
 
       <ProjectTeamSection projectId={projectId} phases={phases} />
 
+      {pdfMsg ? (
+        <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+          {pdfMsg}
+        </p>
+      ) : null}
+
       <div className="flex items-center justify-between">
         <p className="text-xs text-white/60">
           Découpe le projet en phases (ex. Démolition, Fondation,
@@ -3544,6 +3594,22 @@ function PlanificationTab({
                 <FileText className="mr-1.5 h-3.5 w-3.5" />
               )}
               PDF client
+            </button>
+          ) : null}
+          {phases.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => sendClientPdf()}
+              disabled={sendingPdf}
+              className="btn-secondary btn-sm disabled:opacity-60"
+              title="Envoyer le PDF client par courriel au client du projet"
+            >
+              {sendingPdf ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Mail className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Envoyer au client
             </button>
           ) : null}
           {phases.length > 1 ? (
