@@ -713,9 +713,9 @@ async def send_planification_client(
             else f" Les travaux sont prévus du {first} au {last}."
         )
     addr = (project.address or project.name or "").strip()
+    pname = (project.name or addr).strip()
     subject = (
-        f"Work schedule — {addr}" if is_en
-        else f"Planification des travaux — {addr}"
+        f"Schedule ({pname})" if is_en else f"Planification ({pname})"
     )
     body = (
         "<p>Hello,</p><p>Please find attached the planned schedule for "
