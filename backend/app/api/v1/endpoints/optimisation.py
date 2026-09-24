@@ -751,6 +751,14 @@ class QboPieceMeta(BaseModel):
     content_type: Optional[str] = None
 
 
+class QboLigneOut(BaseModel):
+    """Une ligne d'un document QuickBooks imputée à l'enveloppe."""
+
+    description: Optional[str] = None
+    fournisseur: Optional[str] = None
+    montant: float
+
+
 class QboTransactionOut(BaseModel):
     txn_type: str
     txn_id: str
@@ -760,6 +768,8 @@ class QboTransactionOut(BaseModel):
     montant_impute: float
     montant_total: float
     description: Optional[str] = None
+    #: Ventilation par ligne (écriture de journal à plusieurs éléments).
+    lignes: List[QboLigneOut] = Field(default_factory=list)
     pieces: List[QboPieceMeta] = Field(default_factory=list)
 
 
@@ -768,12 +778,19 @@ class QboTransactionOut(BaseModel):
     response_model=List[QboTransactionOut],
 )
 async def qbo_transactions_ligne(
-    projet_id: int, ligne_id: int, db: DBSession, _: CurrentUser
+    projet_id: int,
+    ligne_id: int,
+    db: DBSession,
+    _: CurrentUser,
+    volet: str = Query(default="depense", pattern=r"^(depense|financement)$"),
 ) -> List[QboTransactionOut]:
-    """DÉTAIL d'une enveloppe : les transactions QuickBooks (factures
-    fournisseurs et dépenses) derrière le total « dépensé », avec leurs
-    pièces jointes. Lecture seule — demande Phil 2026-08-22 : « avoir les
-    factures PDF reliées à ces dépenses-là dans mon portail »."""
+    """DÉTAIL d'une enveloppe : les transactions QuickBooks derrière le
+    total « dépensé » (``volet=depense`` : factures, dépenses, écritures)
+    ou derrière le « financé » (``volet=financement`` : dépôts, virements,
+    écritures, remboursements en −), avec leurs pièces jointes. Lecture
+    seule — Phil 2026-08-22 : « avoir les factures PDF reliées à ces
+    dépenses-là dans mon portail » ; 2026-09-24 : « sur les financés aussi
+    ça serait bien que ce soit cliquable »."""
     from app.services.qbo_optimisation import transactions_depenses
 
     p = await _projet_or_404(db, projet_id)
@@ -792,10 +809,15 @@ async def qbo_transactions_ligne(
     ).scalar_one_or_none()
     if ligne is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Ligne introuvable.")
+    brut = (
+        ligne.qbo_financement_accounts_json
+        if volet == "financement"
+        else ligne.qbo_accounts_json
+    )
     try:
         comptes = {
             str(c.get("id"))
-            for c in json.loads(ligne.qbo_accounts_json or "[]")
+            for c in json.loads(brut or "[]")
             if c.get("id") is not None
         }
     except Exception:  # noqa: BLE001
