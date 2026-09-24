@@ -1,11 +1,18 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import {
   Building2,
   Calendar,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   ExternalLink,
   LayoutGrid,
   List,
@@ -255,6 +262,20 @@ function parseAccounts(json: string | null): { id: string; name: string }[] {
   }
 }
 
+/**
+ * Nom COMPLET d'un compte QuickBooks, lisible : « Frais de détention:Frais
+ * bancaire » → « Frais de détention : Frais bancaire ». Phil 2026-09-24 :
+ * « pour l'instant je vois juste Frais bancaire, mettre la catégorie
+ * complète comme titre ».
+ */
+function fqnLisible(fqn: string): string {
+  return fqn
+    .split(":")
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .join(" : ");
+}
+
 function parseObjectifs(json: string | null): ObjectifLibre[] {
   if (!json) return [];
   try {
@@ -303,6 +324,8 @@ export default function ProjetsOptimisationPage() {
   const [qboSolde, setQboSolde] = useState<number | null>(null);
   const [qboCashflow, setQboCashflow] = useState<Cashflow | null>(null);
   const [qboHypCfg, setQboHypCfg] = useState(false);
+  //: Nom complet (« Parent:Enfant ») de chaque compte QBO suivi.
+  const [qboNoms, setQboNoms] = useState<Record<string, string>>({});
   const [qboErr, setQboErr] = useState<string | null>(null);
   const [qboLoading, setQboLoading] = useState(false);
 
@@ -345,6 +368,7 @@ export default function ProjetsOptimisationPage() {
         solde_bancaire: number | null;
         cashflow: Cashflow | null;
         hypotheque_configuree?: boolean;
+        noms_comptes?: Record<string, string>;
         erreur: string | null;
       };
       setQboDep(d.par_ligne || {});
@@ -352,6 +376,7 @@ export default function ProjetsOptimisationPage() {
       setQboSolde(d.solde_bancaire ?? null);
       setQboCashflow(d.cashflow ?? null);
       setQboHypCfg(!!d.hypotheque_configuree);
+      setQboNoms(d.noms_comptes || {});
       setQboErr(d.erreur || null);
     } catch (e) {
       setQboErr(`Lecture QuickBooks échouée : ${(e as Error).message}`);
@@ -379,6 +404,7 @@ export default function ProjetsOptimisationPage() {
       setQboSolde(null);
       setQboCashflow(null);
       setQboHypCfg(false);
+      setQboNoms({});
       setQboErr(null);
       void loadDetail(selId);
       void loadQbo(selId);
@@ -601,6 +627,7 @@ export default function ProjetsOptimisationPage() {
                       projet={detail}
                       qboDep={qboDep}
                       qboFin={qboFin}
+                      qboNoms={qboNoms}
                       qboSolde={qboSolde}
                       qboErr={qboErr}
                       qboLoading={qboLoading}
@@ -965,6 +992,7 @@ function BudgetSection({
   projet,
   qboDep,
   qboFin,
+  qboNoms,
   qboSolde,
   qboErr,
   qboLoading,
@@ -975,6 +1003,7 @@ function BudgetSection({
   projet: Projet;
   qboDep: Record<number, number>;
   qboFin: Record<number, number>;
+  qboNoms: Record<string, string>;
   qboSolde: number | null;
   qboErr: string | null;
   qboLoading: boolean;
@@ -999,6 +1028,62 @@ function BudgetSection({
     });
     if (r.ok) onChanged();
   }
+
+  /** Monte (delta −1) ou descend (+1) l'enveloppe ``idx`` d'un cran. */
+  async function deplacer(idx: number, delta: number) {
+    const ids = projet.budget_lignes.map((x) => x.id);
+    const j = idx + delta;
+    if (j < 0 || j >= ids.length) return;
+    [ids[idx], ids[j]] = [ids[j], ids[idx]];
+    const r = await authedFetch(
+      `/api/v1/optimisation/projets/${projet.id}/budget-lignes/ordre`,
+      { method: "POST", body: JSON.stringify({ ids }) }
+    );
+    if (r.ok) onChanged();
+  }
+
+  //: Titres COMPLETS : dès que QuickBooks a donné le nom qualifié de
+  //: chaque compte suivi, une enveloppe encore nommée avec le nom
+  //: court (« Frais bancaire ») est renommée une fois pour toutes
+  //: (« Frais de détention : Frais bancaire »).
+  const renommees = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    const patches: {
+      id: number;
+      nom: string;
+      accounts: { id: string; name: string }[];
+    }[] = [];
+    for (const l of projet.budget_lignes) {
+      if (l.mode === "deficit_operation" || renommees.current.has(l.id))
+        continue;
+      const accounts = parseAccounts(l.qbo_accounts_json);
+      if (accounts.length !== 1) continue;
+      const fqn = qboNoms[accounts[0].id];
+      if (!fqn) continue;
+      const nom = fqnLisible(fqn);
+      if (!nom || nom === l.nom) continue;
+      patches.push({
+        id: l.id,
+        nom,
+        accounts: [{ id: accounts[0].id, name: nom }]
+      });
+    }
+    if (patches.length === 0) return;
+    for (const p of patches) renommees.current.add(p.id);
+    void (async () => {
+      for (const p of patches) {
+        await authedFetch(`/api/v1/optimisation/budget-lignes/${p.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            nom: p.nom,
+            qbo_accounts_json: JSON.stringify(p.accounts)
+          })
+        });
+      }
+      onChanged();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projet.budget_lignes, qboNoms]);
 
   const totalBudget = projet.budget_lignes.reduce(
     (s, l) => s + (Number(l.budget_montant) || 0),
@@ -1162,7 +1247,7 @@ function BudgetSection({
               </tr>
             </thead>
             <tbody>
-              {projet.budget_lignes.map((l) => {
+              {projet.budget_lignes.map((l, idx) => {
                 const dep = qboDep[l.id] ?? null;
                 const fin = qboFin[l.id] ?? 0;
                 const budget = Number(l.budget_montant) || 0;
@@ -1183,6 +1268,29 @@ function BudgetSection({
                       className="py-2 pr-2 font-medium"
                       style={{ color: "var(--qg-text)" }}
                     >
+                      <span
+                        className="mr-1.5 inline-flex flex-col align-middle"
+                        style={{ color: "var(--qg-text-muted)" }}
+                      >
+                        <button
+                          type="button"
+                          disabled={idx === 0}
+                          onClick={() => void deplacer(idx, -1)}
+                          className="flex h-3 w-4 items-center justify-center rounded hover:text-accent-500 disabled:opacity-20"
+                          title="Monter cette enveloppe"
+                        >
+                          <ChevronUp className="h-3 w-3" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={idx === projet.budget_lignes.length - 1}
+                          onClick={() => void deplacer(idx, 1)}
+                          className="flex h-3 w-4 items-center justify-center rounded hover:text-accent-500 disabled:opacity-20"
+                          title="Descendre cette enveloppe"
+                        >
+                          <ChevronDown className="h-3 w-3" />
+                        </button>
+                      </span>
                       {l.nom}
                       {l.mode === "deficit_operation" ? (
                         <span
@@ -1355,6 +1463,7 @@ function BudgetSection({
           onPatchProjet={onPatchProjet}
           onClose={() => setSettingsOpen(false)}
           onChanged={onChanged}
+          onLierFinancement={(l) => setFinLigne(l)}
         />
       ) : null}
 
@@ -1387,6 +1496,13 @@ type QboPiece = {
   att_id: string;
   file_name: string | null;
   content_type: string | null;
+};
+
+//: Libellé du type de document QuickBooks derrière une ligne du détail.
+const QBO_TXN_LABEL: Record<string, string> = {
+  bill: "facture fournisseur",
+  purchase: "dépense",
+  journalentry: "écriture de journal"
 };
 
 type QboTxn = {
@@ -1503,7 +1619,8 @@ function TransactionsQboModal({
           </p>
         ) : rows !== null && rows.length === 0 ? (
           <p className="py-6 text-center text-xs" style={{ color: "var(--qg-text-muted)" }}>
-            Aucune transaction sur les comptes de cette enveloppe.
+            Aucune facture, dépense ni écriture de journal sur les
+            comptes de cette enveloppe.
           </p>
         ) : rows !== null ? (
           <div className="overflow-x-auto">
@@ -1534,7 +1651,19 @@ function TransactionsQboModal({
                       {t.date || "—"}
                     </td>
                     <td className="py-1.5 pr-2" style={{ color: "var(--qg-text)" }}>
-                      {t.fournisseur || "—"}
+                      {t.fournisseur ||
+                        (t.txn_type === "journalentry"
+                          ? "Écriture de journal"
+                          : "—")}
+                      {QBO_TXN_LABEL[t.txn_type] &&
+                      !(t.txn_type === "journalentry" && !t.fournisseur) ? (
+                        <span
+                          className="ml-1 text-[10px]"
+                          style={{ color: "var(--qg-text-muted)" }}
+                        >
+                          {QBO_TXN_LABEL[t.txn_type]}
+                        </span>
+                      ) : null}
                       {t.doc_number ? (
                         <span
                           className="ml-1 text-[11px]"
@@ -1599,10 +1728,13 @@ function TransactionsQboModal({
               className="mt-2 text-[10px]"
               style={{ color: "var(--qg-text-muted)" }}
             >
-              Les factures ponctuelles (travaux, réparations…) sont
-              jointes à leurs transactions ; les factures récurrentes
-              (électricité, assurances, télécommunications…) ne sont
-              pas déposées systématiquement dans QuickBooks.
+              Factures fournisseurs, dépenses (chèques, cartes) et
+              écritures de journal qui touchent les comptes de
+              l&apos;enveloppe. Les factures ponctuelles (travaux,
+              réparations…) sont jointes à leurs transactions ; les
+              factures récurrentes (électricité, assurances,
+              télécommunications…) ne sont pas déposées
+              systématiquement dans QuickBooks.
             </p>
           </div>
         ) : null}
@@ -1792,12 +1924,16 @@ function BudgetSettingsModal({
   projet,
   onPatchProjet,
   onClose,
-  onChanged
+  onChanged,
+  onLierFinancement
 }: {
   projet: Projet;
   onPatchProjet: (p: Record<string, unknown>) => Promise<void>;
   onClose: () => void;
   onChanged: () => void;
+  //: Ouvre le choix des comptes de FINANCEMENT d'une enveloppe (le même
+  //: « lier un compte » que dans le tableau — Phil 2026-09-24).
+  onLierFinancement: (l: BudgetLigne) => void;
 }) {
   const confirm = useConfirm();
   // La connexion d'un projet d'optimisation est TOUJOURS le fichier
@@ -1876,7 +2012,7 @@ function BudgetSettingsModal({
     void (async () => {
       try {
         const r = await authedFetch(
-          `/api/v1/optimisation/qbo-comptes?scope=${encodeURIComponent(scope)}`
+          `/api/v1/optimisation/qbo-comptes?scope=${encodeURIComponent(scope)}&kind=tous`
         );
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const d = (await r.json()) as {
@@ -2040,9 +2176,57 @@ function BudgetSettingsModal({
             <BankAccountPicker projet={projet} onPatch={onPatchProjet} />
             <HypothequePicker projet={projet} onPatch={onPatchProjet} />
             <DetentionToggle projet={projet} onChanged={onChanged} />
+            {projet.budget_lignes.length > 0 ? (
+              <div className="mt-3">
+                <label className="label text-[10px] uppercase">
+                  Financement des enveloppes
+                </label>
+                <p
+                  className="text-[10px]"
+                  style={{ color: "var(--qg-text-muted)" }}
+                >
+                  Comptes QuickBooks d&apos;entrée d&apos;argent (prêt,
+                  marge, apport…) qui financent chaque enveloppe.
+                </p>
+                <ul className="mt-1 space-y-0.5">
+                  {projet.budget_lignes.map((l) => {
+                    const n = parseAccounts(
+                      l.qbo_financement_accounts_json
+                    ).length;
+                    return (
+                      <li
+                        key={l.id}
+                        className="flex items-center justify-between gap-2 rounded-md px-1.5 py-1 text-[12px]"
+                        style={{ color: "var(--qg-text)" }}
+                      >
+                        <span className="truncate">{l.nom}</span>
+                        <button
+                          type="button"
+                          onClick={() => onLierFinancement(l)}
+                          className="flex-shrink-0 text-[11px] text-accent-500 hover:underline"
+                          title="Choisir les comptes QuickBooks d'entrée d'argent (financement) de cette enveloppe"
+                        >
+                          {n === 0
+                            ? "lier un compte"
+                            : `${n} compte${n > 1 ? "s" : ""} — modifier`}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ) : null}
             <label className="label mt-3 text-[10px] uppercase">
-              Catégories du plan comptable à suivre
+              Éléments du plan comptable à suivre
             </label>
+            <p
+              className="text-[10px]"
+              style={{ color: "var(--qg-text-muted)" }}
+            >
+              Tout le plan comptable (dépenses, immobilisations, passifs…)
+              : chaque élément coché devient une enveloppe, titrée avec sa
+              catégorie complète.
+            </p>
             {comptesErr ? (
               <p className="mt-1 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
                 {comptesErr}
@@ -2074,7 +2258,11 @@ function BudgetSettingsModal({
                         onChange={(e) =>
                           setSel((prev) => {
                             const next = new Map(prev);
-                            if (e.target.checked) next.set(c.id, c.name);
+                            if (e.target.checked)
+                              next.set(
+                                c.id,
+                                fqnLisible(c.fully_qualified_name)
+                              );
                             else next.delete(c.id);
                             return next;
                           })

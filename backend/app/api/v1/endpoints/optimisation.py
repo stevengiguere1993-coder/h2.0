@@ -686,6 +686,43 @@ async def update_budget_ligne(
     return BudgetLigneRead.model_validate(ligne)
 
 
+class BudgetOrdreIn(BaseModel):
+    #: Ids des enveloppes du projet, dans l'ordre d'affichage voulu.
+    ids: List[int] = Field(..., min_length=1, max_length=200)
+
+
+@router.post(
+    "/projets/{projet_id}/budget-lignes/ordre", response_model=ProjetRead
+)
+async def ordonner_budget_lignes(
+    projet_id: int, data: BudgetOrdreIn, db: DBSession, _: CurrentUser
+) -> ProjetRead:
+    """ORDRE des enveloppes du budget — ``ids`` = toutes les lignes du
+    projet, dans l'ordre voulu. Demande Phil 2026-09-24 : « permet-moi
+    de choisir l'ordre des éléments dans le budget, disons taxes de
+    bienvenue en premier »."""
+    p = await _projet_or_404(db, projet_id)
+    lignes = (
+        await db.execute(
+            select(OptimisationBudgetLigne).where(
+                OptimisationBudgetLigne.projet_id == projet_id
+            )
+        )
+    ).scalars().all()
+    par_id = {ligne.id: ligne for ligne in lignes}
+    if len(set(data.ids)) != len(data.ids) or set(data.ids) != set(par_id):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "La liste doit contenir chaque enveloppe du projet exactement "
+            "une fois.",
+        )
+    for pos, lid in enumerate(data.ids):
+        par_id[lid].position = pos
+    await db.commit()
+    await db.refresh(p)
+    return await _projet_read(db, p)
+
+
 @router.delete(
     "/budget-lignes/{ligne_id}", status_code=status.HTTP_204_NO_CONTENT
 )
@@ -875,6 +912,9 @@ class QboDepensesOut(BaseModel):
     cashflow: Optional[Dict[str, object]] = None
     #: True si un compte d'hypothèque est choisi (colonne affichée).
     hypotheque_configuree: bool = False
+    #: Nom COMPLET (« Parent:Enfant ») de chaque compte suivi par une
+    #: enveloppe — l'écran renomme les enveloppes au titre court.
+    noms_comptes: Dict[str, str] = Field(default_factory=dict)
     erreur: Optional[str] = None
 
 
@@ -890,6 +930,7 @@ async def qbo_depenses(
     from app.services.qbo_optimisation import (
         cashflow_mensuel,
         depenses_par_compte,
+        lister_comptes_depense,
         solde_compte,
     )
 
@@ -962,12 +1003,39 @@ async def qbo_depenses(
         except Exception as exc:  # noqa: BLE001 — jamais bloquant
             log.info("solde bancaire projet #%s: %s", projet_id, exc)
 
+    # Noms COMPLETS des comptes suivis (« Frais de détention:Frais
+    # bancaire ») : l'écran s'en sert pour titrer les enveloppes avec la
+    # catégorie entière (Phil 2026-09-24 : « pour l'instant je vois juste
+    # Frais bancaire »). Jamais bloquant.
+    noms: Dict[str, str] = {}
+    ids_suivis: set = set()
+    for ligne in lignes:
+        for raw in (ligne.qbo_accounts_json, ligne.qbo_financement_accounts_json):
+            try:
+                ids_suivis.update(
+                    str(c.get("id"))
+                    for c in json.loads(raw or "[]")
+                    if c.get("id") is not None
+                )
+            except Exception:  # noqa: BLE001
+                continue
+    if ids_suivis:
+        try:
+            noms = {
+                c["id"]: c["fully_qualified_name"]
+                for c in await lister_comptes_depense(p.qbo_scope, "tous")
+                if c["id"] in ids_suivis
+            }
+        except Exception as exc:  # noqa: BLE001 — jamais bloquant
+            log.info("noms des comptes projet #%s: %s", projet_id, exc)
+
     return QboDepensesOut(
         par_ligne=par_ligne,
         financement_par_ligne=financement,
         solde_bancaire=solde,
         cashflow=cashflow,
         hypotheque_configuree=bool(p.qbo_hypotheque_account_id),
+        noms_comptes=noms,
     )
 
 
@@ -982,12 +1050,13 @@ async def qbo_comptes(
     scope: str = Query(...),
     kind: str = Query(
         default="depense",
-        pattern=r"^(depense|financement|banque|hypotheque|avances)$",
+        pattern=r"^(depense|financement|banque|hypotheque|avances|tous)$",
     ),
 ) -> QboComptesOut:
     """Plan comptable de la connexion ``scope``, par famille :
-    ``depense`` (enveloppes), ``financement`` (entrées d'argent) ou
-    ``banque`` (compte dont on affiche le solde)."""
+    ``depense`` (enveloppes), ``financement`` (entrées d'argent),
+    ``banque`` (compte dont on affiche le solde) ou ``tous`` (le plan
+    comptable entier — enveloppes du budget, Phil 2026-09-24)."""
     from app.services.qbo_optimisation import lister_comptes_depense
 
     try:

@@ -51,7 +51,9 @@ _ACCOUNT_TYPES_AVANCES = (
     "Equity",
 )
 
-#: kind exposé par l'API → familles de comptes.
+#: kind exposé par l'API → familles de comptes. « tous » = le plan
+#: comptable ENTIER (Phil 2026-09-24 : « permet de mettre tout élément
+#: du plan comptable » dans les enveloppes du budget).
 _KINDS = {
     "depense": _ACCOUNT_TYPES,
     "financement": _ACCOUNT_TYPES_FINANCEMENT,
@@ -96,12 +98,16 @@ async def lister_comptes_depense(
             f"QuickBooks n'est pas connecté pour « {scope} » "
             "(Paramètres → Intégrations)."
         )
-    types_sql = ", ".join(
-        f"'{t}'" for t in _KINDS.get(kind, _ACCOUNT_TYPES)
-    )
+    if kind == "tous":
+        filtre_type = ""
+    else:
+        types_sql = ", ".join(
+            f"'{t}'" for t in _KINDS.get(kind, _ACCOUNT_TYPES)
+        )
+        filtre_type = f"AND AccountType IN ({types_sql}) "
     rows = await qbo.query(
         "SELECT Id, Name, FullyQualifiedName, AccountType, Classification "
-        f"FROM Account WHERE Active = true AND AccountType IN ({types_sql}) "
+        f"FROM Account WHERE Active = true {filtre_type}"
         "MAXRESULTS 1000"
     )
     out = [
@@ -666,41 +672,95 @@ async def _ready(qbo: Any) -> bool:
         return False
 
 
+#: Comptes de RÉSULTAT (revenus / dépenses) : leur « dépensé » est un
+#: mouvement de période (P&L) → le détail est borné aux mêmes dates.
+#: Les comptes de BILAN (actif, passif, équité — ex. « Acquisition » en
+#: immobilisation) affichent un SOLDE à la date de fin : leur détail
+#: liste TOUT ce qui les a touchés jusqu'à cette date, sans borne de
+#: début, pour que la somme retombe sur le total montré.
+_CLASSIFICATIONS_RESULTAT = ("Revenue", "Expense")
+
+
+async def _classification_comptes(
+    qbo: Any, account_ids: set[str]
+) -> Dict[str, str]:
+    """{id: Classification} des comptes demandés — {} si la lecture
+    échoue (on retombe alors sur le détail borné, comme avant)."""
+    ids = sorted(str(a).replace("'", "") for a in account_ids if a)
+    if not ids:
+        return {}
+    try:
+        rows = await qbo.query(
+            "SELECT Id, Classification FROM Account WHERE Id IN ("
+            + ", ".join(f"'{i}'" for i in ids)
+            + ") MAXRESULTS 1000"
+        )
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant
+        log.info("classification des comptes illisible : %s", exc)
+        return {}
+    return {
+        str(r.get("Id")): str(r.get("Classification") or "") for r in rows
+    }
+
+
+#: Entités QuickBooks lues pour le détail d'une enveloppe → txn_type.
+_ENTITES_DETAIL = (
+    ("Purchase", "purchase"),
+    ("Bill", "bill"),
+    ("JournalEntry", "journalentry"),
+)
+
+
 async def transactions_depenses(
     scope: str,
     account_ids: set[str],
     date_debut: Optional[str],
     date_fin: str,
 ) -> List[Dict[str, Any]]:
-    """Transactions de dépense (Bills + Purchases) touchant les comptes
-    donnés, avec leurs pièces jointes QuickBooks.
+    """Transactions (Bills + Purchases + écritures de journal) touchant
+    les comptes donnés, avec leurs pièces jointes QuickBooks.
 
     Demande Phil 2026-08-22 : « j'aimerais avoir les factures PDF reliées
     à ces dépenses-là dans mon portail ». La page Optimisation n'affichait
-    que des TOTAUX par enveloppe (rapport P&L) — les pièces jointes vivent
-    sur les TRANSACTIONS. On liste donc les documents (Bill = facture
-    fournisseur, Purchase = dépense cash/chèque/carte) dont au moins une
-    ligne impute un des comptes de l'enveloppe, et on y attache les
-    métadonnées d'Attachable. Lecture seule, rien n'est stocké.
+    que des TOTAUX par enveloppe (rapports P&L / bilan) — les pièces
+    jointes vivent sur les TRANSACTIONS. On liste donc les documents dont
+    au moins une ligne impute un des comptes de l'enveloppe, et on y
+    attache les métadonnées d'Attachable. Lecture seule, rien n'est stocké.
 
-    Les JournalEntries sont volontairement ignorées : une écriture de
-    journal ne porte à peu près jamais de facture PDF, et c'est le
-    document qu'on cherche ici.
+    2026-09-24 (Phil : « je ne peux pas voir les factures reliées à des
+    écritures de journal, ex. le 8 076 d'Acquisition ») : les
+    JournalEntries sont lues aussi — débit = +, crédit = − sur le compte
+    de l'enveloppe. Et un compte de BILAN est listé sans borne de début
+    (son total est un solde, pas un mouvement de période).
     """
     from app.integrations.quickbooks import get_qbo
 
     qbo = get_qbo(scope)
-    if not qbo.ready:
+    if not await _ready(qbo):
         raise RuntimeError(
             f"QuickBooks n'est pas connecté pour « {scope} » "
             "(Paramètres → Intégrations)."
         )
+    account_ids = {str(a) for a in account_ids if a}
+    classif = await _classification_comptes(qbo, account_ids)
+    sans_borne = {
+        a
+        for a in account_ids
+        if classif.get(a) and classif[a] not in _CLASSIFICATIONS_RESULTAT
+    }
     filtre_date = f"TxnDate <= '{date_fin}'"
-    if date_debut:
+    if date_debut and not sans_borne:
         filtre_date = f"TxnDate >= '{date_debut}' AND " + filtre_date
 
+    def _compte_retenu(acc: str, txn_date: str) -> bool:
+        if acc not in account_ids:
+            return False
+        if date_debut and txn_date and txn_date < date_debut:
+            return acc in sans_borne
+        return True
+
     out: List[Dict[str, Any]] = []
-    for entity, type_key in (("Purchase", "purchase"), ("Bill", "bill")):
+    for entity, type_key in _ENTITES_DETAIL:
         start = 1
         # Pagination défensive : 5 pages de 200 max par type — au-delà,
         # l'enveloppe couvre des années et le détail perd son sens.
@@ -710,22 +770,39 @@ async def transactions_depenses(
                 f"STARTPOSITION {start} MAXRESULTS 200"
             )
             for txn in rows:
+                txn_date = str(txn.get("TxnDate") or "")
                 impute = 0.0
+                four: Optional[str] = None
+                desc_ligne: Optional[str] = None
                 for line in txn.get("Line") or []:
-                    det = line.get("AccountBasedExpenseLineDetail") or {}
+                    if type_key == "journalentry":
+                        det = line.get("JournalEntryLineDetail") or {}
+                        signe = -1.0 if det.get("PostingType") == "Credit" else 1.0
+                    else:
+                        det = line.get("AccountBasedExpenseLineDetail") or {}
+                        signe = 1.0
                     acc = str(
                         (det.get("AccountRef") or {}).get("value") or ""
                     )
-                    if acc in account_ids:
-                        try:
-                            impute += float(line.get("Amount") or 0)
-                        except (TypeError, ValueError):
-                            pass
-                if not impute:
+                    if not _compte_retenu(acc, txn_date):
+                        continue
+                    try:
+                        impute += signe * float(line.get("Amount") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if type_key == "journalentry":
+                        if four is None:
+                            four = (
+                                (det.get("Entity") or {}).get("EntityRef")
+                                or {}
+                            ).get("name")
+                        if desc_ligne is None and line.get("Description"):
+                            desc_ligne = str(line.get("Description"))
+                if abs(impute) < 0.005:
                     continue
                 if type_key == "purchase":
                     four = (txn.get("EntityRef") or {}).get("name")
-                else:
+                elif type_key == "bill":
                     four = (txn.get("VendorRef") or {}).get("name")
                 out.append(
                     {
@@ -736,7 +813,7 @@ async def transactions_depenses(
                         "doc_number": txn.get("DocNumber"),
                         "montant_impute": round(impute, 2),
                         "montant_total": float(txn.get("TotalAmt") or 0),
-                        "description": txn.get("PrivateNote"),
+                        "description": txn.get("PrivateNote") or desc_ligne,
                         "pieces": [],
                     }
                 )
