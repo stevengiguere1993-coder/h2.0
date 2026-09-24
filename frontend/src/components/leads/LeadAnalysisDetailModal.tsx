@@ -3713,6 +3713,25 @@ type AnalysisResults = {
     amount: number;
     program: string;
   };
+  /** Trace lisible de chaque calcul (Phil 2026-09-24 : « je veux tout
+   *  tout tout voir ») — construite par le serveur au moment du calcul. */
+  details_calculs?: TraceSection[] | null;
+};
+
+type TraceLigne = {
+  label: string;
+  formule: string | null;
+  valeur: number | null;
+  valeur_txt: string;
+  source: "fiche" | "paramètre" | "calcul" | string;
+  gras: boolean;
+  note: string | null;
+};
+
+type TraceSection = {
+  titre: string;
+  note: string | null;
+  lignes: TraceLigne[];
 };
 
 /** Graphique de projection long terme — valeur de l'actif, solde du
@@ -6361,10 +6380,6 @@ function CalculationDetailsSection({
   overridesJson?: string | null;
   lead: LeadDetail;
 }) {
-  // Détails ouverts par défaut : la section occupe désormais son propre
-  // onglet. Le repli reste disponible pour alléger la lecture.
-  const [open, setOpen] = useState(true);
-
   const data = useMemo<AnalysisResults | null>(() => {
     try {
       return JSON.parse(resultsJson) as AnalysisResults;
@@ -6384,26 +6399,238 @@ function CalculationDetailsSection({
     return {};
   }, [overridesJson]);
 
+  //: Sections repliées (par titre). Tout est ouvert par défaut.
+  const [replies, setReplies] = useState<Set<string>>(new Set());
+  const [ancienOuvert, setAncienOuvert] = useState(false);
+
   if (!data) return null;
+  const trace = data.details_calculs || [];
+  const aTrace = trace.length > 0;
+
+  function basculer(titre: string) {
+    setReplies((prev) => {
+      const next = new Set(prev);
+      if (next.has(titre)) next.delete(titre);
+      else next.add(titre);
+      return next;
+    });
+  }
+
+  function ancre(titre: string): string {
+    return `calc-${titre
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")}`;
+  }
 
   return (
     <SectionCard
       icon={ListChecks}
       title="Détails des calculs"
       tone="neutral"
-      subtitle="Reproduit la granularité du fichier Excel d'origine. Toutes les valeurs sont issues du dernier calcul persisté."
+      subtitle={
+        aTrace
+          ? "Chaque calcul du moteur, dans l'ordre : le poste, la formule avec les vrais nombres, la valeur et sa provenance (fiche, paramètre ou calcul). Valeurs du dernier calcul lancé."
+          : "Reproduit la granularité du fichier Excel d'origine. Toutes les valeurs sont issues du dernier calcul persisté."
+      }
       action={
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-white/60 hover:bg-white/10 hover:text-white"
-        >
-          {open ? "Replier" : "Déplier"}
-        </button>
+        aTrace ? (
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setReplies(new Set())}
+              className="rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-white/60 hover:bg-white/10 hover:text-white"
+            >
+              Tout déplier
+            </button>
+            <button
+              type="button"
+              onClick={() => setReplies(new Set(trace.map((t) => t.titre)))}
+              className="rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-white/60 hover:bg-white/10 hover:text-white"
+            >
+              Tout replier
+            </button>
+          </div>
+        ) : null
       }
     >
-      {open ? (
+      {aTrace ? (
         <div className="text-[11px] text-white/80">
+          {/* Sommaire */}
+          <nav className="flex flex-wrap gap-1.5">
+            {trace.map((sec) => (
+              <a
+                key={sec.titre}
+                href={`#${ancre(sec.titre)}`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  setReplies((prev) => {
+                    const next = new Set(prev);
+                    next.delete(sec.titre);
+                    return next;
+                  });
+                  document
+                    .getElementById(ancre(sec.titre))
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+                className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[10px] text-white/70 hover:bg-white/10 hover:text-white"
+              >
+                {sec.titre}
+              </a>
+            ))}
+          </nav>
+          <p className="mt-2 text-[10px] text-white/40">
+            Provenance :{" "}
+            <span className="text-sky-300">fiche</span> = saisi ou extrait de
+            l&apos;annonce ·{" "}
+            <span className="text-amber-300">paramètre</span> = défaut global
+            (Paramètres → Prospection) ·{" "}
+            <span className="text-white/60">calcul</span> = calculé par le
+            moteur.
+          </p>
+
+          {trace.map((sec) => {
+            const replie = replies.has(sec.titre);
+            return (
+              <div
+                key={sec.titre}
+                id={ancre(sec.titre)}
+                className="mt-4 scroll-mt-4 rounded-xl border border-brand-800 bg-brand-950/40"
+              >
+                <button
+                  type="button"
+                  onClick={() => basculer(sec.titre)}
+                  className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left"
+                >
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-accent-500">
+                    {sec.titre}
+                  </span>
+                  <span className="text-[10px] text-white/40">
+                    {replie ? "déplier" : "replier"}
+                  </span>
+                </button>
+                {!replie ? (
+                  <div className="px-3 pb-3">
+                    {sec.note ? (
+                      <p className="mb-2 text-[10px] text-white/50">
+                        {sec.note}
+                      </p>
+                    ) : null}
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[560px]">
+                        <thead>
+                          <tr className="text-[9px] uppercase tracking-wider text-white/40">
+                            <th className="px-2 py-1 text-left font-normal">
+                              Poste
+                            </th>
+                            <th className="px-2 py-1 text-left font-normal">
+                              Formule
+                            </th>
+                            <th className="px-2 py-1 text-right font-normal">
+                              Valeur
+                            </th>
+                            <th className="px-2 py-1 text-center font-normal">
+                              Provenance
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sec.lignes.map((l, i) => (
+                            <tr
+                              key={`${l.label}-${i}`}
+                              className={`border-t border-brand-800/60 ${
+                                l.gras ? "bg-white/[0.03]" : ""
+                              }`}
+                            >
+                              <td
+                                className={`px-2 py-1 align-top ${
+                                  l.gras
+                                    ? "font-semibold text-white"
+                                    : "text-white/70"
+                                }`}
+                              >
+                                {l.label}
+                                {l.note ? (
+                                  <span className="mt-0.5 block max-w-[360px] text-[10px] font-normal leading-snug text-amber-200/80">
+                                    {l.note}
+                                  </span>
+                                ) : null}
+                              </td>
+                              <td className="px-2 py-1 align-top font-mono text-[10px] text-white/55">
+                                {l.formule || "—"}
+                              </td>
+                              <td
+                                className={`px-2 py-1 text-right align-top font-mono tabular-nums ${
+                                  l.gras
+                                    ? "font-bold text-white"
+                                    : "text-white/90"
+                                }`}
+                              >
+                                {l.valeur_txt}
+                              </td>
+                              <td className="px-2 py-1 text-center align-top text-[10px]">
+                                <span
+                                  className={
+                                    l.source === "fiche"
+                                      ? "text-sky-300"
+                                      : l.source === "paramètre"
+                                      ? "text-amber-300"
+                                      : "text-white/40"
+                                  }
+                                >
+                                  {l.source}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+
+          {/* Annexe : détail par unité et tableaux croisés (chantier). */}
+          <StrategieDetailSubsection data={data} lead={lead} />
+
+          <div className="mt-4">
+            <button
+              type="button"
+              onClick={() => setAncienOuvert((v) => !v)}
+              className="text-[10px] text-white/40 hover:text-white/70"
+            >
+              {ancienOuvert
+                ? "Masquer l'ancien affichage (valeurs seules)"
+                : "Afficher l'ancien affichage (valeurs seules)"}
+            </button>
+            {ancienOuvert ? (
+              <>
+                <HypothesesSubsection lead={lead} data={data} />
+                <TypologieSubsection data={data} />
+                <FraisDemarrageDetailSubsection
+                  data={data}
+                  overrides={overrides}
+                  mdfPctFinal={
+                    lead.mdf_preteur_b_pct ?? data.mdf_preteur_b_pct ?? 25
+                  }
+                  prixAchat={lead.asking_price ?? data.prix_achat ?? 0}
+                />
+                <ScenariosDetailSubsection data={data} />
+                <BestRefiSubsection data={data} />
+              </>
+            ) : null}
+          </div>
+        </div>
+      ) : (
+        <div className="text-[11px] text-white/80">
+          <p className="rounded-lg border border-amber-400/30 bg-amber-500/5 p-3 text-[11px] text-amber-200">
+            Cette analyse a été calculée avant l&apos;arrivée du détail
+            complet. Relance le calcul (bouton « Lancer l&apos;analyse »
+            dans l&apos;onglet Analyse) pour voir chaque formule avec ses
+            nombres.
+          </p>
           <HypothesesSubsection lead={lead} data={data} />
           <TypologieSubsection data={data} />
           <FraisDemarrageDetailSubsection
@@ -6416,7 +6643,7 @@ function CalculationDetailsSection({
           <BestRefiSubsection data={data} />
           <StrategieDetailSubsection data={data} lead={lead} />
         </div>
-      ) : null}
+      )}
     </SectionCard>
   );
 }
