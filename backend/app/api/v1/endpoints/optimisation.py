@@ -991,15 +991,37 @@ async def qbo_depenses(
     # Cashflow d'opération mois par mois depuis l'OUVERTURE du projet
     # (date_debut). Le déficit du total nourrit la Détention ci-dessous.
     cashflow = None
-    try:
-        cashflow = await cashflow_mensuel(
-            p.qbo_scope,
-            (p.date_debut or date(2000, 1, 1)).isoformat(),
-            date.today().isoformat(),
-            hypotheque_account_id=p.qbo_hypotheque_account_id,
-        )
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        log.info("cashflow projet #%s: %s", projet_id, exc)
+    if p.date_debut and p.date_debut > date.today():
+        # Ouverture dans le FUTUR : QuickBooks recevrait début > fin et
+        # renverrait des mois futurs à 0 $ (1660 Saint-Clément ouvert au
+        # 2026-10-12, Phil 2026-09-24 : « Encore à 0$… »). On le dit.
+        cashflow = {
+            "mois": [],
+            "total": {
+                "revenus": 0.0,
+                "depenses": 0.0,
+                "hypotheque": 0.0,
+                "ecart": 0.0,
+                "details": [],
+            },
+            "note": (
+                f"La date d'ouverture du projet ({p.date_debut.isoformat()}) "
+                "est dans le futur : le cashflow et le dépensé des comptes de "
+                "dépense ne commencent qu'à cette date. Pour voir les "
+                "mouvements déjà passés (inspection, frais bancaires…), "
+                "recule la date d'ouverture dans les réglages du projet."
+            ),
+        }
+    else:
+        try:
+            cashflow = await cashflow_mensuel(
+                p.qbo_scope,
+                (p.date_debut or date(2000, 1, 1)).isoformat(),
+                date.today().isoformat(),
+                hypotheque_account_id=p.qbo_hypotheque_account_id,
+            )
+        except Exception as exc:  # noqa: BLE001 — jamais bloquant
+            log.info("cashflow projet #%s: %s", projet_id, exc)
 
     par_ligne: Dict[int, float] = {}
     financement: Dict[int, float] = {}
