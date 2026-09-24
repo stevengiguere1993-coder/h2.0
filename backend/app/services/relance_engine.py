@@ -33,12 +33,9 @@ _ENROLL_LOOKBACK_DAYS = 2
 
 
 def _valid_external_email(email: str | None) -> bool:
-    e = (email or "").strip().lower()
-    if "@" not in e:
-        return False
-    if e.endswith("@telephonie.local") or e.endswith("@horizon.placeholder"):
-        return False
-    return True
+    from app.integrations.email_graph import is_placeholder_email
+
+    return not is_placeholder_email(email)
 
 
 async def _active_steps(db: AsyncSession) -> list[CadenceStep]:

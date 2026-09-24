@@ -216,6 +216,12 @@ class Call(Base):
     lead_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     lead_callback_phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     lead_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    #: Adresse des travaux / du logement donnée par l'appelant, et
+    #: « nouveau client ? » tel que Léa l'a établi (retour 2026-09-24 :
+    #: on n'avait que le numéro dans le CRM). Colonnes nullables →
+    #: ajoutées au démarrage.
+    lead_address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    lead_is_new_client: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     # contact_requests.id si la secrétaire a créé un lead CRM pour cet
     # appel (intent = callback / business connu hors heures).
     contact_request_id: Mapped[Optional[int]] = mapped_column(
