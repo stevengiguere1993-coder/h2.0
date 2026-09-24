@@ -1019,6 +1019,8 @@ function BudgetSection({
   const [txnLigne, setTxnLigne] = useState<{
     id: number;
     nom: string;
+    //: « financement » = les transactions derrière le Financé.
+    volet?: "depense" | "financement";
   } | null>(null);
 
   async function patchLigne(id: number, patch: Record<string, unknown>) {
@@ -1233,7 +1235,7 @@ function BudgetSection({
                 </th>
                 <th
                   className={`${GRP_FIN} pb-2 pr-2`}
-                  title="Financement encaissé (lu de QuickBooks)"
+                  title="Financement encaissé (lu de QuickBooks) — comptes liés dans les réglages ⚙"
                 >
                   Financé
                 </th>
@@ -1367,25 +1369,39 @@ function BudgetSection({
                         }}
                       />
                     </td>
-                    <td className={`${GRP_FIN} py-2 pr-2`}>
-                      <button
-                        type="button"
-                        onClick={() => setFinLigne(l)}
-                        className="inline-flex flex-col items-start text-left"
-                        title="Choisir les comptes QuickBooks d'entrée d'argent (financement) de cette enveloppe"
-                      >
-                        <span
-                          className="tabular-nums"
-                          style={{ color: "var(--qg-text)" }}
-                        >
-                          {nbFin === 0 ? "—" : fmtMoney(fin)}
-                        </span>
-                        <span className="text-[10px] text-accent-500 hover:underline">
-                          {nbFin === 0
-                            ? "lier un compte"
-                            : `${nbFin} compte${nbFin > 1 ? "s" : ""}`}
-                        </span>
-                      </button>
+                    <td
+                      className={`${GRP_FIN} py-2 pr-2`}
+                      title="Comptes de financement liés dans les réglages ⚙ du budget"
+                    >
+                      <span className="inline-flex flex-col items-start">
+                        {nbFin === 0 ? (
+                          <span style={{ color: "var(--qg-text)" }}>—</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setTxnLigne({
+                                id: l.id,
+                                nom: l.nom,
+                                volet: "financement"
+                              })
+                            }
+                            className="tabular-nums underline decoration-dotted underline-offset-2 hover:opacity-70"
+                            style={{ color: "var(--qg-text)" }}
+                            title="Voir les transactions QuickBooks derrière ce financement (dépôts, virements, écritures)"
+                          >
+                            {fmtMoney(fin)}
+                          </button>
+                        )}
+                        {nbFin > 0 ? (
+                          <span
+                            className="text-[10px]"
+                            style={{ color: "var(--qg-text-muted)" }}
+                          >
+                            {nbFin} compte{nbFin > 1 ? "s" : ""}
+                          </span>
+                        ) : null}
+                      </span>
                     </td>
                     <td
                       className={`${GRP_FIN} py-2 pr-2 font-semibold tabular-nums ${
@@ -1470,8 +1486,14 @@ function BudgetSection({
       {txnLigne ? (
         <TransactionsQboModal
           projetId={projet.id}
-          titre={txnLigne.nom}
-          fetchUrl={`/api/v1/optimisation/projets/${projet.id}/qbo-lignes/${txnLigne.id}/transactions`}
+          titre={
+            txnLigne.volet === "financement"
+              ? `${txnLigne.nom} (financement)`
+              : txnLigne.nom
+          }
+          fetchUrl={`/api/v1/optimisation/projets/${projet.id}/qbo-lignes/${txnLigne.id}/transactions${
+            txnLigne.volet === "financement" ? "?volet=financement" : ""
+          }`}
           onClose={() => setTxnLigne(null)}
         />
       ) : null}
@@ -1502,7 +1524,15 @@ type QboPiece = {
 const QBO_TXN_LABEL: Record<string, string> = {
   bill: "facture fournisseur",
   purchase: "dépense",
-  journalentry: "écriture de journal"
+  journalentry: "écriture de journal",
+  deposit: "dépôt",
+  transfer: "virement"
+};
+//: Titre de la ligne quand le document n'a pas de tiers.
+const QBO_TXN_TITRE: Record<string, string> = {
+  journalentry: "Écriture de journal",
+  deposit: "Dépôt",
+  transfer: "Virement"
 };
 
 type QboTxn = {
@@ -1514,6 +1544,8 @@ type QboTxn = {
   montant_impute: number;
   montant_total: number;
   description: string | null;
+  //: Ventilation par ligne (écriture de journal à plusieurs éléments).
+  lignes: { description: string | null; fournisseur: string | null; montant: number }[];
   pieces: QboPiece[];
 };
 
@@ -1619,8 +1651,8 @@ function TransactionsQboModal({
           </p>
         ) : rows !== null && rows.length === 0 ? (
           <p className="py-6 text-center text-xs" style={{ color: "var(--qg-text-muted)" }}>
-            Aucune facture, dépense ni écriture de journal sur les
-            comptes de cette enveloppe.
+            Aucune transaction QuickBooks sur les comptes de cette
+            enveloppe.
           </p>
         ) : rows !== null ? (
           <div className="overflow-x-auto">
@@ -1639,8 +1671,8 @@ function TransactionsQboModal({
               </thead>
               <tbody>
                 {rows.map((t) => (
+                  <React.Fragment key={`${t.txn_type}-${t.txn_id}`}>
                   <tr
-                    key={`${t.txn_type}-${t.txn_id}`}
                     className="border-t"
                     style={{ borderColor: "var(--qg-border-soft)" }}
                   >
@@ -1651,12 +1683,8 @@ function TransactionsQboModal({
                       {t.date || "—"}
                     </td>
                     <td className="py-1.5 pr-2" style={{ color: "var(--qg-text)" }}>
-                      {t.fournisseur ||
-                        (t.txn_type === "journalentry"
-                          ? "Écriture de journal"
-                          : "—")}
-                      {QBO_TXN_LABEL[t.txn_type] &&
-                      !(t.txn_type === "journalentry" && !t.fournisseur) ? (
+                      {t.fournisseur || QBO_TXN_TITRE[t.txn_type] || "—"}
+                      {t.fournisseur && QBO_TXN_LABEL[t.txn_type] ? (
                         <span
                           className="ml-1 text-[10px]"
                           style={{ color: "var(--qg-text-muted)" }}
@@ -1721,6 +1749,31 @@ function TransactionsQboModal({
                       )}
                     </td>
                   </tr>
+                  {(t.lignes || []).length > 1
+                    ? t.lignes.map((lg, i) => (
+                        <tr
+                          key={`${t.txn_type}-${t.txn_id}-${i}`}
+                          className="text-[12px]"
+                          style={{ color: "var(--qg-text-muted)" }}
+                        >
+                          <td className="py-0.5 pr-2" />
+                          <td className="py-0.5 pl-3 pr-2">
+                            ↳ {lg.fournisseur || ""}
+                          </td>
+                          <td
+                            className="max-w-[220px] truncate py-0.5 pr-2"
+                            title={lg.description || undefined}
+                          >
+                            {lg.description || "—"}
+                          </td>
+                          <td className="py-0.5 pr-2 text-right tabular-nums">
+                            {fmtMoney(lg.montant)}
+                          </td>
+                          <td />
+                        </tr>
+                      ))
+                    : null}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>
@@ -1728,9 +1781,13 @@ function TransactionsQboModal({
               className="mt-2 text-[10px]"
               style={{ color: "var(--qg-text-muted)" }}
             >
-              Factures fournisseurs, dépenses (chèques, cartes) et
-              écritures de journal qui touchent les comptes de
-              l&apos;enveloppe. Les factures ponctuelles (travaux,
+              Une écriture de journal à plusieurs éléments est ventilée
+              ligne par ligne (↳) ; ses pièces jointes sont sur la ligne
+              principale, QuickBooks les rattachant à l&apos;écriture
+              entière. Dépensé : factures fournisseurs, dépenses (chèques,
+              cartes) et écritures de journal ; financé : dépôts,
+              virements et écritures (un remboursement sort en négatif).
+              Les factures ponctuelles (travaux,
               réparations…) sont jointes à leurs transactions ; les
               factures récurrentes (électricité, assurances,
               télécommunications…) ne sont pas déposées

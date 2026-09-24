@@ -126,9 +126,43 @@ async def lister_comptes_depense(
     return out
 
 
+def _valeurs(cells: List[Dict[str, Any]]) -> List[float]:
+    """Cellules numériques d'un rapport QBO → floats (« 1,234.50 $ »,
+    vide = 0)."""
+    vals: List[float] = []
+    for cell in cells:
+        brut = (
+            (cell.get("value") or "0")
+            .replace(",", "")
+            .replace("$", "")
+            .strip()
+        )
+        try:
+            vals.append(float(brut) if brut else 0.0)
+        except ValueError:
+            vals.append(0.0)
+    return vals
+
+
+def _entete_compte(node: Any) -> Optional[List[Dict[str, Any]]]:
+    """ColData de l'EN-TÊTE d'une section quand cette section est un
+    COMPTE PARENT (elle porte un ``id``) — c'est là que QuickBooks met
+    les écritures passées DIRECTEMENT sur le parent (ses sous-comptes ont
+    leurs propres lignes). Sans ça, un « Frais bancaire » de 5,95 $ posté
+    sur « Frais de détention » disparaissait du cashflow et des totaux
+    (Phil 2026-09-24). None pour les sections de rapport (Income…)."""
+    if not isinstance(node, dict):
+        return None
+    cols = (node.get("Header") or {}).get("ColData")
+    if isinstance(cols, list) and cols and cols[0].get("id"):
+        return cols
+    return None
+
+
 def _walk_rows(node: Any, totals: Dict[str, float]) -> None:
     """Parcourt récursivement les Rows d'un rapport QBO et accumule
-    {account_id: total} pour chaque ligne de détail portant un compte."""
+    {account_id: total} pour chaque ligne de détail portant un compte
+    (y compris les écritures propres d'un compte parent, en en-tête)."""
     if isinstance(node, dict):
         rows = node.get("Rows", {}).get("Row") if "Rows" in node else None
         if rows:
@@ -143,8 +177,14 @@ def _walk_rows(node: Any, totals: Dict[str, float]) -> None:
                     totals[str(acc_id)] = totals.get(str(acc_id), 0.0) + float(raw)
                 except ValueError:
                     pass
-        # Les groupes (Header/Summary) contiennent parfois leurs propres
-        # Rows imbriquées déjà couvertes ci-dessus — rien d'autre à faire.
+        entete = _entete_compte(node)
+        if entete and len(entete) > 1:
+            raw = (entete[-1].get("value") or "").replace(",", "")
+            try:
+                acc_id = str(entete[0].get("id"))
+                totals[acc_id] = totals.get(acc_id, 0.0) + float(raw)
+            except ValueError:
+                pass  # en-tête sans montant propre
     elif isinstance(node, list):
         for r in node:
             _walk_rows(r, totals)
@@ -297,6 +337,26 @@ def _comptes_par_colonne(
                         "vals": vals,
                     }
                 )
+    # Compte PARENT avec ses propres écritures (en-tête de section).
+    entete = _entete_compte(node)
+    if (
+        entete
+        and len(entete) > 1
+        and (section_ici in _SECTIONS_REVENUS or section_ici in _SECTIONS_DEPENSES)
+    ):
+        vals = _valeurs(entete[1:])
+        nom = (entete[0].get("value") or "").strip()
+        if nom and any(abs(v) >= 0.005 for v in vals):
+            out.append(
+                {
+                    "nom": nom,
+                    "compte_id": entete[0].get("id"),
+                    "type": "revenu"
+                    if section_ici in _SECTIONS_REVENUS
+                    else "depense",
+                    "vals": vals,
+                }
+            )
     sous = (node.get("Rows") or {}).get("Row")
     if sous:
         _comptes_par_colonne(sous, out, section_ici)
@@ -335,6 +395,12 @@ def _soldes_par_compte_colonnes(
         out[str(cols[0].get("id"))] = {
             "nom": (cols[0].get("value") or "").strip(),
             "vals": vals,
+        }
+    entete = _entete_compte(node)
+    if entete and len(entete) > 1:
+        out[str(entete[0].get("id"))] = {
+            "nom": (entete[0].get("value") or "").strip(),
+            "vals": _valeurs(entete[1:]),
         }
     sous = (node.get("Rows") or {}).get("Row")
     if sous:
@@ -704,11 +770,62 @@ async def _classification_comptes(
 
 
 #: Entités QuickBooks lues pour le détail d'une enveloppe → txn_type.
+#: Dépôts et virements servent surtout au FINANCEMENT (prêt encaissé,
+#: marge tirée) — Phil 2026-09-24 : « sur les financés aussi ça serait
+#: bien que ce soit cliquable ».
 _ENTITES_DETAIL = (
     ("Purchase", "purchase"),
     ("Bill", "bill"),
     ("JournalEntry", "journalentry"),
+    ("Deposit", "deposit"),
+    ("Transfer", "transfer"),
 )
+
+#: Sens NATUREL d'un compte : un CRÉDIT augmente un passif, l'équité ou
+#: un revenu (financement encaissé = +) ; un DÉBIT augmente un actif ou
+#: une dépense (dépensé = +).
+_CLASSIFICATIONS_CREDIT = ("Liability", "Equity", "Revenue")
+
+
+def _signe(classification: str, sens: str) -> float:
+    """+1 quand l'écriture va dans le sens naturel du compte, −1 sinon.
+    Classification inconnue = compte de dépense (débit positif)."""
+    credit_positif = classification in _CLASSIFICATIONS_CREDIT
+    return 1.0 if (sens == "Credit") == credit_positif else -1.0
+
+
+def _lignes_document(type_key: str, txn: Dict[str, Any]):
+    """(compte, sens Debit/Credit, montant brut, description, tiers) de
+    chaque ligne d'un document QuickBooks, selon son type."""
+    if type_key == "transfer":
+        montant = txn.get("Amount") or 0
+        de = txn.get("FromAccountRef") or {}
+        vers = txn.get("ToAccountRef") or {}
+        desc = (
+            f"Virement : {de.get('name') or '?'} → {vers.get('name') or '?'}"
+        )
+        yield str(vers.get("value") or ""), "Debit", montant, desc, None
+        yield str(de.get("value") or ""), "Credit", montant, desc, None
+        return
+    for line in txn.get("Line") or []:
+        desc = str(line.get("Description") or "") or None
+        if type_key == "journalentry":
+            det = line.get("JournalEntryLineDetail") or {}
+            sens = "Credit" if det.get("PostingType") == "Credit" else "Debit"
+            entite = (
+                (det.get("Entity") or {}).get("EntityRef") or {}
+            ).get("name")
+        elif type_key == "deposit":
+            det = line.get("DepositLineDetail") or {}
+            sens = "Credit"
+            entite = (det.get("Entity") or {}).get("name")
+        else:
+            det = line.get("AccountBasedExpenseLineDetail") or {}
+            # Purchase « Credit » = remboursement sur carte de crédit.
+            sens = "Credit" if txn.get("Credit") else "Debit"
+            entite = None
+        acc = str((det.get("AccountRef") or {}).get("value") or "")
+        yield acc, sens, line.get("Amount") or 0, desc, entite
 
 
 async def transactions_depenses(
@@ -732,6 +849,11 @@ async def transactions_depenses(
     JournalEntries sont lues aussi — débit = +, crédit = − sur le compte
     de l'enveloppe. Et un compte de BILAN est listé sans borne de début
     (son total est un solde, pas un mouvement de période).
+
+    Les montants sont SIGNÉS dans le sens naturel de chaque compte
+    (``_signe``) : + = dépensé sur un compte de dépense/actif, + = encaissé
+    sur un compte de passif/équité/revenu (enveloppes de FINANCEMENT :
+    dépôts, virements, écritures ; un remboursement sort en −).
     """
     from app.integrations.quickbooks import get_qbo
 
@@ -772,38 +894,41 @@ async def transactions_depenses(
             for txn in rows:
                 txn_date = str(txn.get("TxnDate") or "")
                 impute = 0.0
-                four: Optional[str] = None
-                desc_ligne: Optional[str] = None
-                for line in txn.get("Line") or []:
-                    if type_key == "journalentry":
-                        det = line.get("JournalEntryLineDetail") or {}
-                        signe = -1.0 if det.get("PostingType") == "Credit" else 1.0
-                    else:
-                        det = line.get("AccountBasedExpenseLineDetail") or {}
-                        signe = 1.0
-                    acc = str(
-                        (det.get("AccountRef") or {}).get("value") or ""
-                    )
+                # Chaque LIGNE retenue (une écriture de journal à
+                # 3 éléments = 3 sous-lignes à l'écran — Phil 2026-09-24 :
+                # « on ne voit pas les deux autres éléments »).
+                lignes: List[Dict[str, Any]] = []
+                for acc, sens, brut, desc_ligne, entite in _lignes_document(
+                    type_key, txn
+                ):
                     if not _compte_retenu(acc, txn_date):
                         continue
                     try:
-                        impute += signe * float(line.get("Amount") or 0)
+                        montant = _signe(classif.get(acc, ""), sens) * float(brut)
                     except (TypeError, ValueError):
                         continue
-                    if type_key == "journalentry":
-                        if four is None:
-                            four = (
-                                (det.get("Entity") or {}).get("EntityRef")
-                                or {}
-                            ).get("name")
-                        if desc_ligne is None and line.get("Description"):
-                            desc_ligne = str(line.get("Description"))
+                    impute += montant
+                    lignes.append(
+                        {
+                            "description": desc_ligne,
+                            "fournisseur": entite or None,
+                            "montant": round(montant, 2),
+                        }
+                    )
                 if abs(impute) < 0.005:
                     continue
+                four: Optional[str] = None
                 if type_key == "purchase":
                     four = (txn.get("EntityRef") or {}).get("name")
                 elif type_key == "bill":
                     four = (txn.get("VendorRef") or {}).get("name")
+                elif len(lignes) == 1:
+                    four = lignes[0]["fournisseur"]
+                # Description : le mémo du document ; à défaut, celle de
+                # l'unique ligne (plusieurs lignes → chacune la sienne).
+                desc = txn.get("PrivateNote") or (
+                    lignes[0]["description"] if len(lignes) == 1 else None
+                )
                 out.append(
                     {
                         "txn_type": type_key,
@@ -812,8 +937,11 @@ async def transactions_depenses(
                         "fournisseur": four,
                         "doc_number": txn.get("DocNumber"),
                         "montant_impute": round(impute, 2),
-                        "montant_total": float(txn.get("TotalAmt") or 0),
-                        "description": txn.get("PrivateNote") or desc_ligne,
+                        "montant_total": float(
+                            txn.get("TotalAmt") or txn.get("Amount") or 0
+                        ),
+                        "description": desc,
+                        "lignes": lignes,
                         "pieces": [],
                     }
                 )
