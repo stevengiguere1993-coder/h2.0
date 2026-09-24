@@ -478,3 +478,80 @@ def test_endpoint_volet_financement(client, auth_headers, run, monkeypatch):
     assert client.get(base + "?volet=financement", headers=auth_headers).status_code == 200
     assert appels == [{"77"}, {"200"}]
     assert client.get(base + "?volet=autre", headers=auth_headers).status_code == 422
+
+
+def _rapport_pnl_mensuel(avec_total: bool) -> dict:
+    """P&L ventilé par mois (août, septembre) — avec ou sans la colonne
+    « Total » que QuickBooks n'ajoute pas toujours."""
+    def _cells(*vals):
+        return [{"value": v} for v in vals]
+
+    cols = [
+        {"ColTitle": "", "ColType": "Account"},
+        {"ColTitle": "Aug 2026", "ColType": "Money",
+         "MetaData": [{"Name": "StartDate", "Value": "2026-08-01"},
+                      {"Name": "EndDate", "Value": "2026-08-31"}]},
+        {"ColTitle": "Sep 1-24, 2026", "ColType": "Money",
+         "MetaData": [{"Name": "StartDate", "Value": "2026-09-01"},
+                      {"Name": "EndDate", "Value": "2026-09-24"}]},
+    ]
+    aout, sept = "0.00", "10.95"
+    total = ["10.95"] if avec_total else []
+    if avec_total:
+        cols.append({"ColTitle": "Total", "ColType": "Money"})
+    return {
+        "Columns": {"Column": cols},
+        "Rows": {"Row": [
+            {"group": "Income",
+             "Rows": {"Row": []},
+             "Summary": {"ColData": _cells("Total Income", "0.00", "0.00", *total)}},
+            {"group": "Expenses",
+             "Rows": {"Row": [
+                 {"Header": {"ColData": [{"value": "Frais de détention", "id": "80"},
+                                         {"value": ""}, {"value": ""},
+                                         *([{"value": ""}] if avec_total else [])]},
+                  "Rows": {"Row": [
+                      {"type": "Data",
+                       "ColData": [{"value": "Frais bancaires", "id": "81"},
+                                   {"value": aout}, {"value": sept},
+                                   *([{"value": "10.95"}] if avec_total else [])]},
+                  ]},
+                  "Summary": {"ColData": _cells("Total Frais de détention", aout, sept, *total)},
+                  "type": "Section"},
+             ]},
+             "Summary": {"ColData": _cells("Total Expenses", aout, sept, *total)}},
+            {"group": "NetIncome",
+             "Summary": {"ColData": _cells("Net Income", "0.00", "-10.95",
+                                           *(["-10.95"] if avec_total else []))}},
+        ]},
+    }
+
+
+class _FauxQboRapport:
+    ready = True
+
+    def __init__(self, rapport):
+        self.rapport = rapport
+        self.params = None
+
+    async def report(self, name, **params):
+        self.params = (name, params)
+        return self.rapport
+
+
+def test_cashflow_avec_ou_sans_colonne_total(run, monkeypatch):
+    """Septembre doit apparaître dans les deux cas, avec ses 5,95 + 5,00 $
+    de frais bancaires ; le total couvre les deux mois."""
+    for avec_total in (True, False):
+        faux = _FauxQboRapport(_rapport_pnl_mensuel(avec_total))
+        monkeypatch.setattr(qb_mod, "get_qbo", lambda scope="construction", f=faux: f)
+        cf = run(opti.cashflow_mensuel("inc:1", "2026-08-01", "2026-09-24"))
+        assert [m["mois"] for m in cf["mois"]] == ["Aug 2026", "Sep 1-24, 2026"], avec_total
+        sept = cf["mois"][1]
+        assert sept["depenses"] == 10.95 and sept["ecart"] == -10.95
+        assert sept["debut"] == "2026-09-01" and sept["fin"] == "2026-09-24"
+        assert [(d["nom"], d["montant"]) for d in sept["details"]] == [("Frais bancaires", 10.95)]
+        assert cf["total"]["depenses"] == 10.95 and cf["total"]["ecart"] == -10.95
+        assert [(d["nom"], d["montant"]) for d in cf["total"]["details"]] == [("Frais bancaires", 10.95)]
+        assert faux.params[0] == "ProfitAndLoss"
+        assert faux.params[1]["summarize_column_by"] == "Month"

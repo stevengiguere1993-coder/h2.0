@@ -613,6 +613,16 @@ def _assembler_cashflow(
     return {"mois": mois, "total": total}
 
 
+def _colonne_total(titre: str, borne: tuple, autres: List[tuple]) -> bool:
+    """La dernière colonne d'un rapport mensuel est-elle le TOTAL ? Par
+    son libellé (« Total », « TOTAL », « Totaux »…) ou parce qu'elle seule
+    n'a pas de bornes de dates dans les MetaData."""
+    t = (titre or "").strip().lower()
+    if t.startswith("total") or t in ("totaux", "grand total"):
+        return True
+    return borne == (None, None) and any(b != (None, None) for b in autres)
+
+
 async def cashflow_mensuel(
     scope: str,
     date_debut: Optional[str],
@@ -662,6 +672,18 @@ async def cashflow_mensuel(
     _comptes_par_colonne(
         report.get("Rows", {}).get("Row") or [], comptes
     )
+    # Colonne « Total » : QuickBooks l'ajoute en général en dernier, mais
+    # pas toujours (déjà observé sur le bilan). Sans elle, l'assemblage
+    # prenait le DERNIER MOIS pour le total et ce mois disparaissait du
+    # tableau — Phil 2026-09-24 : « je ne vois pas un frais bancaire de
+    # 5,95 $ » (septembre). On la reconnaît, sinon on la fabrique.
+    if titres and not _colonne_total(titres[-1], bornes[-1], bornes[:-1]):
+        titres.append("Total")
+        bornes.append((None, None))
+        for vals in groupes.values():
+            vals.append(round(sum(vals), 2))
+        for c in comptes:
+            c["vals"].append(round(sum(c["vals"]), 2))
 
     # Colonne Hypothèque : baisse mensuelle du compte de passif choisi
     # (capital remboursé), lue du bilan et alignée À DROITE sur les
