@@ -37,8 +37,17 @@ router = APIRouter(prefix="/projects", tags=["project-finances"])
 class CostLine(BaseModel):
     label: str
     quantity: float
+    #: Coût prévu unitaire, taxes incluses (historique).
     unit_cost: float
     total: float
+    #: Coût prévu unitaire HT et total HT (services de la soumission).
+    unit_cost_ht: float = 0.0
+    total_cost_ht: float = 0.0
+    #: PRIX de vente de la soumission (HT), pour comparer au coût prévu
+    #: (retour 2026-09-24 : la fiche n'affichait que le coûtant, lu comme
+    #: « les prix ne correspondent pas à la soumission »).
+    unit_price: float = 0.0
+    line_price: float = 0.0
 
 
 class InvoiceLine(BaseModel):
@@ -201,6 +210,15 @@ async def _compute_finances(
                     quantity=qty,
                     unit_cost=round(cpu * factor, 2),
                     total=line_ttc,
+                    unit_cost_ht=round(cpu, 2),
+                    total_cost_ht=round(line_ht, 2),
+                    unit_price=round(float(it.unit_price or 0), 2),
+                    line_price=round(
+                        float(it.total or 0)
+                        if it.total is not None
+                        else qty * float(it.unit_price or 0),
+                        2,
+                    ),
                 )
             )
         sm = (

@@ -128,10 +128,23 @@ async def send_facture(
     _fa0 = (
         await db.execute(select(Facture).where(Facture.id == facture_id))
     ).scalar_one_or_none()
+    _ref_avant = (getattr(_fa0, "reference", None) or "").strip()
     if _fa0 is not None:
         from app.services.numbering import ensure_facture_number
 
         await ensure_facture_number(db, _fa0)
+    # Un objet saisi à la main peut encore contenir la référence
+    # PROVISOIRE (« Facture BR-0a7 ») : l'interface la pré-remplissait
+    # avant l'attribution du numéro (retour 2026-09-24). On la remplace
+    # par le numéro définitif — jamais de « BR-… » dans un courriel.
+    if subject and _fa0 is not None:
+        from app.services.numbering import is_provisional_facture_reference
+
+        _ref_apres = (_fa0.reference or "").strip()
+        if _ref_avant and is_provisional_facture_reference(_ref_avant):
+            subject = subject.replace(_ref_avant, _ref_apres)
+        if is_provisional_facture_reference(subject.replace("Facture ", "").strip()):
+            subject = None
 
     rendered = await render_facture_pdf(
         db, facture_id, include_statement=include_statement,

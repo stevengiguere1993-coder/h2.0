@@ -772,6 +772,13 @@ export default function ProjectDetailPage() {
                   projectId={id}
                   focusPhaseId={focusPhaseId}
                   onFocusConsumed={() => setFocusPhaseId(null)}
+                  projectBudget={
+                    budget.trim() !== "" && Number.isFinite(Number(budget))
+                      ? Number(budget)
+                      : p.budget != null
+                        ? Number(p.budget)
+                        : null
+                  }
                 />
               ) : tab === "agenda" ? (
                 <ChantierAgendaTab
@@ -1913,7 +1920,16 @@ type Finances = {
   actual_profit: number;
   actual_margin_pct: number;
   billing_kind: string;
-  service_lines: { label: string; quantity: number; unit_cost: number; total: number }[];
+  service_lines: {
+    label: string;
+    quantity: number;
+    unit_cost: number;
+    total: number;
+    unit_cost_ht?: number;
+    total_cost_ht?: number;
+    unit_price?: number;
+    line_price?: number;
+  }[];
   material_lines: { label: string; quantity: number; unit_cost: number; total: number }[];
   invoiced_amount: number;
   invoiced_amount_ex_tax: number;
@@ -2671,8 +2687,13 @@ function FinancesTab({
       {/* Service lines */}
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
         <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-          Coût des services (soumission)
+          Services de la soumission — prix vs coût prévu
         </h3>
+        <p className="mt-1 text-xs text-white/50">
+          Prix = ce que le client paie (soumission, HT). Coût prévu = notre
+          coûtant saisi sur chaque item (HT). Toujours à jour : la table lit
+          la soumission en direct, avenants compris.
+        </p>
         {data.service_lines.length === 0 ? (
           <p className="mt-3 text-xs text-white/50">
             Aucun service lié à ce projet.
@@ -2683,26 +2704,72 @@ function FinancesTab({
               <tr>
                 <th className="py-2 text-left">Nom</th>
                 <th className="py-2 text-right">Qté</th>
-                <th className="py-2 text-right">Coût/unité</th>
-                <th className="py-2 text-right">Total</th>
+                <th className="py-2 text-right">Prix soumission</th>
+                <th className="py-2 text-right">Coût prévu</th>
+                <th className="py-2 text-right">Marge</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-brand-800">
-              {data.service_lines.map((l, i) => (
-                <tr key={i}>
-                  <td className="py-2 text-white">{l.label}</td>
-                  <td className="py-2 text-right text-white/70">
-                    {l.quantity}
-                  </td>
-                  <td className="py-2 text-right text-white/70">
-                    {fmtMoney(l.unit_cost)}
-                  </td>
-                  <td className="py-2 text-right font-semibold text-white">
-                    {fmtMoney(l.total)}
-                  </td>
-                </tr>
-              ))}
+              {data.service_lines.map((l, i) => {
+                const price = l.line_price ?? 0;
+                const cost = l.total_cost_ht ?? 0;
+                const margin = price - cost;
+                return (
+                  <tr key={i}>
+                    <td className="py-2 text-white">{l.label}</td>
+                    <td className="py-2 text-right text-white/70">
+                      {l.quantity}
+                    </td>
+                    <td className="py-2 text-right font-semibold text-white">
+                      {fmtMoney(price)}
+                      {l.quantity !== 1 ? (
+                        <span className="block text-[10px] font-normal text-white/50">
+                          {fmtMoney(l.unit_price ?? 0)} / unité
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className="py-2 text-right text-white/70">
+                      {fmtMoney(cost)}
+                    </td>
+                    <td
+                      className={`py-2 text-right font-semibold ${
+                        margin < 0 ? "text-rose-300" : "text-emerald-300"
+                      }`}
+                    >
+                      {fmtMoney(margin)}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
+            <tfoot className="border-t border-brand-800 text-sm">
+              <tr>
+                <td className="py-2 font-semibold text-white" colSpan={2}>
+                  Total (HT)
+                </td>
+                <td className="py-2 text-right font-semibold text-white">
+                  {fmtMoney(
+                    data.service_lines.reduce((a, l) => a + (l.line_price ?? 0), 0)
+                  )}
+                </td>
+                <td className="py-2 text-right text-white/80">
+                  {fmtMoney(
+                    data.service_lines.reduce(
+                      (a, l) => a + (l.total_cost_ht ?? 0),
+                      0
+                    )
+                  )}
+                </td>
+                <td className="py-2 text-right font-semibold text-white">
+                  {fmtMoney(
+                    data.service_lines.reduce(
+                      (a, l) => a + (l.line_price ?? 0) - (l.total_cost_ht ?? 0),
+                      0
+                    )
+                  )}
+                </td>
+              </tr>
+            </tfoot>
           </table>
         )}
       </section>
@@ -3009,6 +3076,8 @@ type Phase = {
   start_time: string | null;
   duration_days: number | null;
   notes: string | null;
+  // Budget prévu de la phase ($), optionnel — suivi budgétaire.
+  budget: number | string | null;
   assignee_employe_id: number | null;
   assignee_sous_traitant_id: number | null;
   assignee_employe_ids: number[];
@@ -3056,11 +3125,14 @@ type LinkedEvent = {
 function PlanificationTab({
   projectId,
   focusPhaseId = null,
-  onFocusConsumed
+  onFocusConsumed,
+  projectBudget = null
 }: {
   projectId: number;
   focusPhaseId?: number | null;
   onFocusConsumed?: () => void;
+  // Budget global du projet (fiche) pour comparer à la somme des phases.
+  projectBudget?: number | null;
 }) {
   const confirm = useConfirm();
   const [phases, setPhases] = useState<Phase[]>([]);
@@ -3399,6 +3471,72 @@ function PlanificationTab({
   // #14 — Remet les phases en ordre chronologique (date de début
   // croissante). Les phases sans date passent à la fin. Persiste le
   // nouvel ordre via l'endpoint de réordonnancement.
+  // PDF client : phases + dates prévues + agenda, sans heures ni assignés.
+  const [pdfBusy, setPdfBusy] = useState(false);
+  async function openClientPdf() {
+    if (pdfBusy) return;
+    setPdfBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/planification-client.pdf`
+      );
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      setErr(`Génération du PDF client échouée : ${(e as Error).message}`);
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
+  const [sendingPdf, setSendingPdf] = useState(false);
+  const [pdfMsg, setPdfMsg] = useState<string | null>(null);
+  async function sendClientPdf() {
+    if (sendingPdf) return;
+    const ok = await confirm({
+      title: "Envoyer la planification au client ?",
+      description:
+        "Le client recevra par courriel le PDF des phases et des dates prévues (sans heures ni assignés).",
+      confirmLabel: "Envoyer",
+      cancelLabel: "Annuler",
+      success: true
+    });
+    if (!ok) return;
+    setSendingPdf(true);
+    setPdfMsg(null);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/planification-client/send`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        let detail = `http_${res.status}`;
+        try {
+          const j = (await res.json()) as { detail?: string };
+          if (j.detail) detail = j.detail;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail);
+      }
+      const j = (await res.json()) as { to?: string };
+      setPdfMsg(
+        j.to
+          ? `Planification envoyée à ${j.to}.`
+          : "Planification envoyée au client."
+      );
+    } catch (e) {
+      setErr(`Envoi de la planification échoué : ${(e as Error).message}`);
+    } finally {
+      setSendingPdf(false);
+    }
+  }
+
   async function sortPhasesByDate() {
     const next = [...phases].sort((a, b) => {
       const da = a.start_date ? new Date(a.start_date).getTime() : Infinity;
@@ -3501,6 +3639,16 @@ function PlanificationTab({
 
       <ProjectTeamSection projectId={projectId} phases={phases} />
 
+      {phases.some((ph) => ph.budget != null && ph.budget !== "") ? (
+        <PhaseBudgetSummary phases={phases} projectBudget={projectBudget} />
+      ) : null}
+
+      {pdfMsg ? (
+        <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+          {pdfMsg}
+        </p>
+      ) : null}
+
       <div className="flex items-center justify-between">
         <p className="text-xs text-white/60">
           Découpe le projet en phases (ex. Démolition, Fondation,
@@ -3508,6 +3656,38 @@ function PlanificationTab({
           durée en jours — la fin est calculée automatiquement.
         </p>
         <div className="flex items-center gap-2">
+          {phases.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => openClientPdf()}
+              disabled={pdfBusy}
+              className="btn-secondary btn-sm disabled:opacity-60"
+              title="PDF pour le client : phases et dates prévues avec agenda, sans heures ni assignés"
+            >
+              {pdfBusy ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FileText className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              PDF client
+            </button>
+          ) : null}
+          {phases.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => sendClientPdf()}
+              disabled={sendingPdf}
+              className="btn-secondary btn-sm disabled:opacity-60"
+              title="Envoyer le PDF client par courriel au client du projet"
+            >
+              {sendingPdf ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Mail className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Envoyer au client
+            </button>
+          ) : null}
           {phases.length > 1 ? (
             <button
               type="button"
@@ -3661,6 +3841,70 @@ function PlanificationTab({
   );
 }
 
+// Suivi budgétaire par phase : somme des budgets saisis vs budget du
+// projet (retour 2026-09-24). Interne — rien de ceci dans le PDF client.
+function PhaseBudgetSummary({
+  phases,
+  projectBudget
+}: {
+  phases: Phase[];
+  projectBudget: number | null;
+}) {
+  const withBudget = phases.filter(
+    (ph) => ph.budget != null && ph.budget !== ""
+  );
+  const total = withBudget.reduce((acc, ph) => acc + Number(ph.budget), 0);
+  const remaining = projectBudget != null ? projectBudget - total : null;
+  const over = remaining != null && remaining < 0;
+  return (
+    <div className="rounded-lg border border-brand-800 bg-brand-900/60 px-4 py-3 text-sm">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
+        <span className="font-semibold text-white">Budget des phases</span>
+        <span className="text-white/80">
+          {withBudget.length}/{phases.length} phase
+          {phases.length > 1 ? "s" : ""} budgétée
+          {withBudget.length > 1 ? "s" : ""} :{" "}
+          <span className="font-mono font-semibold text-white">
+            {fmtMoney(total)}
+          </span>
+        </span>
+        {projectBudget != null ? (
+          <span className="text-white/80">
+            Budget projet :{" "}
+            <span className="font-mono text-white">{fmtMoney(projectBudget)}</span>
+            {" · "}
+            {over ? (
+              <span className="font-semibold text-rose-300">
+                Dépassement de {fmtMoney(Math.abs(remaining as number))}
+              </span>
+            ) : (
+              <span className="font-semibold text-emerald-300">
+                Reste {fmtMoney(remaining as number)}
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="text-white/50">
+            Aucun budget projet saisi (onglet Résumé).
+          </span>
+        )}
+      </div>
+      {withBudget.length ? (
+        <ul className="mt-2 grid gap-1 text-xs text-white/70 sm:grid-cols-2">
+          {withBudget.map((ph) => (
+            <li key={ph.id} className="flex justify-between gap-3">
+              <span className="truncate">{ph.name}</span>
+              <span className="font-mono text-white/90">
+                {fmtMoney(Number(ph.budget))}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 function PhaseCard({
   phase,
   index,
@@ -3712,6 +3956,15 @@ function PhaseCard({
 }) {
   const [name, setName] = useState(phase.name);
   const [startDate, setStartDate] = useState(phase.start_date || "");
+  const [budgetStr, setBudgetStr] = useState(
+    phase.budget != null && phase.budget !== "" ? String(phase.budget) : ""
+  );
+  function persistBudget() {
+    const v = budgetStr.trim() === "" ? null : Number(budgetStr);
+    if (v != null && (!Number.isFinite(v) || v < 0)) return;
+    const cur = phase.budget != null && phase.budget !== "" ? Number(phase.budget) : null;
+    if (v !== cur) onPatch({ budget: v });
+  }
   // Mode « journée complète » (durée en jours entiers, pas d'heure
   // précise) vs créneau horaire (start + end dans la même journée).
   // L'état initial est dérivé du modèle : si start_time est défini,
@@ -3953,6 +4206,21 @@ function PhaseCard({
                     : "—"}
               </p>
             </div>
+            <label className="text-xs text-white/60">
+              Budget prévu ($)
+              <span className="ml-1 text-white/40">optionnel</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                inputMode="decimal"
+                value={budgetStr}
+                onChange={(e) => setBudgetStr(e.target.value)}
+                onBlur={persistBudget}
+                placeholder="—"
+                className="mt-1 w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white"
+              />
+            </label>
           </div>
 
           <div className="mt-3">
