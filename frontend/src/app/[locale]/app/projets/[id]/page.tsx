@@ -1920,7 +1920,16 @@ type Finances = {
   actual_profit: number;
   actual_margin_pct: number;
   billing_kind: string;
-  service_lines: { label: string; quantity: number; unit_cost: number; total: number }[];
+  service_lines: {
+    label: string;
+    quantity: number;
+    unit_cost: number;
+    total: number;
+    unit_cost_ht?: number;
+    total_cost_ht?: number;
+    unit_price?: number;
+    line_price?: number;
+  }[];
   material_lines: { label: string; quantity: number; unit_cost: number; total: number }[];
   invoiced_amount: number;
   invoiced_amount_ex_tax: number;
@@ -2678,8 +2687,13 @@ function FinancesTab({
       {/* Service lines */}
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
         <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-          Coût des services (soumission)
+          Services de la soumission — prix vs coût prévu
         </h3>
+        <p className="mt-1 text-xs text-white/50">
+          Prix = ce que le client paie (soumission, HT). Coût prévu = notre
+          coûtant saisi sur chaque item (HT). Toujours à jour : la table lit
+          la soumission en direct, avenants compris.
+        </p>
         {data.service_lines.length === 0 ? (
           <p className="mt-3 text-xs text-white/50">
             Aucun service lié à ce projet.
@@ -2690,26 +2704,72 @@ function FinancesTab({
               <tr>
                 <th className="py-2 text-left">Nom</th>
                 <th className="py-2 text-right">Qté</th>
-                <th className="py-2 text-right">Coût/unité</th>
-                <th className="py-2 text-right">Total</th>
+                <th className="py-2 text-right">Prix soumission</th>
+                <th className="py-2 text-right">Coût prévu</th>
+                <th className="py-2 text-right">Marge</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-brand-800">
-              {data.service_lines.map((l, i) => (
-                <tr key={i}>
-                  <td className="py-2 text-white">{l.label}</td>
-                  <td className="py-2 text-right text-white/70">
-                    {l.quantity}
-                  </td>
-                  <td className="py-2 text-right text-white/70">
-                    {fmtMoney(l.unit_cost)}
-                  </td>
-                  <td className="py-2 text-right font-semibold text-white">
-                    {fmtMoney(l.total)}
-                  </td>
-                </tr>
-              ))}
+              {data.service_lines.map((l, i) => {
+                const price = l.line_price ?? 0;
+                const cost = l.total_cost_ht ?? 0;
+                const margin = price - cost;
+                return (
+                  <tr key={i}>
+                    <td className="py-2 text-white">{l.label}</td>
+                    <td className="py-2 text-right text-white/70">
+                      {l.quantity}
+                    </td>
+                    <td className="py-2 text-right font-semibold text-white">
+                      {fmtMoney(price)}
+                      {l.quantity !== 1 ? (
+                        <span className="block text-[10px] font-normal text-white/50">
+                          {fmtMoney(l.unit_price ?? 0)} / unité
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className="py-2 text-right text-white/70">
+                      {fmtMoney(cost)}
+                    </td>
+                    <td
+                      className={`py-2 text-right font-semibold ${
+                        margin < 0 ? "text-rose-300" : "text-emerald-300"
+                      }`}
+                    >
+                      {fmtMoney(margin)}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
+            <tfoot className="border-t border-brand-800 text-sm">
+              <tr>
+                <td className="py-2 font-semibold text-white" colSpan={2}>
+                  Total (HT)
+                </td>
+                <td className="py-2 text-right font-semibold text-white">
+                  {fmtMoney(
+                    data.service_lines.reduce((a, l) => a + (l.line_price ?? 0), 0)
+                  )}
+                </td>
+                <td className="py-2 text-right text-white/80">
+                  {fmtMoney(
+                    data.service_lines.reduce(
+                      (a, l) => a + (l.total_cost_ht ?? 0),
+                      0
+                    )
+                  )}
+                </td>
+                <td className="py-2 text-right font-semibold text-white">
+                  {fmtMoney(
+                    data.service_lines.reduce(
+                      (a, l) => a + (l.line_price ?? 0) - (l.total_cost_ht ?? 0),
+                      0
+                    )
+                  )}
+                </td>
+              </tr>
+            </tfoot>
           </table>
         )}
       </section>
