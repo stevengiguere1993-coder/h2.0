@@ -751,6 +751,14 @@ class QboPieceMeta(BaseModel):
     content_type: Optional[str] = None
 
 
+class QboLigneOut(BaseModel):
+    """Une ligne d'un document QuickBooks imputée à l'enveloppe."""
+
+    description: Optional[str] = None
+    fournisseur: Optional[str] = None
+    montant: float
+
+
 class QboTransactionOut(BaseModel):
     txn_type: str
     txn_id: str
@@ -760,6 +768,8 @@ class QboTransactionOut(BaseModel):
     montant_impute: float
     montant_total: float
     description: Optional[str] = None
+    #: Ventilation par ligne (écriture de journal à plusieurs éléments).
+    lignes: List[QboLigneOut] = Field(default_factory=list)
     pieces: List[QboPieceMeta] = Field(default_factory=list)
 
 
