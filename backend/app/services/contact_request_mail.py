@@ -58,6 +58,12 @@ async def send_contact_acknowledgment(record: ContactRequest) -> bool:
     mailer = get_mailer()
     if not mailer.ready or not record.email:
         return False
+    # Prospect créé sans courriel (adresse fictive « @horizon.placeholder »)
+    # → pas d'accusé de réception, sinon échec de remise chez Outlook.
+    from app.integrations.email_graph import is_placeholder_email
+
+    if is_placeholder_email(record.email):
+        return False
     subject, html = _body(record.name or "", record.locale or "fr")
     try:
         await mailer.send(

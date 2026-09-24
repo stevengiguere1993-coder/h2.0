@@ -29,16 +29,19 @@ Réponse Claude attendue (JSON parsé) ::
                 | "gestion_immo" | "urgence_locataire" | "suivi_projet"
                 | "intake_construction" | "location_prospect"
                 | "spam" | "callback" | "unclear",
-      "lead_name": null | "...",
+      "lead_name": null | "Prénom Nom",
       "lead_callback_phone": null | "+1...",
       "lead_reason": null | "...",
+      "lead_address": null | "adresse des travaux / du logement",
+      "is_new_client": null | true | false,
       "intake_data": null | {
         "type_travaux": "...", "adresse": "...",
         "echeancier": "...", "budget": "...",
         "email": "...", "best_callback_time": "..."
       },
       "next_action": "continue" | "transfer"
-                     | "transfer_emergency" | "transfer_project_lead"
+                     | "transfer_emergency" | "transfer_gestionnaire"
+                     | "transfer_project_lead"
                      | "intake_complete" | "callback" | "end_spam",
       "say": "Ce que la secrétaire dit à l'appelant ensuite."
     }
@@ -200,6 +203,53 @@ votre logement, ou autre chose ? »).
 - Format de sortie : JSON pur, pas de markdown, pas de préfixe.
 
 ──────────────────────────────────────────
+IDENTIFICATION DE L'APPELANT — OBLIGATOIRE AVANT TOUTE ACTION
+──────────────────────────────────────────
+
+Dès que l'appelant veut AVANCER (soumission, rappel, parler à \
+quelqu'un, problème, suivi) — et non pas simplement poser une \
+question d'information — tu établis QUI il est avant de router. \
+Sans ça, la fiche CRM ne contient que son numéro de téléphone, et \
+l'équipe ne sait ni qui rappeler ni pourquoi.
+
+Si le contexte appelant est INCONNU (numéro non reconnu), demande \
+d'abord : « Est-ce que vous êtes déjà client chez Horizon, ou est-ce \
+une première demande ? »
+
+**NOUVEAU client** (`is_new_client = true`) — collecte dans l'ordre, \
+UNE question à la fois, AVANT tout transfert ou rappel :
+  1. **Prénom ET nom** : « Puis-je avoir votre prénom et votre nom ? » \
+Si un des deux manque, redemande ; fais épeler un nom inhabituel. \
+Remplis `lead_name` = « Prénom Nom » (jamais seulement le prénom, \
+jamais « Appelant »).
+  2. **Adresse des travaux** (numéro civique + rue + ville) → \
+`lead_address`.
+  3. **Raison de l'appel** (en une phrase) → `lead_reason`.
+Le numéro qui appelle est capté automatiquement ; ne demande un autre \
+numéro que s'il préfère être rappelé ailleurs (`lead_callback_phone`). \
+Ensuite seulement : intake structuré (règle 3), rappel ou transfert.
+
+**DÉJÀ client ou LOCATAIRE** (`is_new_client = false`) — tu ne \
+prends PAS toute la fiche, tu diriges :
+  - demande son nom et **l'adresse du projet ou du logement** \
+(`lead_address`) ainsi que la raison (`lead_reason`), pour que le \
+serveur retrouve le chantier et son responsable ;
+  - projet de construction → `next_action = transfer_project_lead` \
+(règle 2) : le serveur sonne le responsable du projet ;
+  - locataire d'un immeuble d'Horizon → urgence : \
+`transfer_emergency` ; demande normale : `transfer_gestionnaire` \
+(règle 1) : le serveur sonne le gestionnaire de l'immeuble.
+
+Si le contexte appelant est déjà CLIENT ou LOCATAIRE reconnu, ne pose \
+pas la question « déjà client ? » : `is_new_client = false`, prends \
+juste la raison (et l'adresse si plusieurs projets), puis dirige.
+
+Remplis TOUJOURS `lead_name`, `lead_address`, `lead_reason` et \
+`is_new_client` dès que tu les connais, à CHAQUE tour (répète les \
+valeurs des tours précédents) : le serveur les note sur la fiche \
+prospect même si l'appelant raccroche en cours de route.
+
+──────────────────────────────────────────
 RÈGLES DE ROUTAGE (le contexte ORIENTE, il ne DÉCIDE pas)
 ──────────────────────────────────────────
 
@@ -231,7 +281,9 @@ individuel, PAS vers un message/callback. Dis : « Je vous transfère \
 chez Horizon, un instant. »
 
 → `intent = information`, `next_action = transfer` (le serveur \
-dispatche vers la ligne générale d'Horizon).
+dispatche vers la ligne générale d'Horizon). Pour un appelant \
+INCONNU, prends d'abord son prénom, son nom et la raison de l'appel \
+(section IDENTIFICATION) — un seul tour suffit — puis transfère.
 
 Les règles 1 à 5 ci-dessous ne s'appliquent QUE quand l'appelant \
 fait clairement la demande correspondante. Sinon, par défaut : \
@@ -250,8 +302,11 @@ toilette qui déborde, débordement, situation dangereuse.
 immédiatement au gestionnaire. Ne quittez pas. »
 
 → Si demande normale (réparation routine, question loyer, etc.) : \
-`intent = gestion_immo`, `next_action = callback` en prenant son nom \
-et le détail du problème.
+`intent = gestion_immo`, `next_action = transfer_gestionnaire` après \
+avoir pris son nom, l'adresse du logement (`lead_address`) et le \
+détail du problème (`lead_reason`) ; dis : « Je vous transfère au \
+gestionnaire de votre immeuble, un instant. » (Hors heures, le \
+serveur transforme ça en prise de message.)
 
 **2. CLIENT avec projet en cours :**
 
@@ -262,6 +317,11 @@ parle effectivement de SON projet : avancement du chantier, \
 
 → `intent = suivi_projet`, `next_action = transfer_project_lead`, \
 dis : « Je vous transfère au chargé de projet, un instant. »
+
+Même chose pour un appelant NON reconnu par son numéro qui dit être \
+déjà client : demande l'adresse du projet (`lead_address`) et son nom, \
+puis `transfer_project_lead` — le serveur retrouve le chantier par \
+l'adresse et sonne son responsable.
 
 S'il pose une question générale (services offerts, délais, tarifs, \
 zones couvertes) ou parle d'autre chose qu'un suivi de chantier, NE \
@@ -347,6 +407,7 @@ class SecretaryDecision:
         "continue",
         "transfer",
         "transfer_emergency",
+        "transfer_gestionnaire",
         "transfer_project_lead",
         "intake_complete",
         "propose_slots",
@@ -358,6 +419,10 @@ class SecretaryDecision:
     lead_name: Optional[str] = None
     lead_callback_phone: Optional[str] = None
     lead_reason: Optional[str] = None
+    #: Adresse des travaux / du logement et statut « nouveau client »
+    #: établis par Léa (identification obligatoire avant toute action).
+    lead_address: Optional[str] = None
+    is_new_client: Optional[bool] = None
     intake_data: Dict[str, Any] = field(default_factory=dict)
     # Index 0-based du slot proposé que l'appelant a choisi (uniquement
     # pour next_action = book_slot).
@@ -517,7 +582,8 @@ def _build_user_prompt(
     lines.append(
         "Réponds UNIQUEMENT par un objet JSON conforme au schéma "
         "(lang, intent, lead_name, lead_callback_phone, lead_reason, "
-        "intake_data, next_action, say). Pas de markdown."
+        "lead_address, is_new_client, intake_data, next_action, say). "
+        "Pas de markdown."
     )
     return "\n".join(lines)
 
@@ -529,6 +595,7 @@ _VALID_ACTIONS = {
     "continue",
     "transfer",
     "transfer_emergency",
+    "transfer_gestionnaire",
     "transfer_project_lead",
     "intake_complete",
     "propose_slots",
@@ -600,9 +667,23 @@ def _parse_decision(text: str) -> SecretaryDecision:
         lead_name=_optstr(data.get("lead_name")),
         lead_callback_phone=_optstr(data.get("lead_callback_phone")),
         lead_reason=_optstr(data.get("lead_reason")),
+        lead_address=_optstr(data.get("lead_address")),
+        is_new_client=_optbool(data.get("is_new_client")),
         intake_data=intake,
         chosen_slot_index=chosen_idx,
     )
+
+
+def _optbool(v) -> Optional[bool]:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        t = v.strip().lower()
+        if t in ("true", "oui", "yes", "1"):
+            return True
+        if t in ("false", "non", "no", "0"):
+            return False
+    return None
 
 
 def _optstr(v) -> Optional[str]:

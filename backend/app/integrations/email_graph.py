@@ -28,6 +28,34 @@ class _TokenCache:
     expires_at: float = 0.0
 
 
+#: Domaines FICTIFS : adresses de remplissage créées quand un prospect
+#: n'a pas de courriel (CRM : « no-email+<horodatage>@horizon.placeholder »)
+#: ou joint par téléphone seulement (« @telephonie.local »). Aucun courriel
+#: ne doit JAMAIS leur être envoyé — chaque envoi revenait en échec de
+#: remise Outlook (retour 2026-09-24).
+PLACEHOLDER_EMAIL_DOMAINS = ("@horizon.placeholder", "@telephonie.local")
+
+
+def is_placeholder_email(addr: Optional[str]) -> bool:
+    """Vrai pour une adresse fictive / invalide qui ne doit pas recevoir
+    de courriel (domaine sentinelle, ou pas de « @ »)."""
+    e = (addr or "").strip().lower()
+    if not e or "@" not in e:
+        return True
+    return e.endswith(PLACEHOLDER_EMAIL_DOMAINS)
+
+
+def real_recipients(addrs: Optional[Iterable[str]]) -> list[str]:
+    """Ne garde que les adresses réelles (sans doublon, ordre conservé)."""
+    out: list[str] = []
+    for a in addrs or []:
+        a = (a or "").strip()
+        if not a or is_placeholder_email(a) or a in out:
+            continue
+        out.append(a)
+    return out
+
+
 @dataclass
 class EmailAttachment:
     name: str
@@ -90,6 +118,25 @@ class GraphMailer:
         sinon) ; ``from_name`` change seulement le nom affiché — utile pour
         un gestionnaire contractuel (« Kyle — Gestion Horizon ») dont les
         réponses partent vers ``reply_to`` (son adresse externe)."""
+        # Adresses fictives (prospect sans courriel) : jamais envoyées.
+        # Si plus aucun destinataire réel, on n'envoie rien — sans erreur
+        # (les flux appelants sont best-effort : accusé de réception,
+        # relances, rappels de rendez-vous…).
+        _to_reel = real_recipients(to)
+        _ignores = [a for a in (to or []) if a and a.strip() not in _to_reel]
+        if _ignores:
+            log.info(
+                "Courriel %r : destinataire(s) fictif(s) ignoré(s) : %s",
+                subject, ", ".join(_ignores),
+            )
+        if not _to_reel:
+            log.info(
+                "Courriel %r non envoyé : aucun destinataire réel.", subject
+            )
+            return
+        to = _to_reel
+        cc = real_recipients(cc) or None
+        bcc = real_recipients(bcc) or None
         # STAGING : capture au lieu d'envoyer — le flux appelant voit un
         # succès (audit, statuts) mais RIEN ne part vers de vraies boîtes.
         if settings.mail_capture_only:

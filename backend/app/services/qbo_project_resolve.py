@@ -33,6 +33,13 @@ from app.models.project import Project
 
 log = logging.getLogger(__name__)
 
+_ADDR_ALIASES = {
+    "saint": "st", "sainte": "ste", "boulevard": "boul", "boul": "boul",
+    "avenue": "av", "ave": "av", "av": "av", "chemin": "ch", "ch": "ch",
+    "montee": "mtee", "route": "rte", "apartment": "app", "appartement": "app",
+    "apt": "app", "app": "app", "logement": "log", "log": "log",
+    "quebec": "qc", "qc": "qc", "montreal": "montreal",
+}
 _SEP_RE = re.compile(r"[\s,;:·—–\-_/()\[\]#.'’«»\"|]+")
 
 
@@ -58,7 +65,10 @@ def _norm(value: Optional[str]) -> str:
     « 1616 saint alexandre longueuil » sont ainsi identiques."""
     text = unicodedata.normalize("NFKD", value or "")
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
-    return _SEP_RE.sub(" ", text.lower()).strip()
+    words = _SEP_RE.sub(" ", text.lower()).split()
+    # Abréviations d'adresse courantes ramenées à une forme unique
+    # (« Saint-Alexandre » ≡ « St-Alexandre », « Boulevard » ≡ « Boul. »).
+    return " ".join(_ADDR_ALIASES.get(w, w) for w in words)
 
 
 def _match_level(ln: str, t: str) -> int:
