@@ -386,6 +386,27 @@ async def _record_turn(
     await db.flush()
 
 
+def _lead_message_from_call(call: "Call") -> str:
+    """Notes lisibles pour la fiche prospect : ce que Léa a établi au
+    téléphone (nouveau client ?, raison, adresse des travaux, numéro).
+    L'équipe corrige ensuite dans la fiche au besoin."""
+    lines: list[str] = ["Appel reçu par Léa (secrétaire IA)."]
+    if call.lead_is_new_client is True:
+        lines.append("Nouveau client : oui")
+    elif call.lead_is_new_client is False:
+        lines.append("Nouveau client : non (client ou locataire existant)")
+    if call.lead_reason:
+        lines.append(f"Raison de l'appel : {call.lead_reason}")
+    if call.lead_address:
+        lines.append(f"Adresse des travaux : {call.lead_address}")
+    if call.intent and call.intent not in ("unclear", "callback"):
+        lines.append(f"Intent détecté : {call.intent}")
+    lines.append(f"Numéro entrant : {call.from_e164}")
+    if call.lead_callback_phone and call.lead_callback_phone != call.from_e164:
+        lines.append(f"Numéro de rappel : {call.lead_callback_phone}")
+    return "\n".join(lines)
+
+
 async def _create_lead_from_callback(db, *, call: Call) -> Optional[int]:
     """Crée un ContactRequest depuis les infos capturées par la secrétaire.
 
@@ -416,14 +437,7 @@ async def _create_lead_from_callback(db, *, call: Call) -> Optional[int]:
         or call.from_e164
     )
     name = (call.lead_name or "").strip() or f"Appelant {call.from_e164}"
-    # Construit un message lisible depuis ce qu'on a.
-    bits: list[str] = []
-    if call.lead_reason:
-        bits.append(call.lead_reason)
-    if call.intent and call.intent not in ("unclear", "callback"):
-        bits.append(f"Intent détecté : {call.intent}")
-    bits.append(f"Numéro entrant : {call.from_e164}")
-    message = " — ".join(bits) or "Appel reçu via la secrétaire IA."
+    message = _lead_message_from_call(call)
 
     # Email synthétique stable par numéro (réutilisable pour matcher
     # les rappels successifs au même prospect au lieu d'en créer plein).
@@ -442,6 +456,20 @@ async def _create_lead_from_callback(db, *, call: Call) -> Optional[int]:
         )
     ).scalar_one_or_none()
     if existing is not None:
+        # Fiche créée à un appel précédent avec le seul numéro → on la
+        # complète avec ce que Léa a appris cette fois (nom, adresse,
+        # raison) au lieu de laisser « Appelant +1… ».
+        _placeholder_name = (existing.name or "").startswith("Appelant ")
+        if call.lead_name and (_placeholder_name or not existing.name):
+            existing.name = name[:255]
+        if call.lead_address and not (existing.address or "").strip():
+            existing.address = call.lead_address[:500]
+        if call.lead_reason or call.lead_address:
+            stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+            existing.message = (
+                f"{(existing.message or '').rstrip()}\n\n"
+                f"[Appel du {stamp} UTC]\n{message}"
+            )[:5000].strip()
         call.contact_request_id = existing.id
         await db.flush()
         return existing.id
@@ -450,6 +478,7 @@ async def _create_lead_from_callback(db, *, call: Call) -> Optional[int]:
         name=name[:255],
         email=synth_email,
         phone=callback_phone[:50],
+        address=(call.lead_address or None),
         project_type="autre",
         message=message[:5000],
         locale="fr" if call.lang.startswith("fr") else "en",
@@ -525,6 +554,10 @@ async def _create_intake_contact_request(
     # Message lisible pour la fiche CRM — résumé visuel des champs
     # collectés (utilisé aussi dans le courriel HTML).
     bits: list[str] = ["Demande captée par Léa (secrétaire IA) au téléphone.", ""]
+    if call.lead_is_new_client is True:
+        bits.append("- Nouveau client : oui")
+    elif call.lead_is_new_client is False:
+        bits.append("- Nouveau client : non")
     labels = {
         "type_travaux": "Type de travaux",
         "adresse": "Adresse du projet",
@@ -547,7 +580,7 @@ async def _create_intake_contact_request(
         name=name,
         email=email,
         phone=callback_phone[:50],
-        address=(intake_data or {}).get("adresse"),
+        address=(intake_data or {}).get("adresse") or (call.lead_address or None),
         project_type=project_type,
         budget_range=(intake_data or {}).get("budget"),
         message=message[:5000],
@@ -1243,10 +1276,49 @@ async def _notify_closer_new_booking(
         log.warning("Closer push failed: %s", exc)
 
 
+async def _find_project_by_address(db, address: Optional[str]):
+    """Chantier dont l'adresse correspond à celle donnée au téléphone
+    (normalisée : accents, ponctuation ; égalité ou préfixe à une
+    frontière de mot). Chantier en cours d'abord. None si rien de sûr."""
+    from app.models.project import Project
+    from app.models.project import ProjectStatus as _PSt
+    from app.services.qbo_project_resolve import _match_level, _norm
+
+    target = _norm(address)
+    if len(target) < 6:
+        return None
+    rows = list(
+        (
+            await db.execute(
+                select(Project).where(
+                    Project.address.is_not(None),
+                    Project.kind != "bon_travail",
+                )
+            )
+        ).scalars().all()
+    )
+    best: tuple[int, int, Optional[object]] = (0, 0, None)
+    for pr in rows:
+        lvl = _match_level(_norm(pr.address), target)
+        if lvl < 2:
+            continue
+        active = 0 if pr.status == _PSt.DELIVERED.value else 1
+        key = (lvl, active)
+        if key > (best[0], best[1]) or (
+            key == (best[0], best[1]) and best[2] is not None and pr.id > best[2].id
+        ):
+            best = (lvl, active, pr)
+    return best[2]
+
+
 async def _find_project_for_call(db, call: "Call"):
     """Trouve un projet ACTIF pour l'appelant identifié (CLIENT ou
-    LOCATAIRE avec projet en cours). Renvoie None sinon."""
+    LOCATAIRE avec projet en cours). Appelant NON reconnu par son numéro
+    mais qui a donné l'adresse de son projet à Léa → recherche par
+    adresse (retour 2026-09-24). Renvoie None sinon."""
     if not call.entity_type or not call.entity_id:
+        if getattr(call, "lead_address", None):
+            return await _find_project_by_address(db, call.lead_address)
         return None
     from app.models.project import Project
 
@@ -1783,6 +1855,7 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
     # RDV non urgente est ramenée à une prise de message (callback).
     if after_hours and decision.next_action in (
         "transfer",
+        "transfer_gestionnaire",
         "transfer_project_lead",
         "propose_slots",
         "book_slot",
@@ -1808,6 +1881,10 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
         call.lead_callback_phone = decision.lead_callback_phone[:50]
     if decision.lead_reason:
         call.lead_reason = decision.lead_reason
+    if decision.lead_address:
+        call.lead_address = decision.lead_address[:500]
+    if decision.is_new_client is not None:
+        call.lead_is_new_client = decision.is_new_client
 
     await _record_turn(
         db, call_id=call.id, role="assistant", text=decision.say
@@ -1818,7 +1895,8 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
     # 1) Urgence locataire : on transfère TOUT DE SUITE vers le numéro
     #    gestionnaire (env URGENCY_FORWARD_E164, sinon TWILIO_FORWARD_TO
     #    en dernier recours pour ne jamais raccrocher un cas urgent).
-    if decision.next_action == "transfer_emergency":
+    if decision.next_action in ("transfer_emergency", "transfer_gestionnaire"):
+        _urgent = decision.next_action == "transfer_emergency"
         # Récupère les numéros d'urgence du PhoneNumber (peut être
         # une liste séparée par virgules pour ring plusieurs cibles
         # en parallèle). Fallback env vars URGENCY_FORWARD_E164 +
@@ -1848,25 +1926,29 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
             )
         # Notif cloche urgente — TOUS les owners reçoivent pour qu'au
         # moins une personne soit avertie même si la cible ne décroche pas.
-        await _notify_owners_urgence(
-            db,
-            call=call,
-            reason=decision.lead_reason or "Urgence détectée",
-        )
+        # (Demande normale d'un locataire → transfert au gestionnaire
+        # SANS alerte urgente, retour 2026-09-24.)
+        if _urgent:
+            await _notify_owners_urgence(
+                db,
+                call=call,
+                reason=decision.lead_reason or "Urgence détectée",
+            )
         if not targets:
             # Pas de cible configurée → on ne raccroche pas sec : on
             # capture en callback urgent pour rappel manuel.
-            call.intent = "urgence_locataire"
-            call.lead_reason = (
-                (decision.lead_reason or "") + " [URGENCE LOCATAIRE]"
-            ).strip()
+            call.intent = "urgence_locataire" if _urgent else "gestion_immo"
+            if _urgent:
+                call.lead_reason = (
+                    (decision.lead_reason or "") + " [URGENCE LOCATAIRE]"
+                ).strip()
             await _create_lead_from_callback(db, call=call)
             twiml = provider.build_say_and_hangup(
                 say=decision.say, lang=decision.lang
             )
             return Response(content=twiml, media_type="application/xml")
         call.forwarded_to_e164 = ",".join(targets)
-        call.intent = "urgence_locataire"
+        call.intent = "urgence_locataire" if _urgent else "gestion_immo"
         # Tâche d'entreprise pour tracer/suivre l'urgence locataire
         # (l'IA route vers la bonne entreprise). Fire-and-forget : ne
         # casse jamais l'appel en cours.
@@ -1875,10 +1957,11 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
 
             await create_task_from_call(
                 db,
-                reason=decision.lead_reason or "Urgence locataire signalée",
+                reason=decision.lead_reason
+                or ("Urgence locataire signalée" if _urgent else "Demande locataire"),
                 caller_name=decision.lead_name,
                 caller_phone=decision.lead_callback_phone,
-                intent="urgence locataire",
+                intent="urgence locataire" if _urgent else "demande locataire",
             )
         except Exception:  # noqa: BLE001
             pass
@@ -2319,6 +2402,21 @@ async def twilio_call_status(request: Request, db: DBSession) -> Response:
             from datetime import timedelta
 
             call.answered_at = call.ended_at - timedelta(seconds=call.duration_sec)
+        # L'appelant a raccroché après avoir donné son nom / sa raison à
+        # Léa sans qu'une action finale ait créé la fiche → on la crée
+        # quand même (retour 2026-09-24 : sinon rien dans le CRM).
+        if (
+            call.direction == "inbound"
+            and call.contact_request_id is None
+            and (call.lead_name or call.lead_reason)
+        ):
+            try:
+                await _create_lead_from_callback(db, call=call)
+            except Exception:  # noqa: BLE001
+                log.warning(
+                    "Fiche prospect post-raccroché non créée (call %s)",
+                    call.id, exc_info=True,
+                )
 
     rec_url = params.get("RecordingUrl")
     if rec_url:
