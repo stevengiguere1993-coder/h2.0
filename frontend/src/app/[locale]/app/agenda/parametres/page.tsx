@@ -12,12 +12,30 @@ import {
   ArrowLeft,
   Calendar,
   Loader2,
+  Check,
   Palette,
   Plus,
   Trash2,
   UserCog,
   X
 } from "lucide-react";
+
+// Palette proposée pour les types de rendez-vous : teintes franches,
+// lisibles en pastille sur fond clair comme sombre.
+const COLOR_PALETTE: Array<{ hex: string; label: string }> = [
+  { hex: "0ea5e9", label: "Bleu ciel" },
+  { hex: "2563eb", label: "Bleu" },
+  { hex: "7c3aed", label: "Violet" },
+  { hex: "db2777", label: "Rose" },
+  { hex: "dc2626", label: "Rouge" },
+  { hex: "ea580c", label: "Orange" },
+  { hex: "d89b3c", label: "Doré Horizon" },
+  { hex: "ca8a04", label: "Jaune foncé" },
+  { hex: "16a34a", label: "Vert" },
+  { hex: "0f766e", label: "Sarcelle" },
+  { hex: "64748b", label: "Gris ardoise" },
+  { hex: "78350f", label: "Brun" },
+];
 
 import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
@@ -644,24 +662,51 @@ function TypeEditor({
             className="rounded border border-brand-700 bg-brand-900 px-2 py-1.5 text-sm text-white"
           />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <div className="flex flex-col gap-1 text-xs sm:col-span-2">
           <span className="text-white/70 flex items-center gap-1">
-            <Palette className="h-3 w-3" /> Couleur (hex)
+            <Palette className="h-3 w-3" /> Couleur
           </span>
-          <div className="flex items-center gap-1">
-            <input
-              type="text"
-              value={color}
-              onChange={(e) => setColor(e.target.value.replace(/^#/, ""))}
-              maxLength={6}
-              className="flex-1 rounded border border-brand-700 bg-brand-900 px-2 py-1.5 font-mono text-sm text-white"
-            />
-            <span
-              className="h-7 w-7 rounded border border-brand-700"
-              style={{ backgroundColor: `#${color}` }}
-            />
+          {/* Palette de pastilles : pas besoin de connaître les codes
+              (retour 2026-09-24). Le sélecteur natif reste disponible
+              pour une teinte précise. */}
+          <div className="flex flex-wrap items-center gap-2">
+            {COLOR_PALETTE.map((c) => {
+              const on = c.hex.toLowerCase() === color.toLowerCase();
+              return (
+                <button
+                  key={c.hex}
+                  type="button"
+                  title={c.label}
+                  aria-label={c.label}
+                  aria-pressed={on}
+                  onClick={() => setColor(c.hex)}
+                  className={`h-8 w-8 rounded-full border-2 transition ${
+                    on
+                      ? "scale-110 border-white ring-2 ring-accent-500"
+                      : "border-transparent hover:scale-105"
+                  }`}
+                  style={{ backgroundColor: `#${c.hex}` }}
+                >
+                  {on ? (
+                    <Check className="mx-auto h-4 w-4 text-white drop-shadow" />
+                  ) : null}
+                </button>
+              );
+            })}
+            <label
+              className="flex cursor-pointer items-center gap-1 rounded border border-brand-700 bg-brand-900 px-2 py-1 text-white/70"
+              title="Choisir une autre couleur"
+            >
+              <input
+                type="color"
+                value={`#${/^[0-9a-fA-F]{6}$/.test(color) ? color : "0ea5e9"}`}
+                onChange={(e) => setColor(e.target.value.replace(/^#/, ""))}
+                className="h-6 w-8 cursor-pointer border-0 bg-transparent p-0"
+              />
+              Autre…
+            </label>
           </div>
-        </label>
+        </div>
       </div>
       <div>
         <p className="mb-1 text-xs text-white/70">Rôles autorisés (vide = tous)</p>
