@@ -165,6 +165,8 @@ type Cashflow = {
     ecart: number;
     details: CashflowDetail[];
   };
+  //: Explication quand il n'y a rien à montrer (ex. ouverture future).
+  note?: string | null;
 };
 type AvanceMois = { mois: string; variation: number; solde: number };
 type AvanceCompte = {
@@ -941,11 +943,17 @@ function ProjetHeader({
             />
           </div>
           <div>
-            <label className="label text-[10px] uppercase">Début</label>
+            <label
+              className="label text-[10px] uppercase"
+              title="Le cashflow et le dépensé des comptes de dépense sont lus dans QuickBooks à partir de cette date : mets la date du premier mouvement du projet (inspection, frais…), pas celle de la clôture."
+            >
+              Début
+            </label>
             <input
               type="date"
               className="input"
               defaultValue={projet.date_debut || ""}
+              title="Le cashflow et le dépensé des comptes de dépense sont lus dans QuickBooks à partir de cette date"
               onBlur={(e) =>
                 void onPatch({ date_debut: e.target.value || null })
               }
@@ -2779,6 +2787,10 @@ function CashflowSection({
         <p className="mt-3 text-xs" style={{ color: "var(--qg-text-muted)" }}>
           Connecte le QuickBooks de l&apos;INC (⚙ de la section Budget)
           pour voir les revenus, dépenses et écarts mois par mois.
+        </p>
+      ) : cashflow.note && vue.mois.length === 0 ? (
+        <p className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          {cashflow.note}
         </p>
       ) : (
         <div className="mt-3 max-h-[380px] overflow-y-auto overflow-x-auto pr-1">

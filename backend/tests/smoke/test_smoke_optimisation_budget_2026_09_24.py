@@ -555,3 +555,36 @@ def test_cashflow_avec_ou_sans_colonne_total(run, monkeypatch):
         assert [(d["nom"], d["montant"]) for d in cf["total"]["details"]] == [("Frais bancaires", 10.95)]
         assert faux.params[0] == "ProfitAndLoss"
         assert faux.params[1]["summarize_column_by"] == "Month"
+
+
+def test_cashflow_ouverture_future(client, auth_headers, run, monkeypatch):
+    """Ouverture du projet dans le futur (1660 Saint-Clément : 2026-10-12)
+    → pas d'appel P&L mensuel, cashflow vide avec une note explicite."""
+    from datetime import date, timedelta
+
+    pid = _projet(client, auth_headers, run)
+    futur = (date.today() + timedelta(days=18)).isoformat()
+    assert client.patch(
+        f"/api/v1/optimisation/projets/{pid}",
+        headers=auth_headers, json={"qbo_scope": "inc:test", "date_debut": futur},
+    ).status_code == 200
+
+    async def _totaux(scope, d1, d2):
+        return {}
+
+    async def _jamais(*a, **k):
+        raise AssertionError("cashflow_mensuel ne doit pas être appelé")
+
+    async def _plan(scope, kind="depense"):
+        return []
+
+    monkeypatch.setattr(opti, "depenses_par_compte", _totaux)
+    monkeypatch.setattr(opti, "cashflow_mensuel", _jamais)
+    monkeypatch.setattr(opti, "lister_comptes_depense", _plan)
+    q = client.get(
+        f"/api/v1/optimisation/projets/{pid}/qbo-depenses", headers=auth_headers,
+    )
+    assert q.status_code == 200, q.text
+    cf = q.json()["cashflow"]
+    assert cf["mois"] == [] and cf["total"]["ecart"] == 0
+    assert futur in cf["note"] and "futur" in cf["note"]
