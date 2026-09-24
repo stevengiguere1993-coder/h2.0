@@ -1019,6 +1019,8 @@ function BudgetSection({
   const [txnLigne, setTxnLigne] = useState<{
     id: number;
     nom: string;
+    //: « financement » = les transactions derrière le Financé.
+    volet?: "depense" | "financement";
   } | null>(null);
 
   async function patchLigne(id: number, patch: Record<string, unknown>) {
@@ -1372,12 +1374,25 @@ function BudgetSection({
                       title="Comptes de financement liés dans les réglages ⚙ du budget"
                     >
                       <span className="inline-flex flex-col items-start">
-                        <span
-                          className="tabular-nums"
-                          style={{ color: "var(--qg-text)" }}
-                        >
-                          {nbFin === 0 ? "—" : fmtMoney(fin)}
-                        </span>
+                        {nbFin === 0 ? (
+                          <span style={{ color: "var(--qg-text)" }}>—</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setTxnLigne({
+                                id: l.id,
+                                nom: l.nom,
+                                volet: "financement"
+                              })
+                            }
+                            className="tabular-nums underline decoration-dotted underline-offset-2 hover:opacity-70"
+                            style={{ color: "var(--qg-text)" }}
+                            title="Voir les transactions QuickBooks derrière ce financement (dépôts, virements, écritures)"
+                          >
+                            {fmtMoney(fin)}
+                          </button>
+                        )}
                         {nbFin > 0 ? (
                           <span
                             className="text-[10px]"
@@ -1471,8 +1486,14 @@ function BudgetSection({
       {txnLigne ? (
         <TransactionsQboModal
           projetId={projet.id}
-          titre={txnLigne.nom}
-          fetchUrl={`/api/v1/optimisation/projets/${projet.id}/qbo-lignes/${txnLigne.id}/transactions`}
+          titre={
+            txnLigne.volet === "financement"
+              ? `${txnLigne.nom} (financement)`
+              : txnLigne.nom
+          }
+          fetchUrl={`/api/v1/optimisation/projets/${projet.id}/qbo-lignes/${txnLigne.id}/transactions${
+            txnLigne.volet === "financement" ? "?volet=financement" : ""
+          }`}
           onClose={() => setTxnLigne(null)}
         />
       ) : null}
@@ -1503,7 +1524,15 @@ type QboPiece = {
 const QBO_TXN_LABEL: Record<string, string> = {
   bill: "facture fournisseur",
   purchase: "dépense",
-  journalentry: "écriture de journal"
+  journalentry: "écriture de journal",
+  deposit: "dépôt",
+  transfer: "virement"
+};
+//: Titre de la ligne quand le document n'a pas de tiers.
+const QBO_TXN_TITRE: Record<string, string> = {
+  journalentry: "Écriture de journal",
+  deposit: "Dépôt",
+  transfer: "Virement"
 };
 
 type QboTxn = {
@@ -1622,8 +1651,8 @@ function TransactionsQboModal({
           </p>
         ) : rows !== null && rows.length === 0 ? (
           <p className="py-6 text-center text-xs" style={{ color: "var(--qg-text-muted)" }}>
-            Aucune facture, dépense ni écriture de journal sur les
-            comptes de cette enveloppe.
+            Aucune transaction QuickBooks sur les comptes de cette
+            enveloppe.
           </p>
         ) : rows !== null ? (
           <div className="overflow-x-auto">
@@ -1654,12 +1683,8 @@ function TransactionsQboModal({
                       {t.date || "—"}
                     </td>
                     <td className="py-1.5 pr-2" style={{ color: "var(--qg-text)" }}>
-                      {t.fournisseur ||
-                        (t.txn_type === "journalentry"
-                          ? "Écriture de journal"
-                          : "—")}
-                      {QBO_TXN_LABEL[t.txn_type] &&
-                      !(t.txn_type === "journalentry" && !t.fournisseur) ? (
+                      {t.fournisseur || QBO_TXN_TITRE[t.txn_type] || "—"}
+                      {t.fournisseur && QBO_TXN_LABEL[t.txn_type] ? (
                         <span
                           className="ml-1 text-[10px]"
                           style={{ color: "var(--qg-text-muted)" }}
@@ -1759,9 +1784,10 @@ function TransactionsQboModal({
               Une écriture de journal à plusieurs éléments est ventilée
               ligne par ligne (↳) ; ses pièces jointes sont sur la ligne
               principale, QuickBooks les rattachant à l&apos;écriture
-              entière. Factures fournisseurs, dépenses (chèques, cartes) et
-              écritures de journal qui touchent les comptes de
-              l&apos;enveloppe. Les factures ponctuelles (travaux,
+              entière. Dépensé : factures fournisseurs, dépenses (chèques,
+              cartes) et écritures de journal ; financé : dépôts,
+              virements et écritures (un remboursement sort en négatif).
+              Les factures ponctuelles (travaux,
               réparations…) sont jointes à leurs transactions ; les
               factures récurrentes (électricité, assurances,
               télécommunications…) ne sont pas déposées

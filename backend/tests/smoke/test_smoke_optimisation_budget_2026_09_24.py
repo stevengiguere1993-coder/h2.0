@@ -383,3 +383,98 @@ def test_compte_parent_avec_ecritures_propres():
     _soldes_par_compte_colonnes([section_depenses], soldes)
     assert soldes["80"] == {"nom": "Frais de détention", "vals": [5.95, 5.95]}
     assert "90" in soldes and soldes["90"]["vals"] == [0.0, 0.0]
+
+
+def test_detail_financement_depots_virements(run, monkeypatch):
+    """« Financé » cliquable (Phil 2026-09-24) : sur un compte de PASSIF
+    (prêt), un dépôt ou un virement tiré = +, un remboursement (paiement
+    ou débit d'écriture) = −. Les pièces suivent le dépôt."""
+    faux = _FauxQbo(
+        {
+            "FROM Account WHERE Id IN": [
+                {"Id": "200", "Classification": "Liability"},
+            ],
+            "FROM Deposit": [
+                {"Id": "D1", "TxnDate": "2026-02-10", "TotalAmt": 50000,
+                 "PrivateNote": "Déboursé du prêt",
+                 "Line": [{"Amount": 50000, "DepositLineDetail": {
+                     "AccountRef": {"value": "200"},
+                     "Entity": {"name": "Desjardins"}}}]},
+            ],
+            "FROM Transfer": [
+                {"Id": "T1", "TxnDate": "2026-03-05", "Amount": 5000,
+                 "FromAccountRef": {"value": "200", "name": "Marge"},
+                 "ToAccountRef": {"value": "1", "name": "Compte courant"}},
+            ],
+            "FROM JournalEntry": [
+                {"Id": "J1", "TxnDate": "2026-04-01", "TotalAmt": 1000,
+                 "Line": [
+                     {"Amount": 1000, "Description": "Remboursement capital",
+                      "JournalEntryLineDetail": {
+                          "PostingType": "Debit", "AccountRef": {"value": "200"}}},
+                     {"Amount": 1000, "JournalEntryLineDetail": {
+                         "PostingType": "Credit", "AccountRef": {"value": "1"}}},
+                 ]},
+            ],
+            "FROM Purchase": [
+                {"Id": "P1", "TxnDate": "2026-05-01", "TotalAmt": 2000,
+                 "EntityRef": {"name": "Desjardins"},
+                 "Line": [{"Amount": 2000, "AccountBasedExpenseLineDetail":
+                           {"AccountRef": {"value": "200"}}}]},
+            ],
+            "__attachables__": [
+                {"Id": "A9", "FileName": "contrat-pret.pdf",
+                 "ContentType": "application/pdf",
+                 "AttachableRef": [{"EntityRef": {"type": "Deposit", "value": "D1"}}]},
+            ],
+        }
+    )
+    monkeypatch.setattr(qb_mod, "get_qbo", lambda scope="construction": faux)
+
+    rows = run(
+        opti.transactions_depenses("inc:1", {"200"}, "2026-01-01", "2026-09-24")
+    )
+    par_id = {r["txn_id"]: r for r in rows}
+    assert set(par_id) == {"D1", "T1", "J1", "P1"}
+    assert par_id["D1"]["montant_impute"] == 50000.0
+    assert par_id["D1"]["txn_type"] == "deposit"
+    assert par_id["D1"]["fournisseur"] == "Desjardins"
+    assert par_id["D1"]["description"] == "Déboursé du prêt"
+    assert [p["att_id"] for p in par_id["D1"]["pieces"]] == ["A9"]
+    assert par_id["T1"]["montant_impute"] == 5000.0, "crédit sur le passif = tiré"
+    assert par_id["T1"]["montant_total"] == 5000.0
+    assert par_id["T1"]["lignes"][0]["description"] == "Virement : Marge → Compte courant"
+    assert par_id["J1"]["montant_impute"] == -1000.0, "débit sur le passif = remboursé"
+    assert par_id["P1"]["montant_impute"] == -2000.0, "paiement = remboursé"
+    # Compte de bilan → aucune borne de début dans les requêtes.
+    assert all("TxnDate >=" not in q for q in faux.sql if "FROM Deposit" in q)
+
+
+def test_endpoint_volet_financement(client, auth_headers, run, monkeypatch):
+    """L'endpoint du détail choisit les comptes du volet demandé."""
+    pid = _projet(client, auth_headers, run)
+    lid = _ligne(client, auth_headers, pid, "Travaux", compte="77")
+    r = client.patch(
+        f"/api/v1/optimisation/budget-lignes/{lid}",
+        headers=auth_headers,
+        json={"qbo_financement_accounts_json": json.dumps(
+            [{"id": "200", "name": "Prêt"}])},
+    )
+    assert r.status_code == 200, r.text
+    assert client.patch(
+        f"/api/v1/optimisation/projets/{pid}",
+        headers=auth_headers, json={"qbo_scope": "inc:test"},
+    ).status_code == 200
+
+    appels: List[set] = []
+
+    async def _faux_detail(scope, comptes, d1, d2):
+        appels.append(set(comptes))
+        return []
+
+    monkeypatch.setattr(opti, "transactions_depenses", _faux_detail)
+    base = f"/api/v1/optimisation/projets/{pid}/qbo-lignes/{lid}/transactions"
+    assert client.get(base, headers=auth_headers).status_code == 200
+    assert client.get(base + "?volet=financement", headers=auth_headers).status_code == 200
+    assert appels == [{"77"}, {"200"}]
+    assert client.get(base + "?volet=autre", headers=auth_headers).status_code == 422

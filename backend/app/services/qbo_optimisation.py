@@ -770,11 +770,62 @@ async def _classification_comptes(
 
 
 #: Entités QuickBooks lues pour le détail d'une enveloppe → txn_type.
+#: Dépôts et virements servent surtout au FINANCEMENT (prêt encaissé,
+#: marge tirée) — Phil 2026-09-24 : « sur les financés aussi ça serait
+#: bien que ce soit cliquable ».
 _ENTITES_DETAIL = (
     ("Purchase", "purchase"),
     ("Bill", "bill"),
     ("JournalEntry", "journalentry"),
+    ("Deposit", "deposit"),
+    ("Transfer", "transfer"),
 )
+
+#: Sens NATUREL d'un compte : un CRÉDIT augmente un passif, l'équité ou
+#: un revenu (financement encaissé = +) ; un DÉBIT augmente un actif ou
+#: une dépense (dépensé = +).
+_CLASSIFICATIONS_CREDIT = ("Liability", "Equity", "Revenue")
+
+
+def _signe(classification: str, sens: str) -> float:
+    """+1 quand l'écriture va dans le sens naturel du compte, −1 sinon.
+    Classification inconnue = compte de dépense (débit positif)."""
+    credit_positif = classification in _CLASSIFICATIONS_CREDIT
+    return 1.0 if (sens == "Credit") == credit_positif else -1.0
+
+
+def _lignes_document(type_key: str, txn: Dict[str, Any]):
+    """(compte, sens Debit/Credit, montant brut, description, tiers) de
+    chaque ligne d'un document QuickBooks, selon son type."""
+    if type_key == "transfer":
+        montant = txn.get("Amount") or 0
+        de = txn.get("FromAccountRef") or {}
+        vers = txn.get("ToAccountRef") or {}
+        desc = (
+            f"Virement : {de.get('name') or '?'} → {vers.get('name') or '?'}"
+        )
+        yield str(vers.get("value") or ""), "Debit", montant, desc, None
+        yield str(de.get("value") or ""), "Credit", montant, desc, None
+        return
+    for line in txn.get("Line") or []:
+        desc = str(line.get("Description") or "") or None
+        if type_key == "journalentry":
+            det = line.get("JournalEntryLineDetail") or {}
+            sens = "Credit" if det.get("PostingType") == "Credit" else "Debit"
+            entite = (
+                (det.get("Entity") or {}).get("EntityRef") or {}
+            ).get("name")
+        elif type_key == "deposit":
+            det = line.get("DepositLineDetail") or {}
+            sens = "Credit"
+            entite = (det.get("Entity") or {}).get("name")
+        else:
+            det = line.get("AccountBasedExpenseLineDetail") or {}
+            # Purchase « Credit » = remboursement sur carte de crédit.
+            sens = "Credit" if txn.get("Credit") else "Debit"
+            entite = None
+        acc = str((det.get("AccountRef") or {}).get("value") or "")
+        yield acc, sens, line.get("Amount") or 0, desc, entite
 
 
 async def transactions_depenses(
@@ -798,6 +849,11 @@ async def transactions_depenses(
     JournalEntries sont lues aussi — débit = +, crédit = − sur le compte
     de l'enveloppe. Et un compte de BILAN est listé sans borne de début
     (son total est un solde, pas un mouvement de période).
+
+    Les montants sont SIGNÉS dans le sens naturel de chaque compte
+    (``_signe``) : + = dépensé sur un compte de dépense/actif, + = encaissé
+    sur un compte de passif/équité/revenu (enveloppes de FINANCEMENT :
+    dépôts, virements, écritures ; un remboursement sort en −).
     """
     from app.integrations.quickbooks import get_qbo
 
@@ -842,32 +898,19 @@ async def transactions_depenses(
                 # 3 éléments = 3 sous-lignes à l'écran — Phil 2026-09-24 :
                 # « on ne voit pas les deux autres éléments »).
                 lignes: List[Dict[str, Any]] = []
-                for line in txn.get("Line") or []:
-                    if type_key == "journalentry":
-                        det = line.get("JournalEntryLineDetail") or {}
-                        signe = -1.0 if det.get("PostingType") == "Credit" else 1.0
-                    else:
-                        det = line.get("AccountBasedExpenseLineDetail") or {}
-                        signe = 1.0
-                    acc = str(
-                        (det.get("AccountRef") or {}).get("value") or ""
-                    )
+                for acc, sens, brut, desc_ligne, entite in _lignes_document(
+                    type_key, txn
+                ):
                     if not _compte_retenu(acc, txn_date):
                         continue
                     try:
-                        montant = signe * float(line.get("Amount") or 0)
+                        montant = _signe(classif.get(acc, ""), sens) * float(brut)
                     except (TypeError, ValueError):
                         continue
                     impute += montant
-                    entite = None
-                    if type_key == "journalentry":
-                        entite = (
-                            (det.get("Entity") or {}).get("EntityRef") or {}
-                        ).get("name")
                     lignes.append(
                         {
-                            "description": str(line.get("Description") or "")
-                            or None,
+                            "description": desc_ligne,
                             "fournisseur": entite or None,
                             "montant": round(montant, 2),
                         }
@@ -894,7 +937,9 @@ async def transactions_depenses(
                         "fournisseur": four,
                         "doc_number": txn.get("DocNumber"),
                         "montant_impute": round(impute, 2),
-                        "montant_total": float(txn.get("TotalAmt") or 0),
+                        "montant_total": float(
+                            txn.get("TotalAmt") or txn.get("Amount") or 0
+                        ),
                         "description": desc,
                         "lignes": lignes,
                         "pieces": [],
