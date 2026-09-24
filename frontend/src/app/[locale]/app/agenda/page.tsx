@@ -8,7 +8,8 @@ import {
   ChevronRight,
   Loader2,
   Plus,
-  Trash2
+  Trash2,
+  Users
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
@@ -36,6 +37,11 @@ type AgendaEvent = {
   scope?: "construction" | "prospection";
   lead_id?: number | null;
   assignee_user_id?: number | null;
+  // Noms des personnes cédulées (employés et sous-traitants) — affichés
+  // dans la vue Liste (retour 2026-09-24). Tous les ids d'employés pour
+  // que le filtre « équipe » retrouve une phase à plusieurs personnes.
+  assignee_names?: string[];
+  assignee_employe_ids?: number[];
 };
 
 /**
@@ -67,6 +73,7 @@ type Project = {
   members?: Array<{ employe_id: number }> | null;
 };
 type Employe = { id: number; full_name: string };
+type SousTraitant = { id: number; full_name: string; trade?: string | null };
 type Phase = {
   id: number;
   project_id: number;
@@ -317,6 +324,7 @@ export default function AgendaPage() {
   const [events, setEvents] = useState<AgendaEvent[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [employes, setEmployes] = useState<Employe[]>([]);
+  const [sousTraitants, setSousTraitants] = useState<SousTraitant[]>([]);
   const [phases, setPhases] = useState<Phase[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -385,11 +393,12 @@ export default function AgendaPage() {
       setLoading(true);
       setError(null);
       try {
-        const [evRes, prRes, empRes, phRes] = await Promise.all([
+        const [evRes, prRes, empRes, phRes, stRes] = await Promise.all([
           authedFetch("/api/v1/agenda?limit=500"),
           authedFetch("/api/v1/projects?limit=200"),
           authedFetch("/api/v1/employes?limit=200&volet=construction"),
-          authedFetch("/api/v1/phases")
+          authedFetch("/api/v1/phases"),
+          authedFetch("/api/v1/sous-traitants?limit=200")
         ]);
         if (!evRes.ok) throw new Error(`http_${evRes.status}`);
         const rawEvs = (await evRes.json()) as AgendaEvent[];
@@ -400,11 +409,15 @@ export default function AgendaPage() {
         const prs = prRes.ok ? ((await prRes.json()) as Project[]) : [];
         const emps = empRes.ok ? ((await empRes.json()) as Employe[]) : [];
         const phs = phRes.ok ? ((await phRes.json()) as Phase[]) : [];
+        const sts = stRes.ok
+          ? ((await stRes.json()) as SousTraitant[])
+          : [];
         if (!cancelled) {
           setEvents(evs);
           setProjects(prs);
           setEmployes(emps);
           setPhases(phs);
+          setSousTraitants(Array.isArray(sts) ? sts : []);
         }
       } catch {
         if (!cancelled) setError("Impossible de charger l'agenda.");
@@ -444,6 +457,30 @@ export default function AgendaPage() {
             : sMs + dur * 86_400_000 - 1;
         const s = new Date(sMs);
         const e = new Date(eMs);
+        const empIds =
+          p.assignee_employe_ids && p.assignee_employe_ids.length > 0
+            ? p.assignee_employe_ids
+            : p.assignee_employe_id != null
+              ? [p.assignee_employe_id]
+              : [];
+        const stIds =
+          p.assignee_sous_traitant_ids &&
+          p.assignee_sous_traitant_ids.length > 0
+            ? p.assignee_sous_traitant_ids
+            : p.assignee_sous_traitant_id != null
+              ? [p.assignee_sous_traitant_id]
+              : [];
+        const names = [
+          ...empIds.map(
+            (id) => employes.find((x) => x.id === id)?.full_name || `#${id}`
+          ),
+          ...stIds.map((id) => {
+            const st = sousTraitants.find((x) => x.id === id);
+            return st
+              ? `${st.full_name} (s.-t.)`
+              : `Sous-traitant #${id}`;
+          })
+        ];
         return {
           id: -p.id, // négatif pour ne pas collisionner avec events réels
           title: `📐 ${p.name}`,
@@ -458,16 +495,25 @@ export default function AgendaPage() {
               ? p.assignee_employe_id
               : null,
           event_type: "phase",
-          created_at: s.toISOString()
+          created_at: s.toISOString(),
+          assignee_names: names,
+          assignee_employe_ids: empIds
         } as AgendaEvent;
       });
-  }, [phases]);
+  }, [phases, employes, sousTraitants]);
 
   const filteredEvents = useMemo(() => {
     return [...events, ...phaseAsEvents].filter((e) => {
       if (fType && e.event_type !== fType) return false;
       if (fProject && String(e.project_id || "") !== fProject) return false;
-      if (fAssignee && String(e.assignee_id || "") !== fAssignee) return false;
+      if (fAssignee) {
+        const ids = e.assignee_employe_ids?.length
+          ? e.assignee_employe_ids
+          : e.assignee_id != null
+            ? [e.assignee_id]
+            : [];
+        if (!ids.some((id) => String(id) === fAssignee)) return false;
+      }
       return true;
     });
   }, [events, phaseAsEvents, fType, fProject, fAssignee]);
@@ -834,6 +880,8 @@ export default function AgendaPage() {
         ) : view === "list" ? (
           <ListView
             events={filteredEvents}
+            employes={employes}
+            projects={projects}
             onEventClick={(e) =>
               e.event_type === "busy"
                 ? null
@@ -1355,10 +1403,14 @@ function MonthView({
 
 function ListView({
   events,
-  onEventClick
+  onEventClick,
+  employes = [],
+  projects = []
 }: {
   events: AgendaEvent[];
   onEventClick: (e: AgendaEvent) => void;
+  employes?: Employe[];
+  projects?: Project[];
 }) {
   // Les événements PASSÉS n'encombrent plus la liste (retour
   // 2026-09-12 : « on voit des événements de mai dans le mois de
@@ -1429,7 +1481,32 @@ function ListView({
                         e.end_at ? ` – ${fmtTime(e.end_at)}` : ""
                       }`}
                   {e.location ? ` · ${e.location}` : ""}
+                  {e.project_id
+                    ? ` · ${
+                        projects.find((p) => p.id === e.project_id)?.name ||
+                        `Projet #${e.project_id}`
+                      }`
+                    : ""}
                 </p>
+                {(() => {
+                  const names =
+                    e.assignee_names && e.assignee_names.length > 0
+                      ? e.assignee_names
+                      : e.assignee_id != null
+                        ? [
+                            employes.find((x) => x.id === e.assignee_id)
+                              ?.full_name || `#${e.assignee_id}`
+                          ]
+                        : [];
+                  return (
+                    <p className="mt-0.5 flex items-center gap-1 text-xs text-white/70">
+                      <Users className="h-3 w-3 shrink-0 text-accent-500" />
+                      <span className="truncate">
+                        {names.length > 0 ? names.join(", ") : "Personne de cédulé"}
+                      </span>
+                    </p>
+                  );
+                })()}
               </div>
               <span
                 className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-semibold ${
