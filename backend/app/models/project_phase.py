@@ -53,6 +53,12 @@ class ProjectPhase(Base):
     )
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    #: Budget PRÉVU de la phase en $ (optionnel — suivi budgétaire par
+    #: phase, retour 2026-09-24). Interne : jamais dans le PDF client.
+    budget: Mapped[Optional[float]] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+
     # Affectation par phase. Une phase peut être assignée :
     #  - à un employé interne (assignee_employe_id), ou
     #  - à un sous-traitant (assignee_sous_traitant_id), ou

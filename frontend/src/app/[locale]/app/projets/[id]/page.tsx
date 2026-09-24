@@ -772,6 +772,13 @@ export default function ProjectDetailPage() {
                   projectId={id}
                   focusPhaseId={focusPhaseId}
                   onFocusConsumed={() => setFocusPhaseId(null)}
+                  projectBudget={
+                    budget.trim() !== "" && Number.isFinite(Number(budget))
+                      ? Number(budget)
+                      : p.budget != null
+                        ? Number(p.budget)
+                        : null
+                  }
                 />
               ) : tab === "agenda" ? (
                 <ChantierAgendaTab
@@ -3009,6 +3016,8 @@ type Phase = {
   start_time: string | null;
   duration_days: number | null;
   notes: string | null;
+  // Budget prévu de la phase ($), optionnel — suivi budgétaire.
+  budget: number | string | null;
   assignee_employe_id: number | null;
   assignee_sous_traitant_id: number | null;
   assignee_employe_ids: number[];
@@ -3056,11 +3065,14 @@ type LinkedEvent = {
 function PlanificationTab({
   projectId,
   focusPhaseId = null,
-  onFocusConsumed
+  onFocusConsumed,
+  projectBudget = null
 }: {
   projectId: number;
   focusPhaseId?: number | null;
   onFocusConsumed?: () => void;
+  // Budget global du projet (fiche) pour comparer à la somme des phases.
+  projectBudget?: number | null;
 }) {
   const confirm = useConfirm();
   const [phases, setPhases] = useState<Phase[]>([]);
@@ -3567,6 +3579,10 @@ function PlanificationTab({
 
       <ProjectTeamSection projectId={projectId} phases={phases} />
 
+      {phases.some((ph) => ph.budget != null && ph.budget !== "") ? (
+        <PhaseBudgetSummary phases={phases} projectBudget={projectBudget} />
+      ) : null}
+
       {pdfMsg ? (
         <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
           {pdfMsg}
@@ -3765,6 +3781,70 @@ function PlanificationTab({
   );
 }
 
+// Suivi budgétaire par phase : somme des budgets saisis vs budget du
+// projet (retour 2026-09-24). Interne — rien de ceci dans le PDF client.
+function PhaseBudgetSummary({
+  phases,
+  projectBudget
+}: {
+  phases: Phase[];
+  projectBudget: number | null;
+}) {
+  const withBudget = phases.filter(
+    (ph) => ph.budget != null && ph.budget !== ""
+  );
+  const total = withBudget.reduce((acc, ph) => acc + Number(ph.budget), 0);
+  const remaining = projectBudget != null ? projectBudget - total : null;
+  const over = remaining != null && remaining < 0;
+  return (
+    <div className="rounded-lg border border-brand-800 bg-brand-900/60 px-4 py-3 text-sm">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
+        <span className="font-semibold text-white">Budget des phases</span>
+        <span className="text-white/80">
+          {withBudget.length}/{phases.length} phase
+          {phases.length > 1 ? "s" : ""} budgétée
+          {withBudget.length > 1 ? "s" : ""} :{" "}
+          <span className="font-mono font-semibold text-white">
+            {fmtMoney(total)}
+          </span>
+        </span>
+        {projectBudget != null ? (
+          <span className="text-white/80">
+            Budget projet :{" "}
+            <span className="font-mono text-white">{fmtMoney(projectBudget)}</span>
+            {" · "}
+            {over ? (
+              <span className="font-semibold text-rose-300">
+                Dépassement de {fmtMoney(Math.abs(remaining as number))}
+              </span>
+            ) : (
+              <span className="font-semibold text-emerald-300">
+                Reste {fmtMoney(remaining as number)}
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="text-white/50">
+            Aucun budget projet saisi (onglet Résumé).
+          </span>
+        )}
+      </div>
+      {withBudget.length ? (
+        <ul className="mt-2 grid gap-1 text-xs text-white/70 sm:grid-cols-2">
+          {withBudget.map((ph) => (
+            <li key={ph.id} className="flex justify-between gap-3">
+              <span className="truncate">{ph.name}</span>
+              <span className="font-mono text-white/90">
+                {fmtMoney(Number(ph.budget))}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 function PhaseCard({
   phase,
   index,
@@ -3816,6 +3896,15 @@ function PhaseCard({
 }) {
   const [name, setName] = useState(phase.name);
   const [startDate, setStartDate] = useState(phase.start_date || "");
+  const [budgetStr, setBudgetStr] = useState(
+    phase.budget != null && phase.budget !== "" ? String(phase.budget) : ""
+  );
+  function persistBudget() {
+    const v = budgetStr.trim() === "" ? null : Number(budgetStr);
+    if (v != null && (!Number.isFinite(v) || v < 0)) return;
+    const cur = phase.budget != null && phase.budget !== "" ? Number(phase.budget) : null;
+    if (v !== cur) onPatch({ budget: v });
+  }
   // Mode « journée complète » (durée en jours entiers, pas d'heure
   // précise) vs créneau horaire (start + end dans la même journée).
   // L'état initial est dérivé du modèle : si start_time est défini,
@@ -4057,6 +4146,21 @@ function PhaseCard({
                     : "—"}
               </p>
             </div>
+            <label className="text-xs text-white/60">
+              Budget prévu ($)
+              <span className="ml-1 text-white/40">optionnel</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                inputMode="decimal"
+                value={budgetStr}
+                onChange={(e) => setBudgetStr(e.target.value)}
+                onBlur={persistBudget}
+                placeholder="—"
+                className="mt-1 w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white"
+              />
+            </label>
           </div>
 
           <div className="mt-3">
