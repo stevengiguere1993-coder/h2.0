@@ -846,6 +846,20 @@ async def trigger_all_daily(
     # Inerte tant que la feature n'est pas activée dans Paramètres.
     await _safe("qbo-loyers-sync", _run_qbo_loyers_sync, details)
 
+    # Catalogue de matériaux : relevé quotidien des prix chez les
+    # détaillants (offres avec lien produit, non vérifiées depuis 20 h).
+    async def _run_materiaux_prix():
+        from app.services.materiaux_prix_auto import relever_tout
+
+        async with AsyncSessionLocal() as db:
+            r = await relever_tout(db, max_age_hours=20)
+            await db.commit()
+            return {k: v for k, v in r.items() if k != "erreurs"} | {
+                "erreurs": len(r.get("erreurs") or [])
+            }
+
+    await _safe("materiaux-prix", _run_materiaux_prix, details)
+
     # Insights weekly : on tente quand même daily, le service est
     # idempotent et skip si rien à faire.
     async def _run_qg_insights():

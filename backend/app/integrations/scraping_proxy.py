@@ -198,3 +198,25 @@ async def get_vps_health() -> Optional[dict]:
             return data if isinstance(data, dict) else None
     except Exception:
         return None
+
+
+async def fetch_rendered_html(
+    url: str, *, wait_ms: int = 1500, wait_for: Optional[str] = None
+) -> Optional[str]:
+    """HTML rendu par le navigateur du VPS (endpoint /scrape/fetch-html,
+    2026-09-25 — relevé des prix chez les détaillants qui bloquent un
+    client HTTP). None si le VPS n'est pas configuré ; "" si le VPS a
+    échoué (502) ; lève sur erreur réseau."""
+    if not vps_available():
+        return None
+    async with httpx.AsyncClient(timeout=httpx.Timeout(70.0, connect=10.0)) as client:
+        r = await client.post(
+            f"{VPS_URL}/scrape/fetch-html",
+            headers=_headers(),
+            json={"url": url, "wait_ms": wait_ms, "wait_for": wait_for},
+        )
+        if r.status_code in (502, 404):
+            log.warning("VPS fetch-html %s → %s : %s", url, r.status_code, r.text[:200])
+            return ""
+        r.raise_for_status()
+        return str(r.json().get("html") or "")

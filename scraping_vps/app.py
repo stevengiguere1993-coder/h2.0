@@ -218,6 +218,61 @@ async def centris_detail(req: CentrisDetailRequest):
     return detail
 
 
+# ============== Page rendue (générique) ==============
+#
+# Sert au relevé des prix chez les détaillants qui bloquent un client HTTP
+# nu (rona.ca, bmr.ca…) : Kratos envoie l'URL, on renvoie le HTML rendu
+# par le navigateur. Aucun contournement agressif : mêmes réglages que
+# le reste du service (headed + Xvfb), une page par appel.
+
+
+class FetchHtmlRequest(BaseModel):
+    url: str
+    #: Attente après le chargement (ms) pour laisser les prix s'afficher.
+    wait_ms: int = Field(default=1500, ge=0, le=15000)
+    #: Sélecteur CSS à attendre (optionnel), ex. "[itemprop=price]".
+    wait_for: Optional[str] = None
+
+
+class FetchHtmlResponse(BaseModel):
+    html: str
+    final_url: str
+    status: Optional[int] = None
+
+
+@app.post(
+    "/scrape/fetch-html",
+    dependencies=[Depends(require_api_key)],
+    response_model=FetchHtmlResponse,
+)
+async def fetch_html(req: FetchHtmlRequest):
+    """HTML rendu d'une page (après JS), pour les parseurs de prix."""
+    browser: Browser = app.state.browser
+    context = await browser.new_context(
+        locale="fr-CA",
+        viewport={"width": 1366, "height": 900},
+    )
+    try:
+        page = await context.new_page()
+        resp = await page.goto(req.url, wait_until="domcontentloaded", timeout=45000)
+        if req.wait_for:
+            try:
+                await page.wait_for_selector(req.wait_for, timeout=10000)
+            except Exception:  # noqa: BLE001
+                pass
+        if req.wait_ms:
+            await page.wait_for_timeout(req.wait_ms)
+        html = await page.content()
+        return FetchHtmlResponse(
+            html=html, final_url=page.url,
+            status=(resp.status if resp is not None else None),
+        )
+    except Exception as exc:
+        raise HTTPException(502, f"Échec du rendu de {req.url} : {exc}")
+    finally:
+        await context.close()
+
+
 # ============== Numeriq — Comparables vendus (Journal de MTL) ==============
 
 

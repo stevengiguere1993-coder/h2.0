@@ -107,6 +107,7 @@ from app.api.v1.endpoints import (
     public_offer,
     sales_tasks,
     service_templates,
+    materiaux,
     user_roles,
     users,
     project_billables,
@@ -368,6 +369,7 @@ api_router.include_router(sales_tasks.router, dependencies=DEP_PROSPECTION)
 api_router.include_router(mobile.router)
 api_router.include_router(leave_requests.router)
 api_router.include_router(service_templates.router)
+api_router.include_router(materiaux.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(search.router)
 api_router.include_router(notifications.router)
 api_router.include_router(audit.router)
