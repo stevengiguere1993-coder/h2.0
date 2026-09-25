@@ -1,0 +1,113 @@
+{
+ "source": "homedepot-api",
+ "url": "https://www.homedepot.ca/produit/x/1000416795",
+ "product_id": "1000416795",
+ "store": "7128",
+ "lang": "fr",
+ "localized": {
+  "modelNumber": "VTUTB07",
+  "productId": "1000416795",
+  "storeId": "7128",
+  "unitOfMeasureCode": "EA",
+  "optimizedPrice": {
+   "productId": "1000416795",
+   "storeId": "7128",
+   "unitOfMeasureCode": "EA",
+   "displayPrice": {
+    "currencyIso": "CAD",
+    "value": 6.78,
+    "formattedValue": "6,78 $",
+    "unitOfMeasureCode": "EA",
+    "unitOfMeasure": "chaque"
+   },
+   "lpc": false,
+   "productStatus": "SS"
+  },
+  "storeStock": {
+   "stockLevelStatus": "outOfStock",
+   "stockLevel": 0
+  },
+  "stock": {
+   "stockLevelStatus": "inStock",
+   "stockLevel": 5000,
+   "totalStockLevel": 5000
+  },
+  "sfblStock": {
+   "stockLevelStatus": "inStock",
+   "stockLevel": 52
+  },
+  "fulfillmentOptions": {
+   "addToCart": true,
+   "storeSelectorOverlay": false,
+   "bopisAddToCart": false,
+   "storeMessage": "free_ship_to_store",
+   "shippingMessage": "standard_shipping",
+   "expressDelivery": "scheduled_del"
+  },
+  "badges": [
+   {
+    "code": "MIC",
+    "name": "Fabriqué au Canada"
+   }
+  ],
+  "aisleBay": {},
+  "pvpEligible": false,
+  "isCustomizable": false,
+  "bopis": true,
+  "buyable": true,
+  "seasonalFOOS": false,
+  "shipToHome": true,
+  "nationalPromotionMessages": {
+   "accordionMessages": [
+    "Achetez plus, économisez plus sur les produits Revêtement ABTCO.<br><br> Dépensez 2500 $ obtenez 10 % de rabais.<br>Dépensez entre 5000 $ obtenez 20 % de rabais.\n<br><br>Jusqu’à épuisement des stocks.<br><br>L'offre se termine le 1 novembre, 2026.<br/><br/> <a href=\"https://www.homedepot.ca/fr/accueil/categories/tout/collections/achetez-plus--economisez-plus-sur-certains-appareils-revetements-abtco.html\" target=\"_blank\">PARCOURIR LES PRODUITS</a><br/>"
+   ],
+   "stripeMessage": "ACHETEZ PLUS, ÉCONOMISEZ PLUS"
+  },
+  "fdcListing": "NONE",
+  "listing": {
+   "listingStatus": false
+  },
+  "admsLiteEligible": false,
+  "isBundleAvailable": false,
+  "isAppliance": false,
+  "onlineArticleSiteStatus": "A"
+ },
+ "promotions": [
+  {
+   "accordionMessage": "Achetez plus, économisez plus sur les produits Revêtement ABTCO.<br><br> Dépensez 2500 $ obtenez 10 % de rabais.<br>Dépensez entre 5000 $ obtenez 20 % de rabais.\n<br><br>Jusqu’à épuisement des stocks.<br><br>L'offre se termine le 1 novembre, 2026.<br/><br/> <a href=\"https://www.homedepot.ca/fr/accueil/categories/tout/collections/achetez-plus--economisez-plus-sur-certains-appareils-revetements-abtco.html\" target=\"_blank\">PARCOURIR LES PRODUITS</a><br/>",
+   "isRegional": false,
+   "name": "BMSM_ABTCO_2026",
+   "pipMessage": "ACHETEZ PLUS, ÉCONOMISEZ PLUS",
+   "promotionCode": "00105507",
+   "promotionType": "BMSM",
+   "stripeMessage": "ACHETEZ PLUS, ÉCONOMISEZ PLUS"
+  }
+ ],
+ "pip": {
+  "code": "1000416795",
+  "name": "Cedar Creek - Moulure de Dessous de Fenêtre Sable",
+  "manufacturer": "ABTCO",
+  "modelNumber": "VTUTB07",
+  "price": {
+   "currencyIso": "CAD",
+   "value": 6.78,
+   "priceType": "BUY",
+   "formattedValue": "6,78 $"
+  },
+  "stock": {
+   "stockLevelStatus": "inStock",
+   "stockLevel": 5000
+  },
+  "unitOfMeasure": "chaque",
+  "url": "https://www.homedepot.ca/produit/abtco-cedar-creek-moulure-de-dessous-de-fenetre-sable/1000416795",
+  "productStatus": "LA",
+  "buyable": true,
+  "purchasable": true,
+  "urls": {
+   "en": "https://www.homedepot.ca/product/abtco-undersill-trim-120-inch-sand-exterior-vinyl-siding-accessory-piece/1000416795",
+   "fr": "https://www.homedepot.ca/produit/abtco-cedar-creek-moulure-de-dessous-de-fenetre-sable/1000416795"
+  },
+  "coverage": null
+ },
+ "errors": []
+}
