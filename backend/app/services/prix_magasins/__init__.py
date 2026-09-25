@@ -80,7 +80,7 @@ class FetchBlocked(Exception):
 
 # ───────────────────────── utilitaires communs ─────────────────────────
 
-_MONEY_RE = re.compile(r"(\d{1,3}(?:[  ,]\d{3})*|\d+)(?:[.,](\d{1,2}))?")
+_MONEY_RE = re.compile(r"(\d{1,3}(?:[ \u00a0\u202f\u2009,]\d{3})+|\d+)(?:[.,](\d{1,2}))?")
 
 
 def parse_money(text: Any) -> Optional[float]:
@@ -89,7 +89,7 @@ def parse_money(text: Any) -> Optional[float]:
         return None
     if isinstance(text, (int, float)) and not isinstance(text, bool):
         return round(float(text), 2)
-    s = str(text).strip().replace(" ", " ")
+    s = str(text).strip().replace("\u00a0", " ").replace("\u202f", " ").replace("\u2009", " ")
     if not s:
         return None
     m = _MONEY_RE.search(s)
@@ -104,9 +104,10 @@ def parse_money(text: Any) -> Optional[float]:
 
 
 _FR_MONTHS = {
-    "janv": 1, "janvier": 1, "fév": 2, "fev": 2, "février": 2, "fevrier": 2,
+    "janv": 1, "janvier": 1, "fév": 2, "fev": 2, "févr": 2, "fevr": 2,
+    "février": 2, "fevrier": 2,
     "mars": 3, "avr": 4, "avril": 4, "mai": 5, "juin": 6, "juil": 7,
-    "juillet": 7, "août": 8, "aout": 8, "sept": 9, "septembre": 9,
+    "juill": 7, "juillet": 7, "août": 8, "aout": 8, "sept": 9, "septembre": 9,
     "oct": 10, "octobre": 10, "nov": 11, "novembre": 11, "déc": 12,
     "dec": 12, "décembre": 12, "decembre": 12,
 }
@@ -284,7 +285,10 @@ def parse(html: str, url: str) -> PrixReleve:
     try:
         if mod is not None and hasattr(mod, "parse"):
             res = mod.parse(html, url)
-            if res.ok:
+            # Un module peut interdire le repli générique quand les
+            # données structurées du site sont trompeuses (ex. Rona :
+            # itemprop=price = prix d'une autre vitrine).
+            if res.ok or not getattr(mod, "GENERIC_FALLBACK", True):
                 return res
             fallback = parse_generic(html, url)
             return fallback if fallback.ok else res

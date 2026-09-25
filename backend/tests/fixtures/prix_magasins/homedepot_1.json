@@ -1,0 +1,114 @@
+{
+ "source": "homedepot-api",
+ "url": "https://www.homedepot.ca/produit/glidden-premium-ez-track-rose-a-blanc-peinture-et-appret-d-interieur-pour-plafonds-3-78-l/1000163427",
+ "product_id": "1000163427",
+ "store": "7128",
+ "lang": "fr",
+ "localized": {
+  "modelNumber": "487496",
+  "productId": "1000163427",
+  "storeId": "7128",
+  "unitOfMeasureCode": "EA",
+  "optimizedPrice": {
+   "productId": "1000163427",
+   "storeId": "7128",
+   "unitOfMeasureCode": "EA",
+   "percentSaving": "37%",
+   "wasprice": {
+    "currencyIso": "CAD",
+    "value": 57.47,
+    "formattedValue": "57,47 $"
+   },
+   "savingsAmount": {
+    "currencyIso": "CAD",
+    "value": 21.5,
+    "formattedValue": "21,50 $"
+   },
+   "displayPrice": {
+    "currencyIso": "CAD",
+    "value": 35.97,
+    "formattedValue": "35,97 $",
+    "unitOfMeasureCode": "EA",
+    "unitOfMeasure": "chaque"
+   },
+   "lpc": false,
+   "badge": {
+    "type": "NLP",
+    "was_amount": 57.47,
+    "currency": "CAD"
+   },
+   "productStatus": "LA"
+  },
+  "storeStock": {
+   "stockLevelStatus": "inStock",
+   "stockLevel": 4
+  },
+  "stock": {
+   "stockLevelStatus": "outOfStock",
+   "stockLevel": 0,
+   "totalStockLevel": 0
+  },
+  "sfblStock": {
+   "stockLevelStatus": "inStock",
+   "stockLevel": 29
+  },
+  "fulfillmentOptions": {
+   "addToCart": true,
+   "storeSelectorOverlay": false,
+   "bopisAddToCart": true,
+   "storeMessage": "pick_up_at_store",
+   "shippingMessage": "scheduled_del"
+  },
+  "badges": [
+   {
+    "code": "NLP"
+   }
+  ],
+  "aisleBay": {
+   "aisle": "5",
+   "bay": "001"
+  },
+  "pvpEligible": false,
+  "isCustomizable": false,
+  "bopis": true,
+  "buyable": false,
+  "seasonalFOOS": false,
+  "shipToHome": false,
+  "fdcListing": "NONE",
+  "listing": {
+   "listingStatus": true
+  },
+  "admsLiteEligible": false,
+  "isBundleAvailable": false,
+  "isAppliance": false,
+  "onlineArticleSiteStatus": "UD"
+ },
+ "promotions": [],
+ "pip": {
+  "code": "1000163427",
+  "name": "EZ Track rose à blanc Peinture et Apprêt d'intérieur pour plafonds 3,78 L",
+  "manufacturer": "Glidden Premium",
+  "modelNumber": "487496",
+  "price": {
+   "currencyIso": "CAD",
+   "value": 59.97,
+   "priceType": "BUY",
+   "formattedValue": "59,97 $"
+  },
+  "stock": {
+   "stockLevelStatus": "outOfStock",
+   "stockLevel": 0
+  },
+  "unitOfMeasure": "chaque",
+  "url": "https://www.homedepot.ca/produit/glidden-premium-ez-track-rose-a-blanc-peinture-et-appret-d-interieur-pour-plafonds-3-78-l/1000163427",
+  "productStatus": "X",
+  "buyable": false,
+  "purchasable": true,
+  "urls": {
+   "en": "https://www.homedepot.ca/product/glidden-premium-ez-track-pink-to-white-interior-ceiling-paint-primer-3-78-l/1000163427",
+   "fr": "https://www.homedepot.ca/produit/glidden-premium-ez-track-rose-a-blanc-peinture-et-appret-d-interieur-pour-plafonds-3-78-l/1000163427"
+  },
+  "coverage": null
+ },
+ "errors": []
+}
