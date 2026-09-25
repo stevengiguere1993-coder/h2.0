@@ -54,6 +54,12 @@ class Employe(Base, TimestampUpdateMixin):
     ccq_rate: Mapped[Optional[float]] = mapped_column(
         Numeric(6, 4), nullable=True
     )
+    #: Taux horaire de BASE quand l'employé travaille sous le régime CCQ
+    #: (retour Phil 2026-09-26 : deux taux par employé). NULL = même taux
+    #: que ``hourly_rate``. Le taux facturable au client ne change pas.
+    hourly_rate_ccq: Mapped[Optional[float]] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
 
     # URL personnel chez Employeur D (espace employé pour les talons de
     # paie). On stocke l'URL complète plutôt que de deviner — chaque

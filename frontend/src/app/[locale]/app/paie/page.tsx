@@ -22,6 +22,11 @@ type Row = {
   hours_week_2: number;
   total_hours: number;
   pending_hours: number;
+  hours_ccq: number;
+  hours_hors_decret: number;
+  montant_ccq: number;
+  montant_hors_decret: number;
+  montant_total: number;
 };
 
 type Report = {
@@ -36,7 +41,21 @@ type Report = {
   rows: Row[];
   total_hours: number;
   total_pending_hours: number;
+  total_hours_ccq: number;
+  total_hours_hors_decret: number;
+  total_montant_ccq: number;
+  total_montant_hors_decret: number;
+  total_montant: number;
 };
+
+function fmtMoney(n: number): string {
+  return new Intl.NumberFormat("fr-CA", {
+    style: "currency",
+    currency: "CAD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(n || 0);
+}
 
 function fmtDate(s: string): string {
   // YYYY-MM-DD → "26 avr. 2026"
@@ -324,6 +343,16 @@ export default function PaiePage() {
                     </th>
                     <th className="px-3 py-2 text-right">Total</th>
                     <th className="px-3 py-2 text-right">
+                      <span className="text-sky-300">CCQ</span>
+                    </th>
+                    <th className="px-3 py-2 text-right">Hors décret</th>
+                    <th className="px-3 py-2 text-right">
+                      Montant
+                      <span className="block text-[10px] font-normal normal-case text-white/40">
+                        taux de base (CCQ + hors décret)
+                      </span>
+                    </th>
+                    <th className="px-3 py-2 text-right">
                       <span className="text-amber-400">En attente</span>
                     </th>
                   </tr>
@@ -332,7 +361,7 @@ export default function PaiePage() {
                   {report.rows.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={8}
                         className="px-3 py-6 text-center text-xs text-white/50"
                       >
                         Aucune heure punchée pour cette période.
@@ -352,6 +381,21 @@ export default function PaiePage() {
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums font-semibold text-white">
                           {r.total_hours.toFixed(2)} h
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums text-sky-300">
+                          {r.hours_ccq > 0 ? `${r.hours_ccq.toFixed(2)} h` : <span className="text-white/30">—</span>}
+                          {r.hours_ccq > 0 ? (
+                            <span className="block text-[10px] text-white/50">{fmtMoney(r.montant_ccq)}</span>
+                          ) : null}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums text-white/85">
+                          {r.hours_hors_decret > 0 ? `${r.hours_hors_decret.toFixed(2)} h` : <span className="text-white/30">—</span>}
+                          {r.hours_hors_decret > 0 ? (
+                            <span className="block text-[10px] text-white/50">{fmtMoney(r.montant_hors_decret)}</span>
+                          ) : null}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums font-semibold text-white">
+                          {fmtMoney(r.montant_total)}
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums">
                           {r.pending_hours > 0 ? (
@@ -386,6 +430,17 @@ export default function PaiePage() {
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums font-bold text-white">
                         {report.total_hours.toFixed(2)} h
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-sky-300">
+                        {report.total_hours_ccq.toFixed(2)} h
+                        <span className="block text-[10px] text-white/50">{fmtMoney(report.total_montant_ccq)}</span>
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-white/85">
+                        {report.total_hours_hors_decret.toFixed(2)} h
+                        <span className="block text-[10px] text-white/50">{fmtMoney(report.total_montant_hors_decret)}</span>
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums font-bold text-white">
+                        {fmtMoney(report.total_montant)}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums">
                         {report.total_pending_hours > 0 ? (

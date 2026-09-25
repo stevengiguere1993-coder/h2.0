@@ -16,7 +16,8 @@ import { AppTopbar } from "@/components/app-topbar";
 import { SearchSelect } from "@/components/search-select";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
-import { authedFetch } from "@/lib/auth";
+import { authedFetch, hasMinRole } from "@/lib/auth";
+import { useCurrentUser } from "@/hooks/use-current-user";
 import { projectLabel } from "@/lib/project";
 import { useConfirm } from "@/components/confirm-dialog";
 
@@ -62,6 +63,14 @@ type Punch = {
   geolocation: string | null;
   approved: boolean;
   notes: string | null;
+  // "ccq" | "hors_decret" | null (punch d'avant la règle : suit la fiche
+  // employé). Posé par un admin+ à l'approbation ou en saisie manuelle.
+  regime: string | null;
+};
+
+const REGIME_LABEL: Record<string, string> = {
+  ccq: "CCQ",
+  hors_decret: "Hors décret"
 };
 
 function pad(n: number): string {
@@ -176,6 +185,9 @@ function fmtHm(h: number): string {
 export default function PunchGestionPage() {
   const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
+  const { user: currentUser } = useCurrentUser();
+  // Le régime CCQ / hors décret d'un punch ne se pose que par un admin+.
+  const isAdmin = hasMinRole(currentUser, "admin");
 
   const [viewMode, setViewMode] = useState<ViewMode>("week");
   const [weekStart, setWeekStart] = useState(() => weekStartOf(new Date()));
@@ -420,6 +432,21 @@ export default function PunchGestionPage() {
       upsert((await res.json()) as Punch);
     } catch {
       setError("Approbation échouée.");
+    }
+  }
+
+  async function toggleRegime(p: Punch) {
+    if (!isAdmin) return;
+    const next = p.regime === "ccq" ? "hors_decret" : "ccq";
+    try {
+      const res = await authedFetch(`/api/v1/punch/${p.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ regime: next })
+      });
+      if (!res.ok) throw new Error();
+      upsert((await res.json()) as Punch);
+    } catch {
+      setError("Changement de régime échoué.");
     }
   }
 
@@ -760,6 +787,7 @@ export default function PunchGestionPage() {
                   <th className="px-4 py-3">Fin</th>
                   <th className="px-4 py-3 text-right">Heures</th>
                   <th className="px-4 py-3">Tâche</th>
+                  <th className="px-4 py-3 text-center">Régime</th>
                   <th className="px-4 py-3 text-center">Approuvé</th>
                   <th className="px-4 py-3"></th>
                 </tr>
@@ -817,6 +845,30 @@ export default function PunchGestionPage() {
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
+                            toggleRegime(p);
+                          }}
+                          disabled={!isAdmin}
+                          title={
+                            isAdmin
+                              ? "Basculer CCQ / hors décret (admin)"
+                              : "Seul un administrateur peut changer le régime"
+                          }
+                          className={`rounded-md px-2 py-1 text-[10px] font-semibold ${
+                            p.regime === "ccq"
+                              ? "bg-sky-500/20 text-sky-300 hover:bg-sky-500/30"
+                              : p.regime === "hors_decret"
+                                ? "bg-white/5 text-white/70 hover:bg-white/10"
+                                : "bg-amber-500/10 text-amber-300"
+                          } disabled:cursor-default disabled:hover:bg-inherit`}
+                        >
+                          {p.regime ? REGIME_LABEL[p.regime] || p.regime : "Selon fiche"}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
                             toggleApprove(p);
                           }}
                           className={`rounded-md px-2 py-1 text-[10px] font-semibold ${
@@ -860,6 +912,7 @@ export default function PunchGestionPage() {
       {modal ? (
         <PunchModal
           seed={modal}
+          isAdmin={isAdmin}
           employes={employes}
           projects={projects}
           prospects={prospects}
@@ -878,6 +931,7 @@ export default function PunchGestionPage() {
 
 function PunchModal({
   seed,
+  isAdmin,
   employes,
   projects,
   prospects,
@@ -887,6 +941,7 @@ function PunchModal({
   onSaved
 }: {
   seed: Punch | { fresh: true };
+  isAdmin: boolean;
   employes: Employe[];
   projects: Project[];
   prospects: Prospect[];
@@ -924,6 +979,9 @@ function PunchModal({
   const [task, setTask] = useState(existing?.task || "");
   const [notes, setNotes] = useState(existing?.notes || "");
   const [approved, setApproved] = useState(existing?.approved ?? false);
+  // Régime : hors décret par défaut ; un punch d'avant la règle (null)
+  // reste « selon fiche » tant qu'un admin ne le pose pas.
+  const [regime, setRegime] = useState<string>(existing?.regime ?? (existing ? "" : "hors_decret"));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -968,6 +1026,10 @@ function PunchModal({
           : null
       };
 
+      // Le régime ne part que si un admin l'a choisi (le backend refuse
+      // sinon) ; en création sans choix, le backend pose « hors décret ».
+      if (isAdmin && regime) payload.regime = regime;
+      else if (!isAdmin && !existing) delete payload.regime;
       const res = await authedFetch(
         existing ? `/api/v1/punch/${existing.id}` : "/api/v1/punch",
         {
@@ -1138,6 +1200,30 @@ function PunchModal({
               onChange={(e) => setNotes(e.target.value)}
               className="input"
             />
+          </div>
+
+          <div>
+            <label htmlFor="p_regime" className="label">
+              Régime (CCQ / hors décret)
+            </label>
+            <select
+              id="p_regime"
+              value={regime}
+              onChange={(e) => setRegime(e.target.value)}
+              disabled={!isAdmin}
+              className="input disabled:opacity-60"
+              title={isAdmin ? undefined : "Seul un administrateur peut poser le régime"}
+            >
+              {existing && !existing.regime ? (
+                <option value="">Selon la fiche employé (punch d&apos;avant la règle)</option>
+              ) : null}
+              <option value="hors_decret">Hors décret</option>
+              <option value="ccq">CCQ</option>
+            </select>
+            <p className="mt-1 text-xs text-white/40">
+              Hors décret par défaut. Le régime CCQ (taux horaire CCQ + majoration) se
+              pose à l&apos;approbation par un administrateur.
+            </p>
           </div>
 
           <label className="flex items-center gap-2 text-sm text-white/80">

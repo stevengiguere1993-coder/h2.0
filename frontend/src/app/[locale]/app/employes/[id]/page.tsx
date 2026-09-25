@@ -31,6 +31,8 @@ type Employe = {
   is_ccq: boolean;
   cnesst_rate: number | string | null;
   ccq_rate: number | string | null;
+  // Taux horaire de base sous régime CCQ (null = même que hourly_rate).
+  hourly_rate_ccq: number | string | null;
   employeur_d_url: string | null;
   created_at: string;
 };
@@ -46,6 +48,7 @@ type RateHistoryEntry = {
   cnesst_rate: number | string | null;
   ccq_rate: number | string | null;
   is_ccq: boolean;
+  hourly_rate_ccq?: number | string | null;
   note: string | null;
 };
 
@@ -106,6 +109,7 @@ export default function EmployeDetailPage() {
   const [isCcq, setIsCcq] = useState(false);
   const [cnesstRate, setCnesstRate] = useState("");
   const [ccqRate, setCcqRate] = useState("");
+  const [hourlyRateCcq, setHourlyRateCcq] = useState("");
   const [employeurDUrl, setEmployeurDUrl] = useState("");
 
   // Historique des taux (paliers datés).
@@ -119,6 +123,7 @@ export default function EmployeDetailPage() {
   const [rcCnesst, setRcCnesst] = useState("");
   const [rcCcq, setRcCcq] = useState("");
   const [rcIsCcq, setRcIsCcq] = useState(false);
+  const [rcHourlyCcq, setRcHourlyCcq] = useState("");
   const [rcNote, setRcNote] = useState("");
 
   useEffect(() => {
@@ -148,6 +153,7 @@ export default function EmployeDetailPage() {
         setIsCcq(Boolean(data.is_ccq));
         setCnesstRate(pctFromDecimal(data.cnesst_rate));
         setCcqRate(pctFromDecimal(data.ccq_rate));
+        setHourlyRateCcq(data.hourly_rate_ccq != null ? String(data.hourly_rate_ccq) : "");
         setEmployeurDUrl(data.employeur_d_url || "");
         const histRes = await authedFetch(
           `/api/v1/employes/${id}/rate-history`
@@ -195,6 +201,7 @@ export default function EmployeDetailPage() {
       isCcq !== Boolean(emp.is_ccq) ||
       cnesstRate !== pctFromDecimal(emp.cnesst_rate) ||
       ccqRate !== pctFromDecimal(emp.ccq_rate) ||
+      hourlyRateCcq !== (emp.hourly_rate_ccq != null ? String(emp.hourly_rate_ccq) : "") ||
       employeurDUrl !== (emp.employeur_d_url || "")
     );
   }, [
@@ -215,6 +222,7 @@ export default function EmployeDetailPage() {
     isCcq,
     cnesstRate,
     ccqRate,
+    hourlyRateCcq,
     employeurDUrl
   ]);
 
@@ -253,6 +261,7 @@ export default function EmployeDetailPage() {
         is_ccq: isCcq,
         cnesst_rate: decimalFromPct(cnesstRate),
         ccq_rate: decimalFromPct(ccqRate),
+        hourly_rate_ccq: hourlyRateCcq ? Number(hourlyRateCcq) : null,
         employeur_d_url: employeurDUrl.trim() || null
       };
       const res = await authedFetch(`/api/v1/employes/${id}`, {
@@ -323,6 +332,7 @@ export default function EmployeDetailPage() {
         cnesst_rate: decimalFromPct(rcCnesst),
         ccq_rate: rcIsCcq ? decimalFromPct(rcCcq) : null,
         is_ccq: rcIsCcq,
+        hourly_rate_ccq: rcHourlyCcq ? Number(rcHourlyCcq) : null,
         note: rcNote.trim() || null,
       };
       const res = await authedFetch(`/api/v1/employes/${id}/rate-history`, {
@@ -347,6 +357,7 @@ export default function EmployeDetailPage() {
           setIsCcq(Boolean(data.is_ccq));
           setCnesstRate(pctFromDecimal(data.cnesst_rate));
           setCcqRate(pctFromDecimal(data.ccq_rate));
+          setHourlyRateCcq(data.hourly_rate_ccq != null ? String(data.hourly_rate_ccq) : "");
         }
       } catch {
         /* l'historique est à jour ; le taux courant se resync au reload */
@@ -610,6 +621,27 @@ export default function EmployeDetailPage() {
                       />
                     </div>
                   ) : null}
+                  <div>
+                    <label htmlFor="e_rate_ccq" className="label">
+                      Taux horaire CCQ — coûtant (CAD)
+                    </label>
+                    <input
+                      id="e_rate_ccq"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={hourlyRateCcq}
+                      onChange={(e) => setHourlyRateCcq(e.target.value)}
+                      placeholder="Vide = même taux que hors décret"
+                      className="input"
+                    />
+                    <p className="mt-1 text-xs text-white/40">
+                      Taux payé sur les heures marquées CCQ par l&apos;admin
+                      (gestion des punchs). La majoration CCQ s&apos;ajoute
+                      seulement à ces heures ; le taux facturable au client ne
+                      change pas.
+                    </p>
+                  </div>
                   {realCost !== null ? (
                     <div className="sm:col-span-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
                       <p className="text-xs uppercase tracking-wider text-amber-300">
@@ -624,8 +656,18 @@ export default function EmployeDetailPage() {
                         {isCcq
                           ? ` + CCQ ${(Number(ccqRate) || 0).toFixed(2)} %`
                           : ""}
-                        . Utilisé pour calculer le coût des heures
-                        poinçonnées sur les rapports de paie.
+                        . Utilisé pour les heures d&apos;avant la règle des
+                        régimes ; depuis, chaque punch coûte selon son régime :
+                        hors décret = {Number(hourlyRate).toFixed(2)} $ × (1 +
+                        CNESST) = {(
+                          Number(hourlyRate) * (1 + (Number(cnesstRate) || 0) / 100)
+                        ).toFixed(2)} $/h ; CCQ ={" "}
+                        {(Number(hourlyRateCcq) || Number(hourlyRate)).toFixed(2)} $ × (1 +
+                        CNESST + CCQ {(Number(ccqRate) || 0).toFixed(2)} %) ={" "}
+                        {(
+                          (Number(hourlyRateCcq) || Number(hourlyRate)) *
+                          (1 + (Number(cnesstRate) || 0) / 100 + (Number(ccqRate) || 0) / 100)
+                        ).toFixed(2)} $/h.
                       </p>
                     </div>
                   ) : null}
@@ -717,6 +759,21 @@ export default function EmployeDetailPage() {
                           className="input"
                         />
                       </div>
+                      <div>
+                        <label htmlFor="rc_hourly_ccq" className="label">
+                          Taux horaire CCQ — coûtant (CAD)
+                        </label>
+                        <input
+                          id="rc_hourly_ccq"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={rcHourlyCcq}
+                          onChange={(e) => setRcHourlyCcq(e.target.value)}
+                          placeholder="Vide = même taux que hors décret"
+                          className="input"
+                        />
+                      </div>
                       <label className="flex items-center gap-2 pt-6 text-sm text-white/80">
                         <input
                           type="checkbox"
@@ -795,6 +852,7 @@ export default function EmployeDetailPage() {
                         <tr className="text-white/40">
                           <th className="pb-2 pr-3 font-medium">À partir du</th>
                           <th className="pb-2 pr-3 font-medium">Coûtant</th>
+                          <th className="pb-2 pr-3 font-medium">Coûtant CCQ</th>
                           <th className="pb-2 pr-3 font-medium">Facturable</th>
                           <th className="pb-2 pr-3 font-medium">CNESST</th>
                           <th className="pb-2 pr-3 font-medium">CCQ</th>
@@ -819,6 +877,11 @@ export default function EmployeDetailPage() {
                               </td>
                               <td className="py-2 pr-3">
                                 {base.toFixed(2)} $
+                              </td>
+                              <td className="py-2 pr-3">
+                                {r.hourly_rate_ccq != null
+                                  ? `${Number(r.hourly_rate_ccq).toFixed(2)} $`
+                                  : "—"}
                               </td>
                               <td className="py-2 pr-3">
                                 {r.billing_rate != null

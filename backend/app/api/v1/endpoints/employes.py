@@ -337,6 +337,7 @@ class RateHistoryRead(BaseModel):
     cnesst_rate: Optional[float]
     ccq_rate: Optional[float]
     is_ccq: bool
+    hourly_rate_ccq: Optional[float] = None
     note: Optional[str]
 
 
@@ -350,6 +351,8 @@ class RateChangeCreate(BaseModel):
     cnesst_rate: Optional[float] = Field(default=None, ge=0, le=1)
     ccq_rate: Optional[float] = Field(default=None, ge=0, le=1)
     is_ccq: bool = False
+    #: Taux horaire de base sous régime CCQ (vide = même que hourly_rate).
+    hourly_rate_ccq: Optional[float] = Field(default=None, ge=0)
     note: Optional[str] = Field(default=None, max_length=255)
 
 
@@ -432,6 +435,11 @@ async def add_rate_change(
                     else None
                 ),
                 is_ccq=bool(emp.is_ccq),
+                hourly_rate_ccq=(
+                    float(emp.hourly_rate_ccq)
+                    if emp.hourly_rate_ccq is not None
+                    else None
+                ),
                 note="Taux d'origine (baseline)",
             )
         )
@@ -452,6 +460,7 @@ async def add_rate_change(
             cnesst_rate=data.cnesst_rate,
             ccq_rate=data.ccq_rate,
             is_ccq=data.is_ccq,
+            hourly_rate_ccq=data.hourly_rate_ccq,
             note=data.note,
         )
     )
@@ -463,6 +472,7 @@ async def add_rate_change(
     emp.cnesst_rate = data.cnesst_rate
     emp.ccq_rate = data.ccq_rate
     emp.is_ccq = data.is_ccq
+    emp.hourly_rate_ccq = data.hourly_rate_ccq
     await db.flush()
 
     from app.services.audit import log_action as _log_action
