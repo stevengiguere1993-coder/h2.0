@@ -77,8 +77,9 @@ rabais « Nouveau prix réduit ».
 
 Ce qui ne marche pas : la recherche du site et les pages de catégorie
 (JavaScript pur), les prix par magasin dans le HTML brut, JSON-LD (absent).
-Le rendu Playwright n'apporte rien de plus que l'API (la page appelle
-elle-même ``products-localized-basic`` et ``promotions``), d'où
+Le rendu Playwright (Chromium headless) n'apporte rien : la page s'hydrate
+(1,3 Mo de DOM) mais n'affiche pas le bloc prix sans contexte magasin, et le
+site appelle lui-même ``products-localized-basic`` et ``promotions`` — d'où
 ``NEEDS_BROWSER = False``.
 
 ``parse()`` accepte : la chaîne JSON produite par ``fetch()`` (méthode
@@ -124,8 +125,8 @@ _STATE_RE = re.compile(
 _TAG_RE = re.compile(r"<[^>]+>")
 #: Débuts de phrase qui précèdent une date de fin dans les messages promo.
 _END_HINT_RE = re.compile(
-    r"(?:se termine|prend fin|jusqu[’'] ?(?:au|à|a)|valide jusqu|valable jusqu"
-    r"|expire|until|ends?(?: on)?|through)\s*(?:le\s+)?[:\s]*([^.<\n]{3,60})",
+    r"\b(?:se termine|prend fin|jusqu[’'] ?(?:au|à|a)|valide jusqu|valable jusqu"
+    r"|expire|until|ends?(?: on)?|through)\b\s*(?:le\s+)?[:\s]*([^.<\n]{3,60})",
     re.I,
 )
 #: Types de promotions qui ne portent aucune information de prix.
@@ -329,14 +330,21 @@ def _parse_api(data: dict, url: str) -> PrixReleve:
 
     loc = data.get("localized")
     if not isinstance(loc, dict):
-        return PrixReleve(
-            title=title, sku=pid, method="api", extra=extra,
-            error=f"Produit {pid} inconnu de l'API de prix du magasin {store}.",
+        errs = data.get("errors") or []
+        msg = (
+            f"Appels API Home Depot échoués : {'; '.join(str(e) for e in errs)}"
+            if errs
+            else f"Produit {pid} inconnu de l'API de prix du magasin {store}."
         )
+        return PrixReleve(title=title, sku=pid, method="api", extra=extra, error=msg)
     op = loc.get("optimizedPrice") or {}
     unit = (op.get("displayPrice") or {}).get("unitOfMeasure") or pip.get("unitOfMeasure")
     if unit:
         extra["unit"] = unit
+    cp = op.get("comparablePrice")
+    if isinstance(cp, dict) and _money(cp) is not None:
+        extra["comparable_price"] = _money(cp)
+        extra["comparable_unit"] = cp.get("comparableUnitofMeasure")
     status = op.get("productStatus") or loc.get("productStatus")
     if status:
         extra["product_status"] = status
@@ -378,11 +386,15 @@ def _parse_api(data: dict, url: str) -> PrixReleve:
     if on_sale and regular is None and savings:
         regular = round(price + savings, 2)
 
+    if sale_end and not on_sale:
+        # Date d'une promo conditionnelle (« dépensez X, obtenez Y % ») :
+        # pas la fin d'un rabais sur le prix affiché → information seulement.
+        extra["promo_end"] = sale_end.isoformat()
     return PrixReleve(
         price=price,
         regular_price=regular,
         on_sale=on_sale,
-        sale_end=sale_end,
+        sale_end=(sale_end if on_sale else None),
         currency=str((op.get("displayPrice") or {}).get("currencyIso") or "CAD"),
         title=title,
         sku=pid,
@@ -397,7 +409,10 @@ def _parse_raw_api(data: Any, url: str) -> PrixReleve:
     ``catalogsvc/pip`` (dict) collée telle quelle."""
     pid = product_id_from_url(url)
     if isinstance(data, list):
-        loc = next((x for x in data if isinstance(x, dict) and "optimizedPrice" in x), None)
+        cands = [x for x in data if isinstance(x, dict) and "optimizedPrice" in x]
+        loc = next((x for x in cands if str(x.get("productId")) == str(pid)), None) or (
+            cands[0] if cands and not pid else None
+        )
         if loc:
             wrapped = {"source": SOURCE_TAG, "product_id": loc.get("productId") or pid,
                        "store": loc.get("storeId"), "localized": loc, "promotions": [], "pip": None}
@@ -444,16 +459,15 @@ def _releve_from_pip(pip: dict, pid: Optional[str]) -> PrixReleve:
     )
 
 
-_STATE_UNESCAPE = (("&a;", "&"), ("&q;", '"'), ("&s;", "'"), ("&l;", "<"), ("&g;", ">"))
+_STATE_UNESCAPE = {"a": "&", "q": '"', "s": "'", "l": "<", "g": ">"}
 
 
 def _load_state(html: str) -> Optional[dict]:
     m = _STATE_RE.search(html)
     if not m:
         return None
-    raw = m.group(1).strip()
-    for esc, ch in _STATE_UNESCAPE:
-        raw = raw.replace(esc, ch)
+    # Décodage en UNE passe (comme Angular) : « &a;q; » reste « &q; ».
+    raw = re.sub(r"&(a|q|s|l|g);", lambda mm: _STATE_UNESCAPE[mm.group(1)], m.group(1).strip())
     try:
         st = json.loads(raw)
     except ValueError:
@@ -495,8 +509,10 @@ def _parse_html(html: str, url: str) -> PrixReleve:
     )
 
 
-_WAS_RE = re.compile(r"(?:Était|Was)\s*:?\s*(?:<[^>]+>\s*)*\$?\s*([\d\s ,.]+\d)\s*\$?", re.I)
-_SAVE_RE = re.compile(r"(?:Économisez|Save)\s*:?\s*(?:<[^>]+>\s*)*\$?\s*([\d\s ,.]+\d)\s*\$?", re.I)
+#: Montant en dollars (« $ 12,99 » ou « 12,99 $ ») — jamais un pourcentage.
+_AMT = r"(?:\$\s*(\d[\d\s\u00a0\u202f,.]*\d|\d)|(\d[\d\s\u00a0\u202f,.]*\d|\d)\s*\$)(?!\s*%)"
+_WAS_RE = re.compile(r"(?:Était|Was)\s*:?\s*(?:<[^>]+>\s*)*" + _AMT)
+_SAVE_RE = re.compile(r"(?:Économisez|Save)\s*:?\s*(?:<[^>]+>\s*)*" + _AMT)
 _PRICE_ATTR_RE = re.compile(
     r'(?:data-price|data-display-price|aria-label="[^"]*?prix[^"]*?)[=\s:]*"?\s*\$?\s*([\d\s ,.]+\d)\s*\$?',
     re.I,
@@ -508,14 +524,14 @@ def _enrich_rendered(res: PrixReleve, html: str) -> PrixReleve:
     DOM rendu, s'ils sont présents."""
     was = _WAS_RE.search(html)
     if was:
-        regular = parse_money(was.group(1))
+        regular = parse_money(was.group(1) or was.group(2))
         if regular is not None and res.price is not None and regular > res.price:
             res.regular_price = regular
             res.on_sale = True
     if not res.on_sale:
         sav = _SAVE_RE.search(html)
         if sav:
-            amount = parse_money(sav.group(1))
+            amount = parse_money(sav.group(1) or sav.group(2))
             if amount and res.price is not None:
                 res.regular_price = round(res.price + amount, 2)
                 res.on_sale = True

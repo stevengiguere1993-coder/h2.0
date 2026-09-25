@@ -1,0 +1,53 @@
+{
+   "baseUnit" : "EA",
+   "belowMap" : false,
+   "code" : "7201046",
+   "manufacturer" : "POLAR BEAR",
+   "metaTitle" : "Boudin de mousse isolante 1 po x 10 pi - Canac",
+   "modelID" : "8007SPB",
+   "name" : "Boudin de mousse isolante 1 po x 10 pi",
+   "price" : {
+      "affirmMonthlyAmount" : "0 $",
+      "currencyIso" : "CAD",
+      "formattedValue" : "3,89 $",
+      "priceType" : "BUY",
+      "sapConditionType" : "VKP0",
+      "showAffirmComponent" : false,
+      "storeName" : "2",
+      "unit" : "EA",
+      "unitName" : "Chaque",
+      "value" : 3.89
+   },
+   "priceDivisorUnit" : "",
+   "purchasable" : false,
+   "sapAddToCartDisabled" : true,
+   "specialPrice" : {
+      "currencyIso" : "CAD",
+      "formattedValue" : "2,49 $",
+      "priceType" : "BUY",
+      "sapConditionType" : "VKA0",
+      "storeName" : "2",
+      "unit" : "EA",
+      "unitName" : "Chaque",
+      "value" : 2.49
+   },
+   "stock" : {
+      "isValueRounded" : false,
+      "stockLevel" : 265,
+      "stockLevelStatus" : "inStock",
+      "storeName" : "2"
+   },
+   "tag" : "C",
+   "tagList" : [ "C" ],
+   "upcs" : [ {
+      "main" : true,
+      "upc" : "803088080076"
+   }, {
+      "main" : true,
+      "upc" : "20803088080070"
+   } ],
+   "url" : "/p/boudin-de-mousse-isolante-1-po-x-10-pi/7201046",
+   "urlSlug" : "boudin-de-mousse-isolante-1-po-x-10-pi",
+   "xdChainStatusCode" : "V",
+   "xdChainStatusName" : "Vente Actif"
+}

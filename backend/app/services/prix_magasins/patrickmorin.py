@@ -232,7 +232,11 @@ def _parse(html: str, url: str) -> PrixReleve:
     amounts = _amounts(fragment)
     extra: dict[str, Any] = {}
 
-    badge_m = _BADGE_RE.search(html)
+    # Le badge est cherché AVANT le bloc principal seulement : plus loin,
+    # le carrousel de produits liés a ses propres badges (« Liquidation »
+    # d'un autre article).
+    m_main = re.search(r'<div[^>]+class="[^"]*product-info-main', html, re.I)
+    badge_m = _BADGE_RE.search(html[:m_main.start()] if m_main else html)
     badge = _html.unescape(badge_m.group(1)).strip() if badge_m else None
     if badge:
         extra["banner"] = badge
@@ -251,8 +255,9 @@ def _parse(html: str, url: str) -> PrixReleve:
             price = jsonld_price
             method = "jsonld"
             if msrp is not None and msrp > price:
-                regular = msrp
-                on_sale = True
+                # Prix MAP : l'écart avec le PDSF est permanent, pas un
+                # rabais temporaire → pas de « rabais » au catalogue.
+                extra["pdsf"] = msrp
         elif msrp is not None:
             price = msrp
     else:
