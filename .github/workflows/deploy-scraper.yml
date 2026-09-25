@@ -1,0 +1,144 @@
+# deploy-scraper — met à jour le service de scraping (VPS Hetzner,
+# scraper.immohorizon.com) à chaque merge sur main qui touche
+# scraping_vps/, ou à la demande (onglet Actions → Run workflow).
+#
+# Avant, la mise à jour du VPS était MANUELLE (scp + docker compose) : un
+# endpoint ajouté au dépôt (ex. /scrape/fetch-html pour les prix de
+# matériaux) restait absent en production tant que personne ne se
+# connectait au serveur. Ce workflow rend le déploiement automatique,
+# comme celui de Render.
+#
+# Configuration (une seule fois) — GitHub → repo → Settings → Secrets and
+# variables → Actions → New repository secret :
+#   - SCRAPER_SSH_HOST  : IP ou nom du VPS (ex. scraper.immohorizon.com)
+#   - SCRAPER_SSH_USER  : utilisateur SSH (ex. deploy)
+#   - SCRAPER_SSH_KEY   : clé PRIVÉE SSH (OpenSSH, ed25519 ou rsa) dont la
+#                         clé publique est dans ~/.ssh/authorized_keys de
+#                         cet utilisateur sur le VPS
+#   - SCRAPER_SSH_PORT  : optionnel (22 par défaut)
+#   - SCRAPER_SSH_KNOWN_HOSTS : optionnel mais recommandé — la ligne
+#                         `ssh-keyscan scraper.immohorizon.com` du VPS, pour
+#                         épingler son empreinte (sinon confiance au premier
+#                         contact, avec avertissement)
+#
+# Le dossier cible sur le VPS est /home/<user>/scraping (celui du guide
+# HETZNER_SCRAPING_SETUP.md). Le fichier .env du VPS (SCRAPING_API_KEY…)
+# n'est jamais touché.
+#
+# Tant que les secrets ne sont pas définis, le job log un avertissement et
+# n'échoue pas.
+
+name: deploy-scraper
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scraping_vps/**"
+      - ".github/workflows/deploy-scraper.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: scraper-deploy
+  # On n'interrompt pas un `docker compose up --build` en cours : les
+  # déclenchements suivants attendent leur tour.
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Vérifier les secrets
+        id: check
+        env:
+          HOST: ${{ secrets.SCRAPER_SSH_HOST }}
+          USER: ${{ secrets.SCRAPER_SSH_USER }}
+          KEY: ${{ secrets.SCRAPER_SSH_KEY }}
+        run: |
+          if [ -z "$HOST" ] || [ -z "$USER" ] || [ -z "$KEY" ]; then
+            echo "::warning::SCRAPER_SSH_HOST / SCRAPER_SSH_USER / SCRAPER_SSH_KEY non définis — le scraper n'est pas déployé. Ajoute les secrets (voir en-tête du workflow)."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Préparer SSH
+        if: steps.check.outputs.ready == 'true'
+        env:
+          HOST: ${{ secrets.SCRAPER_SSH_HOST }}
+          KEY: ${{ secrets.SCRAPER_SSH_KEY }}
+          PORT: ${{ secrets.SCRAPER_SSH_PORT }}
+          KNOWN_HOSTS: ${{ secrets.SCRAPER_SSH_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/scraper_key
+          chmod 600 ~/.ssh/scraper_key
+          if [ -n "$KNOWN_HOSTS" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          else
+            echo "::warning::SCRAPER_SSH_KNOWN_HOSTS non défini — empreinte du VPS acceptée au premier contact (ssh-keyscan)."
+            ssh-keyscan -p "${PORT:-22}" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+
+      - name: Copier scraping_vps/ sur le VPS
+        if: steps.check.outputs.ready == 'true'
+        env:
+          HOST: ${{ secrets.SCRAPER_SSH_HOST }}
+          USER: ${{ secrets.SCRAPER_SSH_USER }}
+          PORT: ${{ secrets.SCRAPER_SSH_PORT }}
+        run: |
+          tar -C scraping_vps --exclude='__pycache__' --exclude='.env' -czf /tmp/scraping_vps.tgz .
+          scp -P "${PORT:-22}" -i ~/.ssh/scraper_key /tmp/scraping_vps.tgz "$USER@$HOST:/tmp/scraping_vps.tgz"
+
+      - name: Reconstruire et redémarrer le conteneur
+        if: steps.check.outputs.ready == 'true'
+        env:
+          HOST: ${{ secrets.SCRAPER_SSH_HOST }}
+          USER: ${{ secrets.SCRAPER_SSH_USER }}
+          PORT: ${{ secrets.SCRAPER_SSH_PORT }}
+        run: |
+          ssh -p "${PORT:-22}" -i ~/.ssh/scraper_key "$USER@$HOST" 'bash -s' <<'EOF'
+          set -euo pipefail
+          DIR="$HOME/scraping"
+          mkdir -p "$DIR"
+          cd "$DIR"
+          # Le .env (SCRAPING_API_KEY, identifiants QUB) reste en place :
+          # l'archive ne le contient pas.
+          tar -xzf /tmp/scraping_vps.tgz -C "$DIR"
+          rm -f /tmp/scraping_vps.tgz
+          if [ ! -f .env ]; then
+            echo "ERREUR : $DIR/.env absent (SCRAPING_API_KEY requis) — voir HETZNER_SCRAPING_SETUP.md" >&2
+            exit 1
+          fi
+          docker compose up -d --build --remove-orphans
+          # Attente du démarrage (Chromium + Xvfb), puis contrôle de santé.
+          for i in $(seq 1 30); do
+            if curl -fs http://localhost:8000/health >/dev/null 2>&1; then
+              echo "Scraper en ligne :"; curl -s http://localhost:8000/health; echo
+              docker image prune -f >/dev/null 2>&1 || true
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "ERREUR : /health ne répond pas après 90 s" >&2
+          docker compose logs --tail=80
+          exit 1
+          EOF
+
+      - name: Vérifier l'endpoint public
+        if: steps.check.outputs.ready == 'true'
+        env:
+          HOST: ${{ secrets.SCRAPER_SSH_HOST }}
+        run: |
+          # /scrape/fetch-html sans clé doit répondre 401 (présent) — 404 =
+          # endpoint absent, 000 = HTTPS injoignable (HOST est une IP sans
+          # certificat ?) : dans les deux cas on échoue pour que ça se voie.
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '{"url":"https://example.com"}' "https://$HOST/scrape/fetch-html" || true)
+          echo "POST /scrape/fetch-html sans clé → HTTP $code"
+          case "$code" in
+            401|403) echo "Endpoint présent." ;;
+            *) echo "::error::Vérification publique échouée (HTTP $code) — attendu 401. Si HOST est une IP, mets le nom DNS (HTTPS) dans SCRAPER_SSH_HOST." ; exit 1 ;;
+          esac

@@ -342,3 +342,52 @@ def _parse(html: str, url: str) -> PrixReleve:
         method=method,
         extra=extra,
     )
+
+
+# ───────────── Recherche (prix de base automatique, 2026-09-26) ─────────────
+
+BLOOMREACH_URL = "https://core.dxpapi.com/api/v1/core/"
+BLOOMREACH_ACCOUNT = "7570"
+BLOOMREACH_DOMAIN_KEY = "patrickmorin_fr_new"
+
+
+async def search(query: str, *, limit: int = 10) -> list:
+    """API publique Bloomreach du site (identifiants publics de la page) :
+    ``pid``, ``title``, ``url``, ``price`` (le prix courant n'y est PAS
+    ramené au rabais : on relève ensuite la page produit)."""
+    import time
+
+    import httpx
+
+    from . import BROWSER_HEADERS
+    from .recherche import Candidat
+
+    ts = str(int(time.time() * 1000))
+    params = {
+        "account_id": BLOOMREACH_ACCOUNT, "domain_key": BLOOMREACH_DOMAIN_KEY,
+        "request_type": "search", "search_type": "keyword", "q": query,
+        "fl": "pid,title,price,sale_price,url,brand", "rows": str(int(limit)),
+        "start": "0", "url": "https://patrickmorin.com/fr/",
+        "ref_url": "https://patrickmorin.com/fr/", "request_id": ts,
+        "_br_uid_2": f"uid={ts}:v=11.5:ts={ts}:hc=1",
+    }
+    async with httpx.AsyncClient(timeout=25.0, headers=BROWSER_HEADERS) as client:
+        r = await client.get(BLOOMREACH_URL, params=params)
+    if r.status_code != 200:
+        raise RuntimeError(f"recherche Patrick Morin : HTTP {r.status_code}")
+    try:
+        docs = (r.json().get("response") or {}).get("docs") or []
+    except ValueError as exc:
+        raise RuntimeError("recherche Patrick Morin : réponse non JSON") from exc
+    out = []
+    for d in docs[:limit]:
+        url = str(d.get("url") or "").strip()
+        if not url:
+            continue
+        title = " ".join(str(x) for x in (d.get("brand"), d.get("title")) if x).strip()
+        out.append(Candidat(
+            url=url, title=title or url, sku=(str(d.get("pid")) if d.get("pid") else None),
+            price=parse_money(d.get("sale_price") if d.get("sale_price") is not None else d.get("price")),
+            extra={"brand": d.get("brand")},
+        ))
+    return out

@@ -173,7 +173,33 @@ sudo dpkg-reconfigure -plow unattended-upgrades
 docker compose logs -f --tail=200
 ```
 
-**Mise à jour du code scraping** :
+**Mise à jour du code scraping — AUTOMATIQUE depuis 2026-09-26** :
+
+Le workflow GitHub `.github/workflows/deploy-scraper.yml` copie
+`scraping_vps/` sur le VPS et reconstruit le conteneur à chaque merge sur
+`main` qui touche ce dossier (ou à la demande : onglet Actions →
+« deploy-scraper » → Run workflow). Il lui faut trois secrets GitHub
+(Settings → Secrets and variables → Actions) :
+
+| Secret | Valeur |
+|---|---|
+| `SCRAPER_SSH_HOST` | `scraper.immohorizon.com` (ou l'IP du VPS) |
+| `SCRAPER_SSH_USER` | `deploy` |
+| `SCRAPER_SSH_KEY` | la clé PRIVÉE SSH (OpenSSH) dont la clé publique est dans `/home/deploy/.ssh/authorized_keys` |
+
+Pour créer une clé dédiée au déploiement (sur ton poste) :
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/horizon-scraper-deploy -N "" -C "github-deploy-scraper"
+ssh-copy-id -i ~/.ssh/horizon-scraper-deploy.pub deploy@scraper.immohorizon.com
+cat ~/.ssh/horizon-scraper-deploy      # → contenu du secret SCRAPER_SSH_KEY
+```
+
+Le `.env` du VPS (clé API, identifiants QUB) n'est jamais écrasé. Le
+workflow vérifie ensuite que `POST /scrape/fetch-html` répond 401 (présent)
+et non 404.
+
+Mise à jour manuelle (si les secrets ne sont pas encore posés) :
 
 ```bash
 cd /home/deploy/scraping

@@ -541,3 +541,77 @@ def _parse_html(html: str, url: str) -> PrixReleve:
         method=method,
         extra=extra,
     )
+
+
+# ───────────── Recherche (prix de base automatique, 2026-09-26) ─────────────
+
+COVEO_ORG = "canacproductionhlzhy20d"
+COVEO_SEARCH = f"https://{COVEO_ORG}.org.coveo.com/rest/search/v2?organizationId={COVEO_ORG}"
+_COVEO_TOKEN: dict[str, Any] = {"token": None, "exp": 0.0}
+
+
+async def _coveo_token(client: "httpx.AsyncClient") -> str:
+    import time
+
+    if _COVEO_TOKEN["token"] and _COVEO_TOKEN["exp"] > time.time() + 300:
+        return _COVEO_TOKEN["token"]
+    r = await client.get(f"{API_BASE}/coveo/token")
+    if r.status_code != 200:
+        raise RuntimeError(f"jeton Coveo Canac : HTTP {r.status_code}")
+    tok = str((r.json() or {}).get("token") or "")
+    if not tok:
+        raise RuntimeError("jeton Coveo Canac absent")
+    _COVEO_TOKEN.update(token=tok, exp=time.time() + 6 * 3600)
+    return tok
+
+
+async def search(query: str, *, limit: int = 10) -> list:
+    """Recherche Coveo du site (jeton anonyme public) : ``clickUri`` =
+    page produit, ``raw.ec_name``, ``raw.ec_price`` (régulier),
+    ``raw.ec_promo_price`` / ``ec_prd_discount_price`` (rabais). On relève
+    ensuite le prix exact par l'API OCC du magasin."""
+    import httpx
+
+    from .recherche import Candidat
+
+    body = {
+        "q": query, "numberOfResults": int(limit), "locale": "fr-CA",
+        "fieldsToInclude": [
+            "ec_name", "ec_price", "ec_promo_price", "ec_prd_discount_price",
+            "ec_product_id", "ec_brand", "ec_in_stock", "clickableuri",
+        ],
+    }
+    async with httpx.AsyncClient(timeout=25.0, headers=BROWSER_HEADERS) as client:
+        for tentative in (1, 2):
+            tok = await _coveo_token(client)
+            r = await client.post(
+                COVEO_SEARCH, json=body,
+                headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
+            )
+            if r.status_code in (401, 403, 419) and tentative == 1:
+                _COVEO_TOKEN.update(token=None, exp=0.0)  # jeton périmé → on en reprend un
+                continue
+            break
+    if r.status_code != 200:
+        raise RuntimeError(f"recherche Canac : HTTP {r.status_code}")
+    try:
+        results = r.json().get("results") or []
+    except ValueError as exc:
+        raise RuntimeError("recherche Canac : réponse non JSON") from exc
+    out = []
+    for res in results:
+        uri = str(res.get("clickUri") or res.get("uri") or "")
+        if not uri.startswith("http") or "/p/" not in uri:
+            continue  # ex. « akeneo://… » (fiche interne sans page)
+        raw = res.get("raw") or {}
+        reg = parse_money(raw.get("ec_price"))
+        promo = parse_money(raw.get("ec_promo_price")) or parse_money(raw.get("ec_prd_discount_price"))
+        price = promo if (promo is not None and reg is not None and promo < reg) else reg
+        title = str(raw.get("ec_name") or res.get("title") or "").replace(" ", " ").strip()
+        out.append(Candidat(
+            url=uri, title=title or uri, sku=(str(raw.get("ec_product_id")) if raw.get("ec_product_id") else None),
+            price=price, regular_price=(reg if price is not None and reg is not None and reg > price else None),
+            on_sale=bool(price is not None and reg is not None and price < reg),
+            extra={"brand": raw.get("ec_brand")},
+        ))
+    return out
