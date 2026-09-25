@@ -393,11 +393,15 @@ def _map_extracted_to_lead(data: dict) -> dict:
     """Convertit le JSON renvoyé par Claude en kwargs pour LeadAnalysis."""
     out: dict = {}
     # Fields scalaires directs.
+    # Phil 2026-09-25 : l'extraction ne remplit QUE les champs de la
+    # fiche info. « Autres dépenses » (B12) est une saisie MANUELLE :
+    # aucune annonce ne l'annonce proprement et l'IA y mettait n'importe
+    # quel nombre (40 346 $ sur Des Ormeaux).
     scalar_fields = (
         "address", "city", "postal_code", "province",
         "asking_price", "nb_logements", "revenus_bruts",
         "taxes_municipales", "taxes_scolaires", "assurances",
-        "energie", "depenses_autres", "annee_construction",
+        "energie", "annee_construction",
         "superficie_terrain", "superficie_batiment",
         "evaluation_municipale", "description",
         "courtier_nom", "courtier_contact", "type_batiment",
@@ -506,6 +510,9 @@ _DEFAULTS_FALLBACK: dict = {
     "ajout_wifi": True,
     "loyers_max_abordabilite_json": json.dumps({"abordable": 1090}),
     "mdf_preteur_b_pct": 25.0,
+    "projection_horizon_annees": 5,
+    "ltv_residentiel_pct": 80.0,
+    "amort_residentiel_annees": 25,
     # Frais finançables par défaut (modifiable par l'utilisateur) :
     # rapport d'efficacité énergétique, frais de développement,
     # travaux estimés. Les autres postes (courtier, notaire, etc.)
@@ -535,6 +542,11 @@ _DB_KEY_TO_FIELD: dict[str, str] = {
     "duree_projet_annees": "duree_projet_annees",
     "nb_logements_ajoutes": "nb_logements_ajoutes",
     "nb_thermopompes_ajoutees": "nb_thermopompes_ajoutees",
+    # Sept. 2026 (Phil) : plus aucun nombre en dur au calcul — ces trois
+    # défauts vivent dans Paramètres comme les autres.
+    "projection_horizon_annees": "projection_horizon_annees",
+    "ltv_residentiel_pct": "ltv_residentiel_pct",
+    "amort_residentiel_annees": "amort_residentiel_annees",
 }
 
 # Champs entiers parmi ceux ci-dessus (les autres sont des floats).
@@ -544,6 +556,8 @@ _DB_KEY_INT_FIELDS: set[str] = {
     "duree_projet_annees",
     "nb_logements_ajoutes",
     "nb_thermopompes_ajoutees",
+    "projection_horizon_annees",
+    "amort_residentiel_annees",
 }
 
 
@@ -1919,6 +1933,50 @@ RECALC_INPUT_FIELDS = {
 }
 
 
+#: Intrants du calcul qui ont un DÉFAUT dans Paramètres → Analyse. Un
+#: intrant vide sur la fiche est comblé depuis ces défauts ET écrit sur
+#: la fiche avant le calcul : ce qui est calculé est exactement ce qui
+#: est affiché — plus aucune valeur de repli écrite dans le code (Phil
+#: 2026-09-25 : « le calculateur ne peut pas être modifié dans le
+#: backend »). Les croissances viennent des défauts du TRI (même source
+#: que le calculateur de TRI).
+_CHAMPS_COMPLETES_PARAMETRES: tuple = (
+    "tga_pct",
+    "taux_interet_achat_pct",
+    "taux_interet_refi_pct",
+    "duree_projet_annees",
+    "mdf_preteur_b_pct",
+    "taux_interet_preteur_b_projet_pct",
+    "ajout_wifi",
+    "reduction_energie_pct",
+    "nb_logements_ajoutes",
+    "nb_thermopompes_ajoutees",
+    "projection_horizon_annees",
+    "ltv_residentiel_pct",
+    "amort_residentiel_annees",
+)
+
+
+async def _completer_depuis_parametres(rec, db) -> list[str]:
+    """Écrit sur la fiche, pour chaque intrant VIDE, la valeur de
+    Paramètres → Analyse (ou des défauts du TRI pour les croissances).
+    Retourne les champs complétés (journalisés dans les résultats)."""
+    defauts = await _load_defaults_for_new_analysis(db)
+    tri = await _load_tri_defaults(db)
+    completes: list[str] = []
+    for champ in _CHAMPS_COMPLETES_PARAMETRES:
+        if getattr(rec, champ, None) is None and champ in defauts:
+            setattr(rec, champ, defauts[champ])
+            completes.append(champ)
+    if rec.tri_croissance_loyers is None:
+        rec.tri_croissance_loyers = float(tri["cr_loyers"])
+        completes.append("tri_croissance_loyers")
+    if rec.tri_croissance_depenses is None:
+        rec.tri_croissance_depenses = float(tri["cr_dep"])
+        completes.append("tri_croissance_depenses")
+    return completes
+
+
 async def _compute_and_store(rec, db) -> dict:
     """Construit les intrants depuis ``rec`` (+ overrides globaux),
     lance ``compute_all`` et PERSISTE les champs dérivés sur ``rec``
@@ -2016,6 +2074,12 @@ async def _compute_and_store(rec, db) -> dict:
         await _load_frais_registry(db)
     )
 
+    # Plus AUCUN nombre de repli ici : un intrant vide a été comblé
+    # depuis Paramètres et écrit sur la fiche (``_completer_depuis_
+    # parametres``). Les champs « vide = aucun » (logements ajoutés,
+    # frais saisis, cashback…) valent 0 par nature, pas par défaut caché.
+    champs_completes = await _completer_depuis_parametres(rec, db)
+
     inputs = FinanceInputs(
         adresse=rec.address or "",
         prix_achat=float(rec.asking_price or 0),
@@ -2026,29 +2090,23 @@ async def _compute_and_store(rec, db) -> dict:
         assurances=float(rec.assurances or 0),
         energie=float(rec.energie or 0),
         depenses_autres=float(rec.depenses_autres or 0),
-        tga=float(rec.tga_pct or 4.0) / 100.0,
-        taux_interet_achat=float(rec.taux_interet_achat_pct or 4.0) / 100.0,
-        nb_logements_ajoutes=int(rec.nb_logements_ajoutes or 0),
-        nb_thermopompes_ajoutees=int(rec.nb_thermopompes_ajoutees or 0),
-        wifi_ajoute=bool(rec.ajout_wifi) if rec.ajout_wifi is not None else True,
-        reduction_energie_pct=float(rec.reduction_energie_pct or 0) / 100.0,
-        taux_interet_refi=float(rec.taux_interet_refi_pct or 0) / 100.0,
+        tga=float(rec.tga_pct) / 100.0,
+        taux_interet_achat=float(rec.taux_interet_achat_pct) / 100.0,
+        nb_logements_ajoutes=int(rec.nb_logements_ajoutes),
+        nb_thermopompes_ajoutees=int(rec.nb_thermopompes_ajoutees),
+        wifi_ajoute=bool(rec.ajout_wifi),
+        reduction_energie_pct=float(rec.reduction_energie_pct) / 100.0,
+        taux_interet_refi=float(rec.taux_interet_refi_pct) / 100.0,
         typologie=typologie,
         typologie_prix=loyers_projetes,
-        duree_projet_annees=int(rec.duree_projet_annees or 2),
+        duree_projet_annees=int(rec.duree_projet_annees),
         frais_developpement=float(rec.frais_developpement or 0),
         frais_negociations=float(rec.frais_negociations or 0),
         frais_travaux=float(rec.travaux_estimes or 0),
         nouveau_loyer_abordable=loyer_abord,
-        mdf_preteur_b_pct=(
-            float(rec.mdf_preteur_b_pct) / 100.0
-            if rec.mdf_preteur_b_pct is not None
-            else 0.25
-        ),
+        mdf_preteur_b_pct=float(rec.mdf_preteur_b_pct) / 100.0,
         taux_interet_preteur_b_projet=(
             float(rec.taux_interet_preteur_b_projet_pct) / 100.0
-            if rec.taux_interet_preteur_b_projet_pct is not None
-            else 0.08
         ),
         # Stratégies d'acquisition (août 2026) — défauts = comportement
         # historique intégral tant que la fiche n'a rien choisi.
@@ -2066,12 +2124,8 @@ async def _compute_and_store(rec, db) -> dict:
         cashback_montant=float(rec.cashback_montant or 0),
         optimisation_pre_achat=(rec.optimisation_moment == "pre_achat"),
         # Mode résidentiel (2026-09-08).
-        ltv_residentiel=(
-            float(rec.ltv_residentiel_pct) / 100.0
-            if rec.ltv_residentiel_pct is not None
-            else 0.80
-        ),
-        amort_residentiel_annees=int(rec.amort_residentiel_annees or 25),
+        ltv_residentiel=float(rec.ltv_residentiel_pct) / 100.0,
+        amort_residentiel_annees=int(rec.amort_residentiel_annees),
         depenses_residentiel=_parse_lignes_depenses(
             rec.depenses_residentiel_json
         ),
@@ -2080,9 +2134,9 @@ async def _compute_and_store(rec, db) -> dict:
         ),
         # Phase 2 — détention + refi an N (achats directs). Les
         # croissances réutilisent celles du TRI (source unique).
-        projection_horizon_annees=int(rec.projection_horizon_annees or 5),
-        croissance_loyers=float(rec.tri_croissance_loyers or 0.03),
-        croissance_depenses=float(rec.tri_croissance_depenses or 0.03),
+        projection_horizon_annees=int(rec.projection_horizon_annees),
+        croissance_loyers=float(rec.tri_croissance_loyers),
+        croissance_depenses=float(rec.tri_croissance_depenses),
         # Phase 3 — optimisation par unité (liste vide = comportement
         # historique).
         unites=_parse_unites(rec.unites_json),
@@ -2156,6 +2210,9 @@ async def _compute_and_store(rec, db) -> dict:
     # re-fetcher le registre. Format : [{key, label_fr, visible}] ordonné.
     # Registre absent → liste vide (aucun ordre/label imposé côté front).
     results_dict["frais_registry"] = frais_registry_global
+    # Intrants comblés depuis Paramètres juste avant ce calcul (vides sur
+    # la fiche) — visibles dans les résultats pour ne rien cacher.
+    results_dict["intrants_completes_depuis_parametres"] = champs_completes
 
     rec.analysis_results_json = json.dumps(results_dict)[:80_000]
     rec.best_refi_amount = results.best_refi_amount
@@ -2544,7 +2601,6 @@ _RE_EXTRACT_TOOL = {
             "taxes_scolaires": {"type": "number", "description": "Taxes scolaires annuelles en CAD."},
             "assurances": {"type": "number", "description": "Prime d'assurance annuelle en CAD."},
             "energie": {"type": "number", "description": "Coût annuel d'énergie commune en CAD."},
-            "depenses_autres": {"type": "number", "description": "Autres dépenses annuelles en CAD."},
             "annee_construction": {"type": "integer", "description": "Année de construction."},
             "superficie_terrain": {"type": "number", "description": "Superficie terrain (pi² ou m², pris tel quel)."},
             "superficie_batiment": {"type": "number", "description": "Superficie bâtiment (pi² ou m², pris tel quel)."},
@@ -2587,7 +2643,7 @@ _PATCHABLE_FIELDS = {
     "address", "city", "postal_code", "province",
     "asking_price", "nb_logements", "revenus_bruts",
     "taxes_municipales", "taxes_scolaires", "assurances",
-    "energie", "depenses_autres", "annee_construction",
+    "energie", "annee_construction",
     "superficie_terrain", "superficie_batiment",
     "evaluation_municipale", "description",
     "courtier_nom", "courtier_contact", "type_batiment",
