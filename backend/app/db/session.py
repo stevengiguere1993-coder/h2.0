@@ -3724,6 +3724,41 @@ async def init_db() -> None:
                     "inputs_manuels",
                 ),
                 (
+                    "projection_horizon_annees",
+                    5.0,
+                    "Horizon de détention (années)",
+                    "Stratégies institution traditionnelle et résidentiel : "
+                    "nombre d'années de détention avant le refinancement "
+                    "de référence (projection). Défaut 5.",
+                    1.0,
+                    30.0,
+                    1.0,
+                    "inputs_manuels",
+                ),
+                (
+                    "ltv_residentiel_pct",
+                    80.0,
+                    "Prêt résidentiel (% du prix)",
+                    "Stratégie résidentiel : ratio prêt-valeur du prêt "
+                    "d'achat (au-delà de 80 %, prime d'assurance prêt). "
+                    "Défaut 80 %.",
+                    0.0,
+                    95.0,
+                    1.0,
+                    "inputs_manuels",
+                ),
+                (
+                    "amort_residentiel_annees",
+                    25.0,
+                    "Amortissement résidentiel (années)",
+                    "Stratégie résidentiel : amortissement du prêt "
+                    "d'achat. Défaut 25 ans.",
+                    5.0,
+                    40.0,
+                    1.0,
+                    "inputs_manuels",
+                ),
+                (
                     "nb_logements_ajoutes",
                     0.0,
                     "Logements ajoutés par défaut",

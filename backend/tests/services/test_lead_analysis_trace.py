@@ -84,7 +84,7 @@ def test_trace_preteur_b_complete():
     # 1. Le « Autres dépenses » vient de la FICHE, tel quel, avec l'avertissement.
     autres = _ligne(trace, "1 ·", "Autres dépenses")
     assert autres["valeur"] == 40_346.0 and autres["source"] == "fiche"
-    assert "deux fois" in autres["note"]
+    assert "jamais remplie par l'extraction" in autres["note"]
 
     # 4a. Barème SCHL écrit avec les vrais nombres (24 log. ≥ 12 → grand immeuble).
     conc = _ligne(trace, "4a ·", "Concierge (barème)")
