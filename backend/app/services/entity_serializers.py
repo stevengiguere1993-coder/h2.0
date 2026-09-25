@@ -912,6 +912,37 @@ def serialize_materiau(obj: Any, level: str = "summary") -> dict:
     return data
 
 
+def serialize_projet_materiau(obj: Any, level: str = "summary") -> dict:
+    """Ligne de la liste d'achats de matériaux d'un projet (pôle
+    Construction) : matériau, quantité, phase, magasin choisi, prix prévu,
+    statut (a_acheter | achete) et prix payé."""
+    mat = getattr(obj, "materiau", None)
+    nom = getattr(mat, "name", None) or f"Matériau {obj.materiau_id}"
+    data = {
+        "entity_type": "projet_materiau",
+        "id": obj.id,
+        "label": f"{nom} × {float(obj.quantity or 0):g}",
+        "pole": "construction",
+        "project_id": obj.project_id,
+        "phase_id": obj.phase_id,
+        "materiau_id": obj.materiau_id,
+        "materiau_name": nom,
+        "quantity": float(obj.quantity or 0),
+        "unit": obj.unit,
+        "magasin_id": obj.magasin_id,
+        "prix_prevu": (float(obj.prix_prevu) if obj.prix_prevu is not None else None),
+        "statut": obj.statut,
+        "prix_paye": (float(obj.prix_paye) if obj.prix_paye is not None else None),
+        "achete_le": (obj.achete_le.isoformat() if obj.achete_le else None),
+    }
+    if level == "full":
+        data["purchase_order_id"] = obj.purchase_order_id
+        data["achat_id"] = obj.achat_id
+        data["notes"] = obj.notes
+        data["position"] = obj.position
+    return data
+
+
 SERIALIZERS: dict[str, Callable[..., dict]] = {
     "devlog_soumission": serialize_devlog_soumission,
     "devlog_project_task": serialize_devlog_project_task,
@@ -924,6 +955,7 @@ SERIALIZERS: dict[str, Callable[..., dict]] = {
     "devlog_project": serialize_devlog_project,
     "project": serialize_project,
     "materiau": serialize_materiau,
+    "projet_materiau": serialize_projet_materiau,
     "entreprise": serialize_entreprise,
     "imm_tal_dossier": serialize_imm_tal_dossier,
     "imm_locataire_contact": serialize_imm_locataire_contact,

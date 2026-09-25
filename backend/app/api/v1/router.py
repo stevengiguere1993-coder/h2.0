@@ -108,6 +108,7 @@ from app.api.v1.endpoints import (
     sales_tasks,
     service_templates,
     materiaux,
+    projet_materiaux,
     user_roles,
     users,
     project_billables,
@@ -279,6 +280,7 @@ api_router.include_router(project_photos.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(project_tasks.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(project_phases.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(project_phases.phases_router, dependencies=DEP_CONSTRUCTION)
+api_router.include_router(projet_materiaux.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(project_members.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(project_finances.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(project_punches.router, dependencies=DEP_CONSTRUCTION)
@@ -370,6 +372,7 @@ api_router.include_router(mobile.router)
 api_router.include_router(leave_requests.router)
 api_router.include_router(service_templates.router)
 api_router.include_router(materiaux.router, dependencies=DEP_CONSTRUCTION)
+api_router.include_router(projet_materiaux.rabais_router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(search.router)
 api_router.include_router(notifications.router)
 api_router.include_router(audit.router)

@@ -50,6 +50,7 @@ from app.models.entreprise_tache import EntrepriseTache
 from app.models.immobilier import ImmLocataireContact, ImmTalDossier
 from app.models.project import Project
 from app.models.materiau import Materiau
+from app.models.projet_materiau import ProjetMateriau
 from app.models.project_task import ProjectTask
 from app.models.prospection_deal import ProspectionDeal
 from app.models.prospection_deal_task import ProspectionDealTask
@@ -1544,6 +1545,14 @@ async def move_task(
 #: Type d'entité de détail → (modèle ORM, slug de pôle, entity_type de
 #: sérialisation, capacité de lecture détail dédiée).
 _DETAIL_ENTITIES: dict[str, tuple] = {
+    # Catalogue de matériaux et listes d'achats (2026-09-25).
+    "materiau": (
+        Materiau, "construction", "materiau", "construction:materiaux:list",
+    ),
+    "projet_materiau": (
+        ProjetMateriau, "construction", "projet_materiau",
+        "construction:materiaux:list",
+    ),
     "soumission": (
         DevlogSoumission, "devlog", "devlog_soumission",
         "devlog:soumissions:read",
@@ -1887,6 +1896,13 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         entity_type="materiau", list_cap="construction:materiaux:list",
         order_attr="updated_at", stage_attr="categorie", supports_active=False,
     ),
+    # Liste d'achats de matériaux par projet (étape 3, 2026-09-25) —
+    # `stage` filtre le statut (a_acheter | achete).
+    "projet_materiaux": _ListSpec(
+        model=ProjetMateriau, pole="construction",
+        entity_type="projet_materiau", list_cap="construction:materiaux:list",
+        order_attr="updated_at", stage_attr="statut", supports_active=False,
+    ),
     # Immobilier (2026-09-09) — `stage` filtre le statut du dossier TAL
     # (a_ouvrir | ouvert | audience | decision | ferme) ou le rôle du
     # contact (garant | colocataire | occupant | urgence).
@@ -1918,6 +1934,8 @@ _LIST_ALIASES: dict[str, str] = {
     "construction_projects": "projects",
     "materiau": "materiaux",
     "materiaux_catalogue": "materiaux",
+    "projet_materiau": "projet_materiaux",
+    "liste_achats_materiaux": "projet_materiaux",
     "tal_dossier": "tal_dossiers",
     "imm_tal_dossier": "tal_dossiers",
     "locataire_contact": "locataire_contacts",

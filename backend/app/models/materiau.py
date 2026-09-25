@@ -95,8 +95,10 @@ class Materiau(Base):
         nullable=False,
     )
 
+    #: selectin : toujours utiles (meilleur prix), et la liste générique
+    #: MCP ne pose pas d'options de chargement (async → pas de lazy load).
     offres: Mapped[list["MateriauOffre"]] = relationship(
-        back_populates="materiau", cascade="all, delete-orphan"
+        back_populates="materiau", cascade="all, delete-orphan", lazy="selectin"
     )
 
 
