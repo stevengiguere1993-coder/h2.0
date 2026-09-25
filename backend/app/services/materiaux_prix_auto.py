@@ -283,6 +283,17 @@ async def relever_tout(
     return stats
 
 
+async def alerter_rabais_sans_casser(db) -> int:
+    """Alertes de rabais (étape 3) après un relevé : jamais bloquant."""
+    try:
+        from app.services.materiaux_alertes import alerter_rabais
+
+        return await alerter_rabais(db)
+    except Exception:  # noqa: BLE001
+        log.exception("Alertes rabais matériaux échouées")
+        return 0
+
+
 #: Dernier relevé global (en mémoire, pour l'écran) : lancé/terminé/stats.
 DERNIER_RELEVE: dict = {"en_cours": False, "lance_a": None, "termine_a": None, "stats": None}
 
@@ -297,6 +308,8 @@ async def relever_tout_en_arriere_plan(**kwargs) -> None:
     try:
         async with AsyncSessionLocal() as db:
             stats = await relever_tout(db, **kwargs)
+            await db.commit()
+            stats["alertes"] = await alerter_rabais_sans_casser(db)
             await db.commit()
         DERNIER_RELEVE["stats"] = stats
     except Exception as exc:  # noqa: BLE001

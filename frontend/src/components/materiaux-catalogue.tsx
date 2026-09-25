@@ -26,6 +26,7 @@ import {
 
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
+import { Link } from "@/i18n/navigation";
 
 type Magasin = {
   id: number;
@@ -67,6 +68,21 @@ type Materiau = {
   best_magasin_id: number | null;
   best_magasin_name: string | null;
   best_is_archive: boolean;
+};
+
+type RabaisListe = {
+  ligne_id: number;
+  project_id: number;
+  project_name: string;
+  materiau_name: string;
+  quantity: number;
+  unit: string | null;
+  magasin_name: string;
+  price: number;
+  regular_price: number | null;
+  sale_end: string | null;
+  economie: number;
+  url: string | null;
 };
 
 type ReleveInfo = {
@@ -464,6 +480,8 @@ export function MateriauxCatalogue() {
         ) : null}
       </p>
 
+      <RabaisListesPanel refreshKey={items} />
+
       {loading ? (
         <div className="flex items-center justify-center py-10">
           <Loader2 className="h-5 w-5 animate-spin text-white/40" />
@@ -527,6 +545,75 @@ export function MateriauxCatalogue() {
           onChanged={loadMagasins}
           onError={setError}
         />
+      ) : null}
+    </div>
+  );
+}
+
+// Rabais du jour sur les matériaux encore à acheter des chantiers ouverts
+// (ceux que l'alerte quotidienne signale aux gestionnaires).
+function RabaisListesPanel({ refreshKey }: { refreshKey: unknown }) {
+  const [rows, setRows] = useState<RabaisListe[]>([]);
+  const [open, setOpen] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const res = await authedFetch("/api/v1/materiaux/rabais");
+      if (res.ok && !cancelled) setRows((await res.json()) as RabaisListe[]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey]);
+  if (rows.length === 0) return null;
+  const total = rows.reduce((a, r) => a + r.economie, 0);
+  return (
+    <div className="rounded-xl border border-rose-500/40 bg-rose-500/10">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm font-semibold text-rose-300"
+      >
+        {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        <Tag className="h-4 w-4" />
+        {rows.length} rabais aujourd&apos;hui sur les listes d&apos;achats des chantiers
+        {total > 0 ? ` — économie possible ≈ ${money(total)}` : ""}
+      </button>
+      {open ? (
+        <ul className="divide-y divide-rose-500/20 border-t border-rose-500/20 text-sm">
+          {rows.map((r) => (
+            <li key={r.ligne_id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-1.5">
+              <Link
+                href={`/app/projets/${r.project_id}#materiaux` as any}
+                className="font-medium text-white hover:underline"
+              >
+                {r.project_name}
+              </Link>
+              <span className="text-white/85">
+                {r.materiau_name} × {r.quantity}
+                {r.unit ? ` ${r.unit}` : ""}
+              </span>
+              <span className="font-mono font-semibold text-rose-300">
+                {money(r.price)}
+                {r.regular_price != null ? (
+                  <span className="ml-1 font-normal text-white/60 line-through">{money(r.regular_price)}</span>
+                ) : null}
+              </span>
+              <span className="text-white/70">
+                chez {r.magasin_name}
+                {r.sale_end ? ` jusqu'au ${fmtDate(r.sale_end)}` : ""}
+              </span>
+              {r.economie > 0 ? (
+                <span className="text-emerald-300">économie {money(r.economie)}</span>
+              ) : null}
+              {r.url ? (
+                <a href={r.url} target="_blank" rel="noreferrer" className="text-sky-300 hover:underline">
+                  page produit
+                </a>
+              ) : null}
+            </li>
+          ))}
+        </ul>
       ) : null}
     </div>
   );

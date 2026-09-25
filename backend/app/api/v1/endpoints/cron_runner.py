@@ -849,10 +849,17 @@ async def trigger_all_daily(
     # Catalogue de matériaux : relevé quotidien des prix chez les
     # détaillants (offres avec lien produit, non vérifiées depuis 20 h).
     async def _run_materiaux_prix():
-        from app.services.materiaux_prix_auto import relever_tout
+        from app.services.materiaux_prix_auto import (
+            alerter_rabais_sans_casser,
+            relever_tout,
+        )
 
         async with AsyncSessionLocal() as db:
             r = await relever_tout(db, max_age_hours=20)
+            await db.commit()
+            # Étape 3 : alertes de rabais sur les listes d'achats (cloche +
+            # push aux gestionnaires), une fois par rabais.
+            r["alertes"] = await alerter_rabais_sans_casser(db)
             await db.commit()
             return {k: v for k, v in r.items() if k != "erreurs"} | {
                 "erreurs": len(r.get("erreurs") or [])
