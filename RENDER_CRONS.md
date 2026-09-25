@@ -65,3 +65,7 @@ Les Cron Jobs sur Render Free tier :
 
 Sur le plan payant : ~7 $ /mois par worker continu. Les crons restent
 gratuits dans le quota.
+
+## Catalogue de matériaux
+
+Le mega-cron `all-daily` inclut `materiaux-prix` : relevé quotidien des prix chez les détaillants pour toute offre avec lien produit non vérifiée depuis 20 h (rabais et date de fin compris).

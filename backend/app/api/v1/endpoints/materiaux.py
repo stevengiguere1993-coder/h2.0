@@ -40,11 +40,17 @@ from app.models.materiau import (
     MateriauPrixHistorique,
 )
 from app.services.materiaux_import import (
+    CATEGORIES_STANDARD,
     canonical_store,
+    categorie_standard,
+    categoriser_par_nom,
     import_rows,
     norm_key,
     parse_workbook,
 )
+
+#: Quincailleries principales par défaut = colonnes du comparatif.
+MAGASINS_PRINCIPAUX = ["Home Depot", "Canac", "Rona", "BMR", "Patrick Morin"]
 
 router = APIRouter(tags=["materiaux"])
 
@@ -58,6 +64,8 @@ class MagasinRead(BaseModel):
     website: Optional[str] = None
     color: Optional[str] = None
     is_active: bool = True
+    is_principal: bool = False
+    position: int = 0
 
 
 class MagasinCreate(BaseModel):
@@ -71,6 +79,8 @@ class MagasinUpdate(BaseModel):
     website: Optional[str] = Field(default=None, max_length=255)
     color: Optional[str] = Field(default=None, max_length=6)
     is_active: Optional[bool] = None
+    is_principal: Optional[bool] = None
+    position: Optional[int] = Field(default=None, ge=0, le=999)
 
 
 class OffreRead(BaseModel):
@@ -87,6 +97,10 @@ class OffreRead(BaseModel):
     source: str = "manuel"
     observed_at: Optional[datetime] = None
     note: Optional[str] = None
+    #: Relevé automatique : dernière tentative, erreur, titre lu sur la page.
+    fetch_checked_at: Optional[datetime] = None
+    fetch_error: Optional[str] = None
+    page_title: Optional[str] = None
 
 
 class OffreUpsert(BaseModel):
@@ -170,7 +184,8 @@ def _offre_read(o: MateriauOffre, magasins: dict[int, Magasin]) -> OffreRead:
         sale_end=o.sale_end,
         sale_active=sale_active,
         url=o.url, sku=o.sku, source=o.source, observed_at=o.observed_at,
-        note=o.note,
+        note=o.note, fetch_checked_at=o.fetch_checked_at, fetch_error=o.fetch_error,
+        page_title=o.page_title,
     )
 
 
@@ -211,10 +226,35 @@ async def _get_materiau(db, materiau_id: int) -> Materiau:
 
 # ───────────────────────────── Magasins ─────────────────────────────
 
+async def _ensure_principaux(db) -> None:
+    """Garantit les cinq quincailleries principales (créées si absentes,
+    marquées « principal » si aucun magasin ne l'est encore) — les
+    colonnes du comparatif existent toujours. Idempotent."""
+    rows = list((await db.execute(select(Magasin))).scalars().all())
+    by_key = {m.name.lower(): m for m in rows}
+    if any(m.is_principal for m in rows):
+        return
+    for i, name in enumerate(MAGASINS_PRINCIPAUX):
+        m = by_key.get(name.lower())
+        if m is None:
+            m = Magasin(name=name)
+            db.add(m)
+        m.is_principal = True
+        m.is_active = True
+        m.position = i
+    await db.flush()
+
+
 @router.get("/magasins", response_model=List[MagasinRead])
 async def list_magasins(db: DBSession, _: CurrentUser) -> List[MagasinRead]:
+    await _ensure_principaux(db)
     rows = (
-        await db.execute(select(Magasin).order_by(Magasin.is_active.desc(), Magasin.name.asc()))
+        await db.execute(
+            select(Magasin).order_by(
+                Magasin.is_principal.desc(), Magasin.position.asc(),
+                Magasin.is_active.desc(), Magasin.name.asc(),
+            )
+        )
     ).scalars().all()
     return [MagasinRead.model_validate(r) for r in rows]
 
@@ -253,15 +293,135 @@ async def update_magasin(
 
 @router.get("/materiaux/categories", response_model=List[str])
 async def list_categories(db: DBSession, _: CurrentUser) -> List[str]:
+    """Catégories standard (dans l'ordre d'affichage) puis les autres
+    catégories rencontrées, alphabétiques."""
     rows = (
         await db.execute(
             select(Materiau.categorie)
             .where(Materiau.categorie.is_not(None), Materiau.is_active.is_(True))
             .distinct()
-            .order_by(Materiau.categorie.asc())
         )
     ).scalars().all()
-    return [r for r in rows if r]
+    extra = sorted({r for r in rows if r and r not in CATEGORIES_STANDARD})
+    return list(CATEGORIES_STANDARD) + extra
+
+
+class CategoriserResult(BaseModel):
+    examines: int
+    classes: int
+    sans_categorie: int
+
+
+@router.post("/materiaux/categoriser-auto", response_model=CategoriserResult)
+async def categoriser_auto(
+    db: DBSession, _: RequireManager, force: bool = Query(default=False)
+) -> CategoriserResult:
+    """Classe par mots-clés les matériaux SANS catégorie (ou tous avec
+    ``force``, sauf ceux dont la catégorie est déjà standard) : bois,
+    plomberie, électricité, quincaillerie… Les libellés libres connus
+    sont ramenés aux catégories standard."""
+    rows = list((await db.execute(select(Materiau).where(Materiau.is_active.is_(True)))).scalars().all())
+    examines = classes = sans = 0
+    for m in rows:
+        std = categorie_standard(m.categorie)
+        if m.categorie and std and std != m.categorie:
+            m.categorie = std  # libellé libre → standard
+            classes += 1
+            continue
+        if m.categorie and (std or not force):
+            continue
+        examines += 1
+        cat = categoriser_par_nom(m.name)
+        if cat:
+            m.categorie = cat
+            classes += 1
+        else:
+            sans += 1
+    await db.flush()
+    return CategoriserResult(examines=examines, classes=classes, sans_categorie=sans)
+
+
+# ───────────── Relevé automatique des prix (étape 2) ─────────────
+
+class ReleveInfo(BaseModel):
+    ok: bool
+    price: Optional[float] = None
+    regular_price: Optional[float] = None
+    on_sale: bool = False
+    sale_end: Optional[date] = None
+    changed: bool = False
+    method: str = ""
+    error: Optional[str] = None
+
+
+class ReleveOffreResult(BaseModel):
+    materiau: MateriauRead
+    releve: ReleveInfo
+
+
+class ReleveToutRequest(BaseModel):
+    magasin_id: Optional[int] = None
+    materiau_id: Optional[int] = None
+    #: Ne relève que les offres non vérifiées depuis N heures (None = toutes).
+    max_age_hours: Optional[float] = None
+
+
+@router.get("/materiaux/prix/etat")
+async def etat_releve(_: CurrentUser) -> dict:
+    """État du dernier relevé global (en cours / terminé + statistiques)."""
+    from app.services.materiaux_prix_auto import DERNIER_RELEVE
+
+    return dict(DERNIER_RELEVE)
+
+
+@router.post("/materiaux/prix/relever-tout")
+async def relever_tout_endpoint(data: ReleveToutRequest, _: RequireManager) -> dict:
+    """Lance en arrière-plan le relevé de toutes les offres avec lien
+    (un domaine à la fois). Répond tout de suite ; suivre avec
+    GET /materiaux/prix/etat."""
+    import asyncio
+
+    from app.services.materiaux_prix_auto import (
+        DERNIER_RELEVE,
+        relever_tout_en_arriere_plan,
+    )
+
+    if DERNIER_RELEVE.get("en_cours"):
+        return {"lance": False, "raison": "Un relevé est déjà en cours.", **DERNIER_RELEVE}
+    asyncio.create_task(relever_tout_en_arriere_plan(
+        magasin_id=data.magasin_id, materiau_id=data.materiau_id,
+        max_age_hours=data.max_age_hours,
+    ))
+    return {"lance": True, **DERNIER_RELEVE}
+
+
+@router.post(
+    "/materiaux/{materiau_id}/offres/{magasin_id}/relever",
+    response_model=ReleveOffreResult,
+)
+async def relever_offre_endpoint(
+    materiau_id: int, magasin_id: int, db: DBSession, _: CurrentUser
+) -> ReleveOffreResult:
+    """Relève MAINTENANT le prix de ce magasin depuis le lien produit et
+    renvoie ce qui a été lu (ou l'erreur exacte)."""
+    from app.services.materiaux_prix_auto import relever_offre
+
+    m = await _get_materiau(db, materiau_id)
+    off = next((o for o in m.offres if o.magasin_id == magasin_id), None)
+    if off is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Aucune offre de ce magasin pour ce matériau.")
+    if not (off.url or "").strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Pose d'abord le lien de la page produit.")
+    r = await relever_offre(db, off)
+    m = await _get_materiau(db, materiau_id)
+    return ReleveOffreResult(
+        materiau=_materiau_read(m, await _magasins_map(db)),
+        releve=ReleveInfo(
+            ok=r.ok, price=r.price, regular_price=r.regular_price, on_sale=r.on_sale,
+            sale_end=(date.fromisoformat(r.sale_end) if r.sale_end else None),
+            changed=r.changed, method=r.method, error=r.error,
+        ),
+    )
 
 
 @router.get("/materiaux", response_model=List[MateriauRead])
