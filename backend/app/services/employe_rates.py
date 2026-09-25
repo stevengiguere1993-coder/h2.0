@@ -34,6 +34,31 @@ class RatePeriod:
     cnesst_rate: float
     ccq_rate: float
     is_ccq: bool
+    #: Taux de base sous régime CCQ (None = hourly_rate).
+    hourly_rate_ccq: Optional[float] = None
+
+
+#: Régimes d'un punch (retour Phil 2026-09-26). Le coût suit le régime du
+#: punch ; ``None`` (punch d'avant la règle) suit la fiche employé.
+REGIME_CCQ = "ccq"
+REGIME_HORS_DECRET = "hors_decret"
+REGIMES = (REGIME_CCQ, REGIME_HORS_DECRET)
+
+
+def regime_effectif(
+    periods: list["RatePeriod"], on_date: Optional[date], emp: Optional[Employe], regime: Optional[str]
+) -> str:
+    """Régime à appliquer : celui du punch s'il est posé, sinon celui de
+    la fiche employé à la date (historique), sinon hors décret."""
+    if regime in REGIMES:
+        return regime
+    if periods and on_date is not None:
+        p = _period_for_date(periods, on_date)
+        if p is not None:
+            return REGIME_CCQ if p.is_ccq else REGIME_HORS_DECRET
+    if emp is not None:
+        return REGIME_CCQ if bool(emp.is_ccq) else REGIME_HORS_DECRET
+    return REGIME_HORS_DECRET
 
 
 def real_cost(
@@ -77,6 +102,11 @@ async def load_rate_periods(
                 cnesst_rate=float(r.cnesst_rate or 0),
                 ccq_rate=float(r.ccq_rate or 0),
                 is_ccq=bool(r.is_ccq),
+                hourly_rate_ccq=(
+                    float(r.hourly_rate_ccq)
+                    if getattr(r, "hourly_rate_ccq", None) is not None
+                    else None
+                ),
             )
         )
     return out
@@ -100,11 +130,54 @@ def _period_for_date(
     return chosen or periods[0]
 
 
+def resolve_base_rate(
+    periods: list[RatePeriod],
+    on_date: Optional[date],
+    emp: Optional[Employe],
+    regime: Optional[str] = None,
+) -> Optional[float]:
+    """Taux horaire de BASE (ce qu'on paie à l'employé, avant primes
+    CNESST/CCQ) à `on_date` pour le régime donné : ``hourly_rate_ccq``
+    (sinon ``hourly_rate``) sous CCQ, ``hourly_rate`` hors décret. Sert
+    à la paie."""
+    # Le taux CCQ ne s'applique qu'à un punch EXPLICITEMENT « ccq » : un
+    # punch d'avant la règle (None) reste payé au taux courant (pas de
+    # réécriture rétroactive de la paie ni des coûts).
+    explicite_ccq = regime == REGIME_CCQ
+    if periods and on_date is not None:
+        p = _period_for_date(periods, on_date)
+        if p is not None:
+            if explicite_ccq:
+                t = _taux_ccq_periode(p, periods, emp)
+                if t is not None:
+                    return t
+            return float(p.hourly_rate)
+    if emp is not None:
+        if explicite_ccq and getattr(emp, "hourly_rate_ccq", None) is not None:
+            return float(emp.hourly_rate_ccq)
+        return float(emp.hourly_rate) if emp.hourly_rate is not None else None
+    return None
+
+
+def _taux_ccq_periode(
+    p: RatePeriod, periods: list[RatePeriod], emp: Optional[Employe]
+) -> Optional[float]:
+    """Taux CCQ d'une période ; si la période n'en a pas et que c'est la
+    plus récente, le taux CCQ saisi sur la fiche (PATCH sans palier)
+    fait foi."""
+    if p.hourly_rate_ccq is not None:
+        return float(p.hourly_rate_ccq)
+    if periods and p is periods[-1] and emp is not None and getattr(emp, "hourly_rate_ccq", None) is not None:
+        return float(emp.hourly_rate_ccq)
+    return None
+
+
 def resolve_real_cost(
     periods: list[RatePeriod],
     on_date: Optional[date],
     emp: Optional[Employe],
     avg_rate: float,
+    regime: Optional[str] = None,
 ) -> float:
     """Coût horaire réel à appliquer à un punch daté `on_date`.
 
@@ -113,16 +186,29 @@ def resolve_real_cost(
     2. Sinon → on retombe sur les taux COURANTS de l'employé
        (rétrocompat : employé sans aucun changement documenté).
     3. Sinon → taux moyen équipe.
+
+    ``regime`` (2026-09-26) : « ccq » → taux de base CCQ (sinon le taux
+    courant) + majoration CCQ ; « hors_decret » → taux courant, sans
+    majoration CCQ ; None → suit la fiche employé à la date (comme avant).
+    La CNESST s'applique dans tous les cas.
     """
+    reg = regime_effectif(periods, on_date, emp, regime)
+    is_ccq = reg == REGIME_CCQ          # majoration CCQ (fiche ou punch)
+    explicite_ccq = regime == REGIME_CCQ  # taux de base CCQ : punch explicite seulement
     if periods and on_date is not None:
         p = _period_for_date(periods, on_date)
         if p is not None:
-            return real_cost(
-                p.hourly_rate, p.cnesst_rate, p.ccq_rate, p.is_ccq
-            )
+            base = p.hourly_rate
+            if explicite_ccq:
+                t = _taux_ccq_periode(p, periods, emp)
+                if t is not None:
+                    base = t
+            return real_cost(base, p.cnesst_rate, p.ccq_rate, is_ccq)
     if emp is not None:
         base = float(emp.hourly_rate or avg_rate)
+        if explicite_ccq and getattr(emp, "hourly_rate_ccq", None) is not None:
+            base = float(emp.hourly_rate_ccq)
         cnesst = float(emp.cnesst_rate or 0)
         ccq = float(emp.ccq_rate or 0)
-        return real_cost(base, cnesst, ccq, bool(emp.is_ccq))
+        return real_cost(base, cnesst, ccq, is_ccq)
     return round(float(avg_rate), 2)

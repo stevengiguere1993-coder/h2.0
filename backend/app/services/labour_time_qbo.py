@@ -113,6 +113,7 @@ async def _punch_cost_rate(db: AsyncSession, punch: Punch) -> Optional[float]:
         rate = resolve_real_cost(
             periods.get(punch.employe_id, []), pdate, emp,
             float(emp.hourly_rate or 0) or 35.0,
+            regime=getattr(punch, "regime", None),
         )
         return round(float(rate), 2) if rate else None
     except Exception:  # noqa: BLE001

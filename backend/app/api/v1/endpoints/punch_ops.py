@@ -20,6 +20,13 @@ from app.api.deps import CurrentUser, DBSession, RequireAdminRole, RequireManage
 from app.models.employe import Employe
 from app.models.punch import Punch
 from app.services.audit import log_action
+from app.services.employe_rates import (
+    REGIMES,
+    REGIME_CCQ,
+    load_rate_periods,
+    regime_effectif,
+    resolve_base_rate,
+)
 from app.services.project_auto_status import bump_to_in_progress_if_needed
 
 
@@ -49,6 +56,8 @@ class PunchRead(BaseModel):
     geolocation: Optional[str]
     approved: bool
     notes: Optional[str]
+    #: ccq | hors_decret | None (avant la règle : suit la fiche employé).
+    regime: Optional[str] = None
 
 
 class PunchMe(BaseModel):
@@ -203,6 +212,9 @@ async def clock_in(
         task=(data.task.strip() if data.task else None),
         geolocation=_geo_str(data.latitude, data.longitude),
         notes=(data.notes.strip() if data.notes else None),
+        # Hors décret par défaut : le régime CCQ est posé par un admin+
+        # à l'approbation (retour Phil 2026-09-26).
+        regime="hors_decret",
     )
     db.add(p)
     await db.flush()
@@ -426,6 +438,26 @@ class PunchPending(BaseModel):
     hours: Optional[float]
     task: Optional[str]
     notes: Optional[str]
+    regime: Optional[str] = None
+
+
+def _exiger_admin_pour_regime(user, regime: Optional[str]) -> None:
+    """Le régime d'un punch (CCQ / hors décret) ne se pose que par un
+    admin+ (retour Phil 2026-09-26)."""
+    if regime is None:
+        return
+    if regime not in REGIMES:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Régime inconnu (ccq | hors_decret).")
+    if not user.has_min_role("admin"):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Seul un administrateur peut poser le régime CCQ / hors décret d'un punch.",
+        )
+
+
+class ApproveBody(BaseModel):
+    #: Régime posé à l'approbation (admin+) : ccq | hors_decret.
+    regime: Optional[str] = None
 
 
 @router.get(
@@ -627,6 +659,7 @@ async def approve_punch(
     punch_id: int,
     db: DBSession,
     user: RequireManager,
+    data: Optional[ApproveBody] = None,
 ) -> PunchPending:
     p = (
         await db.execute(select(Punch).where(Punch.id == punch_id))
@@ -638,6 +671,9 @@ async def approve_punch(
             status.HTTP_400_BAD_REQUEST,
             "Impossible d'approuver un punch encore ouvert.",
         )
+    if data is not None and data.regime is not None:
+        _exiger_admin_pour_regime(user, data.regime)
+        p.regime = data.regime
     p.approved = True
     await db.flush()
     await db.refresh(p)
@@ -647,7 +683,7 @@ async def approve_punch(
         action="punch.approved",
         entity_type="punch",
         entity_id=p.id,
-        details={"employe_id": p.employe_id, "hours": float(p.hours or 0)},
+        details={"employe_id": p.employe_id, "hours": float(p.hours or 0), "regime": p.regime},
     )
     # Heures approuvées + projet → feuille de temps QB (TimeActivity) en
     # arrière-plan : suivi de projet/rentabilité SANS écriture comptable
@@ -723,6 +759,12 @@ class PayrollRow(BaseModel):
     total_hours: float
     approved_revenue: float
     total_revenue: float
+    # Ventilation CCQ / hors décret (2026-09-26). Les montants sont au
+    # taux de base du régime en vigueur à la date de chaque punch.
+    hours_ccq: float = 0.0
+    hours_hors_decret: float = 0.0
+    montant_ccq: float = 0.0
+    montant_hors_decret: float = 0.0
 
 
 class PayrollReport(BaseModel):
@@ -802,6 +844,19 @@ class BiWeeklyPayrollRow(BaseModel):
     hours_week_2: float  # samedi → vendredi (semaine 2 de la période)
     total_hours: float
     pending_hours: float  # heures non encore approuvées (info utile)
+    # Ventilation CCQ / hors décret (retour Phil 2026-09-26) : heures et
+    # montants au taux de BASE du régime en vigueur à la date du punch
+    # (sans primes CNESST/CCQ, qui sont des cotisations employeur).
+    hours_ccq: float = 0.0
+    hours_hors_decret: float = 0.0
+    hours_ccq_week_1: float = 0.0
+    hours_ccq_week_2: float = 0.0
+    hours_hd_week_1: float = 0.0
+    hours_hd_week_2: float = 0.0
+    #: Montants sur les heures APPROUVÉES seulement (ce qui sera payé).
+    montant_ccq: float = 0.0
+    montant_hors_decret: float = 0.0
+    montant_total: float = 0.0
 
 
 class BiWeeklyPayrollReport(BaseModel):
@@ -816,6 +871,11 @@ class BiWeeklyPayrollReport(BaseModel):
     rows: list[BiWeeklyPayrollRow]
     total_hours: float
     total_pending_hours: float
+    total_hours_ccq: float = 0.0
+    total_hours_hors_decret: float = 0.0
+    total_montant_ccq: float = 0.0
+    total_montant_hors_decret: float = 0.0
+    total_montant: float = 0.0
 
 
 @router.get(
@@ -865,13 +925,7 @@ async def payroll_bi_weekly(
     # mémoire entre semaine 1 et semaine 2 selon la date de début du
     # punch.
     stmt = (
-        select(
-            Employe.id,
-            Employe.full_name,
-            Punch.started_at,
-            Punch.hours,
-            Punch.approved,
-        )
+        select(Employe, Punch)
         .join(Punch, Punch.employe_id == Employe.id)
         .where(
             Punch.started_at >= start_dt,
@@ -880,14 +934,23 @@ async def payroll_bi_weekly(
         )
     )
     rows_raw = (await db.execute(stmt)).all()
+    periods = await load_rate_periods(db, [r[0].id for r in rows_raw])
 
     agg: dict[int, BiWeeklyPayrollRow] = {}
     for r in rows_raw:
-        emp_id = int(r[0])
-        name = r[1] or f"#{emp_id}"
-        started_at: datetime = r[2]
-        h = float(r[3] or 0)
-        approved = bool(r[4])
+        emp: Employe = r[0]
+        p: Punch = r[1]
+        emp_id = int(emp.id)
+        name = emp.full_name or f"#{emp_id}"
+        started_at: datetime = p.started_at
+        if started_at is not None and started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        h = float(p.hours or 0)
+        approved = bool(p.approved)
+        pdate = started_at.date() if started_at is not None else None
+        reg = regime_effectif(periods.get(emp_id, []), pdate, emp, p.regime)
+        taux = resolve_base_rate(periods.get(emp_id, []), pdate, emp, reg) or 0.0
+        montant = round(h * taux, 2)
 
         if emp_id not in agg:
             agg[emp_id] = BiWeeklyPayrollRow(
@@ -902,19 +965,41 @@ async def payroll_bi_weekly(
         # week_1/week_2 (sinon elles disparaîtraient). pending_hours est
         # un total parallèle pour signaler à l'utilisateur ce qui reste
         # à approuver avant la coupure.
-        if started_at <= week_1_end_dt:
+        sem1 = started_at <= week_1_end_dt
+        if sem1:
             agg[emp_id].hours_week_1 += h
         else:
             agg[emp_id].hours_week_2 += h
         agg[emp_id].total_hours += h
         if not approved:
             agg[emp_id].pending_hours += h
+        if reg == REGIME_CCQ:
+            agg[emp_id].hours_ccq += h
+            if approved:
+                agg[emp_id].montant_ccq += montant
+            if sem1:
+                agg[emp_id].hours_ccq_week_1 += h
+            else:
+                agg[emp_id].hours_ccq_week_2 += h
+        else:
+            agg[emp_id].hours_hors_decret += h
+            if approved:
+                agg[emp_id].montant_hors_decret += montant
+            if sem1:
+                agg[emp_id].hours_hd_week_1 += h
+            else:
+                agg[emp_id].hours_hd_week_2 += h
+        if approved:
+            agg[emp_id].montant_total += montant
 
     for row in agg.values():
-        row.hours_week_1 = round(row.hours_week_1, 2)
-        row.hours_week_2 = round(row.hours_week_2, 2)
-        row.total_hours = round(row.total_hours, 2)
-        row.pending_hours = round(row.pending_hours, 2)
+        for champ in (
+            "hours_week_1", "hours_week_2", "total_hours", "pending_hours",
+            "hours_ccq", "hours_hors_decret", "hours_ccq_week_1", "hours_ccq_week_2",
+            "hours_hd_week_1", "hours_hd_week_2",
+            "montant_ccq", "montant_hors_decret", "montant_total",
+        ):
+            setattr(row, champ, round(getattr(row, champ), 2))
 
     sorted_rows = sorted(agg.values(), key=lambda x: x.employe_name.lower())
 
@@ -932,6 +1017,11 @@ async def payroll_bi_weekly(
         total_pending_hours=round(
             sum(r.pending_hours for r in sorted_rows), 2
         ),
+        total_hours_ccq=round(sum(r.hours_ccq for r in sorted_rows), 2),
+        total_hours_hors_decret=round(sum(r.hours_hors_decret for r in sorted_rows), 2),
+        total_montant_ccq=round(sum(r.montant_ccq for r in sorted_rows), 2),
+        total_montant_hors_decret=round(sum(r.montant_hors_decret for r in sorted_rows), 2),
+        total_montant=round(sum(r.montant_total for r in sorted_rows), 2),
     )
 
 
@@ -946,7 +1036,9 @@ async def payroll_bi_weekly_csv(
         default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"
     ),
 ):
-    """CSV simple pour EmployeurD : nom · semaine 1 · semaine 2."""
+    """CSV simple pour EmployeurD : nom · semaine 1 · semaine 2 (format
+    INCHANGÉ — la ventilation CCQ / hors décret a son propre export,
+    /payroll/bi-weekly-regimes.csv)."""
     from fastapi.responses import Response
     report = await payroll_bi_weekly(db, _, period_end)  # type: ignore[arg-type]
     lines = ["nom_employe,heures_semaine_1,heures_semaine_2"]
@@ -958,6 +1050,47 @@ async def payroll_bi_weekly_csv(
     body = "\n".join(lines)
     filename = (
         f"paie-{report.period_start.isoformat()}_au_"
+        f"{report.period_end.isoformat()}.csv"
+    )
+    return Response(
+        content=body,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
+
+
+@router.get(
+    "/payroll/bi-weekly-regimes.csv",
+    summary="Bi-weekly payroll CSV — ventilation CCQ / hors décret (manager+)",
+)
+async def payroll_bi_weekly_regimes_csv(
+    db: DBSession,
+    _: RequireManager,
+    period_end: Optional[str] = Query(
+        default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"
+    ),
+):
+    """Heures CCQ et hors décret par semaine, et montants (heures
+    approuvées, taux de base du régime à la date du punch)."""
+    from fastapi.responses import Response
+    report = await payroll_bi_weekly(db, _, period_end)  # type: ignore[arg-type]
+    lines = [
+        "nom_employe,heures_ccq_semaine_1,heures_ccq_semaine_2,"
+        "heures_hd_semaine_1,heures_hd_semaine_2,heures_ccq,heures_hors_decret,"
+        "heures_en_attente,montant_ccq,montant_hors_decret,montant_total"
+    ]
+    for r in report.rows:
+        name = (r.employe_name or "").replace('"', "'")
+        lines.append(
+            f'"{name}",{r.hours_ccq_week_1},{r.hours_ccq_week_2},'
+            f"{r.hours_hd_week_1},{r.hours_hd_week_2},{r.hours_ccq},{r.hours_hors_decret},"
+            f"{r.pending_hours},{r.montant_ccq},{r.montant_hors_decret},{r.montant_total}"
+        )
+    body = "\n".join(lines)
+    filename = (
+        f"paie-regimes-{report.period_start.isoformat()}_au_"
         f"{report.period_end.isoformat()}.csv"
     )
     return Response(
@@ -994,51 +1127,63 @@ async def payroll_report(
         end.year, end.month, end.day, 23, 59, 59, tzinfo=timezone.utc
     )
 
-    # Sum hours by (employe, approved) over the period.
+    # Punch par punch : le montant suit le taux de base du RÉGIME (CCQ /
+    # hors décret) en vigueur à la date du punch (2026-09-26).
     stmt = (
-        select(
-            Employe.id,
-            Employe.full_name,
-            Employe.hourly_rate,
-            Punch.approved,
-            func.coalesce(func.sum(Punch.hours), 0).label("h"),
-        )
+        select(Employe, Punch)
         .join(Punch, Punch.employe_id == Employe.id)
         .where(
             Punch.started_at >= start_dt,
             Punch.started_at <= end_dt,
             Punch.ended_at.is_not(None),
         )
-        .group_by(Employe.id, Employe.full_name, Employe.hourly_rate, Punch.approved)
     )
     rows = (await db.execute(stmt)).all()
+    periods = await load_rate_periods(db, [r[0].id for r in rows])
 
     # Fold into per-employee aggregates.
     agg: dict[int, PayrollRow] = {}
     for r in rows:
-        emp_id = int(r[0])
+        emp: Employe = r[0]
+        p: Punch = r[1]
+        emp_id = int(emp.id)
         if emp_id not in agg:
             agg[emp_id] = PayrollRow(
                 employe_id=emp_id,
-                employe_name=r[1] or f"#{emp_id}",
-                hourly_rate=float(r[2]) if r[2] is not None else None,
+                employe_name=emp.full_name or f"#{emp_id}",
+                hourly_rate=float(emp.hourly_rate) if emp.hourly_rate is not None else None,
                 approved_hours=0.0,
                 pending_hours=0.0,
                 total_hours=0.0,
                 approved_revenue=0.0,
                 total_revenue=0.0,
             )
-        h = float(r[4] or 0)
-        if bool(r[3]):
+        h = float(p.hours or 0)
+        pdate = p.started_at.date() if p.started_at is not None else None
+        reg = regime_effectif(periods.get(emp_id, []), pdate, emp, p.regime)
+        taux = resolve_base_rate(periods.get(emp_id, []), pdate, emp, reg) or 0.0
+        montant = round(h * taux, 2)
+        if bool(p.approved):
             agg[emp_id].approved_hours += h
+            agg[emp_id].approved_revenue += montant
         else:
             agg[emp_id].pending_hours += h
         agg[emp_id].total_hours += h
+        agg[emp_id].total_revenue += montant
+        if reg == REGIME_CCQ:
+            agg[emp_id].hours_ccq += h
+            agg[emp_id].montant_ccq += montant
+        else:
+            agg[emp_id].hours_hors_decret += h
+            agg[emp_id].montant_hors_decret += montant
 
     for row in agg.values():
-        rate = float(row.hourly_rate or 0)
-        row.approved_revenue = round(row.approved_hours * rate, 2)
-        row.total_revenue = round(row.total_hours * rate, 2)
+        row.approved_revenue = round(row.approved_revenue, 2)
+        row.total_revenue = round(row.total_revenue, 2)
+        row.hours_ccq = round(row.hours_ccq, 2)
+        row.hours_hors_decret = round(row.hours_hors_decret, 2)
+        row.montant_ccq = round(row.montant_ccq, 2)
+        row.montant_hors_decret = round(row.montant_hors_decret, 2)
         # Round hours for display consistency.
         row.approved_hours = round(row.approved_hours, 2)
         row.pending_hours = round(row.pending_hours, 2)
@@ -1075,14 +1220,16 @@ async def payroll_csv(
     report = await payroll_report(db, _, month)  # type: ignore[arg-type]
     lines = [
         "employe_id,employe_name,hourly_rate,approved_hours,pending_hours,"
-        "total_hours,approved_revenue,total_revenue"
+        "total_hours,approved_revenue,total_revenue,"
+        "hours_ccq,hours_hors_decret,montant_ccq,montant_hors_decret"
     ]
     for r in report.rows:
         name = (r.employe_name or "").replace('"', "'")
         lines.append(
             f'{r.employe_id},"{name}",{r.hourly_rate or 0},'
             f"{r.approved_hours},{r.pending_hours},{r.total_hours},"
-            f"{r.approved_revenue},{r.total_revenue}"
+            f"{r.approved_revenue},{r.total_revenue},"
+            f"{r.hours_ccq},{r.hours_hors_decret},{r.montant_ccq},{r.montant_hors_decret}"
         )
     lines.append("")
     lines.append(
@@ -1150,7 +1297,7 @@ async def employe_monthly_csv(
     ).scalars().all()
 
     lines = [
-        "date,started_at,ended_at,hours,approved,project_id,location,notes"
+        "date,started_at,ended_at,hours,approved,regime,project_id,location,notes"
     ]
     total = 0.0
     approved_total = 0.0
@@ -1162,18 +1309,19 @@ async def employe_monthly_csv(
         if p.approved:
             approved_total += h
         notes = (p.notes or "").replace('"', "'").replace("\n", " ")[:200]
-        loc = (p.location or "").replace('"', "'")
+        loc = (p.geolocation or "").replace('"', "'")
         lines.append(
             f'{started.date().isoformat()},'
             f'{started.strftime("%Y-%m-%d %H:%M")},'
             f'{ended.strftime("%Y-%m-%d %H:%M") if ended else ""},'
             f'{h},{"oui" if p.approved else "non"},'
+            f'{p.regime or "fiche"},'
             f'{p.project_id or ""},'
             f'"{loc}","{notes}"'
         )
     lines.append("")
-    lines.append(f",,TOTAL,{round(total, 2)},,,,")
-    lines.append(f",,APPROUVÉES,{round(approved_total, 2)},,,,")
+    lines.append(f",,TOTAL,{round(total, 2)},,,,,")
+    lines.append(f",,APPROUVÉES,{round(approved_total, 2)},,,,,")
 
     body = "\n".join(lines)
     safe_name = (emp.full_name or f"employe-{emp.id}").replace(
@@ -1205,6 +1353,8 @@ class PunchManualCreate(BaseModel):
     task: Optional[str] = None
     notes: Optional[str] = None
     approved: bool = False
+    #: ccq | hors_decret (admin+) ; vide = hors décret.
+    regime: Optional[str] = None
 
 
 class PunchManualUpdate(BaseModel):
@@ -1219,6 +1369,8 @@ class PunchManualUpdate(BaseModel):
     task: Optional[str] = None
     notes: Optional[str] = None
     approved: Optional[bool] = None
+    #: ccq | hors_decret (admin+ seulement).
+    regime: Optional[str] = None
 
 
 def _hours_between(start, end):
@@ -1235,8 +1387,9 @@ def _hours_between(start, end):
     summary="Creer un punch manuellement (gestion admin)",
 )
 async def create_manual_punch(
-    data: PunchManualCreate, db: DBSession, _: RequireManager
+    data: PunchManualCreate, db: DBSession, user: RequireManager
 ) -> PunchRead:
+    _exiger_admin_pour_regime(user, data.regime)
     hours = (
         data.hours
         if data.hours is not None
@@ -1254,6 +1407,7 @@ async def create_manual_punch(
         task=(data.task or None),
         notes=(data.notes or None),
         approved=bool(data.approved),
+        regime=(data.regime or "hors_decret"),
     )
     db.add(p)
     await db.flush()
@@ -1272,7 +1426,7 @@ async def create_manual_punch(
     summary="Modifier un punch (gestion admin, incl. approuve)",
 )
 async def update_manual_punch(
-    punch_id: int, data: PunchManualUpdate, db: DBSession, _: RequireManager
+    punch_id: int, data: PunchManualUpdate, db: DBSession, user: RequireManager
 ) -> PunchRead:
     p = (
         await db.execute(select(Punch).where(Punch.id == punch_id))
@@ -1280,6 +1434,11 @@ async def update_manual_punch(
     if p is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Punch introuvable.")
     fields = data.model_dump(exclude_unset=True)
+    if "regime" in fields:
+        if fields["regime"] is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Régime requis (ccq | hors_decret).")
+        _exiger_admin_pour_regime(user, fields["regime"])
+    avant = {k: getattr(p, k) for k in ("regime", "hours", "started_at", "ended_at", "project_id", "approved", "employe_id")}
     for k, v in fields.items():
         if k in ("task", "notes") and v == "":
             v = None
@@ -1290,4 +1449,15 @@ async def update_manual_punch(
             p.hours = recomputed
     await db.flush()
     await db.refresh(p)
+    # La feuille de temps QuickBooks (coût au taux du régime) suit toute
+    # modification qui change son montant ou son éligibilité — sinon un
+    # passage hors décret → CCQ après approbation resterait invisible
+    # dans le suivi de projet QB.
+    change = any(getattr(p, k) != v for k, v in avant.items())
+    if change and (p.approved or p.qbo_time_activity_id):
+        import asyncio as _asyncio
+
+        from app.services.labour_time_qbo import push_punch_time_now
+
+        _asyncio.create_task(push_punch_time_now(int(p.id)))
     return PunchRead.model_validate(p)
