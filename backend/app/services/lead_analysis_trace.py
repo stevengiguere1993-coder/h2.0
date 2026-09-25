@@ -160,11 +160,11 @@ def _section_fiche(res: FinanceResults) -> Dict[str, Any]:
             i.depenses_autres,
             source="fiche",
             note=(
-                "Montant DÉCLARÉ sur la fiche (extraction de l'annonce ou "
-                "saisie), pris tel quel. Il s'ajoute au barème normalisé "
-                "(concierge, entretien, gestion, autres normalisations) : si "
-                "le vendeur y a déjà inclus l'entretien, la conciergerie ou la "
-                "gestion, ces postes sont comptés deux fois — à vérifier."
+                "Saisie MANUELLE sur la fiche info (jamais remplie par "
+                "l'extraction depuis le 2026-09-25), prise telle quelle. "
+                "Elle s'ajoute au barème normalisé (concierge, entretien, "
+                "gestion, autres normalisations) : n'y mets pas l'entretien, "
+                "la conciergerie ou la gestion, déjà normalisés."
             ),
         ),
         ligne("Travaux estimés", None, i.frais_travaux, source="fiche"),

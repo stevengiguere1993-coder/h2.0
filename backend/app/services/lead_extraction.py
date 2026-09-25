@@ -111,7 +111,7 @@ _GEO_FIELDS = {"address", "city", "postal_code", "province"}
 _NUMERIC_FIELDS = {
     "asking_price", "nb_logements", "revenus_bruts",
     "taxes_municipales", "taxes_scolaires", "assurances", "energie",
-    "depenses_autres", "annee_construction", "superficie_terrain",
+    "annee_construction", "superficie_terrain",
     "superficie_batiment", "evaluation_municipale",
     "nb_stationnements",
 }
@@ -333,7 +333,7 @@ SCHEMA_GUIDE = (
     "\"typology\": { \"3.5\": int, \"4.5\": int, ... }, "
     "\"revenus_bruts\": int, \"taxes_municipales\": int, "
     "\"taxes_scolaires\": int, \"assurances\": int, \"energie\": int, "
-    "\"depenses_autres\": int, \"annee_construction\": int, "
+    "\"annee_construction\": int, "
     "\"superficie_terrain\": int, \"superficie_batiment\": int, "
     "\"evaluation_municipale\": int, \"description\": str, "
     "\"courtier_nom\": str, \"courtier_contact\": str, "
@@ -2351,7 +2351,7 @@ _PER_SOURCE_TRACKED: Tuple[str, ...] = (
     "address", "city", "postal_code",
     "asking_price", "nb_logements", "revenus_bruts",
     "taxes_municipales", "taxes_scolaires", "assurances",
-    "energie", "depenses_autres",
+    "energie",
     "annee_construction",
     "superficie_terrain", "superficie_batiment",
     "evaluation_municipale",

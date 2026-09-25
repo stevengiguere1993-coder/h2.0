@@ -1165,6 +1165,14 @@ export function LeadAnalysisDetailModal({
                     format="money"
                   />
                   <FieldNumber
+                    label="Autres dépenses ($/an) — saisie manuelle"
+                    name="depenses_autres"
+                    value={data.depenses_autres}
+                    onSave={(v) => patchField("depenses_autres", v)}
+                    format="money"
+                    hint="Jamais remplie par l'extraction. Vide = 0. N'y mets pas l'entretien, la conciergerie ni la gestion : le barème SCHL les normalise déjà."
+                  />
+                  <FieldNumber
                     label="Superficie terrain"
                     value={data.superficie_terrain}
                     onSave={(v) => patchField("superficie_terrain", v)}
@@ -2276,7 +2284,8 @@ function FieldNumber({
   onEstimate,
   estimating,
   format = "plain",
-  name
+  name,
+  hint
 }: {
   label: string;
   value: number | null;
@@ -2286,6 +2295,8 @@ function FieldNumber({
   estimating?: boolean;
   format?: "money" | "percent" | "plain";
   name?: string;
+  /** Aide courte sous le champ (ex. champ manuel, jamais extrait). */
+  hint?: string;
 }) {
   const [focused, setFocused] = useState(false);
   const [v, setV] = useState(value != null ? String(value) : "");
@@ -2364,6 +2375,9 @@ function FieldNumber({
             : ""
         }`}
       />
+      {hint ? (
+        <p className="mt-1 text-[10px] leading-snug text-white/40">{hint}</p>
+      ) : null}
     </div>
   );
 }
@@ -2841,7 +2855,6 @@ function ManualAnalysisSection({
   const missingRecommended = useMemo(() => {
     const missing: string[] = [];
     if (data.energie == null) missing.push("Énergie");
-    if (data.depenses_autres == null) missing.push("Autres dépenses");
     if (!data.annee_construction) missing.push("Année construction");
     if (!data.evaluation_municipale) missing.push("Évaluation municipale");
     return missing;
