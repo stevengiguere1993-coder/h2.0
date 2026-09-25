@@ -1545,6 +1545,14 @@ async def move_task(
 #: Type d'entité de détail → (modèle ORM, slug de pôle, entity_type de
 #: sérialisation, capacité de lecture détail dédiée).
 _DETAIL_ENTITIES: dict[str, tuple] = {
+    # Catalogue de matériaux et listes d'achats (2026-09-25).
+    "materiau": (
+        Materiau, "construction", "materiau", "construction:materiaux:list",
+    ),
+    "projet_materiau": (
+        ProjetMateriau, "construction", "projet_materiau",
+        "construction:materiaux:list",
+    ),
     "soumission": (
         DevlogSoumission, "devlog", "devlog_soumission",
         "devlog:soumissions:read",

@@ -153,8 +153,11 @@ async def relever_offre(db, offre: MateriauOffre) -> ReleveResultat:
     old_price = float(offre.unit_price) if offre.unit_price is not None else None
     old_sale = bool(offre.on_sale)
     old_end = offre.sale_end
-    price = float(releve.price)
-    regular = releve.regular_price
+    # Arrondi à la cent dès ici : la colonne est Numeric(12,2) et la clé
+    # d'idempotence des alertes de rabais doit être la même en session et
+    # relue de la base.
+    price = round(float(releve.price), 2)
+    regular = round(float(releve.regular_price), 2) if releve.regular_price is not None else None
     on_sale = bool(releve.on_sale or (regular is not None and regular > price + 0.005))
     sale_end = releve.sale_end if on_sale else None
     if on_sale and sale_end is None and old_sale and old_end and old_end >= now.date():
@@ -291,6 +294,10 @@ async def alerter_rabais_sans_casser(db) -> int:
         return await alerter_rabais(db)
     except Exception:  # noqa: BLE001
         log.exception("Alertes rabais matériaux échouées")
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
         return 0
 
 

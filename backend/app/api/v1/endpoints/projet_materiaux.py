@@ -31,8 +31,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import CurrentUser, DBSession
+from app.api.deps import CurrentUser, DBSession, RequireManager
 from app.core.permissions import visible_project_ids
+from app.models.achat import Achat
+from app.models.employe import Employe
 from app.models.fournisseur import Fournisseur
 from app.models.materiau import Magasin, Materiau, MateriauOffre
 from app.models.project import Project
@@ -228,9 +230,13 @@ def _offre_courante(o: Optional[MateriauOffre], magasins: dict[int, Magasin]) ->
     )
 
 
+def _actifs(magasins: dict[int, Magasin]) -> set[int]:
+    return {mid for mid, m in magasins.items() if m.is_active}
+
+
 def _ligne_read(l: ProjetMateriau, magasins: dict[int, Magasin]) -> LigneRead:
     offres = l.materiau.offres if l.materiau else []
-    pc = prix_courant(l, offres)
+    pc = prix_courant(l, offres, _actifs(magasins))
     qty = float(l.quantity or 0)
     prevu = float(l.prix_prevu) if l.prix_prevu is not None else None
     paye = float(l.prix_paye) if l.prix_paye is not None else None
@@ -343,15 +349,16 @@ def _resume(lignes: list[LigneRead], phases: list[ProjectPhase], coutant: Option
             r.total_courant += cur
             pr.courant += cur
             if l.meilleur is not None:
-                r.total_meilleur += round(l.quantity * l.meilleur.unit_price, 2)
+                tm = round(l.quantity * l.meilleur.unit_price, 2)
+                r.total_meilleur += tm
+                if l.total_prevu is not None and l.total_prevu > tm:
+                    r.economie_possible += round(l.total_prevu - tm, 2)
             elif l.total_prevu is not None:
                 r.total_meilleur += l.total_prevu
-    for k in ("total_prevu", "total_courant", "total_paye", "total_meilleur"):
+    for k in ("total_prevu", "total_courant", "total_paye", "total_meilleur", "economie_possible"):
         setattr(r, k, round(getattr(r, k), 2))
     for pr in par_phase.values():
         pr.prevu, pr.courant, pr.paye = round(pr.prevu, 2), round(pr.courant, 2), round(pr.paye, 2)
-    prevu_a_acheter = sum((l.total_prevu or 0) for l in lignes if l.statut != "achete")
-    r.economie_possible = round(max(0.0, prevu_a_acheter - r.total_meilleur), 2)
     r.coutant_materiaux_soumission = coutant
     budgets = [float(ph.budget) for ph in phases if ph.budget is not None]
     r.budget_phases = round(sum(budgets), 2) if budgets else None
@@ -423,7 +430,7 @@ async def ajouter_ligne(project_id: int, data: LigneCreate, db: DBSession, user:
     if data.prix_prevu is not None:
         l.prix_prevu = data.prix_prevu
     else:
-        pc = prix_courant(l, m.offres)
+        pc = prix_courant(l, m.offres, _actifs(await _magasins_map(db)))
         if pc.offre is not None:
             l.prix_prevu = float(pc.offre.unit_price)
     db.add(l)
@@ -455,6 +462,12 @@ async def modifier_ligne(
             pc = prix_courant(l, l.materiau.offres if l.materiau else [])
             if pc.offre is not None and pc.offre.magasin_id == data.magasin_id:
                 l.prix_prevu = float(pc.offre.unit_price)
+    if data.achat_id is not None:
+        a = (await db.execute(select(Achat.id, Achat.project_id).where(Achat.id == data.achat_id))).first()
+        if a is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Achat introuvable")
+        if a.project_id is not None and a.project_id != project_id:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Cet achat appartient à un autre projet")
     for champ in ("quantity", "unit", "prix_prevu", "prix_paye", "achete_le", "achat_id", "notes", "position"):
         v = getattr(data, champ)
         if v is not None:
@@ -463,7 +476,7 @@ async def modifier_ligne(
         l.statut = data.statut
         if data.statut == "achete":
             if l.prix_paye is None:
-                pc = prix_courant(l, l.materiau.offres if l.materiau else [])
+                pc = prix_courant(l, l.materiau.offres if l.materiau else [], _actifs(await _magasins_map(db)))
                 l.prix_paye = (
                     float(pc.offre.unit_price) if pc.offre is not None
                     else (float(l.prix_prevu) if l.prix_prevu is not None else None)
@@ -492,13 +505,10 @@ async def _fournisseur_pour_magasin(db, magasin: Magasin) -> Fournisseur:
     """Fournisseur (comptable) du même nom que le magasin ; créé s'il
     manque, pour que le PO puisse devenir un Achat poussé à QuickBooks."""
     f = (await db.execute(
-        select(Fournisseur).where(func.lower(Fournisseur.name) == magasin.name.strip().lower())
+        select(Fournisseur)
+        .where(func.lower(func.trim(Fournisseur.name)) == magasin.name.strip().lower())
+        .order_by(Fournisseur.id.asc())
     )).scalars().first()
-    if f is None:
-        f = (await db.execute(
-            select(Fournisseur).where(Fournisseur.name.ilike(f"%{magasin.name.strip()}%"))
-            .order_by(Fournisseur.id.asc())
-        )).scalars().first()
     if f is None:
         f = Fournisseur(name=magasin.name.strip(), website=magasin.website, category="materiaux")
         db.add(f)
@@ -507,12 +517,30 @@ async def _fournisseur_pour_magasin(db, magasin: Magasin) -> Fournisseur:
 
 
 @router.post("/{project_id}/materiaux/creer-po", response_model=CreerPoResult, status_code=201)
-async def creer_po(project_id: int, data: CreerPoBody, db: DBSession, user: CurrentUser) -> CreerPoResult:
+async def creer_po(project_id: int, data: CreerPoBody, db: DBSession, user: RequireManager) -> CreerPoResult:
+    """Réservé aux gestionnaires (comme POST /purchase-orders)."""
     p = await _projet_visible(db, project_id, user)
     magasin = (await db.execute(select(Magasin).where(Magasin.id == data.magasin_id))).scalar_one_or_none()
     if magasin is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Magasin introuvable")
-    lignes = [l for l in await _lignes(db, project_id) if l.statut == "a_acheter" and l.purchase_order_id is None]
+    if data.assigned_employe_id is not None:
+        if (await db.execute(select(Employe.id).where(Employe.id == data.assigned_employe_id))).scalar_one_or_none() is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Employé introuvable")
+    # Verrou sur les lignes du projet : deux clics simultanés ne doivent
+    # pas produire deux PO avec les mêmes articles.
+    verrou = (
+        select(ProjetMateriau)
+        .where(
+            ProjetMateriau.project_id == project_id,
+            ProjetMateriau.statut == "a_acheter",
+            ProjetMateriau.purchase_order_id.is_(None),
+        )
+        .options(selectinload(ProjetMateriau.materiau).selectinload(Materiau.offres))
+        .order_by(ProjetMateriau.position.asc(), ProjetMateriau.id.asc())
+        .with_for_update(of=ProjetMateriau)
+    )
+    lignes = list((await db.execute(verrou)).scalars().unique().all())
+    actifs = _actifs(await _magasins_map(db))
     if data.ligne_ids:
         voulues = set(data.ligne_ids)
         lignes = [l for l in lignes if l.id in voulues]
@@ -522,7 +550,7 @@ async def creer_po(project_id: int, data: CreerPoBody, db: DBSession, user: Curr
             if l.magasin_id == magasin.id:
                 retenues.append(l)
             elif l.magasin_id is None:
-                pc = prix_courant(l, l.materiau.offres if l.materiau else [])
+                pc = prix_courant(l, l.materiau.offres if l.materiau else [], actifs)
                 if pc.offre is not None and pc.offre.magasin_id == magasin.id:
                     retenues.append(l)
         lignes = retenues
@@ -555,8 +583,8 @@ async def creer_po(project_id: int, data: CreerPoBody, db: DBSession, user: Curr
             unit=l.unit, quantity=qty, unit_price=prix, total=t,
         ))
         l.purchase_order_id = po.id
-        if l.magasin_id is None:
-            l.magasin_id = magasin.id
+        # La ligne part chez CE magasin, quel que soit le choix précédent.
+        l.magasin_id = magasin.id
     po.amount_max = round(total, 2)
     await db.flush()
     return CreerPoResult(purchase_order_id=po.id, reference=po.reference, nb_lignes=len(lignes), total=round(total, 2))

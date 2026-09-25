@@ -93,5 +93,8 @@ class ProjetMateriau(Base):
         nullable=False,
     )
 
-    materiau: Mapped["Materiau"] = relationship()  # noqa: F821
-    magasin: Mapped[Optional["Magasin"]] = relationship()  # noqa: F821
+    #: selectin : la liste générique MCP (activity.list_entities) fait un
+    #: select nu ; en async, un chargement paresseux lèverait
+    #: MissingGreenlet et le sérialiseur renverrait une coquille vide.
+    materiau: Mapped["Materiau"] = relationship(lazy="selectin")  # noqa: F821
+    magasin: Mapped[Optional["Magasin"]] = relationship(lazy="selectin")  # noqa: F821

@@ -40,12 +40,21 @@ STATUTS_OUVERTS: tuple[str, ...] = (
 )
 
 
+#: Un rabais SANS date de fin n'est cru que s'il a été observé
+#: récemment (sinon une offre dont le relevé échoue resterait « en
+#: rabais » pour toujours).
+RABAIS_SANS_FIN_MAX_JOURS = 30
+
+
 def offre_en_rabais(o: MateriauOffre, today: Optional[date] = None) -> bool:
-    """Rabais AFFICHÉ et encore valide (fin inconnue = valide)."""
+    """Rabais AFFICHÉ et encore valide."""
     if not o.on_sale or o.unit_price is None:
         return False
     today = today or date.today()
-    return o.sale_end is None or o.sale_end >= today
+    if o.sale_end is not None:
+        return o.sale_end >= today
+    vu = o.observed_at.date() if o.observed_at else None
+    return vu is not None and (today - vu).days <= RABAIS_SANS_FIN_MAX_JOURS
 
 
 @dataclass
@@ -59,19 +68,57 @@ class PrixCourant:
     rabais: Optional[MateriauOffre]
 
 
-def prix_courant(ligne: ProjetMateriau, offres: Iterable[MateriauOffre]) -> PrixCourant:
-    avec_prix = [o for o in offres if o.unit_price is not None]
-    meilleure = min(avec_prix, key=lambda o: float(o.unit_price)) if avec_prix else None
+def _prix(o: MateriauOffre) -> float:
+    return round(float(o.unit_price), 2)
+
+
+def prix_courant(
+    ligne: ProjetMateriau,
+    offres: Iterable[MateriauOffre],
+    magasins_actifs: Optional[set[int]] = None,
+) -> PrixCourant:
+    """``magasins_actifs`` : ids des magasins actifs ; les offres des
+    autres sont ignorées (comme au catalogue et au relevé). Égalité de
+    prix départagée par l'id du magasin (ordre stable → clé d'alerte
+    stable). Un « rabais » n'est retenu que s'il ne coûte pas plus cher
+    que l'offre retenue : un solde chez un magasin plus cher n'en est
+    pas un pour nous."""
+    avec_prix = [
+        o for o in offres
+        if o.unit_price is not None
+        and (magasins_actifs is None or o.magasin_id in magasins_actifs)
+    ]
+    tri = lambda o: (_prix(o), o.magasin_id)  # noqa: E731
+    meilleure = min(avec_prix, key=tri) if avec_prix else None
     choisie = None
     if ligne.magasin_id is not None:
         choisie = next((o for o in avec_prix if o.magasin_id == ligne.magasin_id), None)
-    en_rabais = [o for o in avec_prix if offre_en_rabais(o)]
-    rabais = min(en_rabais, key=lambda o: float(o.unit_price)) if en_rabais else None
-    return PrixCourant(offre=choisie or meilleure, meilleure=meilleure, rabais=rabais)
+    retenue = choisie or meilleure
+    plafond = _prix(retenue) if retenue is not None else None
+    en_rabais = [
+        o for o in avec_prix
+        if offre_en_rabais(o) and (plafond is None or _prix(o) <= plafond + 0.005)
+    ]
+    rabais = min(en_rabais, key=tri) if en_rabais else None
+    return PrixCourant(offre=retenue, meilleure=meilleure, rabais=rabais)
+
+
+def economie_rabais(ligne: ProjetMateriau, o: MateriauOffre) -> float:
+    """Économie du rabais pour NOUS : par rapport au prix prévu de la
+    ligne (ce qu'on comptait payer), sinon au prix régulier affiché."""
+    qty = float(ligne.quantity or 0)
+    prix = _prix(o)
+    if ligne.prix_prevu is not None:
+        ref = round(float(ligne.prix_prevu), 2)
+    elif o.regular_price is not None:
+        ref = round(float(o.regular_price), 2)
+    else:
+        return 0.0
+    return round((ref - prix) * qty, 2) if ref > prix else 0.0
 
 
 def cle_rabais(o: MateriauOffre) -> str:
-    return f"{o.magasin_id}:{float(o.unit_price):.2f}:{o.sale_end.isoformat() if o.sale_end else ''}"
+    return f"{o.magasin_id}:{_prix(o):.2f}:{o.sale_end.isoformat() if o.sale_end else ''}"
 
 
 async def _lignes_ouvertes(db, project_id: Optional[int] = None) -> list[ProjetMateriau]:
@@ -103,17 +150,17 @@ async def rabais_en_cours(db, project_id: Optional[int] = None) -> list[dict]:
         p.id: p for p in (await db.execute(select(Project).where(Project.id.in_(ids)))).scalars().all()
     }
     magasins = {m.id: m for m in (await db.execute(select(Magasin))).scalars().all()}
+    actifs = {mid for mid, m in magasins.items() if m.is_active}
     out: list[dict] = []
     for l in lignes:
-        pc = prix_courant(l, l.materiau.offres if l.materiau else [])
+        pc = prix_courant(l, l.materiau.offres if l.materiau else [], actifs)
         o = pc.rabais
         if o is None:
             continue
         qty = float(l.quantity or 0)
-        prix = float(o.unit_price)
-        reg = float(o.regular_price) if o.regular_price is not None else None
-        ref = reg if reg is not None else (float(l.prix_prevu) if l.prix_prevu is not None else None)
-        economie = round((ref - prix) * qty, 2) if ref is not None and ref > prix else 0.0
+        prix = _prix(o)
+        reg = round(float(o.regular_price), 2) if o.regular_price is not None else None
+        economie = economie_rabais(l, o)
         p = projets.get(l.project_id)
         out.append({
             "ligne_id": l.id,
@@ -166,24 +213,27 @@ async def alerter_rabais(db) -> int:
             f"Rabais matériaux — {nom} : {len(items)} article(s)"
             + (f", économie ≈ {total:.2f} $" if total > 0 else "")
         )
+        # Un point de sauvegarde par projet : notification ET clés
+        # d'idempotence partent (ou tombent) ensemble.
         try:
-            await notify_role(
-                db,
-                min_role="manager",
-                kind="materiau_rabais",
-                title=titre,
-                body="\n".join(details),
-                href=f"/app/projets/{project_id}#materiaux",
-            )
+            async with db.begin_nested():
+                await notify_role(
+                    db,
+                    min_role="manager",
+                    kind="materiau_rabais",
+                    title=titre,
+                    body="\n".join(details),
+                    href=f"/app/projets/{project_id}#materiaux",
+                )
+                for i in items:
+                    l = lignes.get(i["ligne_id"])
+                    if l is None:
+                        continue
+                    l.derniere_alerte_cle = f"{i['magasin_id']}:{i['price']:.2f}:{i['sale_end'] or ''}"
+                    signales += 1
+                await db.flush()
         except Exception:  # noqa: BLE001 — l'alerte ne doit jamais casser le relevé
             log.exception("Alerte rabais matériaux : notification échouée (projet %s)", project_id)
             continue
-        for i in items:
-            l = lignes.get(i["ligne_id"])
-            if l is None:
-                continue
-            l.derniere_alerte_cle = f"{i['magasin_id']}:{i['price']:.2f}:{i['sale_end'] or ''}"
-            signales += 1
-    await db.flush()
     log.info("Alertes rabais matériaux : %s ligne(s) signalée(s) sur %s projet(s)", signales, len(par_projet))
     return signales
