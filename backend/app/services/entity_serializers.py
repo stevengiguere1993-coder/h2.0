@@ -872,6 +872,46 @@ def _drop_none(data: dict) -> dict:
 #: correspondent aux ``entity_type`` déjà utilisés par l'endpoint
 #: d'activité (``devlog_project_task``, ``entreprise_tache``, …) pour un
 #: branchement direct, plus les entités métier de plus haut niveau.
+def serialize_materiau(obj: Any, level: str = "summary") -> dict:
+    """Matériau du catalogue (pôle Construction) : nom, catégorie, unité,
+    et — en détail — les offres par magasin (prix courant, rabais, fin de
+    rabais, source, dernière observation)."""
+    data = {
+        "entity_type": "materiau",
+        "id": obj.id,
+        "label": obj.name,
+        "name": obj.name,
+        "pole": "construction",
+        "categorie": getattr(obj, "categorie", None),
+        "unit": getattr(obj, "unit", None),
+        "is_active": bool(getattr(obj, "is_active", True)),
+    }
+    offres = list(getattr(obj, "offres", None) or [])
+    priced = [o for o in offres if o.unit_price is not None]
+    if priced:
+        best = min(priced, key=lambda o: float(o.unit_price))
+        data["best_price"] = float(best.unit_price)
+        data["best_magasin_id"] = best.magasin_id
+    if level == "full":
+        data["notes"] = getattr(obj, "notes", None)
+        data["offres"] = [
+            {
+                "magasin_id": o.magasin_id,
+                "unit_price": (float(o.unit_price) if o.unit_price is not None else None),
+                "regular_price": (float(o.regular_price) if o.regular_price is not None else None),
+                "on_sale": bool(o.on_sale),
+                "sale_end": (o.sale_end.isoformat() if o.sale_end else None),
+                "source": o.source,
+                "observed_at": (o.observed_at.isoformat() if o.observed_at else None),
+                "url": o.url,
+                "sku": o.sku,
+                "note": o.note,
+            }
+            for o in offres
+        ]
+    return data
+
+
 SERIALIZERS: dict[str, Callable[..., dict]] = {
     "devlog_soumission": serialize_devlog_soumission,
     "devlog_project_task": serialize_devlog_project_task,
@@ -883,6 +923,7 @@ SERIALIZERS: dict[str, Callable[..., dict]] = {
     "lead_analysis": serialize_lead_analysis,
     "devlog_project": serialize_devlog_project,
     "project": serialize_project,
+    "materiau": serialize_materiau,
     "entreprise": serialize_entreprise,
     "imm_tal_dossier": serialize_imm_tal_dossier,
     "imm_locataire_contact": serialize_imm_locataire_contact,

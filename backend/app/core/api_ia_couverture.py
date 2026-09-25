@@ -230,6 +230,13 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     #: lus via GET /soumissions/{id}/avenants et l'état du contrat
     #: (/projects/{id}/etat-contrat), tous deux dans kratos_api_catalogue.
     "soumission_avenants",
+    #: Catalogue de matériaux (2026-09-25) : magasins, matériaux, offre
+    #: courante par magasin et historique des prix — lecture MCP via la
+    #: liste générique « materiaux » et les routes /materiaux, /magasins.
+    "magasins",
+    "materiaux",
+    "materiau_offres",
+    "materiau_prix_historique",
     "soumission_items",
     "soumissions",
     "sous_traitant_timesheets",

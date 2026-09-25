@@ -49,6 +49,7 @@ from app.models.entreprise import Entreprise, EntreprisePartner
 from app.models.entreprise_tache import EntrepriseTache
 from app.models.immobilier import ImmLocataireContact, ImmTalDossier
 from app.models.project import Project
+from app.models.materiau import Materiau
 from app.models.project_task import ProjectTask
 from app.models.prospection_deal import ProspectionDeal
 from app.models.prospection_deal_task import ProspectionDealTask
@@ -1880,6 +1881,12 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         entity_type="project", list_cap="construction:projects:list",
         order_attr="updated_at", stage_attr="status", supports_active=False,
     ),
+    # Catalogue de matériaux (2026-09-25) — `stage` filtre la catégorie.
+    "materiaux": _ListSpec(
+        model=Materiau, pole="construction",
+        entity_type="materiau", list_cap="construction:materiaux:list",
+        order_attr="updated_at", stage_attr="categorie", supports_active=False,
+    ),
     # Immobilier (2026-09-09) — `stage` filtre le statut du dossier TAL
     # (a_ouvrir | ouvert | audience | decision | ferme) ou le rôle du
     # contact (garant | colocataire | occupant | urgence).
@@ -1909,6 +1916,8 @@ _LIST_ALIASES: dict[str, str] = {
     "entreprise": "entreprises",
     "project": "projects",
     "construction_projects": "projects",
+    "materiau": "materiaux",
+    "materiaux_catalogue": "materiaux",
     "tal_dossier": "tal_dossiers",
     "imm_tal_dossier": "tal_dossiers",
     "locataire_contact": "locataire_contacts",
