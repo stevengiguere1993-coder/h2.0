@@ -574,19 +574,24 @@ async def search(query: str, *, limit: int = 10) -> list:
 
     from .recherche import Candidat
 
+    body = {
+        "q": query, "numberOfResults": int(limit), "locale": "fr-CA",
+        "fieldsToInclude": [
+            "ec_name", "ec_price", "ec_promo_price", "ec_prd_discount_price",
+            "ec_product_id", "ec_brand", "ec_in_stock", "clickableuri",
+        ],
+    }
     async with httpx.AsyncClient(timeout=25.0, headers=BROWSER_HEADERS) as client:
-        tok = await _coveo_token(client)
-        body = {
-            "q": query, "numberOfResults": int(limit), "locale": "fr-CA",
-            "fieldsToInclude": [
-                "ec_name", "ec_price", "ec_promo_price", "ec_prd_discount_price",
-                "ec_product_id", "ec_brand", "ec_in_stock", "clickableuri",
-            ],
-        }
-        r = await client.post(
-            COVEO_SEARCH, json=body,
-            headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
-        )
+        for tentative in (1, 2):
+            tok = await _coveo_token(client)
+            r = await client.post(
+                COVEO_SEARCH, json=body,
+                headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
+            )
+            if r.status_code in (401, 403, 419) and tentative == 1:
+                _COVEO_TOKEN.update(token=None, exp=0.0)  # jeton périmé → on en reprend un
+                continue
+            break
     if r.status_code != 200:
         raise RuntimeError(f"recherche Canac : HTTP {r.status_code}")
     try:

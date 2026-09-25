@@ -62,7 +62,22 @@ _SYNONYMES = {
     "vis": "vis", "paint": "peinture", "primer": "appret",
 }
 
-_FRACTION_RE = re.compile(r"(?<![\d.])(\d+)(?:[ -](\d+)/(\d+)|/(\d+))(?![\d.])")
+#: Expressions composées → jeton unique (après retrait des accents).
+_EXPRESSIONS = (
+    ("cloison seche", "gypse"), ("cloisons seches", "gypse"), ("panneau de platre", "gypse"),
+    ("type x", "typex"), ("type c", "typec"), ("mold tough", "moldtough"),
+    ("resistant a l'eau", "hydrofuge"), ("resistant a l eau", "hydrofuge"),
+    ("resistant au feu", "coupefeu"), ("coupe-feu", "coupefeu"), ("coupe feu", "coupefeu"),
+    ("bois traite", "traite"), ("pression traite", "traite"),
+)
+
+#: Fractions de pouce seulement (dénominateur 2, 4, 8, 16, 32, 64 et
+#: numérateur plus petit) : « 1/2 », « 1 1/4 », « 1-5/8 ». « 14/2 » (calibre
+#: de fil), « 12/3 », « 90 14/2 » restent tels quels.
+_FRACTION_RE = re.compile(
+    r"(?:(?<=^)|(?<=[ (]))(\d+)(?:[ -](\d+)/(\d+)|/(\d+))(?![\d./])"
+)
+_DENOMS = {2, 4, 8, 16, 32, 64}
 _DEC_COMMA_RE = re.compile(r"(\d),(\d)")
 _DIM_RE = re.compile(r"(\d)\s*[x×]\s*(\d)")
 
@@ -76,15 +91,15 @@ def _sans_accents(s: str) -> str:
 def _fraction(m: re.Match) -> str:
     a = int(m.group(1))
     if m.group(2) and m.group(3):
-        try:
-            return _fmt(a + int(m.group(2)) / int(m.group(3)))
-        except ZeroDivisionError:
-            return m.group(0)
+        n, d = int(m.group(2)), int(m.group(3))
+        if d in _DENOMS and 0 < n < d:
+            return _fmt(a + n / d)
+        return m.group(0)
     if m.group(4):
-        try:
-            return _fmt(a / int(m.group(4)))
-        except ZeroDivisionError:
-            return m.group(0)
+        d = int(m.group(4))
+        if d in _DENOMS and 0 < a < d:
+            return _fmt(a / d)
+        return m.group(0)
     return m.group(0)
 
 
@@ -98,11 +113,16 @@ def normaliser(texte: str) -> str:
     normalisées, « 4x8 » → « 4 x 8 », synonymes appliqués."""
     s = _sans_accents((texte or "").lower())
     s = s.replace(" ", " ").replace(" ", " ").replace(" ", " ")
-    s = s.replace("''", " po ").replace('"', " po ").replace("’", "'")
+    s = s.replace("''", " po ").replace('"', " po ").replace("\u2019", "'").replace("'", " pi ")
+    # Expressions à plusieurs mots → un jeton (avant tout découpage).
+    for expr, rep_ in _EXPRESSIONS:
+        s = s.replace(expr, rep_)
     s = _DEC_COMMA_RE.sub(r"\1.\2", s)
     s = _FRACTION_RE.sub(_fraction, s)
     s = _DIM_RE.sub(r"\1 x \2", s)
-    s = re.sub(r"[^a-z0-9. ]+", " ", s)
+    s = re.sub(r"(?<=[a-z ])x(?=\d)", " x ", s)  # « 4 pi x8 pi »
+    s = re.sub(r"(?<=\d)x(?=[a-z ])", " x ", s)
+    s = re.sub(r"[^a-z0-9./ ]+", " ", s)
     mots = []
     for w in s.split():
         w = w.strip(".")
@@ -133,14 +153,29 @@ def _tokens(texte: str) -> tuple[set[str], set[str]]:
     nombres: set[str] = set()
     mots: set[str] = set()
     for w in normaliser(texte).split():
+        w = w.strip("./")
+        if not w:
+            continue
         if re.fullmatch(r"\d+(?:\.\d+)?", w):
             try:
                 nombres.add(_fmt(float(w)))
             except ValueError:
                 nombres.add(w)
+        elif re.fullmatch(r"\d+/\d+", w):
+            nombres.add(w)  # calibre « 14/2 » : doit se retrouver tel quel
         elif len(w) >= 3 and w not in _STOP:
             mots.add(w)
     return nombres, mots
+
+
+def _premier_mot(texte: str) -> Optional[str]:
+    """Premier mot significatif du nom du matériau = le produit lui-même
+    (« panneau », « vis », « peinture ») ; il doit être dans le titre."""
+    for w in normaliser(texte).split():
+        w = w.strip("./")
+        if w and not re.fullmatch(r"[\d./]+", w) and len(w) >= 3 and w not in _STOP:
+            return w
+    return None
 
 
 def _racine(w: str) -> str:
@@ -153,9 +188,15 @@ def _racine(w: str) -> str:
 
 
 def score(nom_materiau: str, titre: str) -> float:
-    """Part (0-1) des nombres (poids 2) et mots (poids 1) du matériau
-    retrouvés dans le titre. 0 dès qu'un nombre du matériau manque : une
-    dimension absente, c'est un autre produit."""
+    """Score (0-1) d'un titre de produit pour un nom de matériau.
+
+    Règles dures (score 0) : un nombre du matériau absent du titre (une
+    dimension absente, c'est un autre produit) ; le premier mot (le
+    produit : « panneau », « vis », « tuyau ») absent ; un mot
+    significatif absent (« blanc » vs « noir », « galvanisé »). Ensuite :
+    pénalité de 0,1 par nombre du titre étranger au matériau (autre
+    format, « 2 000/pqt ») et de 0,15 si le titre porte une dimension
+    « a x b » que le matériau n'a pas (quart de feuille, autre longueur)."""
     n_m, w_m = _tokens(nom_materiau)
     n_t, w_t = _tokens(titre)
     if not n_m and not w_m:
@@ -163,13 +204,19 @@ def score(nom_materiau: str, titre: str) -> float:
     if n_m and not n_m.issubset(n_t):
         return 0.0
     racines_t = {_racine(w) for w in w_t}
-    marques = _marques(nom_materiau)
-    poids = {w: (2.0 if w in marques else 1.0) for w in w_m}
-    total = 2.0 * len(n_m) + sum(poids.values())
-    got = 2.0 * len(n_m) + sum(
-        poids[w] for w in w_m if w in w_t or _racine(w) in racines_t
-    )
-    return round(got / total, 3) if total else 0.0
+
+    def present(w: str) -> bool:
+        return w in w_t or _racine(w) in racines_t
+
+    premier = _premier_mot(nom_materiau)
+    if premier and not present(premier):
+        return 0.0
+    if any(not present(w) for w in w_m):
+        return 0.0
+    penalite = min(0.3, 0.1 * len(n_t - n_m))
+    if not re.search(r"\d x \d", normaliser(nom_materiau)) and re.search(r"\d x \d", normaliser(titre)):
+        penalite += 0.15
+    return round(max(0.0, 1.0 - penalite), 3)
 
 
 #: Score minimal pour accepter un candidat (au-dessus du « 3 sur 5 » qui

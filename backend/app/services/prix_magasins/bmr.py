@@ -581,10 +581,13 @@ async def _search_algolia(query: str, limit: int) -> list:
     from .recherche import Candidat
 
     app, key, index = _ALGOLIA["app"], _ALGOLIA["key"], _ALGOLIA["index"]
-    url = f"https://{app}-dsn.algolia.net/1/indexes/{index}_products/query"
+    from urllib.parse import urlencode
+
+    idx = index if index.endswith("_products") else f"{index}_products"
+    url = f"https://{app}-dsn.algolia.net/1/indexes/{idx}/query"
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(
-            url, json={"params": f"query={query}&hitsPerPage={int(limit)}"},
+            url, json={"params": urlencode({"query": query, "hitsPerPage": int(limit)})},
             headers={"X-Algolia-Application-Id": app, "X-Algolia-API-Key": key},
         )
     if r.status_code != 200:
@@ -640,9 +643,9 @@ async def search(query: str, *, limit: int = 10) -> list:
         if not title:
             continue
         vus.add(sku)
-        tail = html[m.end(): m.end() + 2500]
-        pm_ = _MONEY_TXT_RE.search(tail)
-        out.append(Candidat(url=m.group("href"), title=title, sku=sku, price=(parse_money(pm_.group(1)) if pm_ else None)))
+        # Le prix des tuiles est découpé en balises (« 47 », « , », « 98 $ ») :
+        # on ne le lit pas ici, le relevé de la page produit s'en charge.
+        out.append(Candidat(url=m.group("href"), title=title, sku=sku, price=None))
         if len(out) >= limit:
             break
     return out

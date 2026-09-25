@@ -532,11 +532,10 @@ async def search(query: str, *, limit: int = 10) -> list:
         if not title:
             continue
         vus.add(pid)
-        tail = html[m.end(): m.end() + 2500]
-        pm_ = _MONEY_TXT_RE.search(tail)
+        # Prix laissé au relevé de la page produit (tuiles découpées).
         out.append(Candidat(
             url=(href if href.startswith("http") else "https://www.rona.ca" + href),
-            title=title, sku=pid, price=(parse_money(pm_.group(1)) if pm_ else None),
+            title=title, sku=pid, price=None,
         ))
         if len(out) >= limit:
             break

@@ -24,10 +24,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from app.models.materiau import Magasin, Materiau, MateriauOffre, MateriauPrixHistorique
@@ -69,16 +70,28 @@ _SITES_PAR_NOM = {
 }
 
 
+def site_du_magasin(magasin: Magasin) -> str:
+    site = (magasin.website or "").strip() or _SITES_PAR_NOM.get((magasin.name or "").strip().lower(), "")
+    if site and not site.lower().startswith(("http://", "https://")):
+        site = "https://" + site
+    return site
+
+
 def module_pour_magasin(magasin: Magasin):
     """Module de parseur du magasin (par son site web, sinon par son nom)
     s'il sait chercher."""
-    site = (magasin.website or "").strip() or _SITES_PAR_NOM.get((magasin.name or "").strip().lower(), "")
+    site = site_du_magasin(magasin)
     if not site:
         return None
-    if not site.lower().startswith(("http://", "https://")):
-        site = "https://" + site
     mod = pm.parser_for(site)
     return mod if (mod is not None and hasattr(mod, "search")) else None
+
+
+def _meme_site(magasin: Magasin, url: str) -> bool:
+    """Le lien retenu doit appartenir au site DU magasin (rona.ca pour
+    Rona, pas pour Réno-Dépôt qui partage le module)."""
+    a, b = pm.domain_of(site_du_magasin(magasin)), pm.domain_of(url)
+    return bool(a) and bool(b) and (a == b or b.endswith("." + a))
 
 
 async def _chercher_candidat(mod, nom: str) -> tuple[Optional[Candidat], list[Candidat]]:
@@ -128,6 +141,8 @@ async def chercher_pour_materiau(
             res.statut, res.error = "erreur", str(exc)[:300]
             continue
         res.candidats = [c.title[:120] for c in cands[:5]]
+        if best is not None and not _meme_site(mag, best.url):
+            best = None  # lien d'un autre site (Réno-Dépôt ↔ Rona…)
         if best is None:
             res.statut = "aucun"
             res.error = (
@@ -136,22 +151,41 @@ async def chercher_pour_materiau(
                 if cands else "Le site ne renvoie aucun résultat pour ce nom."
             )
             continue
-        if off is None:
+        nouvelle = off is None
+        if nouvelle:
             off = MateriauOffre(materiau_id=materiau.id, magasin_id=mag.id, source="auto")
             db.add(off)
             materiau.offres.append(off)
             offres[mag.id] = off
+        # Sauvegarde de l'état précédent : si ni la recherche ni le relevé
+        # ne donnent de prix, on remet l'offre comme elle était (pas de
+        # lien « trouvé automatiquement » à côté d'un vieux prix manuel).
+        avant = {k: getattr(off, k) for k in ("url", "sku", "page_title", "note", "fetch_error")}
+        url_change = (off.url or "") != best.url[:500]
         off.url = best.url[:500]
         off.page_title = (best.title or "")[:255] or None
-        if best.sku and not off.sku:
-            off.sku = str(best.sku)[:64]
-        off.note = NOTE_AUTO
+        if url_change or not off.sku:
+            off.sku = (str(best.sku)[:64] if best.sku else None)
+        note_avant = (avant["note"] or "").strip()
+        off.note = (NOTE_AUTO if (not note_avant or NOTE_AUTO in note_avant) else f"{note_avant} · {NOTE_AUTO}")[:255]
         off.fetch_error = None
-        # Prix donné par la recherche (souvent le prix courant du site) :
-        # on le pose tout de suite, le relevé de la page affine ensuite.
-        if best.price is not None and best.price > 0:
-            changed = off.unit_price is None or abs(float(off.unit_price) - best.price) >= 0.005
-            off.unit_price = round(best.price, 2)
+        prix_recherche = round(best.price, 2) if (best.price is not None and best.price > 0) else None
+        res.url, res.title, res.score = off.url, off.page_title, best.score
+        await db.flush()
+        # 1) relevé de la page produit (source de vérité) ; 2) sinon le
+        # prix donné par la recherche ; historique écrit une seule fois.
+        r = None
+        if relever:
+            try:
+                r = await relever_offre(db, off)
+            except Exception as exc:  # noqa: BLE001
+                r = None
+                res.error = f"Relevé de la page échoué : {exc}"[:300]
+        if r is not None and r.ok:
+            res.price, res.regular_price, res.on_sale, res.method = r.price, r.regular_price, r.on_sale, "releve"
+        elif prix_recherche is not None:
+            changed = off.unit_price is None or abs(float(off.unit_price) - prix_recherche) >= 0.005
+            off.unit_price = prix_recherche
             off.regular_price = round(best.regular_price, 2) if (best.on_sale and best.regular_price) else None
             off.on_sale = bool(best.on_sale and best.regular_price)
             off.sale_end = None
@@ -164,22 +198,23 @@ async def chercher_pour_materiau(
                     source="auto", observed_at=now, note="Recherche automatique (résultat du site)"[:255],
                 ))
             res.price, res.regular_price, res.on_sale, res.method = off.unit_price, off.regular_price, off.on_sale, "recherche"
+            if r is not None and not r.ok:
+                res.error = r.error  # information : la page n'a pas pu être relue
+        else:
+            if r is not None and not r.ok and not res.error:
+                res.error = r.error
+            if nouvelle:
+                # Lien gardé (le relevé quotidien réessaiera), sans prix.
+                res.ok, res.statut = False, "trouve_sans_prix"
+            else:
+                for k, v in avant.items():
+                    setattr(off, k, v)
+                res.statut = "trouve_sans_prix"
+                res.url, res.title = avant["url"], avant["page_title"]
+            await db.flush()
+            continue
         await db.flush()
         res.ok, res.statut = True, "trouve"
-        res.url, res.title, res.score = off.url, off.page_title, best.score
-        if relever:
-            try:
-                r = await relever_offre(db, off)
-                if r.ok:
-                    res.price, res.regular_price, res.on_sale, res.method = r.price, r.regular_price, r.on_sale, "releve"
-                elif res.price is None:
-                    res.error = r.error
-            except Exception as exc:  # noqa: BLE001
-                if res.price is None:
-                    res.error = f"Relevé de la page échoué : {exc}"[:300]
-        if res.price is None:
-            res.ok = False
-            res.statut = "trouve_sans_prix"
     return out
 
 
@@ -192,65 +227,126 @@ async def magasins_recherchables(db, magasin_id: Optional[int] = None) -> list[M
     return [m for m in (await db.execute(stmt)).scalars().all() if module_pour_magasin(m) is not None]
 
 
-async def chercher_tout(
-    db,
-    *,
-    limit: int = 60,
-    magasin_id: Optional[int] = None,
-    materiau_id: Optional[int] = None,
-) -> dict:
-    """Comble les manques (matériau × magasin principal sans lien),
-    au plus ``limit`` couples, un domaine à la fois. Flush à mesure ;
-    l'appelant committe."""
-    magasins = await magasins_recherchables(db, magasin_id)
-    stats = {"magasins": len(magasins), "examines": 0, "trouves": 0, "aucun": 0, "erreurs": 0, "par_magasin": {}, "details": []}
-    if not magasins:
-        return stats
+async def _couples_a_chercher(
+    db, magasins: list[Magasin], *, limit: int, materiau_id: Optional[int], max_age_days: Optional[float],
+) -> dict[int, list[int]]:
+    """magasin_id → ids de matériaux sans lien chez ce magasin. Les
+    matériaux jamais cherchés d'abord, puis les plus anciens ; ceux
+    cherchés depuis moins de ``max_age_days`` jours sont sautés (le cron
+    ne re-cherche pas chaque jour les mêmes introuvables)."""
     stmt = (
         select(Materiau).where(Materiau.is_active.is_(True))
         .options(selectinload(Materiau.offres))
-        .order_by(Materiau.updated_at.asc(), Materiau.id.asc())
+        .order_by(Materiau.prix_recherche_at.asc().nulls_first(), Materiau.updated_at.asc(), Materiau.id.asc())
     )
     if materiau_id is not None:
         stmt = stmt.where(Materiau.id == materiau_id)
     materiaux = list((await db.execute(stmt)).scalars().unique().all())
-    # Couples à traiter, groupés par magasin (un domaine = séquentiel).
-    travail: dict[int, list[Materiau]] = {}
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)) if max_age_days else None
+    travail: dict[int, list[int]] = {}
     n = 0
     for m in materiaux:
+        if cutoff is not None and m.prix_recherche_at is not None:
+            pra = m.prix_recherche_at if m.prix_recherche_at.tzinfo else m.prix_recherche_at.replace(tzinfo=timezone.utc)
+            if pra > cutoff:
+                continue
         avec_lien = {o.magasin_id for o in m.offres if (o.url or "").strip()}
         for mag in magasins:
             if mag.id in avec_lien:
                 continue
             if n >= limit:
                 break
-            travail.setdefault(mag.id, []).append(m)
+            travail.setdefault(mag.id, []).append(m.id)
             n += 1
+    return travail
+
+
+async def _chercher_un_couple(db, materiau_id: int, mag: Magasin) -> ResultatRecherche:
+    m = (await db.execute(
+        select(Materiau).where(Materiau.id == materiau_id).options(selectinload(Materiau.offres))
+    )).scalar_one_or_none()
+    if m is None:
+        return ResultatRecherche(magasin_id=mag.id, magasin_name=mag.name, statut="erreur", error="matériau disparu")
+    m.prix_recherche_at = datetime.now(timezone.utc)
+    rs = await chercher_pour_materiau(db, m, [mag], only_missing=True, relever=True)
+    return rs[0]
+
+
+async def chercher_tout(
+    db,
+    *,
+    limit: int = 60,
+    magasin_id: Optional[int] = None,
+    materiau_id: Optional[int] = None,
+    max_age_days: Optional[float] = None,
+    session_factory=None,
+) -> dict:
+    """Comble les manques (matériau × magasin principal sans lien), au
+    plus ``limit`` couples.
+
+    - ``session_factory`` (prod : ``AsyncSessionLocal``) : un magasin par
+      tâche, chacune avec SA session et un commit par couple — une
+      AsyncSession ne supporte pas plusieurs tâches en parallèle, et un
+      commit par couple évite une transaction ouverte pendant toute la
+      course (appels VPS lents) ou un lot entier perdu sur une erreur.
+    - sans fabrique (tests) : séquentiel sur ``db``, l'appelant committe.
+    """
+    magasins = await magasins_recherchables(db, magasin_id)
+    stats = {"magasins": len(magasins), "examines": 0, "trouves": 0, "aucun": 0, "erreurs": 0, "par_magasin": {}, "details": []}
+    if not magasins:
+        return stats
+    travail = await _couples_a_chercher(db, magasins, limit=limit, materiau_id=materiau_id, max_age_days=max_age_days)
     sem = asyncio.Semaphore(PARALLELISME)
 
-    async def _run(mag: Magasin, liste: list[Materiau]) -> None:
-        async with sem:
-            d = stats["par_magasin"].setdefault(mag.name, {"trouves": 0, "aucun": 0, "erreurs": 0})
-            for m in liste:
-                rs = await chercher_pour_materiau(db, m, [mag], only_missing=True, relever=True)
-                r = rs[0]
-                stats["examines"] += 1
-                if r.ok:
-                    stats["trouves"] += 1
-                    d["trouves"] += 1
-                elif r.statut == "erreur":
-                    stats["erreurs"] += 1
-                    d["erreurs"] += 1
-                    if len(stats["details"]) < 25:
-                        stats["details"].append({"materiau_id": m.id, "magasin": mag.name, "error": r.error})
-                    # Site indisponible / bloqué : inutile d'insister aujourd'hui.
-                    if r.error and ("bloqu" in r.error or "VPS" in r.error or "HTTP 4" in r.error):
-                        break
-                else:
-                    stats["aucun"] += 1
-                    d["aucun"] += 1
+    def _compter(mag: Magasin, materiau_id_: int, r: ResultatRecherche) -> bool:
+        """Met à jour les stats ; True = arrêter ce magasin aujourd'hui."""
+        d = stats["par_magasin"].setdefault(mag.name, {"trouves": 0, "aucun": 0, "erreurs": 0})
+        stats["examines"] += 1
+        if r.ok:
+            stats["trouves"] += 1
+            d["trouves"] += 1
+        elif r.statut == "erreur":
+            stats["erreurs"] += 1
+            d["erreurs"] += 1
+            if len(stats["details"]) < 25:
+                stats["details"].append({"materiau_id": materiau_id_, "magasin": mag.name, "error": r.error})
+            # Site indisponible / bloqué : inutile d'insister aujourd'hui.
+            return bool(r.error and ("bloqu" in r.error or "VPS" in r.error or "HTTP 4" in r.error))
+        else:
+            stats["aucun"] += 1
+            d["aucun"] += 1
+        return False
 
-    await asyncio.gather(*(_run(mag, liste) for mag in magasins for liste in [travail.get(mag.id, [])] if liste))
+    async def _run_session(mag: Magasin, ids: list[int]) -> None:
+        async with sem:
+            async with session_factory() as s:
+                for mid in ids:
+                    try:
+                        r = await _chercher_un_couple(s, mid, mag)
+                        await s.commit()
+                    except IntegrityError:
+                        # Offre créée entre-temps par une autre course : on passe.
+                        await s.rollback()
+                        continue
+                    except Exception as exc:  # noqa: BLE001
+                        await s.rollback()
+                        r = ResultatRecherche(magasin_id=mag.id, magasin_name=mag.name, statut="erreur", error=str(exc)[:300])
+                    if _compter(mag, mid, r):
+                        break
+
+    if session_factory is not None:
+        await asyncio.gather(*(_run_session(mag, ids) for mag in magasins for ids in [travail.get(mag.id, [])] if ids))
+    else:
+        for mag in magasins:
+            for mid in travail.get(mag.id, []):
+                try:
+                    r = await _chercher_un_couple(db, mid, mag)
+                    await db.flush()
+                except IntegrityError:
+                    await db.rollback()
+                    continue
+                if _compter(mag, mid, r):
+                    break
     log.info("Recherche prix matériaux : %s", {k: v for k, v in stats.items() if k != "details"})
     return stats
 
@@ -259,6 +355,8 @@ DERNIERE_RECHERCHE: dict = {"en_cours": False, "lance_a": None, "termine_a": Non
 
 
 async def chercher_tout_en_arriere_plan(**kwargs) -> None:
+    """Course complète avec une session par magasin (voir chercher_tout).
+    Un seul run à la fois par processus (bouton, route, cron)."""
     from app.db.session import AsyncSessionLocal
 
     if DERNIERE_RECHERCHE.get("en_cours"):
@@ -266,11 +364,19 @@ async def chercher_tout_en_arriere_plan(**kwargs) -> None:
     DERNIERE_RECHERCHE.update(en_cours=True, lance_a=datetime.now(timezone.utc).isoformat(), termine_a=None)
     try:
         async with AsyncSessionLocal() as db:
-            stats = await chercher_tout(db, **kwargs)
-            await db.commit()
+            stats = await chercher_tout(db, session_factory=AsyncSessionLocal, **kwargs)
         DERNIERE_RECHERCHE["stats"] = stats
     except Exception as exc:  # noqa: BLE001
         log.exception("Recherche prix matériaux en arrière-plan échouée")
         DERNIERE_RECHERCHE["stats"] = {"error": str(exc)[:300]}
     finally:
         DERNIERE_RECHERCHE.update(en_cours=False, termine_a=datetime.now(timezone.utc).isoformat())
+
+
+async def chercher_tout_pour_cron(*, limit: int = 40, max_age_days: float = 7) -> dict:
+    """Entrée du cron quotidien : mêmes garde-fous que le bouton (un run
+    à la fois), quota borné, matériaux déjà cherchés récemment sautés."""
+    if DERNIERE_RECHERCHE.get("en_cours"):
+        return {"skipped": "recherche_deja_en_cours"}
+    await chercher_tout_en_arriere_plan(limit=limit, max_age_days=max_age_days)
+    return dict(DERNIERE_RECHERCHE.get("stats") or {})

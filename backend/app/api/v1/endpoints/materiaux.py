@@ -65,6 +65,10 @@ MAGASINS_SITES = {
 
 router = APIRouter(tags=["materiaux"])
 
+#: Références des tâches de fond (un create_task non référencé peut être
+#: ramassé en cours d'exécution).
+_TACHES_FOND: set = set()
+
 
 # ───────────────────────────── Schémas ─────────────────────────────
 
@@ -467,11 +471,16 @@ async def chercher_tout_endpoint(data: RechercheToutRequest, db: DBSession, _: R
     )
 
     await _ensure_principaux(db)
+    # Les magasins principaux (créés à l'instant au premier appel) doivent
+    # être visibles de la session de fond : commit avant de la lancer.
+    await db.commit()
     if DERNIERE_RECHERCHE.get("en_cours"):
         return {"lance": False, "raison": "Une recherche est déjà en cours.", **DERNIERE_RECHERCHE}
-    asyncio.create_task(chercher_tout_en_arriere_plan(
+    task = asyncio.create_task(chercher_tout_en_arriere_plan(
         magasin_id=data.magasin_id, materiau_id=data.materiau_id, limit=data.limit,
     ))
+    _TACHES_FOND.add(task)
+    task.add_done_callback(_TACHES_FOND.discard)
     return {"lance": True, **DERNIERE_RECHERCHE}
 
 

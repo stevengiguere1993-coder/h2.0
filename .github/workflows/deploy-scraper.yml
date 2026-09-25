@@ -16,6 +16,10 @@
 #                         clé publique est dans ~/.ssh/authorized_keys de
 #                         cet utilisateur sur le VPS
 #   - SCRAPER_SSH_PORT  : optionnel (22 par défaut)
+#   - SCRAPER_SSH_KNOWN_HOSTS : optionnel mais recommandé — la ligne
+#                         `ssh-keyscan scraper.immohorizon.com` du VPS, pour
+#                         épingler son empreinte (sinon confiance au premier
+#                         contact, avec avertissement)
 #
 # Le dossier cible sur le VPS est /home/<user>/scraping (celui du guide
 # HETZNER_SCRAPING_SETUP.md). Le fichier .env du VPS (SCRAPING_API_KEY…)
@@ -36,7 +40,9 @@ on:
 
 concurrency:
   group: scraper-deploy
-  cancel-in-progress: true
+  # On n'interrompt pas un `docker compose up --build` en cours : les
+  # déclenchements suivants attendent leur tour.
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -65,11 +71,17 @@ jobs:
           HOST: ${{ secrets.SCRAPER_SSH_HOST }}
           KEY: ${{ secrets.SCRAPER_SSH_KEY }}
           PORT: ${{ secrets.SCRAPER_SSH_PORT }}
+          KNOWN_HOSTS: ${{ secrets.SCRAPER_SSH_KNOWN_HOSTS }}
         run: |
           mkdir -p ~/.ssh
           printf '%s\n' "$KEY" > ~/.ssh/scraper_key
           chmod 600 ~/.ssh/scraper_key
-          ssh-keyscan -p "${PORT:-22}" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          if [ -n "$KNOWN_HOSTS" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          else
+            echo "::warning::SCRAPER_SSH_KNOWN_HOSTS non défini — empreinte du VPS acceptée au premier contact (ssh-keyscan)."
+            ssh-keyscan -p "${PORT:-22}" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
 
       - name: Copier scraping_vps/ sur le VPS
         if: steps.check.outputs.ready == 'true'
@@ -121,10 +133,12 @@ jobs:
         env:
           HOST: ${{ secrets.SCRAPER_SSH_HOST }}
         run: |
-          # /scrape/fetch-html sans clé doit répondre 401 (présent) et non 404.
+          # /scrape/fetch-html sans clé doit répondre 401 (présent) — 404 =
+          # endpoint absent, 000 = HTTPS injoignable (HOST est une IP sans
+          # certificat ?) : dans les deux cas on échoue pour que ça se voie.
           code=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '{"url":"https://example.com"}' "https://$HOST/scrape/fetch-html" || true)
           echo "POST /scrape/fetch-html sans clé → HTTP $code"
-          if [ "$code" = "404" ]; then
-            echo "::error::L'endpoint fetch-html est toujours absent (404) — le proxy nginx pointe-t-il sur le bon conteneur ?"
-            exit 1
-          fi
+          case "$code" in
+            401|403) echo "Endpoint présent." ;;
+            *) echo "::error::Vérification publique échouée (HTTP $code) — attendu 401. Si HOST est une IP, mets le nom DNS (HTTPS) dans SCRAPER_SSH_HOST." ; exit 1 ;;
+          esac
