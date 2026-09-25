@@ -193,3 +193,15 @@ docker compose up -d --build
 | **Total** | **~7,50 $ CAD/mois** |
 
 vs Render Standard ($25 USD/mo = ~$33 CAD/mo) → économie de ~25 $/mois.
+
+## Endpoint `POST /scrape/fetch-html` (catalogue de matériaux, 2026-09-25)
+
+Rendu navigateur d'une page produit pour les détaillants qui bloquent un
+client HTTP (rona.ca, bmr.ca…). Corps : `{"url": "...", "wait_ms": 1500,
+"wait_for": null}` ; réponse : `{"html": "...", "final_url": "...",
+"status": 200}`. Même clé `X-API-Key` que les autres endpoints.
+
+Après un `git pull` sur le VPS, reconstruire et redémarrer le conteneur
+pour activer l'endpoint (`docker compose up -d --build` dans
+`scraping_vps/`). Tant qu'il n'est pas déployé, Kratos note « relevé
+exige le VPS » sur les offres de ces magasins et garde le dernier prix.

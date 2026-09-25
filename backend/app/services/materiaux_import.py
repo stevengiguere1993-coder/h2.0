@@ -78,6 +78,79 @@ _CATEGORY_LABELS = {
     "armoires", "comptoir", "comptoirs", "demolition", "finition",
 }
 
+#: Catégories STANDARD du catalogue, dans l'ordre d'affichage (retour
+#: 2026-09-25 : « séparer les matériaux en catégorie, bois, plomberie… »).
+CATEGORIES_STANDARD: list[str] = [
+    "Bois et moulures", "Gypse et finition", "Plomberie", "Électricité",
+    "Quincaillerie", "Peinture et scellants", "Isolation",
+    "Planchers et céramique", "Portes et fenêtres", "Cuisine et salle de bain",
+    "Outillage", "Divers",
+]
+
+#: Anciens libellés (import, saisie libre) → catégorie standard.
+_CATEGORY_MAP = {
+    "bois": "Bois et moulures", "moulure": "Bois et moulures", "moulures": "Bois et moulures",
+    "gypse": "Gypse et finition", "finition": "Gypse et finition",
+    "materiaux": None, "materiel": None, "divers": "Divers",
+    "plomberie": "Plomberie", "electricite": "Électricité", "eclairage": "Électricité",
+    "luminaire": "Électricité", "luminaires": "Électricité",
+    "quincaillerie": "Quincaillerie", "peinture": "Peinture et scellants",
+    "isolation": "Isolation", "plancher": "Planchers et céramique",
+    "planchers": "Planchers et céramique", "ceramique": "Planchers et céramique",
+    "porte": "Portes et fenêtres", "portes": "Portes et fenêtres",
+    "fenetre": "Portes et fenêtres", "fenetres": "Portes et fenêtres",
+    "cuisine": "Cuisine et salle de bain", "salle de bain": "Cuisine et salle de bain",
+    "armoire": "Cuisine et salle de bain", "armoires": "Cuisine et salle de bain",
+    "comptoir": "Cuisine et salle de bain", "comptoirs": "Cuisine et salle de bain",
+    "outillage": "Outillage", "outils": "Outillage", "outil": "Outillage",
+    "toiture": "Divers", "ventilation": "Divers", "chauffage": "Divers",
+    "beton": "Divers", "location": "Divers", "nettoyage": "Divers", "demolition": "Divers",
+}
+
+#: Mots-clés (sur le nom normalisé) → catégorie standard, testés dans
+#: l'ordre : le premier groupe qui matche gagne.
+_KEYWORD_RULES: list[tuple[str, tuple[str, ...]]] = [
+    ("Gypse et finition", ("gypse", "compose", "compos", "joint", "ruban", "platre", "plaster", "coin metal", "coin de metal", "couteau a joint", "sablage", "papier sable")),
+    ("Plomberie", ("tuyau", "abs", "pvc", "pex", "robinet", "siphon", "coude", "adapt", "toilette", "drain", "valve", "raccord", "manchon", "te ", "renvoi", "bouchon", "teflon", "colle abs", "beigne", "bride", "chauffe-eau", "chauffe eau", "lavabo", "evier", "douche", "bain")),
+    ("Électricité", ("ampoule", "fil ", "fil,", "boite", "boitier", "disjoncteur", "prise", "interrupteur", "cable", "connecteur", "conduit", "del ", "luminaire", "thermostat", "plinthe elec", "gang", "couvercle", "marrette", "plaque")),
+    ("Bois et moulures", ("2x4", "2x6", "2x8", "2x10", "2x3", "1x2", "1x3", "1x4", "1x6", "contreplaque", "osb", "mdf", "moulure", "plinthe", "cadrage", "colombage", "epinette", "pin ", "quart rond", "1/4 rond", "bois", "poutre", "solive", "lambris", "planche")),
+    ("Quincaillerie", ("vis", "clou", "boulon", "ecrou", "ancrage", "rondelle", "attache", "equerre", "support", "crochet", "sangle", "chevil", "ancre", "tige", "agrafe", "broche", "tirefond")),
+    ("Peinture et scellants", ("peinture", "appret", "primer", "latex", "calfeutr", "scellant", "silicone", "dynaflex", "alex", "rouleau", "pinceau", "teinture", "vernis", "polyfilla", "ruban a masquer")),
+    ("Isolation", ("isolant", "laine", "mousse", "pare-vapeur", "pare vapeur", "polystyrene", "styrofoam", "coupe-froid", "coupe froid", "tyvek")),
+    ("Planchers et céramique", ("plancher", "vinyle", "ceramique", "tuile", "coulis", "colle mapei", "mortier", "sous-plancher", "sous plancher", "membrane", "lattes", "chene", "stratifie", "transition")),
+    ("Portes et fenêtres", ("porte", "fenetre", "poignee", "charniere", "serrure", "penture", "seuil", "moustiquaire", "verrou", "loquet")),
+    ("Cuisine et salle de bain", ("armoire", "comptoir", "vanite", "meuble-lavabo", "hotte", "dosseret", "miroir", "accessoire de bain")),
+    ("Outillage", ("outil", "scie", "lame", "meche", "perceuse", "marteau", "couteau", "niveau", "ruban a mesurer", "pince", "tournevis", "cle ", "embout", "disque", "sac aspirateur", "aspirateur", "escabeau", "echelle", "gant", "lunette", "masque")),
+]
+
+
+def categorie_standard(libelle: Optional[str]) -> Optional[str]:
+    """Ramène un libellé de catégorie libre à une catégorie standard
+    (None si inconnu)."""
+    if not libelle:
+        return None
+    key = norm_key(libelle)
+    if libelle in CATEGORIES_STANDARD:
+        return libelle
+    if key in _CATEGORY_MAP:
+        return _CATEGORY_MAP[key]
+    for std in CATEGORIES_STANDARD:
+        if norm_key(std) == key:
+            return std
+    return None
+
+
+def categoriser_par_nom(name: Optional[str]) -> Optional[str]:
+    """Catégorie déduite du nom du matériau par mots-clés (None si aucun
+    mot-clé ne matche)."""
+    key = " " + norm_key(name).replace('"', " ") + " "
+    for cat, words in _KEYWORD_RULES:
+        for w in words:
+            if w in key:
+                return cat
+    return None
+
+
 #: Lignes de « liste » qui ne sont pas des matériaux.
 _SKIP_NAMES = {"total", "frais gestion", "frais de gestion", "sous-total", "grand total"}
 _SKIP_PREFIXES = ("sous-traitance", "sous traitance", "main-d", "main d")
@@ -180,6 +253,9 @@ def _parse_matrix_sheet(ws, stores: list[Optional[str]]) -> Iterable[dict]:
         if not r or not r[0]:
             continue
         name = str(r[0]).strip()
+        nkey = norm_key(name)
+        if not nkey or nkey in _SKIP_NAMES or nkey.startswith(("total", "sous-total", "grand total")):
+            continue
         vals = [
             (stores[i], _num(v))
             for i, v in enumerate(r)
@@ -244,18 +320,18 @@ async def import_rows(
             await db.flush()
             stores_by_name[store_name] = store
             stats["magasins_crees"] += 1
+        cat = categorie_standard(r.get("categorie")) or categoriser_par_nom(r["materiau"])
         mat = mats_by_key.get(mkey)
         if mat is None:
             mat = Materiau(
-                name=r["materiau"][:255], name_key=mkey[:255],
-                categorie=(r.get("categorie") or None),
+                name=r["materiau"][:255], name_key=mkey[:255], categorie=cat,
             )
             db.add(mat)
             await db.flush()
             mats_by_key[mkey] = mat
             stats["materiaux_crees"] += 1
-        elif not mat.categorie and r.get("categorie"):
-            mat.categorie = r["categorie"]
+        elif not mat.categorie and cat:
+            mat.categorie = cat
 
         note = f"Historique projet {r['projet']} ({source_label})"
         off = offres_by_pair.get((mat.id, store.id))

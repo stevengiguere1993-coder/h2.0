@@ -29,6 +29,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     String,
     Text,
@@ -52,6 +53,16 @@ class Magasin(Base):
     color: Mapped[Optional[str]] = mapped_column(String(6), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
+    )
+    #: Quincaillerie PRINCIPALE = colonne du tableau comparatif (retour
+    #: 2026-09-25 : Home Depot, Canac, Rona, BMR, Patrick Morin). Les
+    #: autres magasins restent consultables, repliés dans « Autres ».
+    is_principal: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    #: Ordre des colonnes principales.
+    position: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -127,6 +138,16 @@ class MateriauOffre(Base):
         DateTime(timezone=True), nullable=True
     )
     note: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    #: Relevé automatique (étape 2) : dernière tentative et son erreur
+    #: éventuelle (site bloqué, prix introuvable…). Le prix n'est jamais
+    #: écrasé par un relevé en échec.
+    fetch_checked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    fetch_error: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    #: Titre du produit tel que lu sur la page (contrôle visuel que le
+    #: lien pointe bien sur le bon article).
+    page_title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
