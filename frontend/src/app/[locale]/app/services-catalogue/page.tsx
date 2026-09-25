@@ -7,6 +7,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
+import { MateriauxCatalogue } from "@/components/materiaux-catalogue";
 
 type Template = {
   id: number;
@@ -30,6 +31,13 @@ type TemplateItem = {
 };
 
 export default function ServicesCataloguePage() {
+  // Onglets : Services (modèles de soumission) | Matériaux (prix par
+  // magasin, retour 2026-09-25). Onglet mémorisé dans l'URL (#materiaux).
+  const [tab, setTab] = useState<"services" | "materiaux">(() =>
+    typeof window !== "undefined" && window.location.hash === "#materiaux"
+      ? "materiaux"
+      : "services"
+  );
   const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -184,17 +192,52 @@ export default function ServicesCataloguePage() {
         ]}
         onOpenSidebar={onOpenSidebar}
         rightSlot={
-          <button
-            type="button"
-            onClick={addTemplate}
-            className="btn-accent text-sm"
-          >
-            <Plus className="mr-1.5 h-4 w-4" /> Nouveau service
-          </button>
+          tab === "services" ? (
+            <button
+              type="button"
+              onClick={addTemplate}
+              className="btn-accent text-sm"
+            >
+              <Plus className="mr-1.5 h-4 w-4" /> Nouveau service
+            </button>
+          ) : null
         }
       />
 
       <div className="p-4 lg:p-6">
+        <div className="mb-4 flex gap-1 border-b border-brand-800">
+          {(
+            [
+              ["services", "Services"],
+              ["materiaux", "Matériaux"]
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => {
+                setTab(key);
+                if (typeof window !== "undefined") {
+                  window.history.replaceState(
+                    null,
+                    "",
+                    key === "materiaux" ? "#materiaux" : " "
+                  );
+                }
+              }}
+              className={`-mb-px border-b-2 px-4 py-2 text-sm font-semibold transition ${
+                tab === key
+                  ? "border-accent-500 text-white"
+                  : "border-transparent text-white/60 hover:text-white"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {tab === "materiaux" ? <MateriauxCatalogue /> : null}
+        <div className={tab === "materiaux" ? "hidden" : ""}>
         {error ? (
           <p className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
             {error}
@@ -447,6 +490,7 @@ export default function ServicesCataloguePage() {
               </p>
             )}
           </section>
+        </div>
         </div>
       </div>
     </>

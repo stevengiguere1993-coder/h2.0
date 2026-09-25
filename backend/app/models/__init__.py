@@ -263,6 +263,7 @@ from app.models.req_company import ReqCompany
 from app.models.sales_task import SalesTask, sales_task_assignees  # noqa: F401
 from app.models.seo_article import SeoArticle
 from app.models.service_template import ServiceTemplate, ServiceTemplateItem
+from app.models.materiau import Magasin, Materiau, MateriauOffre, MateriauPrixHistorique
 from app.models.soumission_avenant import SoumissionAvenant
 from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
