@@ -145,9 +145,11 @@ export default function PaiePage() {
     load(periodEnd);
   }, [load, periodEnd]);
 
-  function downloadCsv() {
+  function downloadCsv(regimes = false) {
     if (!report) return;
-    const url = `/api/v1/punch/payroll/bi-weekly.csv?period_end=${report.period_end}`;
+    const url = regimes
+      ? `/api/v1/punch/payroll/bi-weekly-regimes.csv?period_end=${report.period_end}`
+      : `/api/v1/punch/payroll/bi-weekly.csv?period_end=${report.period_end}`;
     // Backend retourne le CSV avec Content-Disposition. authedFetch
     // ajoute le bearer token, donc on doit fetch puis créer un blob.
     (async () => {
@@ -157,7 +159,7 @@ export default function PaiePage() {
         const blob = await res.blob();
         const link = document.createElement("a");
         link.href = URL.createObjectURL(blob);
-        link.download = `paie-${report.period_start}_au_${report.period_end}.csv`;
+        link.download = `paie-${regimes ? "regimes-" : ""}${report.period_start}_au_${report.period_end}.csv`;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -348,8 +350,8 @@ export default function PaiePage() {
                     <th className="px-3 py-2 text-right">Hors décret</th>
                     <th className="px-3 py-2 text-right">
                       Montant
-                      <span className="block text-[10px] font-normal normal-case text-white/40">
-                        taux de base (CCQ + hors décret)
+                      <span className="block text-[10px] font-normal normal-case text-white/60">
+                        heures approuvées, taux de base du régime
                       </span>
                     </th>
                     <th className="px-3 py-2 text-right">
@@ -385,13 +387,13 @@ export default function PaiePage() {
                         <td className="px-3 py-2 text-right tabular-nums text-sky-300">
                           {r.hours_ccq > 0 ? `${r.hours_ccq.toFixed(2)} h` : <span className="text-white/30">—</span>}
                           {r.hours_ccq > 0 ? (
-                            <span className="block text-[10px] text-white/50">{fmtMoney(r.montant_ccq)}</span>
+                            <span className="block text-[11px] text-white/70">{fmtMoney(r.montant_ccq)}</span>
                           ) : null}
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums text-white/85">
                           {r.hours_hors_decret > 0 ? `${r.hours_hors_decret.toFixed(2)} h` : <span className="text-white/30">—</span>}
                           {r.hours_hors_decret > 0 ? (
-                            <span className="block text-[10px] text-white/50">{fmtMoney(r.montant_hors_decret)}</span>
+                            <span className="block text-[11px] text-white/70">{fmtMoney(r.montant_hors_decret)}</span>
                           ) : null}
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums font-semibold text-white">
@@ -433,11 +435,11 @@ export default function PaiePage() {
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums text-sky-300">
                         {report.total_hours_ccq.toFixed(2)} h
-                        <span className="block text-[10px] text-white/50">{fmtMoney(report.total_montant_ccq)}</span>
+                        <span className="block text-[11px] text-white/70">{fmtMoney(report.total_montant_ccq)}</span>
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums text-white/85">
                         {report.total_hours_hors_decret.toFixed(2)} h
-                        <span className="block text-[10px] text-white/50">{fmtMoney(report.total_montant_hors_decret)}</span>
+                        <span className="block text-[11px] text-white/70">{fmtMoney(report.total_montant_hors_decret)}</span>
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums font-bold text-white">
                         {fmtMoney(report.total_montant)}
@@ -459,21 +461,33 @@ export default function PaiePage() {
 
             {/* Bouton CSV */}
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-[11px] text-white/50">
+              <p className="text-[11px] text-white/70">
                 Format CSV : <span className="font-mono">nom_employe</span>,{" "}
                 <span className="font-mono">heures_semaine_1</span>,{" "}
                 <span className="font-mono">heures_semaine_2</span> — prêt
                 pour EmployeurD.
               </p>
-              <button
-                type="button"
-                onClick={downloadCsv}
-                disabled={report.rows.length === 0}
-                className="btn-accent text-sm disabled:opacity-50"
-              >
-                <Download className="mr-2 h-4 w-4" />
-                Télécharger CSV
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => downloadCsv(true)}
+                  disabled={report.rows.length === 0}
+                  className="btn-secondary text-sm disabled:opacity-50"
+                  title="Heures CCQ / hors décret par semaine et montants (heures approuvées)"
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  CSV CCQ / hors décret
+                </button>
+                <button
+                  type="button"
+                  onClick={() => downloadCsv(false)}
+                  disabled={report.rows.length === 0}
+                  className="btn-accent text-sm disabled:opacity-50"
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  Télécharger CSV
+                </button>
+              </div>
             </div>
           </div>
         ) : null}

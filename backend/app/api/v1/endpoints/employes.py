@@ -460,7 +460,13 @@ async def add_rate_change(
             cnesst_rate=data.cnesst_rate,
             ccq_rate=data.ccq_rate,
             is_ccq=data.is_ccq,
-            hourly_rate_ccq=data.hourly_rate_ccq,
+            # Palier sans taux CCQ retapé → on garde le taux CCQ courant
+            # (une augmentation hors décret n'efface pas le taux CCQ).
+            hourly_rate_ccq=(
+                data.hourly_rate_ccq
+                if data.hourly_rate_ccq is not None
+                else (float(emp.hourly_rate_ccq) if emp.hourly_rate_ccq is not None else None)
+            ),
             note=data.note,
         )
     )
@@ -472,7 +478,8 @@ async def add_rate_change(
     emp.cnesst_rate = data.cnesst_rate
     emp.ccq_rate = data.ccq_rate
     emp.is_ccq = data.is_ccq
-    emp.hourly_rate_ccq = data.hourly_rate_ccq
+    if data.hourly_rate_ccq is not None:
+        emp.hourly_rate_ccq = data.hourly_rate_ccq
     await db.flush()
 
     from app.services.audit import log_action as _log_action

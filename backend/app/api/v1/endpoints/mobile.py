@@ -294,6 +294,9 @@ async def punch_start(
         started_at=now,
         task=body.task,
         geolocation=body.geolocation,
+        # Hors décret par défaut ; le régime CCQ se pose à l'approbation
+        # par un admin+ (retour Phil 2026-09-26).
+        regime="hors_decret",
     )
     db.add(p)
     await db.flush()

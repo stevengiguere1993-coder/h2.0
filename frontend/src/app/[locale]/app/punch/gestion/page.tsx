@@ -21,7 +21,7 @@ import { useCurrentUser } from "@/hooks/use-current-user";
 import { projectLabel } from "@/lib/project";
 import { useConfirm } from "@/components/confirm-dialog";
 
-type Employe = { id: number; full_name: string; email: string | null };
+type Employe = { id: number; full_name: string; email: string | null; is_ccq?: boolean };
 type Project = {
   id: number;
   name: string;
@@ -435,9 +435,16 @@ export default function PunchGestionPage() {
     }
   }
 
+  // Régime effectif d'un punch : le sien, sinon (punch d'avant la règle)
+  // celui de la fiche employé.
+  function regimeEffectif(p: Punch): "ccq" | "hors_decret" {
+    if (p.regime === "ccq" || p.regime === "hors_decret") return p.regime;
+    return empById.get(p.employe_id)?.is_ccq ? "ccq" : "hors_decret";
+  }
+
   async function toggleRegime(p: Punch) {
     if (!isAdmin) return;
-    const next = p.regime === "ccq" ? "hors_decret" : "ccq";
+    const next = regimeEffectif(p) === "ccq" ? "hors_decret" : "ccq";
     try {
       const res = await authedFetch(`/api/v1/punch/${p.id}`, {
         method: "PATCH",
@@ -861,7 +868,9 @@ export default function PunchGestionPage() {
                                 : "bg-amber-500/10 text-amber-300"
                           } disabled:cursor-default disabled:hover:bg-inherit`}
                         >
-                          {p.regime ? REGIME_LABEL[p.regime] || p.regime : "Selon fiche"}
+                          {p.regime
+                            ? REGIME_LABEL[p.regime] || p.regime
+                            : `Selon fiche (${REGIME_LABEL[regimeEffectif(p)]})`}
                         </button>
                       </td>
                       <td className="px-4 py-3 text-center">

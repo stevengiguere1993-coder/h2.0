@@ -330,7 +330,7 @@ export default function EmployeDetailPage() {
         hourly_rate: Number(rcHourly),
         billing_rate: rcBilling ? Number(rcBilling) : null,
         cnesst_rate: decimalFromPct(rcCnesst),
-        ccq_rate: rcIsCcq ? decimalFromPct(rcCcq) : null,
+        ccq_rate: decimalFromPct(rcCcq),
         is_ccq: rcIsCcq,
         hourly_rate_ccq: rcHourlyCcq ? Number(rcHourlyCcq) : null,
         note: rcNote.trim() || null,
@@ -368,6 +368,7 @@ export default function EmployeDetailPage() {
       setRcCnesst("");
       setRcCcq("");
       setRcIsCcq(false);
+      setRcHourlyCcq("");
       setRcNote("");
       setRateFormOpen(false);
     } catch (err) {
@@ -603,8 +604,7 @@ export default function EmployeDetailPage() {
                       className="input"
                     />
                   </div>
-                  {isCcq ? (
-                    <div>
+                  <div>
                       <label htmlFor="e_ccq" className="label">
                         Prime CCQ (% — ex. 22 pour 22 %)
                       </label>
@@ -619,8 +619,11 @@ export default function EmployeDetailPage() {
                         placeholder="Ex. 22"
                         className="input"
                       />
+                      <p className="mt-1 text-xs text-white/60">
+                        S&apos;applique aux heures marquées CCQ, même si
+                        l&apos;employé est hors décret par défaut.
+                      </p>
                     </div>
-                  ) : null}
                   <div>
                     <label htmlFor="e_rate_ccq" className="label">
                       Taux horaire CCQ — coûtant (CAD)
@@ -635,7 +638,7 @@ export default function EmployeDetailPage() {
                       placeholder="Vide = même taux que hors décret"
                       className="input"
                     />
-                    <p className="mt-1 text-xs text-white/40">
+                    <p className="mt-1 text-xs text-white/60">
                       Taux payé sur les heures marquées CCQ par l&apos;admin
                       (gestion des punchs). La majoration CCQ s&apos;ajoute
                       seulement à ces heures ; le taux facturable au client ne
@@ -683,7 +686,19 @@ export default function EmployeDetailPage() {
                     type="button"
                     onClick={() => {
                       setRateError(null);
-                      setRateFormOpen((v) => !v);
+                      setRateFormOpen((v) => {
+                        if (!v) {
+                          // Pré-rempli avec les taux courants : un palier ne
+                          // doit pas effacer un taux non retapé.
+                          setRcHourly(hourlyRate);
+                          setRcBilling(billingRate);
+                          setRcCnesst(cnesstRate);
+                          setRcCcq(ccqRate);
+                          setRcIsCcq(isCcq);
+                          setRcHourlyCcq(hourlyRateCcq);
+                        }
+                        return !v;
+                      });
                     }}
                     className="btn-outline-accent btn-sm"
                   >
@@ -782,7 +797,7 @@ export default function EmployeDetailPage() {
                         />
                         Employé CCQ à cette date
                       </label>
-                      {rcIsCcq ? (
+                      {true ? (
                         <div>
                           <label htmlFor="rc_ccq" className="label">
                             Prime CCQ (% — ex. 22)

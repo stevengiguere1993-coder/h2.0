@@ -851,6 +851,9 @@ class BiWeeklyPayrollRow(BaseModel):
     hours_hors_decret: float = 0.0
     hours_ccq_week_1: float = 0.0
     hours_ccq_week_2: float = 0.0
+    hours_hd_week_1: float = 0.0
+    hours_hd_week_2: float = 0.0
+    #: Montants sur les heures APPROUVÉES seulement (ce qui sera payé).
     montant_ccq: float = 0.0
     montant_hors_decret: float = 0.0
     montant_total: float = 0.0
@@ -972,20 +975,28 @@ async def payroll_bi_weekly(
             agg[emp_id].pending_hours += h
         if reg == REGIME_CCQ:
             agg[emp_id].hours_ccq += h
-            agg[emp_id].montant_ccq += montant
+            if approved:
+                agg[emp_id].montant_ccq += montant
             if sem1:
                 agg[emp_id].hours_ccq_week_1 += h
             else:
                 agg[emp_id].hours_ccq_week_2 += h
         else:
             agg[emp_id].hours_hors_decret += h
-            agg[emp_id].montant_hors_decret += montant
-        agg[emp_id].montant_total += montant
+            if approved:
+                agg[emp_id].montant_hors_decret += montant
+            if sem1:
+                agg[emp_id].hours_hd_week_1 += h
+            else:
+                agg[emp_id].hours_hd_week_2 += h
+        if approved:
+            agg[emp_id].montant_total += montant
 
     for row in agg.values():
         for champ in (
             "hours_week_1", "hours_week_2", "total_hours", "pending_hours",
             "hours_ccq", "hours_hors_decret", "hours_ccq_week_1", "hours_ccq_week_2",
+            "hours_hd_week_1", "hours_hd_week_2",
             "montant_ccq", "montant_hors_decret", "montant_total",
         ):
             setattr(row, champ, round(getattr(row, champ), 2))
@@ -1025,25 +1036,61 @@ async def payroll_bi_weekly_csv(
         default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"
     ),
 ):
-    """CSV pour EmployeurD : nom · semaine 1 · semaine 2, puis la
-    ventilation CCQ / hors décret (heures et montants au taux de base)."""
+    """CSV simple pour EmployeurD : nom · semaine 1 · semaine 2 (format
+    INCHANGÉ — la ventilation CCQ / hors décret a son propre export,
+    /payroll/bi-weekly-regimes.csv)."""
     from fastapi.responses import Response
     report = await payroll_bi_weekly(db, _, period_end)  # type: ignore[arg-type]
-    lines = [
-        "nom_employe,heures_semaine_1,heures_semaine_2,"
-        "heures_ccq,heures_hors_decret,heures_ccq_semaine_1,heures_ccq_semaine_2,"
-        "montant_ccq,montant_hors_decret,montant_total"
-    ]
+    lines = ["nom_employe,heures_semaine_1,heures_semaine_2"]
     for r in report.rows:
         name = (r.employe_name or "").replace('"', "'")
         lines.append(
-            f'"{name}",{r.hours_week_1},{r.hours_week_2},'
-            f"{r.hours_ccq},{r.hours_hors_decret},{r.hours_ccq_week_1},{r.hours_ccq_week_2},"
-            f"{r.montant_ccq},{r.montant_hors_decret},{r.montant_total}"
+            f'"{name}",{r.hours_week_1},{r.hours_week_2}'
         )
     body = "\n".join(lines)
     filename = (
         f"paie-{report.period_start.isoformat()}_au_"
+        f"{report.period_end.isoformat()}.csv"
+    )
+    return Response(
+        content=body,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
+
+
+@router.get(
+    "/payroll/bi-weekly-regimes.csv",
+    summary="Bi-weekly payroll CSV — ventilation CCQ / hors décret (manager+)",
+)
+async def payroll_bi_weekly_regimes_csv(
+    db: DBSession,
+    _: RequireManager,
+    period_end: Optional[str] = Query(
+        default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"
+    ),
+):
+    """Heures CCQ et hors décret par semaine, et montants (heures
+    approuvées, taux de base du régime à la date du punch)."""
+    from fastapi.responses import Response
+    report = await payroll_bi_weekly(db, _, period_end)  # type: ignore[arg-type]
+    lines = [
+        "nom_employe,heures_ccq_semaine_1,heures_ccq_semaine_2,"
+        "heures_hd_semaine_1,heures_hd_semaine_2,heures_ccq,heures_hors_decret,"
+        "heures_en_attente,montant_ccq,montant_hors_decret,montant_total"
+    ]
+    for r in report.rows:
+        name = (r.employe_name or "").replace('"', "'")
+        lines.append(
+            f'"{name}",{r.hours_ccq_week_1},{r.hours_ccq_week_2},'
+            f"{r.hours_hd_week_1},{r.hours_hd_week_2},{r.hours_ccq},{r.hours_hors_decret},"
+            f"{r.pending_hours},{r.montant_ccq},{r.montant_hors_decret},{r.montant_total}"
+        )
+    body = "\n".join(lines)
+    filename = (
+        f"paie-regimes-{report.period_start.isoformat()}_au_"
         f"{report.period_end.isoformat()}.csv"
     )
     return Response(
@@ -1391,6 +1438,7 @@ async def update_manual_punch(
         if fields["regime"] is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Régime requis (ccq | hors_decret).")
         _exiger_admin_pour_regime(user, fields["regime"])
+    avant = {k: getattr(p, k) for k in ("regime", "hours", "started_at", "ended_at", "project_id", "approved", "employe_id")}
     for k, v in fields.items():
         if k in ("task", "notes") and v == "":
             v = None
@@ -1401,4 +1449,15 @@ async def update_manual_punch(
             p.hours = recomputed
     await db.flush()
     await db.refresh(p)
+    # La feuille de temps QuickBooks (coût au taux du régime) suit toute
+    # modification qui change son montant ou son éligibilité — sinon un
+    # passage hors décret → CCQ après approbation resterait invisible
+    # dans le suivi de projet QB.
+    change = any(getattr(p, k) != v for k, v in avant.items())
+    if change and (p.approved or p.qbo_time_activity_id):
+        import asyncio as _asyncio
+
+        from app.services.labour_time_qbo import push_punch_time_now
+
+        _asyncio.create_task(push_punch_time_now(int(p.id)))
     return PunchRead.model_validate(p)
