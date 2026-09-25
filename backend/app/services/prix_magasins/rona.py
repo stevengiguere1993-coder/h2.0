@@ -491,3 +491,53 @@ def _parse_json(raw: str, url: str) -> PrixReleve:
         method="api",
         extra={k: data[k] for k in ("brand", "manufacturerPartNumber") if data.get(k)},
     )
+
+
+# ───────────── Recherche (prix de base automatique, 2026-09-26) ─────────────
+
+SEARCH_URL = "https://www.rona.ca/fr/recherche?q={q}"
+_TILE_LINK_RE = re.compile(
+    r"<a\b[^>]*href=\"(?P<href>(?:https://www\.rona\.ca)?/fr/produit/[^\"#?]+?-(?P<pid>\d{5,}))\"[^>]*>(?P<inner>.*?)</a>",
+    re.S | re.I,
+)
+_MONEY_TXT_RE = re.compile(r"(\d{1,3}(?:[   ]\d{3})*(?:[.,]\d{2})?)\s*\$")
+
+
+async def search(query: str, *, limit: int = 10) -> list:
+    """Page de résultats RENDUE par le navigateur du VPS (Cloudflare bloque
+    tout client direct). On lit les tuiles : lien produit ``/fr/produit/
+    <slug>-<id>``, titre, premier montant en $ qui suit."""
+    from urllib.parse import quote
+
+    from app.integrations.scraping_proxy import fetch_rendered_html
+
+    from .recherche import Candidat
+
+    html = await fetch_rendered_html(SEARCH_URL.format(q=quote(query)), wait_ms=2500)
+    if html is None:
+        raise RuntimeError("recherche Rona : le VPS de scraping n'est pas configuré")
+    if not html or is_blocked_page(html) and "/fr/produit/" not in html:
+        raise RuntimeError("recherche Rona : page bloquée (Cloudflare)")
+    out: list[Candidat] = []
+    vus: set[str] = set()
+    for m in _TILE_LINK_RE.finditer(html):
+        pid = m.group("pid")
+        if pid in vus:
+            continue
+        href = m.group("href")
+        title = _text(m.group("inner")) or ""
+        if not title:
+            t = re.search(r"title=\"([^\"]+)\"", m.group(0))
+            title = _html.unescape(t.group(1)).strip() if t else ""
+        if not title:
+            continue
+        vus.add(pid)
+        tail = html[m.end(): m.end() + 2500]
+        pm_ = _MONEY_TXT_RE.search(tail)
+        out.append(Candidat(
+            url=(href if href.startswith("http") else "https://www.rona.ca" + href),
+            title=title, sku=pid, price=(parse_money(pm_.group(1)) if pm_ else None),
+        ))
+        if len(out) >= limit:
+            break
+    return out

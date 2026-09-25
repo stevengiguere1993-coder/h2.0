@@ -545,3 +545,45 @@ def _parse_rendered(html: str, pid: Optional[str]) -> PrixReleve:
         return PrixReleve(error="Prix introuvable dans le DOM rendu.")
     res = PrixReleve(price=price, sku=pid, method="html", extra={"price_scope": "unknown"})
     return _enrich_rendered(res, html)
+
+
+# ───────────── Recherche (prix de base automatique, 2026-09-26) ─────────────
+
+SEARCH_API = "https://www.homedepot.ca/api/search/v1/search"
+
+
+async def search(query: str, *, store: Optional[str] = None, limit: int = 10) -> list:
+    """Moteur de recherche public (JSON) : ``code``, ``name``, ``url``
+    (relative) et, en magasin, ``pricing.displayPrice.value``."""
+    from .recherche import Candidat
+
+    from urllib.parse import quote
+
+    store = store or store_for("")
+    url = f"{SEARCH_API}?q={quote(query)}&lang=fr&pageSize={int(limit)}&store={store}"
+    async with httpx.AsyncClient(timeout=25.0, headers=BROWSER_HEADERS, follow_redirects=True) as client:
+        r = await client.get(url)
+    if r.status_code != 200:
+        raise RuntimeError(f"recherche Home Depot : HTTP {r.status_code}")
+    try:
+        data = r.json()
+    except ValueError as exc:
+        raise RuntimeError("recherche Home Depot : réponse non JSON") from exc
+    out = []
+    for p in (data.get("products") or [])[:limit]:
+        code = str(p.get("code") or "").strip()
+        rel = str(p.get("url") or "").strip()
+        if not code or not rel:
+            continue
+        pricing = p.get("pricing") or {}
+        disp = pricing.get("displayPrice") if isinstance(pricing, dict) else None
+        price = _money(disp.get("value")) if isinstance(disp, dict) else None
+        name = " ".join(str(x) for x in (p.get("brand"), p.get("name")) if x).strip()
+        stock = (p.get("storeStock") or {}).get("stockLevelStatus") if isinstance(p.get("storeStock"), dict) else None
+        out.append(Candidat(
+            url=("https://www.homedepot.ca" + rel) if rel.startswith("/") else rel,
+            title=name or code, sku=code, price=price,
+            in_stock=_stock_flag(stock),
+            extra={"brand": p.get("brand"), "badges": p.get("badges")},
+        ))
+    return out

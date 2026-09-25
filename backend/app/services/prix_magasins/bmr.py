@@ -547,3 +547,102 @@ def _parse(html: str, url: str) -> PrixReleve:
         method=method,
         extra=extra,
     )
+
+
+# ───────────── Recherche (prix de base automatique, 2026-09-26) ─────────────
+
+SEARCH_URL = "https://www.bmr.ca/fr/catalogsearch/result/?q={q}"
+_BMR_LINK_RE = re.compile(
+    r"<a\b[^>]*href=\"(?P<href>https://www\.bmr\.ca/fr/[^\"#?]+?-(?P<sku>\d{3}-\d{4})(?:-m)?\.html)\"[^>]*>(?P<inner>.*?)</a>",
+    re.S | re.I,
+)
+_MONEY_TXT_RE = re.compile(r"(\d{1,3}(?:[   ]\d{3})*(?:[.,]\d{2})?)\s*\$")
+#: Identifiants Algolia lus dans ``window.algoliaConfig`` de la première
+#: page rendue : ensuite la recherche interroge Algolia directement
+#: (JSON, sans navigateur).
+_ALGOLIA: dict[str, Any] = {"app": None, "key": None, "index": None}
+
+
+def _capture_algolia(html: str) -> None:
+    m = re.search(r"window\.algoliaConfig\s*=\s*(\{.*?\});\s*</script>", html, re.S)
+    if not m:
+        return
+    raw = m.group(1)
+    app = re.search(r"\"applicationId\"\s*:\s*\"([^\"]+)\"", raw)
+    key = re.search(r"\"apiKey\"\s*:\s*\"([^\"]+)\"", raw)
+    idx = re.search(r"\"indexName\"\s*:\s*\"([^\"]+)\"", raw)
+    if app and key and idx:
+        _ALGOLIA.update(app=app.group(1), key=key.group(1), index=idx.group(1))
+
+
+async def _search_algolia(query: str, limit: int) -> list:
+    import httpx
+
+    from .recherche import Candidat
+
+    app, key, index = _ALGOLIA["app"], _ALGOLIA["key"], _ALGOLIA["index"]
+    url = f"https://{app}-dsn.algolia.net/1/indexes/{index}_products/query"
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.post(
+            url, json={"params": f"query={query}&hitsPerPage={int(limit)}"},
+            headers={"X-Algolia-Application-Id": app, "X-Algolia-API-Key": key},
+        )
+    if r.status_code != 200:
+        raise RuntimeError(f"Algolia BMR : HTTP {r.status_code}")
+    out = []
+    for h in (r.json().get("hits") or [])[:limit]:
+        url = str(h.get("url") or "")
+        if not url:
+            continue
+        price = None
+        p = h.get("price")
+        if isinstance(p, dict):
+            cad = p.get("CAD") or next(iter(p.values()), None)
+            if isinstance(cad, dict):
+                price = parse_money(cad.get("default"))
+        out.append(Candidat(url=url, title=str(h.get("name") or url), sku=(str(h.get("sku")) if h.get("sku") else None), price=price))
+    return out
+
+
+async def search(query: str, *, limit: int = 10) -> list:
+    """Page de résultats RENDUE par le VPS (Cloudflare) ; les tuiles sont
+    des liens ``…-NNN-NNNN.html``. Si la page livre les identifiants
+    Algolia, les recherches suivantes passent par Algolia (JSON)."""
+    from urllib.parse import quote
+
+    from app.integrations.scraping_proxy import fetch_rendered_html
+
+    from .recherche import Candidat
+
+    if _ALGOLIA["app"]:
+        try:
+            res = await _search_algolia(query, limit)
+            if res:
+                return res
+        except Exception:  # noqa: BLE001 — on retombe sur la page rendue
+            pass
+    html = await fetch_rendered_html(SEARCH_URL.format(q=quote(query)), wait_ms=3000)
+    if html is None:
+        raise RuntimeError("recherche BMR : le VPS de scraping n'est pas configuré")
+    if not html or ("Un instant" in html[:3000] and "-dsn.algolia" not in html and ".html\"" not in html):
+        raise RuntimeError("recherche BMR : page bloquée (Cloudflare)")
+    _capture_algolia(html)
+    out: list[Candidat] = []
+    vus: set[str] = set()
+    for m in _BMR_LINK_RE.finditer(html):
+        sku = m.group("sku")
+        if sku in vus:
+            continue
+        title = _text(m.group("inner")) or ""
+        if not title:
+            t = re.search(r"title=\"([^\"]+)\"", m.group(0))
+            title = _html.unescape(t.group(1)).strip() if t else ""
+        if not title:
+            continue
+        vus.add(sku)
+        tail = html[m.end(): m.end() + 2500]
+        pm_ = _MONEY_TXT_RE.search(tail)
+        out.append(Candidat(url=m.group("href"), title=title, sku=sku, price=(parse_money(pm_.group(1)) if pm_ else None)))
+        if len(out) >= limit:
+            break
+    return out

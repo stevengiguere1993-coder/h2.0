@@ -861,6 +861,17 @@ async def trigger_all_daily(
             # push aux gestionnaires), une fois par rabais.
             r["alertes"] = await alerter_rabais_sans_casser(db)
             await db.commit()
+            # Prix de base manquants : recherche sur les sites (bornée par
+            # jour pour rester poli avec les détaillants).
+            try:
+                from app.services.materiaux_recherche import chercher_tout
+
+                rc = await chercher_tout(db, limit=40)
+                await db.commit()
+                r["recherche"] = {k: v for k, v in rc.items() if k != "details"}
+            except Exception as exc:  # noqa: BLE001
+                await db.rollback()
+                r["recherche"] = {"error": str(exc)[:200]}
             return {k: v for k, v in r.items() if k != "erreurs"} | {
                 "erreurs": len(r.get("erreurs") or [])
             }
