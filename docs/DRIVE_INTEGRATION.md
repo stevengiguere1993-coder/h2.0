@@ -69,7 +69,9 @@ fichiers.
    `APIs & Services → Library → Google Drive API → Enable`.
 4. Configurer le consent screen :
    `APIs & Services → OAuth consent screen`.
-   - **User type** : **Internal** (⚠️ voir l'encadré ci-dessous)
+   - **User type** : External (« Interne » est impossible : immohorizon.com
+     n'est pas un domaine Google Workspace — les comptes sont des comptes
+     Google créés avec une adresse d'entreprise hébergée chez Microsoft)
    - **App name** : Kratos
    - **User support email** : `info@immohorizon.com`
    - **Developer contact** : `info@immohorizon.com`
@@ -78,31 +80,39 @@ fichiers.
      - `https://www.googleapis.com/auth/drive`
      - `https://www.googleapis.com/auth/userinfo.email`
      - `openid`
+   - **Branding** : nom, courriel d'assistance, page d'accueil (adresse
+     https de Kratos, domaine dans « Authorized domains »), courriel du
+     développeur. **Pas de logo** (un logo oblige à faire valider l'app).
+   - **Publication** : page « Cible / Audience » → **Publier
+     l'application** (statut « En production »), SANS soumettre de demande
+     de validation. Fait par Phil le 2026-09-28.
 
-   > ⚠️ **Pourquoi « Internal » et pas « External / Testing »**
+   > ⚠️ **Pourquoi publier, et pourquoi pas rester en « Test »**
    > (retour Phil 2026-09-28 : « le connecteur me déconnecte souvent »).
-   > Une application OAuth **External** en statut **Testing** reçoit de
-   > Google des refresh tokens qui **expirent après 7 jours** dès qu'elle
-   > demande un scope sensible (c'est le cas de `auth/drive`). Chaque
-   > utilisateur devait donc reconnecter son Drive toutes les semaines,
-   > et le journal `drive_audit_logs` se remplissait de
-   > `refresh_failed … invalid_grant`. En **Internal** (projet Google
-   > Cloud appartenant à l'organisation Workspace `immohorizon.com`),
-   > les refresh tokens n'expirent plus (sauf révocation, changement de
-   > mot de passe ou 6 mois sans usage), aucune vérification Google
-   > n'est requise, et seuls les comptes `@immohorizon.com` peuvent se
-   > connecter — pas besoin de liste de testeurs.
+   > Une application External en statut **Testing** reçoit de Google des
+   > refresh tokens qui **expirent après 7 jours** dès qu'elle demande un
+   > scope sensible (c'est le cas de `auth/drive`) : chaque utilisateur
+   > devait reconnecter son Drive toutes les semaines, et
+   > `drive_audit_logs` se remplissait de `refresh_failed … invalid_grant`.
+   > En **production**, même non validée, les refresh tokens n'expirent
+   > plus (sauf révocation, changement de mot de passe Google ou 6 mois
+   > sans usage).
    >
-   > Si l'option « Internal » est grisée, le projet Google Cloud n'est
-   > pas rattaché à l'organisation Workspace : créer (ou recréer) le
-   > projet en étant connecté avec un compte administrateur
-   > `@immohorizon.com`, recréer le client OAuth (étape 5), puis mettre
-   > à jour `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` sur Render.
-   > Chaque utilisateur reconnecte ensuite son Drive UNE dernière fois.
+   > Conséquences d'une app publiée non validée : à la connexion, Google
+   > affiche « Google n'a pas validé cette application » → « Paramètres
+   > avancés » → « Accéder à Kratos Drive Integration (non sécurisé) »
+   > (une fois par utilisateur) ; limite de 100 utilisateurs à vie ; la
+   > liste des utilisateurs test ne sert plus. Kratos ne délivre l'URL de
+   > consentement qu'aux admins/owners (`RequireAdminOrOwner`), donc
+   > personne d'autre ne peut connecter un compte.
    >
-   > Publier en « Production » en restant External n'est pas une option
-   > raisonnable : le scope `auth/drive` est « restreint » et exige une
-   > vérification Google plus une évaluation de sécurité tierce.
+   > Juste après une publication ou un changement de branding, l'écran de
+   > consentement Google peut renvoyer « 500. That's an error » pendant
+   > quelques minutes (propagation) : attendre 10-15 min et réessayer.
+   >
+   > Réduire le scope à `drive.file` éviterait l'avertissement mais
+   > casserait l'accès aux dossiers existants (conventions, archivage) —
+   > non retenu.
 
 5. Créer les credentials OAuth :
    `APIs & Services → Credentials → Create Credentials → OAuth client ID`.
@@ -204,10 +214,10 @@ Toute mutation Drive depuis Kratos doit y poser une ligne avec
 
 ## Sécurité
 
-- **Restriction Google** : en mode « Internal », seuls les comptes de
-  l'organisation Workspace `immohorizon.com` peuvent passer l'écran de
-  consentement (l'ancienne liste de testeurs du mode Testing n'existe
-  plus — et avec elle l'expiration des jetons après 7 jours).
+- **Qui peut connecter un compte Google** : l'application est publiée
+  (External, en production, non validée), donc l'écran de consentement
+  n'est plus limité à une liste de testeurs ; la restriction est côté
+  Kratos — seuls les admins/owners obtiennent l'URL de consentement.
 - **State HMAC** : le `state` du flow OAuth est signé avec `jwt_secret`
   et porte le `user_id` + un nonce + un TTL de 10 min. Empêche les
   attaques CSRF et le replay.
