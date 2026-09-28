@@ -39,6 +39,21 @@ scrapers automatiques sur VPS mais laissent passer ton vrai navigateur
 4. Dans h2.0, ouvre la modale Immeuble MTL pour ce matricule — les
    propriétaires sont déjà là (avec enrichissement REQ + Canada411).
 
+### Collecte en lot (1.2.0)
+
+1. Dans h2.0 → Prospection → Immeubles MTL, pose tes filtres (ex. 12 à
+   24 logements + un arrondissement).
+2. Clique **Collecter les propriétaires** : h2.0 envoie à l'extension
+   la liste des propriétés SANS propriétaire connu ; un onglet
+   montreal.ca s'ouvre en arrière-plan et les traite une par une
+   (6 à 11 s chacune, ~400 par heure, plafond 5 000 par lot).
+3. Un panneau en bas à droite suit l'avancement : pause, reprise,
+   arrêt, « réessayer les échecs ». Après 6 échecs de suite, la
+   collecte se met en pause d'elle-même (le site bloque probablement) :
+   reprends-la plus tard.
+4. Les propriétaires apparaissent dans la liste et dans l'export CSV.
+   Garde Chrome ouvert ; l'état survit à un rechargement de la page.
+
 ### Centris
 
 1. Navigue sur centris.ca comme d'habitude
