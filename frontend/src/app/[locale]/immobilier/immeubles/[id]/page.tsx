@@ -36,6 +36,7 @@ import { useSearchParams } from "next/navigation";
 
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch, getToken } from "@/lib/auth";
+import { compareNumero } from "@/components/immobilier/numero-sort";
 import {
   ouvrirDossierTal,
   TalPastille
@@ -194,6 +195,9 @@ type Maintenance = {
 type Financials = {
   immeuble_id: number;
   nb_logements_actifs: number;
+  nb_logements_en_chambres?: number;
+  nb_chambres?: number;
+  nb_chambres_occupees?: number;
   nb_logements_occupes: number;
   taux_occupation: number;
   // Principal = unités louées ; toutes_unites = potentiel avec vacantes.
@@ -967,7 +971,11 @@ export default function ImmeubleDetailPage({
             <Kpi
               label="Occupation"
               value={`${(financials.taux_occupation * 100).toFixed(0)}%`}
-              sub={`${financials.nb_logements_occupes}/${financials.nb_logements_actifs} occupés`}
+              sub={
+                (financials.nb_chambres || 0) > 0
+                  ? `${financials.nb_logements_occupes}/${financials.nb_logements_actifs} occupés · ${financials.nb_logements_en_chambres} en chambres : ${financials.nb_chambres_occupees}/${financials.nb_chambres} ch.`
+                  : `${financials.nb_logements_occupes}/${financials.nb_logements_actifs} occupés`
+              }
               icon={Home}
               tone={financials.taux_occupation >= 0.9 ? "emerald" : "amber"}
             />
@@ -2980,9 +2988,7 @@ function PaiementsMoisSection({
           .sort(
             (a, b) =>
               (ETAT_ORDRE[a.etat] ?? 9) - (ETAT_ORDRE[b.etat] ?? 9) ||
-              (a.logement_numero || "").localeCompare(
-                b.logement_numero || "", "fr"
-              )
+              compareNumero(a.logement_numero, b.logement_numero)
           )
       );
       // Fail-quiet : feature inactive / immeuble non mappé → null.
