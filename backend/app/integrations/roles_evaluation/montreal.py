@@ -160,6 +160,39 @@ async def lookup_by_address(
 
 # --------------------------- Ingestion ---------------------------
 
+#: Codes de la colonne MUNICIPALITE du fichier de la Ville → nom de la
+#: municipalité (identifiants 02 à 50 de l'agglomération). Déduits du
+#: suffixe des noms de rue du fichier (« (MTL) », « (WMT) »…) et de la
+#: fiche du jeu de données (02 = Baie-D'Urfé … 50 = Montréal). Avant, le
+#: code brut était stocké et le filtre « Île de Montréal » (par NOM) ne
+#: voyait plus la ville de Montréal (Phil 2026-09-28).
+MUNICIPALITE_CODES: Dict[str, str] = {
+    "50": "Montréal",
+    "02": "Baie-D'Urfé",
+    "03": "Beaconsfield",
+    "04": "Côte-Saint-Luc",
+    "05": "Dollard-Des Ormeaux",
+    "06": "Dorval",
+    "07": "Hampstead",
+    "09": "L'Île-Dorval",
+    "10": "Kirkland",
+    "13": "Mont-Royal",
+    "14": "Montréal-Est",
+    "15": "Montréal-Ouest",
+    "20": "Pointe-Claire",
+    "22": "Senneville",
+    "23": "Sainte-Anne-de-Bellevue",
+    "29": "Westmount",
+}
+
+
+def nom_municipalite(brut: Optional[str]) -> Optional[str]:
+    """« 50 » → « Montréal » ; un nom déjà en toutes lettres est gardé."""
+    v = (brut or "").strip()
+    if not v:
+        return None
+    return MUNICIPALITE_CODES.get(v.zfill(2) if v.isdigit() else v, v)
+
 
 def _parse_int(v: str) -> Optional[int]:
     v = (v or "").strip()
@@ -193,7 +226,7 @@ def _row_to_dict(row: Dict[str, str]) -> Optional[Dict[str, Any]]:
         "civique_fin": (row.get("CIVIQUE_FIN") or "").strip() or None,
         "nom_rue": rue or None,
         "suite_debut": (row.get("SUITE_DEBUT") or "").strip() or None,
-        "municipalite": (row.get("MUNICIPALITE") or "").strip() or None,
+        "municipalite": nom_municipalite(row.get("MUNICIPALITE")),
         "nombre_logement": _parse_int(row.get("NOMBRE_LOGEMENT", "")),
         "annee_construction": _parse_int(
             row.get("ANNEE_CONSTRUCTION", "")

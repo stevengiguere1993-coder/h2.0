@@ -285,11 +285,27 @@ def _filtres_mtl(
             # écrit le nom de l'arrondissement dans `municipalite`
             # (ex. « Le Plateau-Mont-Royal » plutôt que « Montréal »)
             # — autrement Montréal proper « disparaît » de la liste.
+            from app.integrations.roles_evaluation.montreal import (
+                MUNICIPALITE_CODES,
+            )
+
+            # MTL_ISLAND_CITIES est normalisée SANS accents (« montreal ») :
+            # une ligne « Montréal » (avec accent, comme l'écrit l'import
+            # de la Ville) ne matchait pas → on ajoute les noms accentués
+            # en minuscules (Phil 2026-09-28).
+            noms_ile = set(MTL_ISLAND_CITIES) | {
+                n.lower() for n in MUNICIPALITE_CODES.values()
+            }
             filters.append(
                 or_(
                     MontrealPropertyUnit.region == "mtl-island",
                     func.lower(MontrealPropertyUnit.municipalite).in_(
-                        list(MTL_ISLAND_CITIES)
+                        sorted(noms_ile)
+                    ),
+                    # Codes bruts d'un import antérieur à la conversion
+                    # en noms (« 50 » = Montréal) — Phil 2026-09-28.
+                    MontrealPropertyUnit.municipalite.in_(
+                        list(MUNICIPALITE_CODES.keys())
                     ),
                     MontrealPropertyUnit.arrondissement.is_not(None),
                 )
