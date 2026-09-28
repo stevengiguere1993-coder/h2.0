@@ -19,6 +19,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { telechargerExport } from "@/components/immobilier/bouton-export";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 import { useProspectionLayout } from "../layout";
 
 type Property = {
@@ -61,6 +62,25 @@ type ListResponse = {
   total: number;
   properties: Property[];
 };
+
+//: État de la collecte en lot, tel que l'extension le renvoie.
+type BatchState = {
+  status: "idle" | "running" | "paused" | "done";
+  total: number;
+  index: number;
+  ok: number;
+  fail: number;
+  failures: string[];
+  nbFailures?: number;
+  current: string | null;
+  raison?: string | null;
+  startedAt?: number | null;
+};
+
+function extensionVersion(): string {
+  if (typeof window === "undefined") return "";
+  return (window as unknown as { __h2_extension?: string }).__h2_extension || "";
+}
 
 const SIZE_PRESETS = [
   { label: "Tous", min: undefined as number | undefined, max: undefined as number | undefined },
@@ -165,6 +185,107 @@ export default function ImmeublesMtlPage() {
     distanceBand,
     arrondissement
   ]);
+
+  // ── Collecte en lot des propriétaires (Phil 2026-09-28) ──
+  const confirm = useConfirm();
+  const [batch, setBatch] = useState<BatchState | null>(null);
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchMsg, setBatchMsg] = useState<string | null>(null);
+  const [batchMasque, setBatchMasque] = useState(false);
+  const batchStatutPrec = useRef<string>("idle");
+
+  // Réponses de l'extension (pont content-h20.js).
+  useEffect(() => {
+    function onMsg(ev: MessageEvent) {
+      if (ev.source !== window) return;
+      const d = ev.data as { type?: string; state?: BatchState | null; error?: string | null };
+      if (d?.type !== "h2_batch_state") return;
+      if (d.state) setBatch(d.state);
+      if (d.error) setBatchMsg(d.error);
+    }
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
+
+  // État demandé au chargement puis toutes les 3 s (local, sans réseau).
+  useEffect(() => {
+    if (!extensionVersion()) return;
+    window.postMessage({ type: "h2_batch_status" }, "*");
+    const id = setInterval(
+      () => window.postMessage({ type: "h2_batch_status" }, "*"),
+      3000
+    );
+    return () => clearInterval(id);
+  }, []);
+
+  function batchCmd(cmd: "pause" | "resume" | "stop" | "retry") {
+    window.postMessage({ type: `h2_batch_${cmd}` }, "*");
+  }
+
+  async function lancerCollecte() {
+    const v = extensionVersion();
+    if (!v) {
+      setBatchMsg(
+        "Extension Horizon non détectée : installe-la (Paramètres → Outils), puis recharge cette page."
+      );
+      return;
+    }
+    if (v < "1.2.0") {
+      setBatchMsg(
+        `Extension ${v} : la collecte en lot demande la version 1.2.0 — recharge l'extension depuis le dossier à jour.`
+      );
+      return;
+    }
+    setBatchBusy(true);
+    setBatchMsg(null);
+    try {
+      const p = paramsFiltres();
+      p.set("sans_proprietaire", "true");
+      const r = await authedFetch(
+        `/api/v1/prospection/mtl-properties/matricules?${p}`
+      );
+      if (!r.ok) throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      const d = (await r.json()) as {
+        matricules: string[];
+        total: number;
+        deja_connus: number;
+        plafond: number;
+        tronque: boolean;
+      };
+      if (d.matricules.length === 0) {
+        setBatchMsg(
+          `Rien à collecter : les ${d.total.toLocaleString("fr-CA")} propriétés du filtre ont déjà un propriétaire connu.`
+        );
+        return;
+      }
+      const heures = (d.matricules.length * 9) / 3600;
+      const duree =
+        heures < 1
+          ? `${Math.max(1, Math.round(heures * 60))} min`
+          : `${Math.round(heures * 10) / 10} h`;
+      const ok = await confirm({
+        title: `Collecter ${d.matricules.length.toLocaleString("fr-CA")} propriétaires ?`,
+        description:
+          `${d.total.toLocaleString("fr-CA")} propriétés dans le filtre, ${d.deja_connus.toLocaleString("fr-CA")} déjà connues. ` +
+          `L'extension consulte montreal.ca une propriété à la fois dans un onglet en arrière-plan, environ ${duree} avec Chrome ouvert. ` +
+          `Pause possible à tout moment.` +
+          (d.tronque
+            ? ` Plafond de ${d.plafond.toLocaleString("fr-CA")} par lot : relance ensuite pour la suite.`
+            : ""),
+        confirmLabel: "Lancer la collecte"
+      });
+      if (!ok) return;
+      setBatchMasque(false);
+      window.postMessage(
+        { type: "h2_batch_start", matricules: d.matricules },
+        "*"
+      );
+    } catch (e) {
+      setBatchMsg(`Collecte : ${(e as Error).message}`);
+    } finally {
+      setBatchBusy(false);
+    }
+  }
 
   const [exporting, setExporting] = useState(false);
   async function exporterCsv() {
@@ -309,6 +430,13 @@ export default function ImmeublesMtlPage() {
     void load();
   }, [load]);
 
+  // Fin d'un lot → la liste se rafraîchit (propriétaires visibles).
+  useEffect(() => {
+    const st = batch?.status || "idle";
+    if (st === "done" && batchStatutPrec.current !== "done") void load();
+    batchStatutPrec.current = st;
+  }, [batch?.status, load]);
+
   const filteredCount = properties.length;
   const totalPages = Math.ceil(total / limit);
   const currentPage = Math.floor(offset / limit) + 1;
@@ -380,6 +508,20 @@ export default function ImmeublesMtlPage() {
               <Download className="h-4 w-4" />
             )}
             {exporting ? "Export en cours…" : "Exporter en CSV"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void lancerCollecte()}
+            disabled={batchBusy || batch?.status === "running"}
+            title="L'extension Horizon consulte montreal.ca pour chaque propriété du filtre sans propriétaire connu, une à la fois, en arrière-plan"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/50 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-200 transition hover:border-emerald-400 disabled:opacity-60"
+          >
+            {batchBusy ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Users className="h-4 w-4" />
+            )}
+            Collecter les propriétaires
           </button>
           {/* Filtre arrondissement (visible quand mtl_only ou Tout le Québec
               + des arrondissements existent en DB). */}
@@ -648,6 +790,100 @@ export default function ImmeublesMtlPage() {
           ) : null}
         </div>
 
+        {batchMsg ? (
+          <p className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+            {batchMsg}
+            <button
+              type="button"
+              onClick={() => setBatchMsg(null)}
+              className="ml-2 underline hover:text-white"
+            >
+              fermer
+            </button>
+          </p>
+        ) : null}
+        {batch && batch.status !== "idle" && !batchMasque ? (
+          <div className="fixed bottom-4 right-4 z-[900] w-[340px] rounded-xl border border-emerald-500/40 bg-brand-950/95 p-3 shadow-2xl backdrop-blur">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-300">
+                Collecte des propriétaires
+                {batch.status === "running"
+                  ? " · en cours"
+                  : batch.status === "paused"
+                    ? " · en pause"
+                    : " · terminée"}
+              </p>
+              <button
+                type="button"
+                onClick={() => setBatchMasque(true)}
+                className="text-[10px] text-white/50 hover:text-white"
+                title="Masquer (la collecte continue)"
+              >
+                masquer
+              </button>
+            </div>
+            <div className="mt-2 h-1.5 w-full overflow-hidden rounded bg-white/10">
+              <div
+                className="h-full bg-emerald-400 transition-all"
+                style={{
+                  width: `${batch.total > 0 ? Math.round((batch.index / batch.total) * 100) : 0}%`
+                }}
+              />
+            </div>
+            <p className="mt-1.5 font-mono text-[11px] text-white/80">
+              {batch.index.toLocaleString("fr-CA")} / {batch.total.toLocaleString("fr-CA")} ·{" "}
+              <span className="text-emerald-300">{batch.ok} trouvés</span> ·{" "}
+              <span className={batch.fail > 0 ? "text-amber-300" : "text-white/50"}>
+                {batch.fail} échecs
+              </span>
+            </p>
+            {batch.current ? (
+              <p className="mt-0.5 truncate font-mono text-[10px] text-white/40">
+                en cours : {batch.current}
+              </p>
+            ) : null}
+            {batch.raison ? (
+              <p className="mt-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-200">
+                {batch.raison}
+              </p>
+            ) : null}
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {batch.status === "running" ? (
+                <button type="button" onClick={() => batchCmd("pause")} className="btn-secondary btn-xs">
+                  Pause
+                </button>
+              ) : null}
+              {batch.status === "paused" ? (
+                <button type="button" onClick={() => batchCmd("resume")} className="btn-accent btn-xs">
+                  Reprendre
+                </button>
+              ) : null}
+              {(batch.nbFailures ?? batch.failures.length) > 0 && batch.status !== "running" ? (
+                <button
+                  type="button"
+                  onClick={() => batchCmd("retry")}
+                  className="btn-secondary btn-xs"
+                  title="Relance seulement les propriétés en échec"
+                >
+                  Réessayer les échecs ({batch.nbFailures ?? batch.failures.length})
+                </button>
+              ) : null}
+              {batch.status === "done" ? (
+                <button type="button" onClick={() => void load()} className="btn-secondary btn-xs">
+                  Actualiser la liste
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => batchCmd("stop")}
+                className="btn-ghost btn-xs text-rose-300"
+                title={batch.status === "done" ? "Effacer ce suivi" : "Arrêter la collecte (l'onglet montreal.ca se ferme)"}
+              >
+                {batch.status === "done" ? "Fermer" : "Arrêter"}
+              </button>
+            </div>
+          </div>
+        ) : null}
         {error ? (
           <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {error}

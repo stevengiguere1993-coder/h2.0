@@ -137,6 +137,13 @@
     const parts = decomposeMatricule(matricule);
     if (!parts) {
       log("Matricule invalide:", matricule);
+      try {
+        chrome.runtime.sendMessage({
+          type: "EVALWEB_NOT_FOUND",
+          matricule,
+          raison: "matricule invalide",
+        });
+      } catch (_) {}
       return false;
     }
     log("Autopilot étape 2 : remplissage form pour", matricule);
@@ -204,6 +211,15 @@
 
     if (candidates.length === 0) {
       log("Aucune carte de résultat trouvée pour", matricule);
+      // Collecte en lot : signale l'échec tout de suite (sinon le chien
+      // de garde attendrait 75 s).
+      try {
+        chrome.runtime.sendMessage({
+          type: "EVALWEB_NOT_FOUND",
+          matricule,
+          raison: "aucun résultat",
+        });
+      } catch (_) {}
       return false;
     }
 
