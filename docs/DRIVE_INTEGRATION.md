@@ -69,23 +69,40 @@ fichiers.
    `APIs & Services → Library → Google Drive API → Enable`.
 4. Configurer le consent screen :
    `APIs & Services → OAuth consent screen`.
-   - **User type** : External
+   - **User type** : **Internal** (⚠️ voir l'encadré ci-dessous)
    - **App name** : Kratos
    - **User support email** : `info@immohorizon.com`
    - **Developer contact** : `info@immohorizon.com`
    - **Authorized domains** : `immohorizon.com`, `onrender.com`
    - **Scopes** : ajouter
-     - `https://www.googleapis.com/auth/drive.file`
+     - `https://www.googleapis.com/auth/drive`
      - `https://www.googleapis.com/auth/userinfo.email`
      - `openid`
-   - **Test users** : ajouter les 3 partners Kratos :
-     - `philippe.meuser@immohorizon.com`
-     - `sgiguere@immohorizon.com`
-     - `mvilliard@immohorizon.com`
 
-   Comme les comptes sont Gmail perso avec adresse business (pas
-   Workspace), on reste en mode « Testing » → pas besoin de Verification
-   Google. La whitelist limite l'accès aux 3 emails ci-dessus.
+   > ⚠️ **Pourquoi « Internal » et pas « External / Testing »**
+   > (retour Phil 2026-09-28 : « le connecteur me déconnecte souvent »).
+   > Une application OAuth **External** en statut **Testing** reçoit de
+   > Google des refresh tokens qui **expirent après 7 jours** dès qu'elle
+   > demande un scope sensible (c'est le cas de `auth/drive`). Chaque
+   > utilisateur devait donc reconnecter son Drive toutes les semaines,
+   > et le journal `drive_audit_logs` se remplissait de
+   > `refresh_failed … invalid_grant`. En **Internal** (projet Google
+   > Cloud appartenant à l'organisation Workspace `immohorizon.com`),
+   > les refresh tokens n'expirent plus (sauf révocation, changement de
+   > mot de passe ou 6 mois sans usage), aucune vérification Google
+   > n'est requise, et seuls les comptes `@immohorizon.com` peuvent se
+   > connecter — pas besoin de liste de testeurs.
+   >
+   > Si l'option « Internal » est grisée, le projet Google Cloud n'est
+   > pas rattaché à l'organisation Workspace : créer (ou recréer) le
+   > projet en étant connecté avec un compte administrateur
+   > `@immohorizon.com`, recréer le client OAuth (étape 5), puis mettre
+   > à jour `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` sur Render.
+   > Chaque utilisateur reconnecte ensuite son Drive UNE dernière fois.
+   >
+   > Publier en « Production » en restant External n'est pas une option
+   > raisonnable : le scope `auth/drive` est « restreint » et exige une
+   > vérification Google plus une évaluation de sécurité tierce.
 
 5. Créer les credentials OAuth :
    `APIs & Services → Credentials → Create Credentials → OAuth client ID`.
@@ -187,8 +204,10 @@ Toute mutation Drive depuis Kratos doit y poser une ligne avec
 
 ## Sécurité
 
-- **Whitelist Google** : seuls les 3 emails partners peuvent passer
-  l'écran de consentement OAuth tant qu'on reste en mode Testing.
+- **Restriction Google** : en mode « Internal », seuls les comptes de
+  l'organisation Workspace `immohorizon.com` peuvent passer l'écran de
+  consentement (l'ancienne liste de testeurs du mode Testing n'existe
+  plus — et avec elle l'expiration des jetons après 7 jours).
 - **State HMAC** : le `state` du flow OAuth est signé avec `jwt_secret`
   et porte le `user_id` + un nonce + un TTL de 10 min. Empêche les
   attaques CSRF et le replay.
