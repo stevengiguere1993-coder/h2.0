@@ -97,6 +97,8 @@ type Immeuble = {
   id: number;
   name: string;
   address: string;
+  /** Début de la collecte des loyers (1er du mois) ; vide = démarrage global. */
+  collecte_depuis?: string | null;
   city?: string | null;
   postal_code?: string | null;
   type: string;
@@ -354,7 +356,8 @@ export default function ImmeubleDetailPage({
     gestion_externe: false,
     gestionnaire_externe_nom: "",
     gestionnaire_externe_contact: "",
-    maintenance_interne: false
+    maintenance_interne: false,
+    collecte_depuis: ""
   });
   const [financials, setFinancials] = useState<Financials | null>(null);
   const [logements, setLogements] = useState<Logement[] | null>(null);
@@ -608,7 +611,8 @@ export default function ImmeubleDetailPage({
       gestionnaire_externe_nom: immeuble.gestionnaire_externe_nom || "",
       gestionnaire_externe_contact:
         immeuble.gestionnaire_externe_contact || "",
-      maintenance_interne: !!immeuble.maintenance_interne
+      maintenance_interne: !!immeuble.maintenance_interne,
+      collecte_depuis: immeuble.collecte_depuis || ""
     });
     setShowEdit(true);
   }
@@ -646,7 +650,11 @@ export default function ImmeubleDetailPage({
           : null,
         maintenance_interne: editForm.gestion_externe
           ? editForm.maintenance_interne
-          : false
+          : false,
+        // Toujours un 1er du mois (le serveur le garantit aussi).
+        collecte_depuis: editForm.collecte_depuis
+          ? `${editForm.collecte_depuis.slice(0, 7)}-01`
+          : null
       };
       const res = await authedFetch(
         `/api/v1/immobilier/immeubles/${immeubleId}`,
@@ -1058,10 +1066,25 @@ export default function ImmeubleDetailPage({
             />
           ) : null}
           {tab === "paiements" ? (
-            <PaiementsMoisSection
-              immeubleId={immeubleId}
-              gestionExterne={gestionExterne}
-            />
+            <>
+              {immeuble?.collecte_depuis ? (
+                <p className="mb-3 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+                  Collecte des loyers suivie depuis{" "}
+                  {new Date(
+                    `${immeuble.collecte_depuis.slice(0, 10)}T00:00:00`
+                  ).toLocaleDateString("fr-CA", {
+                    month: "long",
+                    year: "numeric"
+                  })}
+                  {" "}— les mois précédents ne sont ni attendus ni en
+                  retard (réglable dans Modifier l&apos;immeuble).
+                </p>
+              ) : null}
+              <PaiementsMoisSection
+                immeubleId={immeubleId}
+                gestionExterne={gestionExterne}
+              />
+            </>
           ) : null}
           {tab === "baux" ? (
             <BauxTab
@@ -1355,6 +1378,30 @@ export default function ImmeubleDetailPage({
                   />
                 </EditField>
               </div>
+              <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 p-3">
+                <EditField label="Début de la collecte des loyers">
+                  <input
+                    type="month"
+                    value={editForm.collecte_depuis.slice(0, 7)}
+                    onChange={(e) =>
+                      setEditForm((f) => ({
+                        ...f,
+                        collecte_depuis: e.target.value
+                          ? `${e.target.value}-01`
+                          : ""
+                      }))
+                    }
+                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-emerald-300"
+                  />
+                </EditField>
+                <p className="mt-1 text-[11px] text-emerald-200/70">
+                  Premier mois dont Kratos collecte les loyers. Exemple :
+                  acte notarié le 11 septembre, ajustements au notaire →
+                  collecte à partir d&apos;octobre ; les mois précédents ne
+                  sont ni attendus ni en retard. Vide = démarrage global du
+                  pôle (Paramètres).
+                </p>
+              </div>
               <div className="rounded-lg border border-sky-400/30 bg-sky-500/10 p-3">
                 <label className="flex cursor-pointer items-center gap-2 text-sm text-white">
                   <input
@@ -1373,8 +1420,12 @@ export default function ImmeubleDetailPage({
                   </span>
                 </label>
                 <p className="mt-1 text-[11px] text-sky-200/70">
-                  Les paiements, renouvellements, dépôts et relances sont
-                  gérés par la compagnie de gestion — masqués dans Kratos.
+                  Réservé aux immeubles gérés par une compagnie TIERCE : les
+                  paiements, renouvellements, dépôts, relances et
+                  coordonnées des locataires sont chez elle, donc masqués
+                  dans Kratos. Si la gestion est faite par votre propre
+                  équipe (ex. Magnifica), laissez cette case décochée : les
+                  locataires, baux et paiements se suivent ici.
                 </p>
                 {editForm.gestion_externe ? (
                   <>
@@ -2303,6 +2354,12 @@ function LogementsTab({
         router.push(
           `/immobilier/logements/${saved.id}?from=immeuble` as any
         );
+      }}
+      onSavedMany={(ls) => {
+        // Plusieurs d'un coup : on reste sur l'onglet Logements pour
+        // corriger chaque fiche (retour partenaire 2026-09-28).
+        setList((prev) => [...(prev ?? []), ...ls]);
+        setShowCreate(false);
       }}
       onDeleted={(id) => {
         setList((prev) => prev?.filter((l) => l.id !== id) ?? prev);

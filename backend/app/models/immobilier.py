@@ -185,6 +185,15 @@ class Immeuble(Base, TimestampUpdateMixin):
     maintenance_interne: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    #: Début de la COLLECTE des loyers par Kratos pour cet immeuble
+    #: (1er du mois) — retour partenaire 2026-09-28 : « si on passe chez
+    #: le notaire le 11 septembre, il y a des ajustements et la collecte
+    #: commence le 1er octobre ». Les mois précédents ne sont ni attendus
+    #: ni en retard. Vide = démarrage global du pôle (Paramètres).
+    #: Colonne additive → ensure_critical_columns.
+    collecte_depuis: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
+    )
 
     # Frais de gestion (page /immobilier/frais-gestion, 2026-07-22) :
     # contrat de gestion actif → on facture chaque mois X % des revenus

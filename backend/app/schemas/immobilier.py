@@ -45,6 +45,9 @@ class ImmeubleBase(BaseModel):
     # Gestion externe mais maintenance faite par nos hommes → l'onglet
     # Maintenance (bons de travail) reste actif sur la fiche.
     maintenance_interne: bool = False
+    #: Début de la collecte des loyers (1er du mois) ; vide = démarrage
+    #: global du pôle. Retour partenaire 2026-09-28.
+    collecte_depuis: Optional[date] = None
 
 
 class ImmeubleCreate(ImmeubleBase):
@@ -78,6 +81,7 @@ class ImmeubleUpdate(BaseModel):
         default=None, max_length=255
     )
     maintenance_interne: Optional[bool] = None
+    collecte_depuis: Optional[date] = None
 
 
 class ImmeubleRead(ImmeubleBase):
@@ -153,6 +157,33 @@ class LogementBase(BaseModel):
 
 class LogementCreate(LogementBase):
     pass
+
+
+class LogementLotModele(BaseModel):
+    """Valeurs COMMUNES des logements créés d'un coup (retour partenaire
+    2026-09-28 : « les ajouter 1 par 1, c'est terriblement long »)."""
+
+    nb_pieces_decimal: Optional[float] = Field(default=None, ge=0)
+    nb_chambres: Optional[int] = Field(default=None, ge=0)
+    nb_sdb: Optional[float] = Field(default=None, ge=0)
+    superficie_pi2: Optional[float] = Field(default=None, ge=0)
+    location_en_chambres: bool = False
+    etage: Optional[int] = None
+    type: str = Field(default="residentiel", max_length=32)
+    status: str = Field(default="vacant", max_length=16)
+    loyer_demande: Optional[float] = Field(default=None, ge=0)
+    notes: Optional[str] = None
+
+
+class LogementsLotIn(BaseModel):
+    numeros: List[str] = Field(..., min_length=1, max_length=300)
+    modele: Optional[LogementLotModele] = None
+
+
+class LogementsLotOut(BaseModel):
+    crees: List["LogementRead"] = Field(default_factory=list)
+    #: Numéros ignorés : déjà présents dans l'immeuble ou en double.
+    ignores: List[str] = Field(default_factory=list)
 
 
 class LogementUpdate(BaseModel):
