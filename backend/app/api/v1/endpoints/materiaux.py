@@ -51,8 +51,23 @@ from app.services.materiaux_import import (
 
 #: Quincailleries principales par défaut = colonnes du comparatif.
 MAGASINS_PRINCIPAUX = ["Home Depot", "Canac", "Rona", "BMR", "Patrick Morin"]
+#: Sites web par défaut (la recherche automatique de prix choisit son
+#: moteur d'après le domaine du site).
+MAGASINS_SITES = {
+    "home depot": "https://www.homedepot.ca",
+    "canac": "https://www.canac.ca",
+    "rona": "https://www.rona.ca",
+    "réno-dépôt": "https://www.renodepot.com",
+    "reno-depot": "https://www.renodepot.com",
+    "bmr": "https://www.bmr.ca",
+    "patrick morin": "https://patrickmorin.com",
+}
 
 router = APIRouter(tags=["materiaux"])
+
+#: Références des tâches de fond (un create_task non référencé peut être
+#: ramassé en cours d'exécution).
+_TACHES_FOND: set = set()
 
 
 # ───────────────────────────── Schémas ─────────────────────────────
@@ -232,12 +247,22 @@ async def _ensure_principaux(db) -> None:
     colonnes du comparatif existent toujours. Idempotent."""
     rows = list((await db.execute(select(Magasin))).scalars().all())
     by_key = {m.name.lower(): m for m in rows}
+    # Site web par défaut des quincailleries connues (sans lui, la
+    # recherche automatique de prix ne sait pas quel moteur appeler).
+    touche = False
+    for m in rows:
+        site = MAGASINS_SITES.get(m.name.strip().lower())
+        if site and not (m.website or "").strip():
+            m.website = site
+            touche = True
     if any(m.is_principal for m in rows):
+        if touche:
+            await db.flush()
         return
     for i, name in enumerate(MAGASINS_PRINCIPAUX):
         m = by_key.get(name.lower())
         if m is None:
-            m = Magasin(name=name)
+            m = Magasin(name=name, website=MAGASINS_SITES.get(name.lower()))
             db.add(m)
         m.is_principal = True
         m.is_active = True
@@ -366,6 +391,34 @@ class ReleveToutRequest(BaseModel):
     max_age_hours: Optional[float] = None
 
 
+class RechercheToutRequest(BaseModel):
+    magasin_id: Optional[int] = None
+    materiau_id: Optional[int] = None
+    #: Nombre maximal de couples matériau × magasin à chercher.
+    limit: int = Field(default=80, ge=1, le=500)
+
+
+class RechercheMagasinResult(BaseModel):
+    magasin_id: int
+    magasin_name: str
+    ok: bool
+    statut: str
+    url: Optional[str] = None
+    title: Optional[str] = None
+    score: Optional[float] = None
+    price: Optional[float] = None
+    regular_price: Optional[float] = None
+    on_sale: bool = False
+    method: str = ""
+    error: Optional[str] = None
+    candidats: List[str] = []
+
+
+class RechercheMateriauResult(BaseModel):
+    materiau: MateriauRead
+    resultats: List[RechercheMagasinResult]
+
+
 @router.get("/materiaux/prix/etat")
 async def etat_releve(_: CurrentUser) -> dict:
     """État du dernier relevé global (en cours / terminé + statistiques)."""
@@ -393,6 +446,66 @@ async def relever_tout_endpoint(data: ReleveToutRequest, _: RequireManager) -> d
         max_age_hours=data.max_age_hours,
     ))
     return {"lance": True, **DERNIER_RELEVE}
+
+
+@router.get("/materiaux/prix/chercher/etat")
+async def etat_recherche(_: CurrentUser) -> dict:
+    """État de la dernière recherche automatique de prix (en cours /
+    terminée + statistiques)."""
+    from app.services.materiaux_recherche import DERNIERE_RECHERCHE
+
+    return dict(DERNIERE_RECHERCHE)
+
+
+@router.post("/materiaux/prix/chercher")
+async def chercher_tout_endpoint(data: RechercheToutRequest, db: DBSession, _: RequireManager) -> dict:
+    """Lance en arrière-plan la recherche des prix de BASE manquants : pour
+    chaque matériau sans lien chez une quincaillerie principale, trouve le
+    produit sur le site du magasin, pose le lien et le prix. Répond tout
+    de suite ; suivre avec GET /materiaux/prix/chercher/etat."""
+    import asyncio
+
+    from app.services.materiaux_recherche import (
+        DERNIERE_RECHERCHE,
+        chercher_tout_en_arriere_plan,
+    )
+
+    await _ensure_principaux(db)
+    # Les magasins principaux (créés à l'instant au premier appel) doivent
+    # être visibles de la session de fond : commit avant de la lancer.
+    await db.commit()
+    if DERNIERE_RECHERCHE.get("en_cours"):
+        return {"lance": False, "raison": "Une recherche est déjà en cours.", **DERNIERE_RECHERCHE}
+    task = asyncio.create_task(chercher_tout_en_arriere_plan(
+        magasin_id=data.magasin_id, materiau_id=data.materiau_id, limit=data.limit,
+    ))
+    _TACHES_FOND.add(task)
+    task.add_done_callback(_TACHES_FOND.discard)
+    return {"lance": True, **DERNIERE_RECHERCHE}
+
+
+@router.post("/materiaux/{materiau_id}/chercher", response_model=RechercheMateriauResult)
+async def chercher_materiau_endpoint(
+    materiau_id: int, db: DBSession, _: CurrentUser,
+    magasin_id: Optional[int] = Query(default=None),
+    remplacer: bool = Query(default=False, description="Chercher aussi chez les magasins qui ont déjà un lien"),
+) -> RechercheMateriauResult:
+    """Cherche MAINTENANT ce matériau chez les quincailleries principales
+    (ou un magasin donné) et renvoie, par magasin, ce qui a été trouvé
+    (lien, titre lu, prix) ou pourquoi rien n'a été posé."""
+    from app.services.materiaux_recherche import chercher_pour_materiau, magasins_recherchables
+
+    await _ensure_principaux(db)
+    m = await _get_materiau(db, materiau_id)
+    magasins = await magasins_recherchables(db, magasin_id)
+    if not magasins:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Aucun magasin principal avec un site web connu.")
+    rs = await chercher_pour_materiau(db, m, magasins, only_missing=not remplacer, relever=True)
+    m = await _get_materiau(db, materiau_id)
+    return RechercheMateriauResult(
+        materiau=_materiau_read(m, await _magasins_map(db)),
+        resultats=[RechercheMagasinResult(**r.__dict__) for r in rs],
+    )
 
 
 @router.post(

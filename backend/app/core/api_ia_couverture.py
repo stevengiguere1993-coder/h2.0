@@ -237,6 +237,9 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "materiaux",
     "materiau_offres",
     "materiau_prix_historique",
+    #: Liste d'achats de matériaux par projet (étape 3, 2026-09-25) —
+    #: liste générique « projet_materiaux » + GET /projects/{id}/materiaux.
+    "projet_materiaux",
     "soumission_items",
     "soumissions",
     "sous_traitant_timesheets",

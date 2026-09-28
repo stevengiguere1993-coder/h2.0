@@ -58,6 +58,10 @@ class EmployeRateHistory(Base, TimestampMixin):
     is_ccq: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # Taux horaire de base sous régime CCQ à cette date (NULL = hourly_rate).
+    hourly_rate_ccq: Mapped[Optional[float]] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
     # Note libre : « augmentation annuelle », « passage CCQ », etc.
     note: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 

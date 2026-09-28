@@ -85,6 +85,12 @@ class Materiau(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
+    #: Dernière recherche automatique de prix sur les sites (2026-09-26) :
+    #: le cron traite d'abord les matériaux jamais cherchés, puis les plus
+    #: anciens, et ne recommence pas avant quelques jours.
+    prix_recherche_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -95,8 +101,10 @@ class Materiau(Base):
         nullable=False,
     )
 
+    #: selectin : toujours utiles (meilleur prix), et la liste générique
+    #: MCP ne pose pas d'options de chargement (async → pas de lazy load).
     offres: Mapped[list["MateriauOffre"]] = relationship(
-        back_populates="materiau", cascade="all, delete-orphan"
+        back_populates="materiau", cascade="all, delete-orphan", lazy="selectin"
     )
 
 

@@ -1,0 +1,42 @@
+{
+   "baseUnit" : "EA",
+   "belowMap" : false,
+   "code" : "1248",
+   "metaTitle" : "Gypse régulier léger 1/2 po x 4 pi x 8 pi - Canac",
+   "modelID" : "012237",
+   "name" : "Gypse régulier léger 1/2 po x 4 pi x 8 pi",
+   "price" : {
+      "affirmMonthlyAmount" : "3 $",
+      "currencyIso" : "CAD",
+      "formattedValue" : "16,75 $",
+      "priceType" : "BUY",
+      "sapConditionType" : "VKP0",
+      "showAffirmComponent" : false,
+      "storeName" : "2",
+      "unit" : "EA",
+      "unitName" : "Chaque",
+      "value" : 16.75
+   },
+   "priceDivisorUnit" : "",
+   "purchasable" : true,
+   "sapAddToCartDisabled" : false,
+   "stock" : {
+      "isValueRounded" : false,
+      "stockLevel" : 2373,
+      "stockLevelStatus" : "inStock",
+      "storeName" : "2"
+   },
+   "tag" : "",
+   "tagList" : [ ],
+   "upcs" : [ {
+      "main" : true,
+      "upc" : "81999559137"
+   }, {
+      "main" : false,
+      "upc" : "800805145476"
+   } ],
+   "url" : "/p/gypse-regulier-leger-1-2-po-x-4-pi-x-8-pi/1248",
+   "urlSlug" : "gypse-regulier-leger-1-2-po-x-4-pi-x-8-pi",
+   "xdChainStatusCode" : "V",
+   "xdChainStatusName" : "Vente Actif"
+}

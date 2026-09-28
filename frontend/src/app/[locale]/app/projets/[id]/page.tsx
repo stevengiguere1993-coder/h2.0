@@ -30,6 +30,7 @@ import { TAX_FACTOR } from "@/lib/tax";
 import { useConfirm } from "@/components/confirm-dialog";
 import { MultiSelectDropdown } from "@/components/multi-select-dropdown";
 import { ProjectHoursSection } from "@/components/project-hours-section";
+import { ProjectMateriauxTab } from "@/components/project-materiaux-tab";
 import {
   AchatMarkPaidModal,
   type MarkPaidAchat
@@ -103,6 +104,7 @@ type TabId =
   | "planification"
   | "agenda"
   | "achats"
+  | "materiaux"
   | "photos"
   | "tasks"
   | "corrections"
@@ -113,6 +115,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "planification", label: "Planification" },
   { id: "agenda", label: "Agenda chantier" },
   { id: "achats", label: "Achats / PO" },
+  { id: "materiaux", label: "Matériaux" },
   { id: "finances", label: "Récap & finances" },
   { id: "photos", label: "Photos" },
   { id: "tasks", label: "Tâches" },
@@ -184,6 +187,7 @@ export default function ProjectDetailPage() {
       "planification",
       "agenda",
       "achats",
+      "materiaux",
       "photos",
       "tasks",
       "finances"
@@ -795,6 +799,8 @@ export default function ProjectDetailPage() {
                 />
               ) : tab === "achats" ? (
                 <ProjectAchatsTab projectId={id} />
+              ) : tab === "materiaux" ? (
+                <ProjectMateriauxTab projectId={id} />
               ) : tab === "finances" ? (
                 <FinancesTab projectId={id} project={p} />
               ) : tab === "photos" ? (
