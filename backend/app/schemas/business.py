@@ -29,6 +29,7 @@ class EmployeCreate(BaseModel):
     is_ccq: bool = False
     cnesst_rate: Optional[float] = Field(default=None, ge=0, le=1)
     ccq_rate: Optional[float] = Field(default=None, ge=0, le=1)
+    hourly_rate_ccq: Optional[float] = Field(default=None, ge=0)
     employeur_d_url: Optional[str] = Field(default=None, max_length=500)
 
 
@@ -49,6 +50,7 @@ class EmployeUpdate(BaseModel):
     is_ccq: Optional[bool] = None
     cnesst_rate: Optional[float] = Field(default=None, ge=0, le=1)
     ccq_rate: Optional[float] = Field(default=None, ge=0, le=1)
+    hourly_rate_ccq: Optional[float] = Field(default=None, ge=0)
     employeur_d_url: Optional[str] = None
 
 
@@ -70,6 +72,7 @@ class EmployeRead(_Base):
     is_ccq: bool = False
     cnesst_rate: Optional[float] = None
     ccq_rate: Optional[float] = None
+    hourly_rate_ccq: Optional[float] = None
     employeur_d_url: Optional[str] = None
     created_at: datetime
 
@@ -404,6 +407,8 @@ class PunchRead(_Base):
     geolocation: Optional[str]
     approved: bool
     notes: Optional[str]
+    #: ccq | hors_decret | None (avant la règle : suit la fiche employé).
+    regime: Optional[str] = None
     created_at: datetime
 
 

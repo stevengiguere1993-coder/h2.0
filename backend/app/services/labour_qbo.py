@@ -75,7 +75,8 @@ async def compute_project_labour_cost_ht(
         emp = emp_cache.get(p.employe_id)
         pdate = p.started_at.date() if p.started_at is not None else None
         cph = resolve_real_cost(
-            rate_periods.get(p.employe_id or -1, []), pdate, emp, avg_rate
+            rate_periods.get(p.employe_id or -1, []), pdate, emp, avg_rate,
+            regime=getattr(p, "regime", None),
         )
         cost += float(p.hours or 0) * cph
     return round(cost, 2), round(hours, 2)

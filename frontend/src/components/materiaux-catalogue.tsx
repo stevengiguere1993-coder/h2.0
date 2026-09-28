@@ -16,6 +16,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Search,
   Settings2,
   Tag,
   Trash2,
@@ -26,6 +27,7 @@ import {
 
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
+import { Link } from "@/i18n/navigation";
 
 type Magasin = {
   id: number;
@@ -67,6 +69,21 @@ type Materiau = {
   best_magasin_id: number | null;
   best_magasin_name: string | null;
   best_is_archive: boolean;
+};
+
+type RabaisListe = {
+  ligne_id: number;
+  project_id: number;
+  project_name: string;
+  materiau_name: string;
+  quantity: number;
+  unit: string | null;
+  magasin_name: string;
+  price: number;
+  regular_price: number | null;
+  sale_end: string | null;
+  economie: number;
+  url: string | null;
 };
 
 type ReleveInfo = {
@@ -126,6 +143,7 @@ export function MateriauxCatalogue() {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [searching, setSearching] = useState(false);
   const [classifying, setClassifying] = useState(false);
   const [storesOpen, setStoresOpen] = useState(false);
   const [releveEtat, setReleveEtat] = useState<{
@@ -329,7 +347,9 @@ export function MateriauxCatalogue() {
           setNotice(
             st.error
               ? `Relevé terminé avec une erreur : ${st.error}`
-              : `Relevé terminé : ${st.offres ?? 0} offres avec lien, ${st.ok ?? 0} prix lus, ${st.changes ?? 0} changements, ${st.rabais ?? 0} en rabais, ${st.echecs ?? 0} échecs.`
+              : Number(st.offres ?? 0) === 0
+                ? "Aucune offre n'a de lien produit : rien à relever. Clique « Trouver les prix » pour chercher chaque matériau sur les sites des quincailleries et poser un prix de base."
+                : `Relevé terminé : ${st.offres ?? 0} offres avec lien, ${st.ok ?? 0} prix lus, ${st.changes ?? 0} changements, ${st.rabais ?? 0} en rabais, ${st.echecs ?? 0} échecs.`
           );
           await load();
           break;
@@ -339,6 +359,43 @@ export function MateriauxCatalogue() {
       setError(`Relevé non lancé : ${(e as Error).message}`);
     } finally {
       setRefreshing(false);
+    }
+  }
+
+  async function findAllPrices() {
+    if (searching) return;
+    setSearching(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await authedFetch("/api/v1/materiaux/prix/chercher", {
+        method: "POST",
+        body: JSON.stringify({ limit: 150 })
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      setNotice(
+        "Recherche lancée : chaque matériau sans lien est cherché sur le site de chaque quincaillerie principale (un magasin à la fois). Ça peut prendre plusieurs minutes."
+      );
+      for (let i = 0; i < 180; i += 1) {
+        await new Promise((r) => setTimeout(r, 5000));
+        const er = await authedFetch("/api/v1/materiaux/prix/chercher/etat");
+        if (!er.ok) continue;
+        const e = (await er.json()) as { en_cours: boolean; stats: Record<string, unknown> | null };
+        if (!e.en_cours) {
+          const st = (e.stats || {}) as Record<string, number | string>;
+          setNotice(
+            st.error
+              ? `Recherche terminée avec une erreur : ${st.error}`
+              : `Recherche terminée : ${st.examines ?? 0} couples matériau × magasin examinés, ${st.trouves ?? 0} prix posés, ${st.aucun ?? 0} sans correspondance (précise le nom : dimensions, format, marque), ${st.erreurs ?? 0} erreurs de site.`
+          );
+          await load();
+          break;
+        }
+      }
+    } catch (e) {
+      setError(`Recherche non lancée : ${(e as Error).message}`);
+    } finally {
+      setSearching(false);
     }
   }
 
@@ -422,6 +479,20 @@ export function MateriauxCatalogue() {
           </button>
           <button
             type="button"
+            onClick={findAllPrices}
+            disabled={searching}
+            className="btn-secondary btn-sm disabled:opacity-60"
+            title="Chercher chaque matériau sans lien sur les sites des quincailleries principales et poser un prix de base"
+          >
+            {searching ? (
+              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Search className="mr-1 h-3.5 w-3.5" />
+            )}
+            Trouver les prix
+          </button>
+          <button
+            type="button"
             onClick={refreshAllPrices}
             disabled={refreshing}
             className="btn-secondary btn-sm disabled:opacity-60"
@@ -453,16 +524,20 @@ export function MateriauxCatalogue() {
 
       <p className="text-xs text-white/60">
         Meilleur prix en vert. « archive » = prix du fichier historique,
-        sans date, à vérifier avant d'acheter. Clique une case pour poser le
-        prix du jour, le rabais et sa date de fin, ou coller le lien de la
-        page produit : le prix est alors relevé chaque jour (prix régulier,
-        rabais et date de fin compris).
+        sans date, à vérifier avant d'acheter. « Trouver les prix » cherche
+        chaque matériau sans lien sur le site de chaque quincaillerie et pose
+        le lien et le prix du jour (le titre lu sur le site est gardé pour
+        vérifier l'article). Clique une case pour poser un prix, un rabais et
+        sa date de fin, ou coller le lien de la page produit : le prix est
+        alors relevé chaque jour.
         {releveEtat?.termine_a ? (
           <span className="ml-1 text-white/45">
             Dernier relevé automatique : {fmtDate(releveEtat.termine_a)}.
           </span>
         ) : null}
       </p>
+
+      <RabaisListesPanel refreshKey={items} />
 
       {loading ? (
         <div className="flex items-center justify-center py-10">
@@ -527,6 +602,75 @@ export function MateriauxCatalogue() {
           onChanged={loadMagasins}
           onError={setError}
         />
+      ) : null}
+    </div>
+  );
+}
+
+// Rabais du jour sur les matériaux encore à acheter des chantiers ouverts
+// (ceux que l'alerte quotidienne signale aux gestionnaires).
+function RabaisListesPanel({ refreshKey }: { refreshKey: unknown }) {
+  const [rows, setRows] = useState<RabaisListe[]>([]);
+  const [open, setOpen] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const res = await authedFetch("/api/v1/materiaux/rabais");
+      if (res.ok && !cancelled) setRows((await res.json()) as RabaisListe[]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey]);
+  if (rows.length === 0) return null;
+  const total = rows.reduce((a, r) => a + r.economie, 0);
+  return (
+    <div className="rounded-xl border border-rose-500/40 bg-rose-500/10">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm font-semibold text-rose-300"
+      >
+        {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        <Tag className="h-4 w-4" />
+        {rows.length} rabais aujourd&apos;hui sur les listes d&apos;achats des chantiers
+        {total > 0 ? ` — économie possible ≈ ${money(total)}` : ""}
+      </button>
+      {open ? (
+        <ul className="divide-y divide-rose-500/20 border-t border-rose-500/20 text-sm">
+          {rows.map((r) => (
+            <li key={r.ligne_id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-1.5">
+              <Link
+                href={`/app/projets/${r.project_id}#materiaux` as any}
+                className="font-medium text-white hover:underline"
+              >
+                {r.project_name}
+              </Link>
+              <span className="text-white/85">
+                {r.materiau_name} × {r.quantity}
+                {r.unit ? ` ${r.unit}` : ""}
+              </span>
+              <span className="font-mono font-semibold text-rose-300">
+                {money(r.price)}
+                {r.regular_price != null ? (
+                  <span className="ml-1 font-normal text-white/60 line-through">{money(r.regular_price)}</span>
+                ) : null}
+              </span>
+              <span className="text-white/70">
+                chez {r.magasin_name}
+                {r.sale_end ? ` jusqu'au ${fmtDate(r.sale_end)}` : ""}
+              </span>
+              {r.economie > 0 ? (
+                <span className="text-emerald-300">économie {money(r.economie)}</span>
+              ) : null}
+              {r.url ? (
+                <a href={r.url} target="_blank" rel="noreferrer" className="text-sky-300 hover:underline">
+                  page produit
+                </a>
+              ) : null}
+            </li>
+          ))}
+        </ul>
       ) : null}
     </div>
   );
@@ -722,6 +866,33 @@ function MateriauRow({
   const [unit, setUnit] = useState(m.unit || "");
   const [saving, setSaving] = useState(false);
   const [othersOpen, setOthersOpen] = useState(false);
+  const [finding, setFinding] = useState(false);
+
+  async function findPrices() {
+    if (finding) return;
+    setFinding(true);
+    try {
+      const res = await authedFetch(`/api/v1/materiaux/${m.id}/chercher`, { method: "POST" });
+      if (!res.ok) throw new Error(await readError(res));
+      const j = (await res.json()) as {
+        materiau: Materiau;
+        resultats: Array<{ magasin_name: string; ok: boolean; statut: string; title: string | null; price: number | null; error: string | null }>;
+      };
+      onSaved(j.materiau);
+      const manques = j.resultats.filter((r) => !r.ok && r.statut !== "deja");
+      if (manques.length > 0) {
+        onError(
+          `« ${m.name} » — ${j.resultats.filter((r) => r.statut === "trouve").length} prix posé(s). Sans résultat : ${manques
+            .map((r) => `${r.magasin_name} (${r.error || r.statut})`)
+            .join(" · ")}`
+        );
+      }
+    } catch (e) {
+      onError(`Recherche échouée : ${(e as Error).message}`);
+    } finally {
+      setFinding(false);
+    }
+  }
 
   async function save() {
     setSaving(true);
@@ -858,6 +1029,15 @@ function MateriauRow({
         )}
       </td>
       <td className="px-1 py-1.5 text-right whitespace-nowrap">
+        <button
+          type="button"
+          onClick={findPrices}
+          disabled={finding}
+          className="rounded p-1 text-white/50 hover:text-white disabled:opacity-60"
+          title="Chercher ce matériau sur les sites des quincailleries principales (magasins sans lien) et poser le prix"
+        >
+          {finding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
+        </button>
         <button
           type="button"
           onClick={onEdit}

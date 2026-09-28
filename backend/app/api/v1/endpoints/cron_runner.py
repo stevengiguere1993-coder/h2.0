@@ -849,14 +849,31 @@ async def trigger_all_daily(
     # Catalogue de matériaux : relevé quotidien des prix chez les
     # détaillants (offres avec lien produit, non vérifiées depuis 20 h).
     async def _run_materiaux_prix():
-        from app.services.materiaux_prix_auto import relever_tout
+        from app.services.materiaux_prix_auto import (
+            alerter_rabais_sans_casser,
+            relever_tout,
+        )
 
         async with AsyncSessionLocal() as db:
             r = await relever_tout(db, max_age_hours=20)
             await db.commit()
-            return {k: v for k, v in r.items() if k != "erreurs"} | {
-                "erreurs": len(r.get("erreurs") or [])
-            }
+            # Étape 3 : alertes de rabais sur les listes d'achats (cloche +
+            # push aux gestionnaires), une fois par rabais.
+            r["alertes"] = await alerter_rabais_sans_casser(db)
+            await db.commit()
+        # Prix de base manquants : recherche sur les sites (bornée par
+        # jour, une session par magasin, un run à la fois ; les matériaux
+        # cherchés depuis moins de 7 jours sont sautés).
+        try:
+            from app.services.materiaux_recherche import chercher_tout_pour_cron
+
+            rc = await chercher_tout_pour_cron(limit=40, max_age_days=7)
+            r["recherche"] = {k: v for k, v in rc.items() if k != "details"}
+        except Exception as exc:  # noqa: BLE001
+            r["recherche"] = {"error": str(exc)[:200]}
+        return {k: v for k, v in r.items() if k != "erreurs"} | {
+            "erreurs": len(r.get("erreurs") or [])
+        }
 
     await _safe("materiaux-prix", _run_materiaux_prix, details)
 

@@ -44,6 +44,14 @@ class Punch(Base, TimestampUpdateMixin):
     geolocation: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)  # 'lat,lng'
     approved: Mapped[bool] = mapped_column(nullable=False, default=False, index=True)
     notes: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
+    #: Régime de la ligne de temps (retour Phil 2026-09-26) : « ccq » ou
+    #: « hors_decret ». Le coût (majoration CCQ, taux horaire CCQ) suit le
+    #: régime du PUNCH, pas la fiche employé : un employé peut faire des
+    #: heures CCQ et hors décret dans la même semaine. Posé à
+    #: l'approbation ou en saisie manuelle par un admin+, jamais par
+    #: l'employé (hors décret par défaut). NULL = punch d'avant la règle
+    #: → suit la fiche employé (is_ccq) à la date du punch.
+    regime: Mapped[Optional[str]] = mapped_column(String(16), nullable=True, index=True)
 
     # Phase B — refacturation des heures.
     # Date où le punch a été versé sur une facture client. Garde-fou

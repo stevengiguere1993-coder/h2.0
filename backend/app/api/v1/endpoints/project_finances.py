@@ -605,6 +605,7 @@ async def _compute_finances(
             punch_date,
             emp,
             float(avg_rate),
+            regime=getattr(p, "regime", None),
         )
         actual_labour_cost += float(p.hours or 0) * cost_per_hour
     actual_labour_cost = round(actual_labour_cost, 2)
