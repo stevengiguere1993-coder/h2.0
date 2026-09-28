@@ -599,6 +599,10 @@ export default function LogementsPage() {
             setShowCreate(false);
             void load();
           }}
+          onSavedMany={() => {
+            setShowCreate(false);
+            void load();
+          }}
           onDeleted={() => {
             setShowCreate(false);
             void load();

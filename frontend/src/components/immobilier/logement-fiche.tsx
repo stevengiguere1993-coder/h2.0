@@ -112,7 +112,8 @@ export function LogementFiche({
   bails,
   onClose,
   onSaved,
-  onDeleted
+  onDeleted,
+  onSavedMany
 }: {
   /** null = mode création (immeubleId requis). */
   logement: LogementFicheData | null;
@@ -123,8 +124,44 @@ export function LogementFiche({
   onClose: () => void;
   onSaved: (l: LogementFicheData) => void;
   onDeleted?: (id: number) => void;
+  /** Création de PLUSIEURS logements d'un coup (retour partenaire
+   *  2026-09-28) : reçoit les logements créés et les numéros ignorés. */
+  onSavedMany?: (ls: LogementFicheData[], ignores: string[]) => void;
 }) {
   const isCreate = logement === null;
+  //: « Créer plusieurs d'un coup » : plage de numéros (de … à …, avec
+  //: préfixe/suffixe) OU liste collée ; les autres champs du formulaire
+  //: sont appliqués à tous.
+  const [plusieurs, setPlusieurs] = useState(false);
+  const [lot, setLot] = useState({
+    de: "1",
+    a: "",
+    prefixe: "",
+    suffixe: "",
+    liste: ""
+  });
+  const numerosDuLot = (() => {
+    const vus = new Set<string>();
+    const out: string[] = [];
+    const ajouter = (n: string) => {
+      const t = n.trim();
+      const k = t.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (!t || !k || vus.has(k)) return;
+      vus.add(k);
+      out.push(t);
+    };
+    if (lot.liste.trim()) {
+      lot.liste.split(/[\n,;]+/).forEach(ajouter);
+      return out.slice(0, 300);
+    }
+    const de = parseInt(lot.de, 10);
+    const a = parseInt(lot.a, 10);
+    if (Number.isNaN(de) || Number.isNaN(a) || a < de) return out;
+    for (let n = de; n <= a && out.length < 300; n++) {
+      ajouter(`${lot.prefixe}${n}${lot.suffixe}`);
+    }
+    return out;
+  })();
   const [form, setForm] = useState({
     numero: logement?.numero ?? "",
     type: logement?.type ?? "residentiel",
@@ -195,7 +232,7 @@ export function LogementFiche({
 
   async function submit(e: React.FormEvent | null, force = false) {
     e?.preventDefault();
-    if (!form.numero.trim()) return;
+    if (!(isCreate && plusieurs) && !form.numero.trim()) return;
     setSaving(true);
     setErr(null);
     setDoublon(null);
@@ -214,6 +251,32 @@ export function LogementFiche({
         notes: form.notes.trim() ? form.notes : null
       };
       let res: Response;
+      if (isCreate && plusieurs) {
+        if (immeubleId == null) throw new Error("immeubleId manquant.");
+        if (numerosDuLot.length === 0) {
+          throw new Error("Indique une plage (de … à …) ou une liste de numéros.");
+        }
+        const { numero: _n, ...modele } = body;
+        void _n;
+        res = await authedFetch(
+          `/api/v1/immobilier/immeubles/${immeubleId}/logements/lot`,
+          {
+            method: "POST",
+            body: JSON.stringify({ numeros: numerosDuLot, modele })
+          }
+        );
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+        }
+        const d = (await res.json()) as {
+          crees: LogementFicheData[];
+          ignores: string[];
+        };
+        if (onSavedMany) onSavedMany(d.crees, d.ignores);
+        else if (d.crees[0]) onSaved(d.crees[0]);
+        return;
+      }
       if (isCreate) {
         if (immeubleId == null) throw new Error("immeubleId manquant.");
         res = await authedFetch(
@@ -344,17 +407,100 @@ export function LogementFiche({
         ) : null}
 
         <form onSubmit={submit} className="grid gap-4 p-5">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <label className="label">Numéro *</label>
+          {isCreate ? (
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-white/80">
               <input
-                required
-                value={form.numero}
-                onChange={(e) => set("numero", e.target.value)}
-                className="input"
-                placeholder="ex. 101"
+                type="checkbox"
+                checked={plusieurs}
+                onChange={(e) => setPlusieurs(e.target.checked)}
+                className="h-3.5 w-3.5 accent-accent-500"
               />
+              Créer plusieurs logements d&apos;un coup
+            </label>
+          ) : null}
+          {isCreate && plusieurs ? (
+            <div className="rounded-lg border border-accent-500/30 bg-accent-500/5 p-3">
+              <div className="grid gap-3 sm:grid-cols-4">
+                <div>
+                  <label className="label">De</label>
+                  <input
+                    type="number"
+                    value={lot.de}
+                    onChange={(e) => setLot((l) => ({ ...l, de: e.target.value }))}
+                    className="input font-mono"
+                    placeholder="1"
+                  />
+                </div>
+                <div>
+                  <label className="label">À</label>
+                  <input
+                    type="number"
+                    value={lot.a}
+                    onChange={(e) => setLot((l) => ({ ...l, a: e.target.value }))}
+                    className="input font-mono"
+                    placeholder="24"
+                  />
+                </div>
+                <div>
+                  <label className="label">Préfixe</label>
+                  <input
+                    value={lot.prefixe}
+                    onChange={(e) =>
+                      setLot((l) => ({ ...l, prefixe: e.target.value }))
+                    }
+                    className="input font-mono"
+                    placeholder="ex. A-"
+                  />
+                </div>
+                <div>
+                  <label className="label">Suffixe</label>
+                  <input
+                    value={lot.suffixe}
+                    onChange={(e) =>
+                      setLot((l) => ({ ...l, suffixe: e.target.value }))
+                    }
+                    className="input font-mono"
+                    placeholder="ex. -B"
+                  />
+                </div>
+              </div>
+              <div className="mt-2">
+                <label className="label">Ou une liste (séparés par virgule ou retour à la ligne)</label>
+                <textarea
+                  rows={2}
+                  value={lot.liste}
+                  onChange={(e) => setLot((l) => ({ ...l, liste: e.target.value }))}
+                  className="input"
+                  placeholder="101, 102, 201, 202, 301A, 301B"
+                />
+              </div>
+              <p className="mt-2 text-[11px] text-white/60">
+                {numerosDuLot.length === 0
+                  ? "Aucun numéro pour l'instant."
+                  : `${numerosDuLot.length} logement${
+                      numerosDuLot.length > 1 ? "s" : ""
+                    } : ${numerosDuLot.slice(0, 12).join(", ")}${
+                      numerosDuLot.length > 12 ? " …" : ""
+                    }`}
+                {" "}
+                Les champs ci-dessous s&apos;appliquent à tous ; un numéro
+                déjà présent est ignoré. Chaque fiche se corrige ensuite.
+              </p>
             </div>
+          ) : null}
+          <div className="grid gap-3 sm:grid-cols-2">
+            {!(isCreate && plusieurs) ? (
+              <div>
+                <label className="label">Numéro *</label>
+                <input
+                  required
+                  value={form.numero}
+                  onChange={(e) => set("numero", e.target.value)}
+                  className="input"
+                  placeholder="ex. 101"
+                />
+              </div>
+            ) : null}
             <div>
               <label className="label">Type</label>
               <select
@@ -574,13 +720,24 @@ export function LogementFiche({
               </button>
               <button
                 type="submit"
-                disabled={saving || !form.numero.trim()}
+                disabled={
+                  saving ||
+                  (isCreate && plusieurs
+                    ? numerosDuLot.length === 0
+                    : !form.numero.trim())
+                }
                 className="btn-accent btn-sm inline-flex items-center disabled:opacity-60"
               >
                 {saving ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                 ) : null}
-                {isCreate ? "Créer" : "Enregistrer"}
+                {isCreate && plusieurs
+                  ? `Créer ${numerosDuLot.length} logement${
+                      numerosDuLot.length > 1 ? "s" : ""
+                    }`
+                  : isCreate
+                  ? "Créer"
+                  : "Enregistrer"}
               </button>
             </div>
           </div>

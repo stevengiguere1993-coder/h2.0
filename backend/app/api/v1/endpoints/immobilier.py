@@ -121,6 +121,9 @@ from app.schemas.immobilier import (
     DossierPaiement,
     DossierRenouvellement,
     LogementCreate,
+    LogementLotModele,
+    LogementsLotIn,
+    LogementsLotOut,
     LogementDossier,
     LogementDossierBail,
     LogementDossierBon,
@@ -939,6 +942,10 @@ async def update_immeuble(
     _require_volet(user)
     obj = await _get_immeuble_or_404(db, immeuble_id)
     data_imm = payload.model_dump(exclude_unset=True)
+    # Début de la collecte : toujours un 1er du mois (le notaire le 11 →
+    # la collecte commence le 1er du mois SUIVANT, choisi par l'usager).
+    if data_imm.get("collecte_depuis") is not None:
+        data_imm["collecte_depuis"] = data_imm["collecte_depuis"].replace(day=1)
     etait_externe = bool(getattr(obj, "gestion_externe", False))
     devient_externe = data_imm.get("gestion_externe")
     # Externe → interne : les unités « occupées » par un simple nom n'ont
@@ -2688,6 +2695,62 @@ async def _figer_attendu_mois_passes(db, lg, ancien_loyer: float, user) -> None:
         m = _mois_suivant(m)
 
 
+@router.post(
+    "/immeubles/{immeuble_id}/logements/lot",
+    response_model=LogementsLotOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_logements_lot(
+    immeuble_id: int, payload: LogementsLotIn, db: DBSession, user: CurrentUser,
+) -> LogementsLotOut:
+    """Crée PLUSIEURS logements d'un coup (retour partenaire 2026-09-28 :
+    « pouvoir tous les créer one shot et venir corriger chacun ensuite »).
+    Les numéros déjà présents dans l'immeuble (même règle de doublon que
+    la création unitaire) et les doublons de la liste sont ignorés et
+    renvoyés dans ``ignores``. Les valeurs du ``modele`` s'appliquent à
+    tous ; chaque fiche se corrige ensuite individuellement."""
+    _require_volet(user)
+    await _get_immeuble_or_404(db, immeuble_id)
+    existants = {
+        _cle_numero(lg.numero)
+        for lg in (
+            await db.execute(
+                select(Logement).where(Logement.immeuble_id == immeuble_id)
+            )
+        ).scalars().all()
+    }
+    modele = (payload.modele or LogementLotModele()).model_dump()
+    crees: List[Logement] = []
+    ignores: List[str] = []
+    vus: set = set()
+    for brut in payload.numeros:
+        numero = (brut or "").strip()[:32]
+        if not numero:
+            continue
+        cle = _cle_numero(numero)
+        if not cle or cle in existants or cle in vus:
+            ignores.append(numero)
+            continue
+        vus.add(cle)
+        obj = Logement(immeuble_id=immeuble_id, numero=numero, **modele)
+        obj.created_at = _now()
+        obj.updated_at = _now()
+        db.add(obj)
+        crees.append(obj)
+    if not crees and not ignores:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Aucun numéro de logement fourni.",
+        )
+    await db.commit()
+    for obj in crees:
+        await db.refresh(obj)
+    return LogementsLotOut(
+        crees=[LogementRead.model_validate(o) for o in trier_par_numero(crees)],
+        ignores=ignores,
+    )
+
+
 @router.patch("/logements/{logement_id}", response_model=LogementRead)
 async def update_logement(
     logement_id: int,
@@ -3571,6 +3634,17 @@ async def locataire_dossier(
     depuis = await get_demarrage()
     paiements = []
     bail_ids = [b.id for b in baux]
+    # Même borne que la page Paiements : le début de collecte de
+    # l'immeuble du bail quand il est posé (retour partenaire 2026-09-28).
+    bail_par_id_360 = {b.id: b for b in baux}
+
+    def _depuis_bail_360(bid: int) -> date:
+        b0 = bail_par_id_360.get(bid)
+        lg0 = log_by_id.get(b0.logement_id) if b0 else None
+        im0 = imm_by_id.get(lg0.immeuble_id) if lg0 else None
+        d0 = getattr(im0, "collecte_depuis", None) if im0 else None
+        return max(depuis, d0.replace(day=1)) if d0 else depuis
+
     if bail_ids:
         for pmt in (
             await db.execute(
@@ -3582,6 +3656,10 @@ async def locataire_dossier(
                 .order_by(PaiementLoyer.mois_couvert.desc())
             )
         ).scalars().all():
+            if pmt.mois_couvert is not None and pmt.mois_couvert < _depuis_bail_360(
+                pmt.bail_id
+            ):
+                continue
             paiements.append(
                 DossierPaiement(
                     id=pmt.id,
@@ -5243,6 +5321,15 @@ async def loyers_overview(
     if visible is not None:
         immeubles = [i for i in immeubles if i.id in visible]
     imm_by_id = {i.id: i for i in immeubles}
+
+    def _depuis_imm(imm) -> date:
+        """Début de la collecte pour CET immeuble : la date posée sur sa
+        fiche (acte notarié le 11 → collecte le 1er du mois suivant),
+        jamais avant le démarrage global du pôle. Retour partenaire
+        2026-09-28 (« 6646 Érables a des retards de paiement »)."""
+        d = getattr(imm, "collecte_depuis", None)
+        return max(solde_depuis, d.replace(day=1)) if d else solde_depuis
+
     if not imm_by_id:
         return LoyerOverview(
             mois=month_label,
@@ -5361,6 +5448,12 @@ async def loyers_overview(
     frais_mois_by_bail: dict[int, list] = {}
     paye_total_by_bail: dict[int, float] = {}
     frais_total_by_bail: dict[int, float] = {}
+    # Borne de collecte de chaque bail = celle de son immeuble.
+    depuis_bail: dict[int, date] = {}
+    for b in baux:
+        lg_b = log_by_id.get(b.logement_id)
+        imm_b = imm_by_id.get(lg_b.immeuble_id) if lg_b else None
+        depuis_bail[b.id] = _depuis_imm(imm_b) if imm_b else solde_depuis
     if bail_ids:
         for f in (
             await db.execute(
@@ -5371,33 +5464,41 @@ async def loyers_overview(
             )
         ).scalars().all():
             frais_mois_by_bail.setdefault(f.bail_id, []).append(f)
-        for bid, total in (
+        # Sommes VIE DU BAIL bornées au début de collecte de SON immeuble
+        # (pas seulement au démarrage global du pôle).
+        for bid, mc, montant in (
             await db.execute(
                 select(
-                    PaiementLoyer.bail_id, func.sum(PaiementLoyer.montant)
-                )
-                .where(
+                    PaiementLoyer.bail_id,
+                    PaiementLoyer.mois_couvert,
+                    PaiementLoyer.montant,
+                ).where(
                     PaiementLoyer.bail_id.in_(bail_ids),
                     PaiementLoyer.mois_couvert >= solde_depuis,
                 )
-                .group_by(PaiementLoyer.bail_id)
             )
         ).all():
-            paye_total_by_bail[bid] = float(total or 0)
-        for bid, total in (
+            if mc is not None and mc >= depuis_bail.get(bid, solde_depuis):
+                paye_total_by_bail[bid] = paye_total_by_bail.get(bid, 0.0) + float(
+                    montant or 0
+                )
+        for bid, mc, montant in (
             await db.execute(
                 select(
-                    FraisLocatif.bail_id, func.sum(FraisLocatif.montant)
-                )
-                .where(
+                    FraisLocatif.bail_id,
+                    FraisLocatif.mois_couvert,
+                    FraisLocatif.montant,
+                ).where(
                     FraisLocatif.bail_id.in_(bail_ids),
                     FraisLocatif.mois_couvert >= solde_depuis,
                     FraisLocatif.mois_couvert <= month_start,
                 )
-                .group_by(FraisLocatif.bail_id)
             )
         ).all():
-            frais_total_by_bail[bid] = float(total or 0)
+            if mc is not None and mc >= depuis_bail.get(bid, solde_depuis):
+                frais_total_by_bail[bid] = frais_total_by_bail.get(bid, 0.0) + float(
+                    montant or 0
+                )
 
     # « Prochain locataire » pendant la transition (retour Phil
     # 2026-07-31) : bail futur (date_debut > aujourd'hui) ou en
@@ -5454,7 +5555,9 @@ async def loyers_overview(
         """Nombre de 1ers de mois couverts par le bail jusqu'au mois
         affiché inclus (borné à aujourd'hui) — pour le solde cumulatif.
         Ne remonte jamais avant la date de démarrage du pôle."""
-        debut = max(b.date_debut.replace(day=1), solde_depuis)
+        debut = max(
+            b.date_debut.replace(day=1), depuis_bail.get(b.id, solde_depuis)
+        )
         fin = min(month_start, today.replace(day=1))
         # Bail AU MOIS : reconduction auto — les loyers courent sans
         # egard a la date de fin (retour Phil 2026-07-28)… sauf s'il
@@ -5492,6 +5595,13 @@ async def loyers_overview(
         logement = log_by_id.get(b.logement_id)
         imm = imm_by_id.get(logement.immeuble_id) if logement else None
         if imm is None:
+            continue
+        # Collecte pas encore commencée pour cet immeuble ce mois-là
+        # (acte notarié en cours de mois) : rien attendu, rien en retard,
+        # et pas de ligne « vacant » non plus.
+        if month_start < _depuis_imm(imm):
+            if b.logement_id:
+                logements_couverts.add(b.logement_id)
             continue
         loc = locataires.get(b.locataire_id)
         ps = paiements_mois.get(b.id) or []
@@ -5679,6 +5789,8 @@ async def loyers_overview(
             continue
         imm = imm_by_id.get(lg.immeuble_id)
         if imm is None:
+            continue
+        if month_start < _depuis_imm(imm):
             continue
         pro = prochains.get(lg.id)
         nb_vacants += 1

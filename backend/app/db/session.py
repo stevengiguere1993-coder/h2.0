@@ -328,6 +328,7 @@ async def ensure_critical_columns() -> None:
         ),
         ("imm_immeubles", "frais_gestion_pct", "NUMERIC(5,2)"),
         ("imm_immeubles", "frais_gestion_depuis", "DATE"),
+        ("imm_immeubles", "collecte_depuis", "DATE"),
         ("imm_immeubles", "qbo_customer_id", "VARCHAR(64)"),
         ("imm_immeubles", "qbo_customer_name", "VARCHAR(255)"),
         # Frais de gestion — ligne « complément » (loyers payés en retard
