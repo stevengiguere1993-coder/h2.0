@@ -20,6 +20,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { ApercuEnvoiModal } from "@/components/immobilier/apercu-envoi";
 import { authedFetch } from "@/lib/auth";
+import { compareNumero } from "@/components/immobilier/numero-sort";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
 import { BandeauAvisRenouvellement } from "@/components/immobilier/bandeau-avis";
 import { BandeauBailManquant } from "@/components/immobilier/bandeau-bail-manquant";
@@ -755,9 +756,7 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
         (a, b) =>
           (ordre[a.etat] ?? 9) - (ordre[b.etat] ?? 9) ||
           a.immeuble_name.localeCompare(b.immeuble_name, "fr") ||
-          (a.logement_numero || "").localeCompare(
-            b.logement_numero || "", "fr"
-          )
+          compareNumero(a.logement_numero, b.logement_numero)
       );
   }, [data, allRows, search, etatFilter, immeubleFilter]);
 

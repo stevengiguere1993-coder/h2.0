@@ -25,6 +25,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Loader2, Plus, Search, UserPlus, X } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { compareNumero } from "@/components/immobilier/numero-sort";
 import { CreateLocataireModal } from "@/components/immobilier/create-locataire-modal";
 import type { FichierAImporter } from "@/components/immobilier/doc-types";
 import {
@@ -223,7 +224,7 @@ function AssignerBailModal({
         rows.sort((a, b) => {
           const va = a.status === "vacant" ? 0 : 1;
           const vb = b.status === "vacant" ? 0 : 1;
-          return va - vb || String(a.numero).localeCompare(String(b.numero));
+          return va - vb || compareNumero(a.numero, b.numero);
         });
         setLogements(rows);
       }

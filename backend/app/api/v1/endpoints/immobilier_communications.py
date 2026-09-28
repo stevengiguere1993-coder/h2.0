@@ -32,6 +32,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
+from app.services.locatif_chambres import cle_tri_numero
 from app.api.deps import CurrentUser, DBSession
 from app.integrations.email_graph import get_mailer
 from app.models.immobilier import (
@@ -170,6 +171,8 @@ async def list_destinataires(
     )
     query = query.where(Immeuble.gestion_externe.isnot(True))
     rows = (await db.execute(query)).all()
+    # Ordre naturel des numéros (retour partenaire 2026-09-28).
+    rows.sort(key=lambda r: ((r[3].name or ""), cle_tri_numero(r[2].numero)))
     mois_courant = _now().date().replace(day=1)
     dus = await _du_du_mois(db, [b.id for b, _l, _lg, _i in rows], mois_courant)
     par_immeuble: Dict[int, ImmeubleDestinatairesOut] = {}
@@ -394,6 +397,7 @@ async def _resoudre_destinataires(
     )
     q = q.where(Immeuble.gestion_externe.isnot(True))
     rows = (await db.execute(q)).all()
+    rows.sort(key=lambda r: ((r[3].name or ""), cle_tri_numero(r[2].numero)))
     vus: set = set()
     out: List[tuple] = []
     imm_set = set(immeuble_ids)

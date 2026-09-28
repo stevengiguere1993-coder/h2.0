@@ -105,6 +105,11 @@ class ImmeubleListItem(BaseModel):
     nb_logements_occupes: int = 0
     revenu_mensuel: float = 0.0
     taux_occupation: float = 0.0  # 0..1
+    #: Chambres (retour partenaire 2026-09-28) : logements loués EN
+    #: CHAMBRES, total de chambres et chambres occupées.
+    nb_logements_en_chambres: int = 0
+    nb_chambres: int = 0
+    nb_chambres_occupees: int = 0
 
 
 # ─── Ownership ──────────────────────────────────────────────────────────
@@ -870,6 +875,11 @@ class ImmeubleFinancials(BaseModel):
     nb_logements_actifs: int = 0
     nb_logements_occupes: int = 0
     taux_occupation: float = 0.0  # 0..1
+    #: Chambres (retour partenaire 2026-09-28) : logements loués EN
+    #: CHAMBRES, total de chambres et chambres occupées.
+    nb_logements_en_chambres: int = 0
+    nb_chambres: int = 0
+    nb_chambres_occupees: int = 0
 
     # Revenus. Le montant PRINCIPAL = unités louées seulement (bail actif,
     # ou statut « occupé » en gestion externe). toutes_unites = potentiel

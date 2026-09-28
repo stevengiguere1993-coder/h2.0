@@ -43,6 +43,11 @@ from app.repositories.user import UserRepository
 from app.api.deps import CurrentUser, DBSession
 from app.models.user import User
 from app.services.audit import log_action
+from app.services.locatif_chambres import (
+    cle_tri_numero,
+    compter_chambres,
+    trier_par_numero,
+)
 from app.services.locatif_demarrage import get_demarrage, set_demarrage
 from app.services.loyer_echeance import paiement_en_retard, seuil_retard
 from app.services.tal_garants import (
@@ -730,6 +735,7 @@ async def list_immeubles(
                     rev_by_imm.get(lg.immeuble_id, 0.0) + m
                 )
 
+    chambres_par_imm = await compter_chambres(db, immeubles)
     out: List[ImmeubleListItem] = []
     for imm in immeubles:
         sts = logs_by_imm.get(imm.id, {})
@@ -755,6 +761,9 @@ async def list_immeubles(
                 nb_logements_occupes=nb_occ,
                 revenu_mensuel=round(revenu, 2),
                 taux_occupation=round(taux, 4),
+                nb_logements_en_chambres=chambres_par_imm.get(imm.id, {}).get("log", 0),
+                nb_chambres=chambres_par_imm.get(imm.id, {}).get("tot", 0),
+                nb_chambres_occupees=chambres_par_imm.get(imm.id, {}).get("occ", 0),
             )
         )
     return out
@@ -2299,6 +2308,9 @@ async def list_logements(
             .order_by(Logement.numero.asc())
         )
     ).scalars().all()
+    # Ordre NATUREL des numéros (1, 2, 9, 10 — retour partenaire
+    # 2026-09-28) ; le tri SQL (texte) mettait 10 après 1.
+    rows = trier_par_numero(rows)
     # Hiérarchie du loyer effectif (retour client 2026-08-14) : la liste
     # porte le loyer RÉEL du bail actif pour un logement occupé… SAUF en
     # gestion EXTERNE, où le loyer SAISI sur le logement est la vérité —
@@ -2456,7 +2468,7 @@ async def logements_doublons(db: DBSession, user: CurrentUser) -> List[LogementD
                 ],
             )
         )
-    out.sort(key=lambda g: (g.immeuble_name, g.numero))
+    out.sort(key=lambda g: (g.immeuble_name, cle_tri_numero(g.numero)))
     return out
 
 
@@ -7673,11 +7685,15 @@ async def get_financials(
             2,
         )
 
+    chambres = (await compter_chambres(db, [imm])).get(immeuble_id, {})
     return ImmeubleFinancials(
         immeuble_id=immeuble_id,
         nb_logements_actifs=nb_actifs,
         nb_logements_occupes=nb_occ,
         taux_occupation=round(taux, 4),
+        nb_logements_en_chambres=chambres.get("log", 0),
+        nb_chambres=chambres.get("tot", 0),
+        nb_chambres_occupees=chambres.get("occ", 0),
         revenu_brut_mensuel=round(revenu, 2),
         revenu_brut_annuel=round(revenu_annuel, 2),
         revenu_brut_mensuel_toutes_unites=round(revenu_toutes_unites, 2),

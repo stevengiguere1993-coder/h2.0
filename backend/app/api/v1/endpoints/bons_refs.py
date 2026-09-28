@@ -25,6 +25,7 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, DBSession
 from app.core.permissions import visible_immeuble_ids
 from app.models.immobilier import Immeuble, ImmeubleOwnership, Logement
+from app.services.locatif_chambres import trier_par_numero
 
 router = APIRouter(prefix="/bons/refs", tags=["bons"])
 
@@ -82,4 +83,7 @@ async def list_logements_ref(
             .order_by(Logement.numero.asc())
         )
     ).scalars().all()
-    return [LogementRef(id=lg.id, numero=lg.numero or "") for lg in rows]
+    return [
+        LogementRef(id=lg.id, numero=lg.numero or "")
+        for lg in trier_par_numero(rows)
+    ]

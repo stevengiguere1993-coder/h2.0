@@ -20,6 +20,7 @@ import { ArrowRightLeft, Check, FileSignature, Loader2, X } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { compareNumero } from "@/components/immobilier/numero-sort";
 import { uploadBailDocument } from "@/components/immobilier/tal-avis";
 
 type ImmeubleLite = {
@@ -246,10 +247,7 @@ function TransfertUniteModal({
           const va = a.status === "vacant" ? 0 : 1;
           const vb = b.status === "vacant" ? 0 : 1;
           return (
-            va - vb ||
-            String(a.numero ?? "").localeCompare(String(b.numero ?? ""), "fr", {
-              numeric: true
-            })
+            va - vb || compareNumero(a.numero, b.numero)
           );
         });
         setLogements(rows);

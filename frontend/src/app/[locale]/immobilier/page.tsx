@@ -34,6 +34,10 @@ type ImmeubleListItem = {
   nb_logements_occupes: number;
   revenu_mensuel: number;
   taux_occupation: number;
+  /** Chambres (retour partenaire 2026-09-28). */
+  nb_logements_en_chambres?: number;
+  nb_chambres?: number;
+  nb_chambres_occupees?: number;
 };
 
 function fmtCurrency(n: number): string {
@@ -157,19 +161,39 @@ export default function ImmobilierDashboard() {
         nbLogements: 0,
         nbOccupes: 0,
         revenu: 0,
-        taux: 0
+        taux: 0,
+        nbLogEnChambres: 0,
+        nbChambres: 0,
+        nbChambresOcc: 0,
+        unites: 0
       };
     const nbI = list.length;
     const nbL = list.reduce((acc, x) => acc + x.nb_logements_actifs, 0);
     const nbO = list.reduce((acc, x) => acc + x.nb_logements_occupes, 0);
     const rev = list.reduce((acc, x) => acc + x.revenu_mensuel, 0);
     const tx = nbL > 0 ? nbO / nbL : 0;
+    // Chambres : un logement loué en chambres vaut ses chambres, pas
+    // une porte (retour partenaire 2026-09-28). Unités locatives =
+    // logements entiers + chambres.
+    const nbLC = list.reduce(
+      (acc, x) => acc + (x.nb_logements_en_chambres || 0),
+      0
+    );
+    const nbC = list.reduce((acc, x) => acc + (x.nb_chambres || 0), 0);
+    const nbCO = list.reduce(
+      (acc, x) => acc + (x.nb_chambres_occupees || 0),
+      0
+    );
     return {
       nbImmeubles: nbI,
       nbLogements: nbL,
       nbOccupes: nbO,
       revenu: rev,
-      taux: tx
+      taux: tx,
+      nbLogEnChambres: nbLC,
+      nbChambres: nbC,
+      nbChambresOcc: nbCO,
+      unites: nbL - nbLC + nbC
     };
   }, [list]);
 
@@ -287,7 +311,13 @@ export default function ImmobilierDashboard() {
           <KpiCard
             label="Logements"
             value={`${kpis.nbOccupes} / ${kpis.nbLogements}`}
-            sub={`Occupation ${fmtPct(kpis.taux)}`}
+            sub={
+              kpis.nbChambres > 0
+                ? `Occupation ${fmtPct(kpis.taux)} · ${kpis.nbLogEnChambres} loué${
+                    kpis.nbLogEnChambres > 1 ? "s" : ""
+                  } en chambres : ${kpis.nbChambresOcc}/${kpis.nbChambres} chambres · ${kpis.unites} unités locatives`
+                : `Occupation ${fmtPct(kpis.taux)}`
+            }
             icon={Home}
             tone="emerald"
           />
@@ -417,6 +447,14 @@ function ImmeubleRow({ imm }: { imm: ImmeubleListItem }) {
             <span className="rounded bg-brand-950 px-1.5 py-0.5 font-mono text-white/60">
               {imm.nb_logements_occupes}/{imm.nb_logements_actifs} occ.
             </span>
+            {(imm.nb_chambres || 0) > 0 ? (
+              <span
+                className="rounded bg-brand-950 px-1.5 py-0.5 font-mono text-white/60"
+                title={`${imm.nb_logements_en_chambres} logement(s) loué(s) en chambres`}
+              >
+                {imm.nb_chambres_occupees}/{imm.nb_chambres} ch.
+              </span>
+            ) : null}
             <span
               className={`badge font-mono ${
                 tauxOk ? "badge-emerald" : "badge-amber"
