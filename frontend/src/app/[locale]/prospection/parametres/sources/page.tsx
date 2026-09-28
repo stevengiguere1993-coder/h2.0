@@ -303,6 +303,7 @@ export default function ProspectionSourcesPage() {
     void refreshRentalStatus();
     void refreshCentrisStatus();
     void refreshProvStatus();
+    void refreshMtlStatus();
     if (reqPollRef.current === null) {
       reqPollRef.current = setInterval(refreshReqStatus, 5000);
     }
@@ -332,9 +333,73 @@ export default function ProspectionSourcesPage() {
         clearInterval(provPollRef.current);
         provPollRef.current = null;
       }
+      if (mtlPollRef.current !== null) {
+        clearInterval(mtlPollRef.current);
+        mtlPollRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOwner]);
+
+  // ── Rôle Ville de Montréal (CSV officiel) — Phil 2026-09-28 ──
+  type MtlStatus = {
+    status: "idle" | "running" | "done" | "error";
+    started_at: string | null;
+    finished_at: string | null;
+    rows_upserted: number | null;
+    error: string | null;
+  };
+  const [mtlStatus, setMtlStatus] = useState<MtlStatus | null>(null);
+  const [mtlError, setMtlError] = useState<string | null>(null);
+  const [mtlStarting, setMtlStarting] = useState(false);
+  const mtlPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  async function refreshMtlStatus() {
+    try {
+      const res = await authedFetch("/api/v1/admin/data/mtl-roles/import-status");
+      if (!res.ok) return;
+      const data = (await res.json()) as MtlStatus;
+      setMtlStatus(data);
+      if (data.status !== "running" && mtlPollRef.current !== null) {
+        clearInterval(mtlPollRef.current);
+        mtlPollRef.current = null;
+        // Compteurs DB à jour une fois l'import fini.
+        void refreshProvStatus();
+      }
+    } catch {
+      /* silent */
+    }
+  }
+
+  async function importMtl() {
+    if (mtlStarting || mtlStatus?.status === "running") return;
+    setMtlStarting(true);
+    setMtlError(null);
+    try {
+      const res = await authedFetch("/api/v1/admin/data/mtl-roles/import", {
+        method: "POST"
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      setMtlStatus((prev) => ({
+        status: "running",
+        started_at: new Date().toISOString(),
+        finished_at: null,
+        rows_upserted: null,
+        error: null,
+        ...(prev ? {} : {})
+      }));
+      if (mtlPollRef.current === null) {
+        mtlPollRef.current = setInterval(refreshMtlStatus, 5000);
+      }
+    } catch (e) {
+      setMtlError((e as Error).message);
+    } finally {
+      setMtlStarting(false);
+    }
+  }
 
   async function refreshProvStatus() {
     try {
@@ -589,6 +654,96 @@ export default function ProspectionSourcesPage() {
         ) : null}
 
         {/* === Rôles d'évaluation foncière (toutes municipalités) === */}
+        <section className="mt-6 rounded-2xl border border-emerald-500/40 bg-brand-900 p-5">
+          <header className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-300">
+                <Building2 className="h-5 w-5" />
+              </span>
+              <div>
+                <h2 className="text-base font-bold text-white">
+                  Rôle d&apos;évaluation — Ville de Montréal
+                </h2>
+                <p className="mt-0.5 text-xs text-white/60">
+                  CSV officiel de la Ville (environ 514 000 unités, mis à
+                  jour chaque semaine) : nombre de logements, année,
+                  superficies, pour Montréal et les 15 villes liées de
+                  l&apos;île. C&apos;est LA source pour l&apos;île : le ZIP
+                  provincial ci-dessous ne contient pas Montréal. Environ
+                  5 minutes, en arrière-plan ; ré-importer met à jour les
+                  unités existantes.
+                </p>
+              </div>
+            </div>
+            <a
+              href="https://donnees.montreal.ca/dataset/unites-evaluation-fonciere"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex flex-shrink-0 items-center gap-1 text-[11px] text-accent-500 hover:text-accent-400"
+            >
+              <ExternalLink className="h-3 w-3" />
+              source
+            </a>
+          </header>
+
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => void importMtl()}
+              disabled={!isOwner || mtlStarting || mtlStatus?.status === "running"}
+              className="btn-outline-accent btn-sm disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {mtlStarting || mtlStatus?.status === "running" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Database className="h-4 w-4" />
+              )}
+              {mtlStatus?.status === "running"
+                ? "Import en cours…"
+                : "Importer le rôle Ville de Montréal"}
+            </button>
+            {mtlStatus?.status === "running" ? (
+              <span className="text-[11px] text-white/60">
+                Démarré{mtlStatus.started_at ? ` à ${new Date(mtlStatus.started_at).toLocaleTimeString("fr-CA", { hour: "2-digit", minute: "2-digit" })}` : ""} — tu peux quitter la page, l&apos;import continue.
+              </span>
+            ) : null}
+            {mtlStatus?.status === "done" ? (
+              <span className="text-[11px] text-emerald-300">
+                <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />
+                Terminé{mtlStatus.finished_at ? ` à ${new Date(mtlStatus.finished_at).toLocaleTimeString("fr-CA", { hour: "2-digit", minute: "2-digit" })}` : ""}
+                {mtlStatus.rows_upserted != null
+                  ? ` · ${mtlStatus.rows_upserted.toLocaleString("fr-CA")} unités mises à jour`
+                  : ""}
+              </span>
+            ) : null}
+            {mtlStatus?.status === "error" ? (
+              <span className="text-[11px] text-rose-300">
+                <AlertTriangle className="mr-1 inline h-3.5 w-3.5" />
+                Échec : {mtlStatus.error || "erreur inconnue"}
+              </span>
+            ) : null}
+            {mtlError ? (
+              <span className="text-[11px] text-rose-300">
+                <AlertTriangle className="mr-1 inline h-3.5 w-3.5" />
+                {mtlError}
+              </span>
+            ) : null}
+          </div>
+          {provDbStats ? (
+            <p className="mt-3 text-[11px] text-white/60">
+              En base pour la ville de Montréal :{" "}
+              <span className="font-mono text-white/90">
+                {(
+                  provDbStats.by_municipalite
+                    .filter((m) => m.municipalite === "Montréal" || m.municipalite === "50")
+                    .reduce((acc, m) => acc + m.count, 0)
+                ).toLocaleString("fr-CA")}
+              </span>{" "}
+              unités (attendu : environ 437 000 après import).
+            </p>
+          ) : null}
+        </section>
+
         <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
           <header className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-3">
