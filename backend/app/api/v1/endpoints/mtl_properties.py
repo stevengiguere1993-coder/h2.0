@@ -508,6 +508,95 @@ def _noms_proprietaires(owners_json: Optional[str]) -> Tuple[str, str]:
     return " | ".join(noms), " | ".join(dates)
 
 
+class MatriculesACollecterOut(BaseModel):
+    """Matricules que l'extension doit consulter sur montreal.ca."""
+
+    matricules: List[str] = Field(default_factory=list)
+    #: Unités qui matchent les filtres (avec ou sans propriétaire connu).
+    total: int = 0
+    #: … dont propriétaire déjà connu (owners_json non vide).
+    deja_connus: int = 0
+    plafond: int = 0
+    tronque: bool = False
+
+
+@router.get("/matricules", response_model=MatriculesACollecterOut)
+async def matricules_a_collecter(
+    db: DBSession,
+    _: CurrentUser,
+    min_logements: Optional[int] = Query(default=None, ge=0),
+    max_logements: Optional[int] = Query(default=None, ge=0),
+    min_annee: Optional[int] = Query(default=None, ge=1700),
+    max_annee: Optional[int] = Query(default=None, le=2100),
+    min_superficie_terrain: Optional[float] = Query(default=None, ge=0),
+    municipalite: Optional[str] = Query(default=None),
+    region: Optional[str] = Query(
+        default=None, pattern="^(mtl-island|laval|rive-sud|rive-nord)$"
+    ),
+    distance_band: Optional[str] = Query(
+        default=None,
+        pattern="^(mtl_only|under_30|30_to_40|40_to_50|over_50)$",
+    ),
+    nom_rue_contains: Optional[str] = Query(default=None),
+    arrondissement: Optional[str] = Query(default=None),
+    codes_utilisation: Optional[List[str]] = Query(default=None),
+    sans_proprietaire: bool = Query(default=True),
+    limite: int = Query(default=5000, ge=1, le=20000),
+) -> MatriculesACollecterOut:
+    """Collecte EN LOT des propriétaires (Phil 2026-09-28 : « 12 à 24
+    logements pour commencer, on peut choisir un quartier ») : mêmes
+    filtres que la page Immeubles MTL ; par défaut seulement les unités
+    SANS propriétaire connu, triées par matricule, plafonnées (l'extension
+    les consulte une à une sur montreal.ca)."""
+    filters = _filtres_mtl(
+        min_logements=min_logements,
+        max_logements=max_logements,
+        min_annee=min_annee,
+        max_annee=max_annee,
+        min_superficie_terrain=min_superficie_terrain,
+        municipalite=municipalite,
+        region=region,
+        distance_band=distance_band,
+        nom_rue_contains=nom_rue_contains,
+        arrondissement=arrondissement,
+        codes_utilisation=codes_utilisation,
+    )
+    sans_owner = or_(
+        MontrealPropertyUnit.owners_json.is_(None),
+        MontrealPropertyUnit.owners_json == "",
+        MontrealPropertyUnit.owners_json == "[]",
+    )
+    total = (
+        await db.execute(
+            select(func.count()).select_from(MontrealPropertyUnit).where(*filters)
+        )
+    ).scalar_one() or 0
+    inconnus = (
+        await db.execute(
+            select(func.count())
+            .select_from(MontrealPropertyUnit)
+            .where(*filters, sans_owner)
+        )
+    ).scalar_one() or 0
+    q = (
+        select(MontrealPropertyUnit.matricule)
+        .where(*filters, MontrealPropertyUnit.matricule.is_not(None))
+        .order_by(MontrealPropertyUnit.matricule.asc())
+        .limit(limite + 1)
+    )
+    if sans_proprietaire:
+        q = q.where(sans_owner)
+    rows = [r[0] for r in (await db.execute(q)).all() if r[0]]
+    tronque = len(rows) > limite
+    return MatriculesACollecterOut(
+        matricules=rows[:limite],
+        total=int(total),
+        deja_connus=int(total) - int(inconnus),
+        plafond=limite,
+        tronque=tronque,
+    )
+
+
 @router.get("/export.csv")
 async def export_properties_csv(
     db: DBSession,
