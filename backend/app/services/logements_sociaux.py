@@ -8,8 +8,10 @@ pas connu comme social) :
    communautaires » (HLM, OMHM, SHDM, coopératives, OBNL) : ~2 800
    projets avec le nom de rue (sans numéro civique), l'arrondissement ou
    la ville liée et le nombre de logements. Une unité du rôle est marquée
-   quand (arrondissement/ville, rue, nombre de logements) coïncident —
-   volontairement strict pour ne jamais exclure un immeuble privé ;
+   quand (arrondissement/ville, rue, nombre de logements) coïncident ET
+   qu'UN SEUL immeuble du rôle correspond (plusieurs immeubles de même
+   taille sur la rue = ambigu, non marqué) — pour ne jamais exclure un
+   immeuble privé ;
 2. le nom du propriétaire collecté sur EvalWeb (Office d'habitation, SHDM,
    SHQ, coopérative d'habitation, habitations communautaires…), appliqué
    au fil des collectes.
@@ -18,6 +20,8 @@ from __future__ import annotations
 
 import csv
 import io
+from collections import defaultdict
+from pathlib import Path
 import json
 import logging
 import re
@@ -32,12 +36,25 @@ from app.models.montreal_property_unit import MontrealPropertyUnit as U
 
 log = logging.getLogger(__name__)
 
+#: Fin du libellé des marquages déduits du NOM du propriétaire collecté
+#: (« Coop · propriétaire ») — ceux-là survivent au recalcul du fichier.
+SUFFIXE_PROPRIETAIRE = "· propriétaire"
+
 #: CSV « Logements sociaux et communautaires » (donnees.montreal.ca).
 LOGEMENTS_SOCIAUX_CSV_URL = (
     "https://donnees.montreal.ca/dataset/"
     "d26fad0f-2eae-44d5-88a0-2bc699fd2592/resource/"
     "bb380faa-1ba5-458b-b520-9e2287bcc07f/download/"
     "log_horsmarche_donneesouvertes_20241231.csv"
+)
+
+#: Copie du même fichier (édition 2024-12-31, licence ouverte de la Ville)
+#: utilisée si le téléchargement échoue — le 2026-09-29, donnees.montreal.ca
+#: a répondu 403 au serveur et aucun logement social n'a été marqué.
+_COPIE_EMBARQUEE = (
+    Path(__file__).resolve().parent.parent
+    / "data"
+    / "logements_sociaux_montreal_20241231.csv"
 )
 
 _TYPES_VOIE = frozenset({
@@ -164,12 +181,35 @@ def decoder_csv(brut: bytes) -> str:
 
 
 async def telecharger_csv(url: str = LOGEMENTS_SOCIAUX_CSV_URL) -> str:
+    """Télécharge le fichier de la Ville — avec le même en-tête navigateur
+    que l'import du rôle (sans lui, le site répond 403 au serveur)."""
+    from app.integrations.roles_evaluation.montreal import USER_AGENT
+
     async with httpx.AsyncClient(
-        timeout=httpx.Timeout(120.0, connect=30.0)
+        timeout=httpx.Timeout(120.0, connect=30.0),
+        headers={"User-Agent": USER_AGENT, "Accept": "text/csv,*/*"},
     ) as client:
         r = await client.get(url, follow_redirects=True)
         r.raise_for_status()
         return decoder_csv(r.content)
+
+
+async def charger_texte_csv(
+    url: str = LOGEMENTS_SOCIAUX_CSV_URL,
+) -> Tuple[str, str]:
+    """(texte, source) : le fichier à jour de la Ville, sinon la copie
+    embarquée — le marquage ne doit plus échouer sur un 403."""
+    try:
+        texte = await telecharger_csv(url)
+        if "nomrue" in texte[:2000]:
+            return texte, "Ville de Montréal (en ligne)"
+        log.warning("Fichier des logements sociaux inattendu — copie embarquée utilisée")
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "Téléchargement des logements sociaux échoué (%s) — copie embarquée utilisée",
+            exc,
+        )
+    return decoder_csv(_COPIE_EMBARQUEE.read_bytes()), "copie embarquée (2024-12-31)"
 
 
 async def _ecrire_marquages(db: AsyncSession, marquages: Dict[str, str]) -> int:
@@ -217,47 +257,83 @@ async def marquer_logements_sociaux(
 ) -> Dict[str, Any]:
     """Marque les unités du rôle qui correspondent à un projet du jeu de
     données de la Ville, puis celles dont le propriétaire collecté est un
-    bailleur social. Idempotent (ne touche que ``logement_social IS NULL``).
-    Commit par l'appelant."""
+    bailleur social. La partie « fichier » est RECALCULÉE à chaque passage
+    (une règle plus stricte retire d'anciens marquages) ; les marquages
+    par propriétaire sont gardés. Commit par l'appelant."""
+    source = "fourni"
     if texte_csv is None:
-        texte_csv = await telecharger_csv()
+        texte_csv, source = await charger_texte_csv()
     projets = charger_projets(texte_csv)
     nlogs = sorted({cle[2] for cle in projets})
     par_type: Dict[str, int] = {}
+    table = U.__table__
 
-    candidates: list = []
-    if nlogs:
-        candidates = (
-            await db.execute(
-                select(
-                    U.matricule,
-                    U.nom_rue,
-                    U.municipalite,
-                    U.arrondissement,
-                    U.nombre_logement,
-                ).where(
-                    U.region == "mtl-island",
-                    U.logement_social.is_(None),
-                    U.nombre_logement.in_(nlogs),
-                )
-            )
-        ).all()
-    marquages: Dict[str, str] = {}
+    # 1. Remise à zéro des marquages « fichier ».
+    await db.execute(
+        update(table)
+        .where(
+            table.c.logement_social.is_not(None),
+            ~table.c.logement_social.like(f"%{SUFFIXE_PROPRIETAIRE}"),
+        )
+        .values(logement_social=None)
+    )
+
+    # 2. Unités de l'île dont le nombre de logements correspond à un projet
+    #    — lues EN FLUX (~500 000 lignes : jamais tout en mémoire sur le
+    #    serveur gratuit à 512 Mo).
+    par_cle: Dict[Tuple[str, str, int], List[Tuple[str, Optional[str]]]] = (
+        defaultdict(list)
+    )
     sans_arrondissement = 0
-    for mat, nom_rue, municipalite, arrondissement, nb in candidates:
-        if not arrondissement and normaliser_secteur(municipalite) == "montreal":
-            # Montréal sans arrondissement : impossible de trancher entre
-            # 19 arrondissements → on ne marque pas (relancer l'import du
-            # rôle Ville, qui remplit l'arrondissement).
-            sans_arrondissement += 1
+    nb_candidates = 0
+    if nlogs:
+        flux = await db.stream(
+            select(
+                U.matricule,
+                U.nom_rue,
+                U.municipalite,
+                U.arrondissement,
+                U.nombre_logement,
+                U.logement_social,
+            )
+            .where(
+                U.region == "mtl-island",
+                U.nombre_logement.in_(nlogs),
+            )
+            .execution_options(yield_per=5000)
+        )
+        async for mat, nom_rue, municipalite, arrondissement, nb, deja in flux:
+            nb_candidates += 1
+            if not arrondissement and normaliser_secteur(municipalite) == "montreal":
+                # Montréal sans arrondissement : impossible de trancher
+                # entre 19 arrondissements → on ne marque pas (relancer
+                # l'import du rôle Ville, qui remplit l'arrondissement).
+                sans_arrondissement += 1
+                continue
+            secteur = arrondissement or municipalite or ""
+            cle = (
+                normaliser_secteur(secteur),
+                normaliser_rue(nom_rue),
+                int(nb or 0),
+            )
+            if cle in projets:
+                par_cle[cle].append((mat, deja))
+
+    # 3. Strict : un projet ne marque qu'UN immeuble, et seulement si un
+    #    seul immeuble du rôle a cette clé — sinon un plex privé voisin de
+    #    même taille serait exclu à tort (Phil 2026-09-29).
+    marquages: Dict[str, str] = {}
+    ambigus = 0
+    for cle, liste in par_cle.items():
+        if len(liste) != 1:
+            ambigus += 1
             continue
-        secteur = arrondissement or municipalite or ""
-        cle = (normaliser_secteur(secteur), normaliser_rue(nom_rue), int(nb or 0))
-        trouve = projets.get(cle)
-        if trouve:
-            typ, projet = trouve
-            marquages[mat] = libelle_social(typ, projet)
-            par_type[typ] = par_type.get(typ, 0) + 1
+        mat, deja = liste[0]
+        if deja:  # déjà marqué par le nom du propriétaire
+            continue
+        typ, projet = projets[cle]
+        marquages[mat] = libelle_social(typ, projet)
+        par_type[typ] = par_type.get(typ, 0) + 1
     marquees_csv = await _ecrire_marquages(db, marquages)
     marquees_prop = await marquer_depuis_proprietaires(db)
     await db.flush()
@@ -273,13 +349,15 @@ async def marquer_logements_sociaux(
     )
     log.info(
         "Logements sociaux : %d projets, %d unités marquées (fichier), "
-        "%d (propriétaire), %d au total",
-        len(projets), marquees_csv, marquees_prop, total,
+        "%d projets ambigus, %d (propriétaire), %d au total",
+        len(projets), marquees_csv, ambigus, marquees_prop, total,
     )
     return {
         "projets": len(projets),
-        "unites_candidates": len(candidates),
+        "unites_candidates": nb_candidates,
+        "source": source,
         "marquees_fichier": marquees_csv,
+        "projets_ambigus": ambigus,
         "marquees_proprietaire": marquees_prop,
         "montreal_sans_arrondissement": sans_arrondissement,
         "total_marquees": total,
