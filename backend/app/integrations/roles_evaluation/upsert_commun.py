@@ -19,7 +19,7 @@ from app.models.montreal_property_unit import MontrealPropertyUnit
 
 #: Colonnes que l'import ne touche jamais (données collectées par nous).
 COLONNES_CONSERVEES = frozenset(
-    {"owners_json", "owners_fetched_at", "logement_social"}
+    {"owners_json", "owners_fetched_at", "logement_social", "proprietaire_depuis"}
 )
 #: Colonnes complétées : nouvelle valeur si fournie, sinon l'existante.
 COLONNES_COMPLETEES = frozenset({"arrondissement"})
