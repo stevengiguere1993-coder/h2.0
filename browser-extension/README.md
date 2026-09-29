@@ -39,6 +39,15 @@ scrapers automatiques sur VPS mais laissent passer ton vrai navigateur
 4. Dans h2.0, ouvre la modale Immeuble MTL pour ce matricule — les
    propriétaires sont déjà là (avec enrichissement REQ + Canada411).
 
+### Configuration automatique (1.2.1)
+
+Plus rien à saisir dans la fenêtre de l'icône : en ouvrant la page
+Prospection → Rôles fonciers de Kratos, la page transmet à l'extension
+l'adresse du serveur et la clé (`GET /api/v1/extension/config`, utilisateur
+connecté). L'extension n'accepte cette configuration que depuis une page
+Kratos et vers un serveur Kratos. Corrige « Échec envoi : Backend URL non
+configurée » après une réinstallation (2026-09-29).
+
 ### Collecte en lot (1.2.0)
 
 1. Dans h2.0 → Prospection → Immeubles MTL, pose tes filtres (ex. 12 à

@@ -90,6 +90,7 @@ function extensionVersion(): string {
 const SIZE_PRESETS = [
   { label: "Tous", min: undefined as number | undefined, max: undefined as number | undefined },
   { label: "4-10", min: 4, max: 10 },
+  { label: "8+", min: 8, max: undefined },
   { label: "11-20", min: 11, max: 20 },
   { label: "20+", min: 20, max: undefined },
   { label: "50+", min: 50, max: undefined },
@@ -104,15 +105,17 @@ export default function ImmeublesMtlPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Filtres
-  const [presetIdx, setPresetIdx] = useState(3); // 20+ par défaut
-  const [minLogements, setMinLogements] = useState<string>("20");
+  //: 8+ par défaut (Phil prospecte les 8 logements et plus ; avec 20+, un
+  //: 8 logements comme le 2420 Pie-IX était introuvable — 2026-09-29).
+  const [presetIdx, setPresetIdx] = useState(2);
+  const [minLogements, setMinLogements] = useState<string>("8");
   const [maxLogements, setMaxLogements] = useState<string>("");
   //: Valeurs APPLIQUÉES (débouncées) des champs numériques. Taper « 12 »
   //: envoyait une requête pour « 1 » puis une pour « 12 » ; la première
   //: (lente, ~900 k lignes) revenait APRÈS la seconde et écrasait le
   //: résultat — « 6 donne 329, 12 en donne plus » (Phil 2026-09-22).
   const [filtresNum, setFiltresNum] = useState({
-    minLogements: "20",
+    minLogements: "8",
     maxLogements: "",
     minAnnee: "",
     maxAnnee: ""
@@ -127,6 +130,10 @@ export default function ImmeublesMtlPage() {
   // Valeur debouncée envoyée à l'API — évite un fetch par keystroke
   // quand l'utilisateur tape un nom de rue.
   const [rueSearchDebounced, setRueSearchDebounced] = useState<string>("");
+  //: Numéro de porte (Phil 2026-09-29 : « disons 1660 ») — les plages
+  //: « 1660-1672 » du rôle sont reconnues côté serveur.
+  const [civiqueSearch, setCiviqueSearch] = useState<string>("");
+  const [civiqueDebounced, setCiviqueDebounced] = useState<string>("");
   const [sortBy, setSortBy] = useState("nombre_logement_desc");
   const [distanceBand, setDistanceBand] = useState<
     "" | "mtl_only" | "under_30" | "30_to_40" | "40_to_50" | "over_50"
@@ -182,6 +189,8 @@ export default function ImmeublesMtlPage() {
     if (filtresNum.maxAnnee) params.set("max_annee", filtresNum.maxAnnee);
     if (rueSearchDebounced.trim())
       params.set("nom_rue_contains", rueSearchDebounced.trim());
+    if (civiqueDebounced.trim())
+      params.set("numero_civique", civiqueDebounced.trim());
     for (const code of selectedCodes) params.append("codes_utilisation", code);
     if (distanceBand) params.set("distance_band", distanceBand);
     if (arrondissement) params.set("arrondissement", arrondissement);
@@ -190,6 +199,7 @@ export default function ImmeublesMtlPage() {
   }, [
     filtresNum,
     rueSearchDebounced,
+    civiqueDebounced,
     selectedCodes,
     distanceBand,
     arrondissement,
@@ -232,6 +242,39 @@ export default function ImmeublesMtlPage() {
     window.postMessage({ type: `h2_batch_${cmd}` }, "*");
   }
 
+  //: Auto-configuration de l'extension (Phil 2026-09-29 : « Échec envoi :
+  //: Backend URL non configurée ») : Kratos lui transmet l'adresse du
+  //: serveur et sa clé — plus rien à saisir dans la fenêtre de l'icône.
+  const configurerExtension = useCallback(async () => {
+    const v = extensionVersion();
+    if (!v || v < "1.2.1") return;
+    try {
+      const r = await authedFetch("/api/v1/extension/config");
+      if (!r.ok) return;
+      const d = (await r.json()) as {
+        backend_url: string | null;
+        api_key: string | null;
+      };
+      if (!d.backend_url || !d.api_key) return;
+      window.postMessage(
+        {
+          type: "h2_extension_config",
+          backendUrl: d.backend_url,
+          apiKey: d.api_key
+        },
+        window.location.origin
+      );
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    // content-h20 s'annonce au « document_idle » : petit délai.
+    const id = setTimeout(() => void configurerExtension(), 800);
+    return () => clearTimeout(id);
+  }, [configurerExtension]);
+
   async function lancerCollecte() {
     const v = extensionVersion();
     if (!v) {
@@ -240,12 +283,13 @@ export default function ImmeublesMtlPage() {
       );
       return;
     }
-    if (v < "1.2.0") {
+    if (v < "1.2.1") {
       setBatchMsg(
-        `Extension ${v} : la collecte en lot demande la version 1.2.0 — recharge l'extension depuis le dossier à jour.`
+        `Extension ${v} : installe la version 1.2.1 (elle se configure toute seule depuis Kratos), puis recharge cette page.`
       );
       return;
     }
+    await configurerExtension();
     setBatchBusy(true);
     setBatchMsg(null);
     try {
@@ -331,6 +375,8 @@ export default function ImmeublesMtlPage() {
       if (filtresNum.maxAnnee) params.set("max_annee", filtresNum.maxAnnee);
       if (rueSearchDebounced.trim())
         params.set("nom_rue_contains", rueSearchDebounced.trim());
+      if (civiqueDebounced.trim())
+        params.set("numero_civique", civiqueDebounced.trim());
       // codes_utilisation : multi-valeur, FastAPI accepte
       // ?codes_utilisation=A&codes_utilisation=B
       for (const code of selectedCodes) {
@@ -367,6 +413,7 @@ export default function ImmeublesMtlPage() {
   }, [
     filtresNum,
     rueSearchDebounced,
+    civiqueDebounced,
     selectedCodes,
     sortBy,
     distanceBand,
@@ -381,10 +428,11 @@ export default function ImmeublesMtlPage() {
   useEffect(() => {
     const id = setTimeout(() => {
       setRueSearchDebounced(rueSearch);
+      setCiviqueDebounced(civiqueSearch);
       setOffset(0);
     }, 350);
     return () => clearTimeout(id);
-  }, [rueSearch]);
+  }, [rueSearch, civiqueSearch]);
 
   // Même délai pour les bornes numériques : on interroge la table (~1 M
   // lignes) une fois la saisie terminée, pas à chaque chiffre.
@@ -591,15 +639,38 @@ export default function ImmeublesMtlPage() {
                 className="input text-sm"
               />
             </div>
-            <div className="lg:col-span-3">
-              <label className="label">Nom de rue contient</label>
+            <div>
+              <label className="label">Numéro civique</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={civiqueSearch}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setCiviqueSearch(v);
+                  // Chercher UNE adresse : la taille ne doit pas la cacher.
+                  if (v.trim() && presetIdx !== 0) applyPreset(0);
+                }}
+                placeholder="Ex : 1660"
+                className="input text-sm"
+                title="Numéro de porte — les plages du rôle (1660-1672) sont reconnues. Retire le filtre de taille pour trouver l'immeuble peu importe son nombre de logements."
+              />
+            </div>
+            <div className="lg:col-span-2">
+              <label className="label">Rue (ou adresse complète)</label>
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
                 <input
                   type="search"
                   value={rueSearch}
-                  onChange={(e) => setRueSearch(e.target.value)}
-                  placeholder="Ex: Saint-Laurent, Sherbrooke, …"
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setRueSearch(v);
+                    // « 2420 Pie-IX » = une adresse précise : taille retirée.
+                    if (/^\s*\d+\s*[,\s]\s*\S/.test(v) && presetIdx !== 0)
+                      applyPreset(0);
+                  }}
+                  placeholder="Ex : Pie-IX, St-Clément, 2420 Pie-IX…"
                   className="input pl-8 text-sm"
                 />
               </div>
@@ -957,6 +1028,28 @@ export default function ImmeublesMtlPage() {
               <p className="mt-3 text-sm text-white/50">
                 Aucune propriété ne correspond aux filtres.
               </p>
+              {filtresNum.minLogements || filtresNum.maxLogements || exclureSociaux ? (
+                <div className="mt-2 flex flex-wrap items-center justify-center gap-2 text-[11px] text-white/60">
+                  <span>
+                    Un filtre peut cacher l&apos;immeuble cherché
+                    {filtresNum.minLogements || filtresNum.maxLogements
+                      ? ` (taille : ${filtresNum.minLogements || "0"} à ${
+                          filtresNum.maxLogements || "∞"
+                        } logements)`
+                      : ""}
+                    {exclureSociaux ? " · logements sociaux exclus" : ""}.
+                  </span>
+                  {filtresNum.minLogements || filtresNum.maxLogements ? (
+                    <button
+                      type="button"
+                      onClick={() => applyPreset(0)}
+                      className="rounded-md border border-brand-700 px-2 py-1 text-white/80 hover:border-accent-500"
+                    >
+                      Toutes les tailles
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
               <p className="mt-1 text-[11px] text-white/40">
                 Si la table est vide, il faut d&apos;abord importer le
                 rôle Montréal (voir Sources de données).
