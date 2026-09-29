@@ -29,6 +29,8 @@ from app.integrations.roles_evaluation.montreal import (
     MTL_CSV_URL,
     ingest_csv as ingest_montreal_csv,
 )
+from app.services.logements_sociaux import marquer_logements_sociaux
+from app.services.mtl_dedoublonnage import compter_jumelles, fusionner_jumelles
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +47,10 @@ _mtl_state: dict = {
     "finished_at": None,
     "rows_upserted": None,
     "error": None,
+    # Étapes enchaînées après l'import (Phil 2026-09-28) : fusion des
+    # jumelles provinciales, marquage des logements sociaux.
+    "dedoublonnage": None,
+    "logements_sociaux": None,
 }
 
 
@@ -87,13 +93,29 @@ async def _mtl_import_worker(max_rows: Optional[int]) -> None:
     _mtl_state["rows_upserted"] = None
     _mtl_state["error"] = None
     try:
+        _mtl_state["dedoublonnage"] = None
+        _mtl_state["logements_sociaux"] = None
         async with AsyncSessionLocal() as session:
             result = await ingest_montreal_csv(
                 session, url=MTL_CSV_URL, max_rows=max_rows
             )
             await session.commit()
-        _mtl_state["status"] = "done"
         _mtl_state["rows_upserted"] = int(result.get("rows_upserted") or 0)
+        # Enchaînement (Phil 2026-09-28) : le fichier de la Ville est LA
+        # source pour l'île → les jumelles du rôle provincial sont
+        # fusionnées, puis les logements sociaux marqués. Un seul clic.
+        for cle, etape in (
+            ("dedoublonnage", fusionner_jumelles),
+            ("logements_sociaux", marquer_logements_sociaux),
+        ):
+            try:
+                async with AsyncSessionLocal() as session:
+                    _mtl_state[cle] = await etape(session)
+                    await session.commit()
+            except Exception as exc:  # noqa: BLE001
+                log.exception("mtl import — étape %s échouée : %s", cle, exc)
+                _mtl_state[cle] = {"error": str(exc)[:300]}
+        _mtl_state["status"] = "done"
     except Exception as exc:
         log.exception("mtl import failed: %s", exc)
         _mtl_state["status"] = "error"
@@ -146,6 +168,77 @@ async def mtl_import_status(_: RequireOwner) -> dict:
     return {
         k: v for k, v in _mtl_state.items() if not k.startswith("_")
     }
+
+
+# État de la fusion des jumelles lancée à la main (bouton Sources).
+_dedupe_state: dict = {
+    "status": "idle",
+    "started_at": None,
+    "finished_at": None,
+    "result": None,
+    "error": None,
+}
+
+
+async def _dedupe_worker() -> None:
+    _dedupe_state.update(
+        status="running",
+        started_at=datetime.now(timezone.utc).isoformat(),
+        finished_at=None,
+        result=None,
+        error=None,
+    )
+    try:
+        async with AsyncSessionLocal() as db:
+            res = await fusionner_jumelles(db)
+            await db.commit()
+        _dedupe_state["result"] = res
+        _dedupe_state["status"] = "done"
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Fusion des jumelles échouée : %s", exc)
+        _dedupe_state["status"] = "error"
+        _dedupe_state["error"] = str(exc)[:500]
+    finally:
+        _dedupe_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+
+@router.post(
+    "/mtl-roles/dedupe",
+    summary="Fusionne les jumelles provinciales des unités de l'île de "
+    "Montréal (dry_run=true : analyse seulement, rien n'est modifié).",
+)
+async def dedupe_mtl_roles(_: RequireOwner, dry_run: bool = True) -> dict:
+    """Le rôle provincial MAMH et le fichier de la Ville décrivent les
+    mêmes bâtiments avec deux formats de matricule (« 66023-9939-11-8086-8 »
+    vs « 9939-11-8086-8-000-0000 ») : chaque immeuble de l'île comptait
+    deux fois (Phil 2026-09-28 : « 24 029 de 8 logements et plus ? »).
+    Voir services/mtl_dedoublonnage.py."""
+    if dry_run:
+        async with AsyncSessionLocal() as db:
+            return {"dry_run": True, **(await compter_jumelles(db))}
+    if _dedupe_state["status"] == "running":
+        raise HTTPException(
+            status_code=409, detail="Une fusion est déjà en cours."
+        )
+    asyncio.create_task(_dedupe_worker())
+    return {"dry_run": False, "status": "running"}
+
+
+@router.get("/mtl-roles/dedupe-status")
+async def dedupe_mtl_roles_status(_: RequireOwner) -> dict:
+    return dict(_dedupe_state)
+
+
+@router.post(
+    "/montreal/logements-sociaux",
+    summary="Marque les unités du rôle qui sont des logements sociaux "
+    "(jeu de données de la Ville + propriétaires collectés).",
+)
+async def marquer_logements_sociaux_endpoint(_: RequireOwner) -> dict:
+    async with AsyncSessionLocal() as db:
+        res = await marquer_logements_sociaux(db)
+        await db.commit()
+    return res
 
 
 @router.post(

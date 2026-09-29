@@ -34,6 +34,35 @@ type MtlStatus = {
   error: string | null;
 };
 
+function nb(v: unknown): string {
+  return Number(v ?? 0).toLocaleString("fr-CA");
+}
+
+//: Résumés des étapes enchaînées après l'import du rôle Ville (Phil
+//: 2026-09-28) : fusion des jumelles provinciales, logements sociaux.
+function resumeDedupe(d: Record<string, unknown> | null | undefined): string {
+  if (!d) return "fusion des doublons non exécutée";
+  if (d.error) return `fusion des doublons échouée (${String(d.error)})`;
+  return `${nb(d.supprimees)} jumelles provinciales fusionnées`;
+}
+
+function resumeSociaux(d: Record<string, unknown> | null | undefined): string {
+  if (!d) return "logements sociaux non marqués";
+  if (d.error)
+    return `marquage des logements sociaux échoué (${String(d.error)})`;
+  const sans = Number(d.montreal_sans_arrondissement ?? 0);
+  return (
+    `${nb(d.total_marquees)} unités marquées logement social (${nb(
+      d.marquees_fichier
+    )} par le fichier de la Ville, ${nb(
+      d.marquees_proprietaire
+    )} par le propriétaire)` +
+    (sans > 0
+      ? ` · ${nb(sans)} unités de Montréal sans arrondissement ignorées — relance l'import du rôle Ville`
+      : "")
+  );
+}
+
 export default function ProspectionSourcesPage() {
   const { onOpenSidebar } = useProspectionLayout();
   const { user } = useCurrentUser();
@@ -337,6 +366,10 @@ export default function ProspectionSourcesPage() {
         clearInterval(mtlPollRef.current);
         mtlPollRef.current = null;
       }
+      if (dedupePollRef.current !== null) {
+        clearInterval(dedupePollRef.current);
+        dedupePollRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOwner]);
@@ -348,6 +381,8 @@ export default function ProspectionSourcesPage() {
     finished_at: string | null;
     rows_upserted: number | null;
     error: string | null;
+    dedoublonnage?: Record<string, unknown> | null;
+    logements_sociaux?: Record<string, unknown> | null;
   };
   const [mtlStatus, setMtlStatus] = useState<MtlStatus | null>(null);
   const [mtlError, setMtlError] = useState<string | null>(null);
@@ -398,6 +433,110 @@ export default function ProspectionSourcesPage() {
       setMtlError((e as Error).message);
     } finally {
       setMtlStarting(false);
+    }
+  }
+
+  // ── Jumelles provinciales + logements sociaux (Phil 2026-09-28) ──
+  type DedupeInfo = Record<string, unknown>;
+  const [dedupeInfo, setDedupeInfo] = useState<DedupeInfo | null>(null);
+  const [dedupeBusy, setDedupeBusy] = useState(false);
+  const [dedupeRunning, setDedupeRunning] = useState(false);
+  const [dedupeResult, setDedupeResult] = useState<DedupeInfo | null>(null);
+  const [dedupeError, setDedupeError] = useState<string | null>(null);
+  const dedupePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [sociauxInfo, setSociauxInfo] = useState<Record<string, unknown> | null>(
+    null
+  );
+  const [sociauxBusy, setSociauxBusy] = useState(false);
+  const [sociauxError, setSociauxError] = useState<string | null>(null);
+
+  async function analyserDoublons() {
+    setDedupeBusy(true);
+    setDedupeError(null);
+    setDedupeResult(null);
+    try {
+      const res = await authedFetch(
+        "/api/v1/admin/data/mtl-roles/dedupe?dry_run=true",
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      setDedupeInfo((await res.json()) as DedupeInfo);
+    } catch (e) {
+      setDedupeError((e as Error).message);
+    } finally {
+      setDedupeBusy(false);
+    }
+  }
+
+  async function verifierDedupe() {
+    try {
+      const res = await authedFetch("/api/v1/admin/data/mtl-roles/dedupe-status");
+      if (!res.ok) return;
+      const d = (await res.json()) as {
+        status: string;
+        result: DedupeInfo | null;
+        error: string | null;
+      };
+      if (d.status === "running") return;
+      if (dedupePollRef.current !== null) {
+        clearInterval(dedupePollRef.current);
+        dedupePollRef.current = null;
+      }
+      setDedupeRunning(false);
+      if (d.status === "done") {
+        setDedupeResult(d.result);
+        setDedupeInfo(null);
+        void refreshProvStatus();
+      }
+      if (d.status === "error") setDedupeError(d.error || "erreur inconnue");
+    } catch {
+      /* silent */
+    }
+  }
+
+  async function fusionnerDoublons() {
+    if (dedupeRunning) return;
+    setDedupeRunning(true);
+    setDedupeError(null);
+    try {
+      const res = await authedFetch(
+        "/api/v1/admin/data/mtl-roles/dedupe?dry_run=false",
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      if (dedupePollRef.current === null) {
+        dedupePollRef.current = setInterval(verifierDedupe, 3000);
+      }
+    } catch (e) {
+      setDedupeError((e as Error).message);
+      setDedupeRunning(false);
+    }
+  }
+
+  async function marquerSociaux() {
+    setSociauxBusy(true);
+    setSociauxError(null);
+    setSociauxInfo(null);
+    try {
+      const res = await authedFetch(
+        "/api/v1/admin/data/montreal/logements-sociaux",
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      setSociauxInfo((await res.json()) as Record<string, unknown>);
+    } catch (e) {
+      setSociauxError((e as Error).message);
+    } finally {
+      setSociauxBusy(false);
     }
   }
 
@@ -728,6 +867,134 @@ export default function ProspectionSourcesPage() {
                 {mtlError}
               </span>
             ) : null}
+          </div>
+          {mtlStatus?.status === "done" &&
+          (mtlStatus.dedoublonnage || mtlStatus.logements_sociaux) ? (
+            <p className="mt-2 text-[11px] text-white/60">
+              Après l&apos;import : {resumeDedupe(mtlStatus.dedoublonnage)} ·{" "}
+              {resumeSociaux(mtlStatus.logements_sociaux)}
+            </p>
+          ) : null}
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <div className="rounded-lg border border-brand-800 bg-brand-950/50 p-3">
+              <h3 className="text-sm font-semibold text-white">
+                Doublons rôle provincial / fichier de la Ville
+              </h3>
+              <p className="mt-1 text-[11px] text-white/60">
+                Le ZIP provincial et le fichier de la Ville décrivent les mêmes
+                immeubles avec deux matricules (« 66023-9939-11-8086-8 » et
+                « 9939-11-8086-8-000-0000 ») : chaque immeuble de l&apos;île
+                comptait deux fois. La fusion garde la ligne de la Ville, y
+                reporte les propriétaires collectés et supprime la jumelle.
+                Faite automatiquement après chaque import ; ce bouton sert à
+                vérifier.
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void analyserDoublons()}
+                  disabled={!isOwner || dedupeBusy || dedupeRunning}
+                  className="btn-outline-accent btn-sm disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {dedupeBusy ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4" />
+                  )}
+                  Analyser
+                </button>
+                {dedupeInfo && Number(dedupeInfo.jumelles) > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          `Fusionner ${nb(dedupeInfo.jumelles)} jumelles provinciales ? Les lignes du fichier de la Ville sont conservées, les propriétaires collectés reportés.`
+                        )
+                      )
+                        void fusionnerDoublons();
+                    }}
+                    disabled={!isOwner || dedupeRunning}
+                    className="btn-outline-accent btn-sm disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {dedupeRunning ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Database className="h-4 w-4" />
+                    )}
+                    {dedupeRunning ? "Fusion en cours…" : "Fusionner les jumelles"}
+                  </button>
+                ) : null}
+              </div>
+              {dedupeInfo ? (
+                <p className="mt-2 text-[11px] text-white/70">
+                  {nb(dedupeInfo.jumelles)} jumelles ({nb(dedupeInfo.jumelles_8_plus)}{" "}
+                  de 8 logements et plus) · {nb(dedupeInfo.ville_total)} unités
+                  Ville dont {nb(dedupeInfo.ville_8_plus)} de 8 et plus ·{" "}
+                  {nb(dedupeInfo.leads_a_rattacher)} lead(s) à rattacher ·{" "}
+                  {nb(dedupeInfo.provinciales_sans_jumelle)} lignes provinciales
+                  sans jumelle (gardées)
+                </p>
+              ) : null}
+              {dedupeResult ? (
+                <p className="mt-2 text-[11px] text-emerald-300">
+                  <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />
+                  {nb(dedupeResult.supprimees)} jumelles supprimées ·{" "}
+                  {nb(dedupeResult.proprietaires_reportes)} propriétaires
+                  reportés · {nb(dedupeResult.leads_rattaches)} lead(s)
+                  rattaché(s)
+                </p>
+              ) : null}
+              {dedupeError ? (
+                <p className="mt-2 text-[11px] text-rose-300">
+                  <AlertTriangle className="mr-1 inline h-3.5 w-3.5" />
+                  {dedupeError}
+                </p>
+              ) : null}
+            </div>
+            <div className="rounded-lg border border-brand-800 bg-brand-950/50 p-3">
+              <h3 className="text-sm font-semibold text-white">
+                Logements sociaux et communautaires
+              </h3>
+              <p className="mt-1 text-[11px] text-white/60">
+                Jeu de données de la Ville (HLM, OMHM, SHDM, coopératives,
+                OBNL : environ 2 800 projets) croisé avec le rôle
+                (arrondissement + rue + nombre de logements), plus le nom des
+                propriétaires collectés. Alimente la case « Exclure les
+                logements sociaux » de la page Rôles fonciers. Fait
+                automatiquement après chaque import.
+              </p>
+              <div className="mt-2">
+                <button
+                  type="button"
+                  onClick={() => void marquerSociaux()}
+                  disabled={!isOwner || sociauxBusy}
+                  className="btn-outline-accent btn-sm disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {sociauxBusy ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Building2 className="h-4 w-4" />
+                  )}
+                  {sociauxBusy
+                    ? "Marquage en cours…"
+                    : "Marquer les logements sociaux"}
+                </button>
+              </div>
+              {sociauxInfo ? (
+                <p className="mt-2 text-[11px] text-emerald-300">
+                  <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />
+                  {resumeSociaux(sociauxInfo)}
+                </p>
+              ) : null}
+              {sociauxError ? (
+                <p className="mt-2 text-[11px] text-rose-300">
+                  <AlertTriangle className="mr-1 inline h-3.5 w-3.5" />
+                  {sociauxError}
+                </p>
+              ) : null}
+            </div>
           </div>
           {provDbStats ? (
             <p className="mt-3 text-[11px] text-white/60">

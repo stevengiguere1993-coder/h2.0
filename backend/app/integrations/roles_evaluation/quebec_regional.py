@@ -147,6 +147,7 @@ def _build_field_map(headers: List[str]) -> Dict[str, str]:
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.integrations.roles_evaluation.upsert_commun import colonnes_upsert
 from app.models.montreal_property_unit import MontrealPropertyUnit
 
 log = logging.getLogger(__name__)
@@ -294,13 +295,10 @@ async def _bulk_upsert(
     if not deduped:
         return 0
     stmt = pg_insert(MontrealPropertyUnit).values(deduped)
-    update_cols = {
-        c.name: stmt.excluded[c.name]
-        for c in MontrealPropertyUnit.__table__.columns
-        if c.name not in ("matricule",)
-    }
+    # Conserve propriétaires collectés + marquage « logement social »,
+    # complète l'arrondissement (upsert_commun).
     stmt = stmt.on_conflict_do_update(
-        index_elements=["matricule"], set_=update_cols
+        index_elements=["matricule"], set_=colonnes_upsert(stmt)
     )
 
     import asyncio as _asyncio
