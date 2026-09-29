@@ -109,6 +109,10 @@ class OwnerCandidate(BaseModel):
 class ListResponse(BaseModel):
     total: int
     properties: List[MtlPropertyRead]
+    #: Unités retirées par « Exclure les logements sociaux » (None si la
+    #: case n'est pas cochée) — Phil 2026-09-29 : « ça change rien au
+    #: nombre ».
+    sociaux_exclus: Optional[int] = None
 
 
 class ConvertIn(BaseModel):
@@ -605,7 +609,7 @@ async def list_properties(
 
     if proprietaire_min_annees:
         await _completer_proprietaire_depuis(db)
-    filters = _filtres_mtl(
+    filtres_kwargs = dict(
         min_logements=min_logements,
         max_logements=max_logements,
         min_annee=min_annee,
@@ -621,6 +625,7 @@ async def list_properties(
         numero_civique=numero_civique,
         proprietaire_min_annees=proprietaire_min_annees,
     )
+    filters = _filtres_mtl(**filtres_kwargs)
 
     stmt = select(MontrealPropertyUnit)
     for f in filters:
@@ -699,7 +704,22 @@ async def list_properties(
         if d.superficie_batiment is not None:
             d.superficie_batiment = float(d.superficie_batiment)
         out.append(d)
-    return ListResponse(total=total, properties=out)
+    sociaux_exclus: Optional[int] = None
+    if exclure_sociaux:
+        base = _filtres_mtl(**{**filtres_kwargs, "exclure_sociaux": False})
+        sociaux_exclus = int(
+            (
+                await db.execute(
+                    select(func.count())
+                    .select_from(MontrealPropertyUnit)
+                    .where(*base, MontrealPropertyUnit.logement_social.is_not(None))
+                )
+            ).scalar()
+            or 0
+        )
+    return ListResponse(
+        total=total, properties=out, sociaux_exclus=sociaux_exclus
+    )
 
 
 _COLONNES_EXPORT = [
