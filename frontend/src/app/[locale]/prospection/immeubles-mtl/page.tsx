@@ -39,6 +39,11 @@ type Property = {
   has_owner_data: boolean;
   owner_names: string[] | null;
   owner_inscription_dates: string[] | null;
+  //: « HLM · Saint-Sulpice », « Coop · propriétaire »… ; null = pas connu
+  //: comme logement social.
+  logement_social: string | null;
+  //: Années écoulées depuis l'inscription du 1er propriétaire au rôle.
+  proprietaire_depuis_annees: number | null;
 };
 
 type UtilisationType = {
@@ -130,6 +135,9 @@ export default function ImmeublesMtlPage() {
   const [arrondissementsList, setArrondissementsList] = useState<
     Array<{ name: string; count: number }>
   >([]);
+  //: Exclure HLM / coops / OBNL / SHDM (Phil 2026-09-28) — coché par défaut :
+  //: on prospecte des immeubles à acheter, jamais du logement social.
+  const [exclureSociaux, setExclureSociaux] = useState(true);
   const [offset, setOffset] = useState(0);
   const limit = 100;
 
@@ -177,13 +185,15 @@ export default function ImmeublesMtlPage() {
     for (const code of selectedCodes) params.append("codes_utilisation", code);
     if (distanceBand) params.set("distance_band", distanceBand);
     if (arrondissement) params.set("arrondissement", arrondissement);
+    if (exclureSociaux) params.set("exclure_sociaux", "true");
     return params;
   }, [
     filtresNum,
     rueSearchDebounced,
     selectedCodes,
     distanceBand,
-    arrondissement
+    arrondissement,
+    exclureSociaux
   ]);
 
   // ── Collecte en lot des propriétaires (Phil 2026-09-28) ──
@@ -329,6 +339,7 @@ export default function ImmeublesMtlPage() {
       params.set("sort_by", sortBy);
       if (distanceBand) params.set("distance_band", distanceBand);
       if (arrondissement) params.set("arrondissement", arrondissement);
+      if (exclureSociaux) params.set("exclure_sociaux", "true");
       params.set("limit", String(limit));
       params.set("offset", String(offset));
 
@@ -360,6 +371,7 @@ export default function ImmeublesMtlPage() {
     sortBy,
     distanceBand,
     arrondissement,
+    exclureSociaux,
     offset
   ]);
 
@@ -471,30 +483,6 @@ export default function ImmeublesMtlPage() {
               convertis en lead en 1 clic.
             </p>
           </div>
-          <select
-            value={distanceBand}
-            onChange={(e) => {
-              setDistanceBand(
-                e.target.value as
-                  | ""
-                  | "mtl_only"
-                  | "under_30"
-                  | "30_to_40"
-                  | "40_to_50"
-                  | "over_50"
-              );
-              setOffset(0);
-            }}
-            className="rounded-lg border border-brand-700 bg-brand-950 px-3 py-2 text-sm font-medium text-white"
-            title="Filtre par distance depuis le centre-ville de Montréal"
-          >
-            <option value="">Tout le Québec</option>
-            <option value="mtl_only">Île de Montréal uniquement</option>
-            <option value="under_30">≤ 30 km de MTL</option>
-            <option value="30_to_40">30-40 km de MTL</option>
-            <option value="40_to_50">40-50 km de MTL</option>
-            <option value="over_50">&gt; 50 km de MTL</option>
-          </select>
           <button
             type="button"
             onClick={() => void exporterCsv()}
@@ -523,26 +511,6 @@ export default function ImmeublesMtlPage() {
             )}
             Collecter les propriétaires
           </button>
-          {/* Filtre arrondissement (visible quand mtl_only ou Tout le Québec
-              + des arrondissements existent en DB). */}
-          {arrondissementsList.length > 0 ? (
-            <select
-              value={arrondissement}
-              onChange={(e) => {
-                setArrondissement(e.target.value);
-                setOffset(0);
-              }}
-              className="rounded-lg border border-brand-700 bg-brand-950 px-3 py-2 text-sm font-medium text-white"
-              title="Arrondissement (Ville de Montréal seulement)"
-            >
-              <option value="">Tous arrondissements</option>
-              {arrondissementsList.map((a) => (
-                <option key={a.name} value={a.name}>
-                  {a.name} ({a.count.toLocaleString("fr-CA")})
-                </option>
-              ))}
-            </select>
-          ) : null}
         </header>
 
         {/* Filtres */}
@@ -596,7 +564,7 @@ export default function ImmeublesMtlPage() {
               />
             </div>
             <div>
-              <label className="label">Année min</label>
+              <label className="label">Année de construction min</label>
               <input
                 type="number"
                 min="1700"
@@ -610,7 +578,7 @@ export default function ImmeublesMtlPage() {
               />
             </div>
             <div>
-              <label className="label">Année max</label>
+              <label className="label">Année de construction max</label>
               <input
                 type="number"
                 min="1700"
@@ -660,6 +628,83 @@ export default function ImmeublesMtlPage() {
                 </option>
                 <option value="matricule_asc">Matricule</option>
               </select>
+            </div>
+            {/* Zone + arrondissement + logements sociaux : dans la boîte
+                avec les autres filtres (Phil 2026-09-28). */}
+            <div>
+              <label className="label">Zone</label>
+              <select
+                value={distanceBand}
+                onChange={(e) => {
+                  setDistanceBand(
+                    e.target.value as
+                      | ""
+                      | "mtl_only"
+                      | "under_30"
+                      | "30_to_40"
+                      | "40_to_50"
+                      | "over_50"
+                  );
+                  setOffset(0);
+                }}
+                className="input text-sm"
+                title="Distance depuis le centre-ville de Montréal"
+              >
+                <option value="">Tout le Québec</option>
+                <option value="mtl_only">Île de Montréal uniquement</option>
+                <option value="under_30">≤ 30 km de MTL</option>
+                <option value="30_to_40">30-40 km de MTL</option>
+                <option value="40_to_50">40-50 km de MTL</option>
+                <option value="over_50">&gt; 50 km de MTL</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Arrondissement (Montréal)</label>
+              <select
+                value={arrondissement}
+                onChange={(e) => {
+                  setArrondissement(e.target.value);
+                  setOffset(0);
+                }}
+                className="input text-sm"
+                disabled={arrondissementsList.length === 0}
+                title={
+                  arrondissementsList.length === 0
+                    ? "Aucun arrondissement en base : relance l'import du rôle Ville de Montréal (Paramètres → Sources)"
+                    : "Arrondissement de la Ville de Montréal (les villes liées se filtrent par la zone)"
+                }
+              >
+                <option value="">
+                  {arrondissementsList.length === 0
+                    ? "Aucun arrondissement en base"
+                    : "Tous les arrondissements"}
+                </option>
+                {arrondissementsList.map((a) => (
+                  <option key={a.name} value={a.name}>
+                    {a.name} ({a.count.toLocaleString("fr-CA")})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-end lg:col-span-2">
+              <label className="flex w-full cursor-pointer items-center gap-2 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2 text-sm text-white/80">
+                <input
+                  type="checkbox"
+                  checked={exclureSociaux}
+                  onChange={(e) => {
+                    setExclureSociaux(e.target.checked);
+                    setOffset(0);
+                  }}
+                  className="h-4 w-4 accent-accent-500"
+                />
+                <span>
+                  Exclure les logements sociaux
+                  <span className="block text-[10px] text-white/40">
+                    HLM, OMHM, SHDM, coopératives et OBNL — jeu de données de
+                    la Ville + nom des propriétaires collectés
+                  </span>
+                </span>
+              </label>
             </div>
           </div>
 
@@ -927,11 +972,11 @@ export default function ImmeublesMtlPage() {
                     <th className="px-3 py-2.5 text-right">
                       # logements
                     </th>
-                    <th className="px-3 py-2.5 text-right">Année</th>
+                    <th className="px-3 py-2.5 text-right">Construit en</th>
                     <th className="px-3 py-2.5 text-right">Terrain</th>
                     <th className="px-3 py-2.5">Utilisation</th>
                     <th className="px-3 py-2.5">Matricule</th>
-                    <th className="px-3 py-2.5 text-right">Date inscription</th>
+                    <th className="px-3 py-2.5 text-right">Propriétaire depuis</th>
                     <th className="px-3 py-2.5">Actions</th>
                   </tr>
                 </thead>
@@ -954,6 +999,14 @@ export default function ImmeublesMtlPage() {
                           <div className="text-[10px] text-white/40">
                             {p.municipalite}
                           </div>
+                        ) : null}
+                        {p.logement_social ? (
+                          <span
+                            className="mt-0.5 inline-block rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-medium text-rose-300"
+                            title="Logement social ou communautaire — exclu quand la case « Exclure les logements sociaux » est cochée"
+                          >
+                            Social · {p.logement_social}
+                          </span>
                         ) : null}
                       </td>
                       <td className="px-3 py-2.5 max-w-[180px]">
@@ -1002,7 +1055,22 @@ export default function ImmeublesMtlPage() {
                       <td className="px-3 py-2.5 text-right text-[11px] tabular-nums text-white/60">
                         {p.owner_inscription_dates &&
                         p.owner_inscription_dates[0] ? (
-                          p.owner_inscription_dates[0]
+                          <span
+                            title={`Inscrit au rôle le ${p.owner_inscription_dates[0]}`}
+                          >
+                            {p.proprietaire_depuis_annees != null ? (
+                              <span className="font-medium text-white/80">
+                                {p.proprietaire_depuis_annees === 0
+                                  ? "moins d'un an"
+                                  : `${p.proprietaire_depuis_annees} an${
+                                      p.proprietaire_depuis_annees > 1 ? "s" : ""
+                                    }`}
+                              </span>
+                            ) : null}
+                            <span className="block text-[10px] text-white/40">
+                              {p.owner_inscription_dates[0]}
+                            </span>
+                          </span>
                         ) : (
                           <span className="text-white/30">—</span>
                         )}

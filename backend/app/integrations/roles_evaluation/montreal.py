@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.integrations.roles_evaluation.upsert_commun import colonnes_upsert
 from app.models.montreal_property_unit import MontrealPropertyUnit
 
 log = logging.getLogger(__name__)
@@ -194,6 +195,47 @@ def nom_municipalite(brut: Optional[str]) -> Optional[str]:
     return MUNICIPALITE_CODES.get(v.zfill(2) if v.isdigit() else v, v)
 
 
+#: Codes de la colonne NO_ARROND_ILE_CUM du fichier de la Ville → nom
+#: officiel de l'arrondissement (Ville de Montréal, MUNICIPALITE = 50).
+#: Vérifiés sur le fichier du 2026-09-28 par le suffixe des noms de rue
+#: (« (OUT) », « (ANJ) »…) et les rues dominantes de chaque code (REM19 =
+#: René-Lévesque/de la Montagne = Ville-Marie, REM21 = Papineau/Saint-
+#: Denis = Plateau, REM34 = Jean-Talon Ouest/Décarie = CDN-NDG…). Les
+#: villes liées portent « REM99 » (pas d'arrondissement).
+ARRONDISSEMENT_CODES: Dict[str, str] = {
+    "REM05": "Outremont",
+    "REM09": "Anjou",
+    "REM12": "Verdun",
+    "REM14": "Saint-Léonard",
+    "REM15": "Saint-Laurent",
+    "REM16": "Montréal-Nord",
+    "REM17": "LaSalle",
+    "REM19": "Ville-Marie",
+    "REM20": "Le Sud-Ouest",
+    "REM21": "Le Plateau-Mont-Royal",
+    "REM22": "Mercier–Hochelaga-Maisonneuve",
+    "REM23": "Ahuntsic-Cartierville",
+    "REM24": "Rosemont–La Petite-Patrie",
+    "REM25": "Villeray–Saint-Michel–Parc-Extension",
+    "REM27": "Lachine",
+    "REM31": "Pierrefonds-Roxboro",
+    "REM32": "L'Île-Bizard–Sainte-Geneviève",
+    "REM33": "Rivière-des-Prairies–Pointe-aux-Trembles",
+    "REM34": "Côte-des-Neiges–Notre-Dame-de-Grâce",
+}
+
+
+def nom_arrondissement(
+    code: Optional[str], municipalite: Optional[str]
+) -> Optional[str]:
+    """« REM19 » (Montréal) → « Ville-Marie » ; None pour une ville liée
+    ou un code inconnu — l'arrondissement n'est alors pas écrasé en base
+    (voir ``colonnes_upsert``)."""
+    if nom_municipalite(municipalite) != "Montréal":
+        return None
+    return ARRONDISSEMENT_CODES.get((code or "").strip().upper())
+
+
 def _parse_int(v: str) -> Optional[int]:
     v = (v or "").strip()
     if not v:
@@ -250,6 +292,12 @@ def _row_to_dict(row: Dict[str, str]) -> Optional[Dict[str, Any]]:
         # Tag explicite « mtl-island » pour distinguer du rôle provincial
         # (rive-sud/laval/rive-nord) ingéré par un autre flow.
         "region": "mtl-island",
+        # Arrondissement lu directement dans le fichier (Phil 2026-09-28 :
+        # filtre par arrondissement) — plus besoin de la dérivation par
+        # le dataset Adresses civiques pour les unités de la Ville.
+        "arrondissement": nom_arrondissement(
+            row.get("NO_ARROND_ILE_CUM"), row.get("MUNICIPALITE")
+        ),
     }
 
 
@@ -260,13 +308,10 @@ async def _bulk_upsert(
     if not rows:
         return 0
     stmt = pg_insert(MontrealPropertyUnit).values(rows)
-    update_cols = {
-        c.name: getattr(stmt.excluded, c.name)
-        for c in MontrealPropertyUnit.__table__.columns
-        if c.name != "matricule"
-    }
+    # Ne touche jamais aux propriétaires collectés ni au marquage
+    # « logement social » ; complète l'arrondissement (upsert_commun).
     stmt = stmt.on_conflict_do_update(
-        index_elements=["matricule"], set_=update_cols
+        index_elements=["matricule"], set_=colonnes_upsert(stmt)
     )
     # Retry sur connection drop (Render free coupe les conn idles
     # pendant les longs imports). pool_pre_ping reconnecte au prochain

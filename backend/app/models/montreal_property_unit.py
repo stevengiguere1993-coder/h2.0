@@ -103,6 +103,15 @@ class MontrealPropertyUnit(Base):
         String(64), nullable=True, index=True
     )
 
+    # Logement social/communautaire (Phil 2026-09-28 : filtre d'exclusion).
+    # NULL = pas connu comme social. Sinon « HLM · Saint-Sulpice »,
+    # « Coop · Les Habitations X », « Office d'habitation · propriétaire »…
+    # Rempli par services/logements_sociaux.py (jeu de données de la Ville
+    # + nom des propriétaires collectés). Jamais écrasé par un ré-import.
+    logement_social: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+
     __table_args__ = (
         Index("ix_mtl_units_nom_rue", "nom_rue"),
     )
