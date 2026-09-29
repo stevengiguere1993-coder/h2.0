@@ -204,6 +204,15 @@ async def receive_evalweb_owners(
         if unit:
             unit.owners_json = json.dumps(enriched, ensure_ascii=False)
             unit.owners_fetched_at = datetime.now(timezone.utc)
+            # « Propriétaire depuis » (filtre « au moins N ans »).
+            try:
+                from app.api.v1.endpoints.mtl_properties import (
+                    date_inscription_min,
+                )
+
+                unit.proprietaire_depuis = date_inscription_min(enriched)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Date « propriétaire depuis » échouée : %s", exc)
             # Bailleur social (Office d'habitation, SHDM, coop…) → unité
             # marquée « logement social » pour le filtre d'exclusion.
             if not getattr(unit, "logement_social", None):
