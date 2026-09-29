@@ -35,11 +35,11 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from app.api.deps import DBSession
+from app.api.deps import CurrentUser, DBSession
 from app.models.centris_listing import CentrisListing
 from app.models.montreal_property_unit import MontrealPropertyUnit
 
@@ -138,6 +138,21 @@ async def ping(x_extension_key: Optional[str] = Header(default=None)):
     """Test de connexion. Retourne 200 si la clé est valide."""
     _check_extension_key(x_extension_key)
     return {"ok": True, "service": "h2.0 extension API"}
+
+
+@router.get("/config")
+async def extension_config(request: Request, _: CurrentUser) -> Dict[str, Any]:
+    """Auto-configuration de l'extension depuis Kratos (Phil 2026-09-29 :
+    « Échec envoi : Backend URL non configurée ») : la page Rôles fonciers
+    transmet à l'extension l'adresse de CE serveur et la clé partagée —
+    plus rien à saisir dans la fenêtre de l'icône après une réinstallation.
+    Réservé aux utilisateurs connectés."""
+    host = request.headers.get("host") or request.url.netloc
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "https").split(",")[0].strip()
+    return {
+        "backend_url": f"{proto}://{host}".rstrip("/"),
+        "api_key": EXTENSION_API_KEY or None,
+    }
 
 
 @router.post("/evalweb-owners")
