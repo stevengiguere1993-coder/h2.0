@@ -353,6 +353,20 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
     amort_residentiel_annees: Mapped[Optional[int]] = mapped_column(
         Integer, nullable=True
     )
+    # ASSUMATION HYPOTHÉCAIRE (Phil 2026-09-29) : prêt existant repris —
+    # solde, taux (4.25 = 4,25 %), amortissement et terme RESTANTS (ans).
+    assume_solde: Mapped[Optional[float]] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
+    assume_taux_pct: Mapped[Optional[float]] = mapped_column(
+        Numeric(6, 3), nullable=True
+    )
+    assume_amort_restant_annees: Mapped[Optional[float]] = mapped_column(
+        Numeric(5, 2), nullable=True
+    )
+    assume_terme_restant_annees: Mapped[Optional[float]] = mapped_column(
+        Numeric(5, 2), nullable=True
+    )
     depenses_residentiel_json: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True
     )

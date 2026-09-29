@@ -135,6 +135,11 @@ type LeadDetail = {
   strategie_acquisition: string | null;
   programme_achat?: string | null;
   refi_retenu?: string | null;
+  /** Assumation hypothécaire (Phil 2026-09-29) : prêt existant repris. */
+  assume_solde?: number | null;
+  assume_taux_pct?: number | null;
+  assume_amort_restant_annees?: number | null;
+  assume_terme_restant_annees?: number | null;
   balance_vente_montant: number | null;
   balance_vente_taux_pct: number | null;
   /** Cashback reçu au notaire (coût réel = prix − cashback). */
@@ -2796,12 +2801,17 @@ function ManualAnalysisSection({
       ? "preteur_b"
       : stratBrute === "residentiel"
       ? "residentiel"
+      : stratBrute === "assumation"
+      ? "assumation"
       : "traditionnel";
   const modePreteurB = stratChantier && strategie === "preteur_b";
   // « Direct » = pas de prêteur B (institution traditionnelle OU
   // résidentiel) ; résidentiel (2026-09-08) a ses propres champs.
   const modeDirect = stratChantier && strategie !== "preteur_b";
   const modeRes = stratChantier && strategie === "residentiel";
+  // Assumation hypothécaire (Phil 2026-09-29) : comme le traditionnel,
+  // mais le prêt initial = le prêt existant repris.
+  const modeAssume = stratChantier && strategie === "assumation";
 
   const typology = useMemo<Record<string, number>>(() => {
     if (!data.typology_json) return {};
@@ -3025,6 +3035,10 @@ function ManualAnalysisSection({
                   Institution traditionnelle (conventionnel / SCHL /
                   APH) + détention + refi
                 </option>
+                <option value="assumation">
+                  Assumation hypothécaire (reprise du prêt existant) +
+                  détention + refi
+                </option>
                 <option value="residentiel">
                   Résidentiel (≤ 8 unités) — ratio prêt-valeur au choix,
                   dépenses réelles, cashflow
@@ -3043,6 +3057,14 @@ function ManualAnalysisSection({
                       ? ` — ⚠ cette fiche en a ${data.nb_logements}`
                       : ""}
                     . Onglets « Achat » et « Cashflow ».
+                  </>
+                ) : strategie === "assumation" ? (
+                  <>
+                    Tu reprends le prêt du vendeur : le prêt initial est
+                    son solde (taux et amortissement restants → paiement
+                    mensuel), le cash à sortir = prix − solde + frais.
+                    Frais, détention et refinancement comme
+                    l&apos;institution traditionnelle. PDF inclus.
                   </>
                 ) : strategie === "traditionnel" ? (
                   <>
@@ -3064,6 +3086,41 @@ function ManualAnalysisSection({
           </SubCard>
         ) : null}
 
+        {/* Assumation hypothécaire (Phil 2026-09-29) : le prêt repris. */}
+        {modeAssume ? (
+          <SubCard
+            icon={Banknote}
+            title="Prêt repris (assumation hypothécaire)"
+            cols={2}
+          >
+            <FieldNumber
+              label="Solde du prêt ($)"
+              value={data.assume_solde ?? null}
+              onSave={(v) => onPatch("assume_solde", v)}
+              format="money"
+              hint="Balance actuelle du prêt du vendeur : devient le prêt initial."
+            />
+            <FieldNumber
+              label="Taux d'intérêt du prêt (%)"
+              value={data.assume_taux_pct ?? null}
+              onSave={(v) => onPatch("assume_taux_pct", v)}
+              format="percent"
+            />
+            <FieldNumber
+              label="Amortissement restant (ans)"
+              value={data.assume_amort_restant_annees ?? null}
+              onSave={(v) => onPatch("assume_amort_restant_annees", v)}
+              hint="Années qu'il reste à rembourser (ex. 25 ans au départ − 6 écoulés = 19) : sert au paiement mensuel."
+            />
+            <FieldNumber
+              label="Terme restant (ans)"
+              value={data.assume_terme_restant_annees ?? null}
+              onSave={(v) => onPatch("assume_terme_restant_annees", v)}
+              hint="Information : le taux est supposé constant jusqu'au refinancement."
+            />
+          </SubCard>
+        ) : null}
+
         {/* Financement & taux */}
         <SubCard icon={Percent} title="Financement & taux" cols={3}>
           {/* Résidentiel : pas de valeur économique, donc pas de TGA. */}
@@ -3078,7 +3135,7 @@ function ManualAnalysisSection({
           {/* En stratégie prêteur B, le taux d'achat conventionnel ne
               sert à rien (retour Phil 2026-08-31) — masqué sur le
               chantier, conservé ailleurs. */}
-          {!modePreteurB ? (
+          {!modePreteurB && !modeAssume ? (
             <FieldNumber
               label={modeRes ? "Taux hypothécaire (%)" : "Taux intérêt achat (%)"}
               value={data.taux_interet_achat_pct ?? 4}
@@ -3656,6 +3713,17 @@ type AnalysisResults = {
   cashback?: { montant: number; prix_reel: number };
   optimisation_pre_achat?: boolean;
   traditionnel?: {
+    /** « traditionnel » | « assumation » (Phil 2026-09-29). */
+    mode?: string;
+    /** Assumation : prêt repris (taux en fraction). */
+    assumation?: {
+      solde: number;
+      taux: number;
+      amort_restant_annees: number;
+      terme_restant_annees: number;
+      paiement_mensuel: number;
+      paiement_annuel: number;
+    } | null;
     programme_retenu: string;
     labels: Record<string, string>;
     horizon: number;
@@ -4115,7 +4183,7 @@ function TradColonnes({
   /** Achat : bouton « Retenir » par colonne. */
   onRetenir?: (k: string) => void;
 }) {
-  const ordre = ["conventionnel", "schl_std", "aph_50", "aph_100"];
+  const ordre = ["assumation", "conventionnel", "schl_std", "aph_50", "aph_100"];
   const keys = ordre.filter((k) => cols[k]);
   const rows: Array<{
     label: string;
@@ -4874,9 +4942,20 @@ function TraditionnelAchatPanel({
   return (
     <SectionCard
       icon={Banknote}
-      title="Achat — Institution traditionnelle"
+      title={
+        t.mode === "assumation"
+          ? "Achat — Assumation hypothécaire"
+          : "Achat — Institution traditionnelle"
+      }
       tone="emerald"
       subtitle={
+        t.mode === "assumation" ? (
+          <>
+            Prêt initial = le prêt du vendeur repris (solde, taux et
+            amortissement restants). Revenus et dépenses ACTUELS pour le
+            cashflow ; mise de fonds = prix − solde, plus les frais.
+          </>
+        ) : (
         <>
           {t.optimisation_pre_achat
             ? "Financé sur les loyers OPTIMISÉS des unités (pré-achat) et les dépenses actuelles"
@@ -4885,6 +4964,7 @@ function TraditionnelAchatPanel({
           mise de fonds et le solde du prêt au refinancement — clique
           « Retenir » pour en changer.
         </>
+        )
       }
       action={
         <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-1.5 text-right">
@@ -4900,7 +4980,33 @@ function TraditionnelAchatPanel({
         </div>
       }
     >
-      {onPatchField ? (
+      {t.assumation ? (
+        <div className="mb-3 grid gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-xs sm:grid-cols-5">
+          {(
+            [
+              ["Prêt repris (solde)", fmtMoney(t.assumation.solde)],
+              ["Taux", `${(t.assumation.taux * 100).toFixed(2)} %`],
+              [
+                "Amortissement restant",
+                `${Number(t.assumation.amort_restant_annees.toFixed(2))} ans`
+              ],
+              [
+                "Terme restant",
+                `${Number(t.assumation.terme_restant_annees.toFixed(2))} ans`
+              ],
+              ["Paiement mensuel", fmtMoney(t.assumation.paiement_mensuel)]
+            ] as Array<[string, string]>
+          ).map(([l, v]) => (
+            <div key={l}>
+              <p className="text-[10px] uppercase tracking-wider text-white/50">
+                {l}
+              </p>
+              <p className="font-mono font-semibold text-white">{v}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {onPatchField && t.mode !== "assumation" ? (
         <RefiReferenceSelect
           options={[
             ["conventionnel", t.labels.conventionnel],
@@ -4925,7 +5031,7 @@ function TraditionnelAchatPanel({
         mdfParProgramme={t.mdf_par_programme}
         detailMdf={t.detail_mdf_par_programme}
         onRetenir={
-          onPatchField
+          onPatchField && t.mode !== "assumation"
             ? (k) => onPatchField("programme_achat", k)
             : undefined
         }
@@ -4968,7 +5074,11 @@ function TraditionnelRefiPanel({
   return (
     <SectionCard
       icon={TrendingUp}
-      title={`Refinancement (an ${t.horizon}) — Institution traditionnelle`}
+      title={`Refinancement (an ${t.horizon}) — ${
+        t.mode === "assumation"
+          ? "Assumation hypothécaire"
+          : "Institution traditionnelle"
+      }`}
       tone="emerald"
       subtitle={
         <>
@@ -5910,7 +6020,9 @@ function FraisDemarrageBreakdownPanel({
         </span>
         <h4 className="text-sm font-bold text-white">
           {estTrad
-            ? "Composition de la mise de fonds (institution traditionnelle)"
+            ? data.traditionnel?.mode === "assumation"
+              ? "Composition de la mise de fonds (assumation hypothécaire)"
+              : "Composition de la mise de fonds (institution traditionnelle)"
             : "Composition de la MDF avec prêteur B"}
         </h4>
       </div>
@@ -7196,6 +7308,8 @@ function StrategieDetailSubsection({
               ? "Prêteur B + optimisation + refi"
               : lead.strategie_acquisition === "residentiel"
               ? "Résidentiel (cashflow, ≤ 8 unités)"
+              : lead.strategie_acquisition === "assumation"
+              ? "Assumation hypothécaire"
               : "Institution traditionnelle"
           )}
           {trad

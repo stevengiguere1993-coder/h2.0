@@ -457,8 +457,8 @@
  {
   "section": "4a · Scénario Achat conventionnel",
   "label": "Mise de fonds nécessaire (prix d'acquisition − prêt)",
-  "formule": "5 605 110 $ − 2 189 681 $",
-  "valeur": "3 415 430 $",
+  "formule": "5 613 772 $ − 2 189 681 $",
+  "valeur": "3 424 092 $",
   "source": "calcul"
  },
  {
@@ -646,8 +646,8 @@
  {
   "section": "4b · Scénario SCHL standard",
   "label": "Équité à la fin (prêt refi − prix d'acquisition)",
-  "formule": "3 982 520 $ − 5 605 110 $",
-  "valeur": "-1 622 591 $",
+  "formule": "3 982 520 $ − 5 613 772 $",
+  "valeur": "-1 631 253 $",
   "source": "calcul"
  },
  {
@@ -835,8 +835,8 @@
  {
   "section": "4c · Scénario SCHL Efficacité énergétique (50 pts)",
   "label": "Équité à la fin (prêt refi − prix d'acquisition)",
-  "formule": "4 963 195 $ − 5 605 110 $",
-  "valeur": "-641 915 $",
+  "formule": "4 963 195 $ − 5 613 772 $",
+  "valeur": "-650 577 $",
   "source": "calcul"
  },
  {
@@ -1024,8 +1024,8 @@
  {
   "section": "4d · Scénario SCHL Abordabilité + Efficacité (100 pts)",
   "label": "Équité à la fin (prêt refi − prix d'acquisition)",
-  "formule": "4 326 422 $ − 5 605 110 $",
-  "valeur": "-1 278 689 $",
+  "formule": "4 326 422 $ − 5 613 772 $",
+  "valeur": "-1 287 351 $",
   "source": "calcul"
  },
  {
@@ -1122,8 +1122,8 @@
  {
   "section": "5 · Frais de démarrage",
   "label": "Frais de dossier du prêteur B",
-  "formule": "2 % × prêt initial 3 562 500 $ (4 750 000 $ × 75 %)",
-  "valeur": "71 250 $",
+  "formule": "2 % × (prêt bâtisse 3 800 000 $ (80 % × 4 750 000 $) + frais financés 195 600 $ (80 % × frais finançables 244 500 $))",
+  "valeur": "79 912 $",
   "source": "calcul"
  },
  {
@@ -1151,14 +1151,14 @@
   "section": "5 · Frais de démarrage",
   "label": "Total des frais de démarrage",
   "formule": "somme des postes",
-  "valeur": "855 110 $",
+  "valeur": "863 772 $",
   "source": "calcul"
  },
  {
   "section": "5 · Frais de démarrage",
   "label": "dont payés en cash",
   "formule": "postes non finançables à 100 % + postes finançables × MDF %",
-  "valeur": "659 510 $",
+  "valeur": "668 172 $",
   "source": "calcul"
  },
  {
@@ -1179,14 +1179,14 @@
   "section": "6 · Mise de fonds et prêt du prêteur B",
   "label": "+ Frais de démarrage payés en cash",
   "formule": "section 5",
-  "valeur": "659 510 $",
+  "valeur": "668 172 $",
   "source": "calcul"
  },
  {
   "section": "6 · Mise de fonds et prêt du prêteur B",
   "label": "= Mise de fonds prêteur B (cash à sortir)",
-  "formule": "950 000 $ + 659 510 $",
-  "valeur": "1 609 510 $",
+  "formule": "950 000 $ + 668 172 $",
+  "valeur": "1 618 172 $",
   "source": "calcul"
  },
  {
@@ -1213,29 +1213,29 @@
  {
   "section": "6 · Mise de fonds et prêt du prêteur B",
   "label": "Prix d'acquisition (total dépensé)",
-  "formule": "coût réel 4 750 000 $ + frais de démarrage 855 110 $",
-  "valeur": "5 605 110 $",
+  "formule": "coût réel 4 750 000 $ + frais de démarrage 863 772 $",
+  "valeur": "5 613 772 $",
   "source": "calcul"
  },
  {
   "section": "7 · Refinancement et verdict",
   "label": "SCHL standard — équité à la fin",
-  "formule": "prêt refi 3 982 520 $ − prix d'acquisition 5 605 110 $",
-  "valeur": "-1 622 591 $",
+  "formule": "prêt refi 3 982 520 $ − prix d'acquisition 5 613 772 $",
+  "valeur": "-1 631 253 $",
   "source": "calcul"
  },
  {
   "section": "7 · Refinancement et verdict",
   "label": "SCHL Efficacité énergétique (50 pts) — équité à la fin",
-  "formule": "prêt refi 4 963 195 $ − prix d'acquisition 5 605 110 $",
-  "valeur": "-641 915 $",
+  "formule": "prêt refi 4 963 195 $ − prix d'acquisition 5 613 772 $",
+  "valeur": "-650 577 $",
   "source": "calcul"
  },
  {
   "section": "7 · Refinancement et verdict",
   "label": "SCHL Abordabilité + Efficacité (100 pts) — équité à la fin",
-  "formule": "prêt refi 4 326 422 $ − prix d'acquisition 5 605 110 $",
-  "valeur": "-1 278 689 $",
+  "formule": "prêt refi 4 326 422 $ − prix d'acquisition 5 613 772 $",
+  "valeur": "-1 287 351 $",
   "source": "calcul"
  },
  {
@@ -1256,7 +1256,7 @@
   "section": "7 · Refinancement et verdict",
   "label": "Argent dégagé au refinancement",
   "formule": "équité à la fin du scénario retenu (négatif = il manque du cash)",
-  "valeur": "-641 915 $",
+  "valeur": "-650 577 $",
   "source": "calcul"
  }
 ]
