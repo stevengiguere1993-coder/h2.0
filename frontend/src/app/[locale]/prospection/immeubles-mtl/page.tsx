@@ -82,9 +82,84 @@ type BatchState = {
   startedAt?: number | null;
 };
 
-function extensionVersion(): string {
-  if (typeof window === "undefined") return "";
-  return (window as unknown as { __h2_extension?: string }).__h2_extension || "";
+//: Détection de l'extension (Phil 2026-09-29 : « Backend URL non
+//: configurée ») : le content script vit dans un monde ISOLÉ — la page ne
+//: voit pas window.__h2_extension. On la sonde par message : elle répond
+//: à h2_batch_status (≥ 1.2.0). Résultat mémorisé pour le bouton
+//: « Récupérer (auto) » de la fiche propriétaire.
+let extensionDetectee = false;
+
+function sonderExtension(delaiMs = 1200): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (typeof window === "undefined") return resolve(false);
+    let fini = false;
+    const onMsg = (ev: MessageEvent) => {
+      if (ev.source !== window) return;
+      const t = (ev.data as { type?: string } | null)?.type;
+      if (t === "h2_batch_state") {
+        fini = true;
+        window.removeEventListener("message", onMsg);
+        extensionDetectee = true;
+        resolve(true);
+      }
+    };
+    window.addEventListener("message", onMsg);
+    window.postMessage({ type: "h2_batch_status" }, "*");
+    setTimeout(() => {
+      if (!fini) {
+        window.removeEventListener("message", onMsg);
+        resolve(false);
+      }
+    }, delaiMs);
+  });
+}
+
+//: Pousse l'adresse du serveur + la clé à l'extension ; « configuree » si
+//: elle accuse réception (≥ 1.2.1), « ancienne » si elle répond aux
+//: messages mais pas à la configuration, « absente » sinon.
+type ExtStatut = "inconnue" | "absente" | "ancienne" | "configuree";
+
+async function configurerExtensionDepuisKratos(): Promise<ExtStatut> {
+  if (!(await sonderExtension())) return "absente";
+  try {
+    const r = await authedFetch("/api/v1/extension/config");
+    if (!r.ok) return "ancienne";
+    const d = (await r.json()) as {
+      backend_url: string | null;
+      api_key: string | null;
+    };
+    if (!d.backend_url || !d.api_key) return "ancienne";
+    const ok = await new Promise<boolean>((resolve) => {
+      let fini = false;
+      const onMsg = (ev: MessageEvent) => {
+        if (ev.source !== window) return;
+        const m = ev.data as { type?: string; ok?: boolean } | null;
+        if (m?.type === "h2_extension_config_ack") {
+          fini = true;
+          window.removeEventListener("message", onMsg);
+          resolve(!!m.ok);
+        }
+      };
+      window.addEventListener("message", onMsg);
+      window.postMessage(
+        {
+          type: "h2_extension_config",
+          backendUrl: d.backend_url,
+          apiKey: d.api_key
+        },
+        window.location.origin
+      );
+      setTimeout(() => {
+        if (!fini) {
+          window.removeEventListener("message", onMsg);
+          resolve(false);
+        }
+      }, 1500);
+    });
+    return ok ? "configuree" : "ancienne";
+  } catch {
+    return "ancienne";
+  }
 }
 
 export default function ImmeublesMtlPage() {
@@ -224,46 +299,13 @@ export default function ImmeublesMtlPage() {
     return () => window.removeEventListener("message", onMsg);
   }, []);
 
-  // État demandé au chargement puis toutes les 3 s (local, sans réseau).
-  useEffect(() => {
-    if (!extensionVersion()) return;
-    window.postMessage({ type: "h2_batch_status" }, "*");
-    const id = setInterval(
-      () => window.postMessage({ type: "h2_batch_status" }, "*"),
-      3000
-    );
-    return () => clearInterval(id);
-  }, []);
-
-  function batchCmd(cmd: "pause" | "resume" | "stop" | "retry") {
-    window.postMessage({ type: `h2_batch_${cmd}` }, "*");
-  }
-
-  //: Auto-configuration de l'extension (Phil 2026-09-29 : « Échec envoi :
-  //: Backend URL non configurée ») : Kratos lui transmet l'adresse du
-  //: serveur et sa clé — plus rien à saisir dans la fenêtre de l'icône.
-  const configurerExtension = useCallback(async () => {
-    const v = extensionVersion();
-    if (!v || v < "1.2.1") return;
-    try {
-      const r = await authedFetch("/api/v1/extension/config");
-      if (!r.ok) return;
-      const d = (await r.json()) as {
-        backend_url: string | null;
-        api_key: string | null;
-      };
-      if (!d.backend_url || !d.api_key) return;
-      window.postMessage(
-        {
-          type: "h2_extension_config",
-          backendUrl: d.backend_url,
-          apiKey: d.api_key
-        },
-        window.location.origin
-      );
-    } catch {
-      /* ignore */
-    }
+  //: Extension : détectée par message et configurée depuis Kratos au
+  //: chargement (plus rien à saisir dans la fenêtre de l'icône).
+  const [extStatut, setExtStatut] = useState<ExtStatut>("inconnue");
+  const configurerExtension = useCallback(async (): Promise<ExtStatut> => {
+    const st = await configurerExtensionDepuisKratos();
+    setExtStatut(st);
+    return st;
   }, []);
 
   useEffect(() => {
@@ -272,21 +314,35 @@ export default function ImmeublesMtlPage() {
     return () => clearTimeout(id);
   }, [configurerExtension]);
 
+  // État demandé toutes les 3 s une fois l'extension détectée (local).
+  useEffect(() => {
+    if (extStatut !== "configuree" && extStatut !== "ancienne") return;
+    window.postMessage({ type: "h2_batch_status" }, "*");
+    const id = setInterval(
+      () => window.postMessage({ type: "h2_batch_status" }, "*"),
+      3000
+    );
+    return () => clearInterval(id);
+  }, [extStatut]);
+
+  function batchCmd(cmd: "pause" | "resume" | "stop" | "retry") {
+    window.postMessage({ type: `h2_batch_${cmd}` }, "*");
+  }
+
   async function lancerCollecte() {
-    const v = extensionVersion();
-    if (!v) {
+    const st = await configurerExtension();
+    if (st === "absente") {
       setBatchMsg(
         "Extension Horizon non détectée : installe-la (Paramètres → Outils), puis recharge cette page."
       );
       return;
     }
-    if (v < "1.2.1") {
+    if (st === "ancienne") {
       setBatchMsg(
-        `Extension ${v} : installe la version 1.2.1 (elle se configure toute seule depuis Kratos), puis recharge cette page.`
+        "Extension trop ancienne : installe la version 1.2.1 (elle se configure toute seule depuis Kratos), puis recharge cette page."
       );
       return;
     }
-    await configurerExtension();
     setBatchBusy(true);
     setBatchMsg(null);
     try {
@@ -563,6 +619,18 @@ export default function ImmeublesMtlPage() {
             )}
             Collecter les propriétaires
           </button>
+          {extStatut === "configuree" ? (
+            <span
+              className="text-[11px] text-emerald-300"
+              title="Kratos a transmis à l'extension l'adresse du serveur et sa clé"
+            >
+              Extension configurée
+            </span>
+          ) : extStatut === "ancienne" ? (
+            <span className="text-[11px] text-amber-300">
+              Extension à mettre à jour (1.2.1)
+            </span>
+          ) : null}
         </header>
 
         {/* Filtres */}
@@ -1649,7 +1717,9 @@ function OwnerCandidatesModal({
                     // l'onglet. Si l'extension n'est pas installée, on
                     // fallback sur window.open visible.
                     const matricule = property.matricule;
-                    const hasExtension = (window as unknown as { __h2_extension?: string }).__h2_extension;
+                    // Détectée par message au chargement de la page
+                    // (le marqueur window.__h2_extension est invisible).
+                    const hasExtension = extensionDetectee;
                     if (hasExtension) {
                       window.postMessage(
                         { type: "h2_open_evalweb", matricule },

@@ -366,6 +366,24 @@ def solde_pret_canadien(
     return max(0.0, solde)
 
 
+def pret_origine_canadien(
+    solde: float, rate_annual: float, n_mois: int, k_mois: int
+) -> float:
+    """Montant d'ORIGINE d'un prêt (composition canadienne semestrielle)
+    dont le solde vaut ``solde`` après ``k_mois`` paiements sur un
+    amortissement de ``n_mois`` — inverse de ``solde_pret_canadien``
+    (assumation hypothécaire, Phil 2026-09-29)."""
+    if solde <= 0 or n_mois <= 0 or k_mois <= 0 or k_mois >= n_mois:
+        return max(0.0, solde)
+    if rate_annual == 0:
+        return solde * n_mois / (n_mois - k_mois)
+    rm = (1 + rate_annual / 2) ** (1 / 6) - 1
+    a_n = (1 + rm) ** n_mois
+    a_k = (1 + rm) ** k_mois
+    frac = (a_n - a_k) / (a_n - 1)
+    return solde / frac if frac > 0 else solde
+
+
 # ─── Agrégats de typologie ─────────────────────────────────────────
 
 
@@ -1028,11 +1046,15 @@ class FinanceInputs:
     # HYPOTHÉCAIRE. Comme l'institution traditionnelle (frais, détention,
     # refinancement à l'an H identiques), sauf le PRÊT INITIAL : on
     # reprend le prêt existant du vendeur — solde, taux, amortissement
-    # restant (paiement mensuel calculé), terme restant (information).
+    # de DÉPART et années déjà écoulées (amortissement restant, prêt
+    # d'origine et paiement mensuel calculés), terme restant (information).
     # Mise de fonds = prix − solde repris. Taux en FRACTION.
     assume_solde: float = 0.0
     assume_taux: float = 0.0
-    assume_amort_restant_annees: float = 0.0
+    #: Amortissement de DÉPART du prêt (Phil 2026-09-29 : « c'est celui
+    #: de départ ») et années déjà écoulées.
+    assume_amort_depart_annees: float = 0.0
+    assume_annees_ecoulees: float = 0.0
     assume_terme_restant_annees: float = 0.0
 
     # True quand la fiche a explicitement choisi une stratégie
@@ -1947,9 +1969,20 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             # celles du conventionnel, à titre d'information.
             _solde_as = max(0.0, float(inputs.assume_solde or 0.0))
             _taux_as = max(0.0, float(inputs.assume_taux or 0.0))
-            _mois_as = max(
+            # Amortissement de DÉPART − années écoulées = restant (Phil
+            # 2026-09-29) ; le paiement sur le solde et le restant est
+            # exactement celui du prêt d'origine.
+            _mois_dep_as = max(
                 0,
-                int(round(float(inputs.assume_amort_restant_annees or 0.0) * 12)),
+                int(round(float(inputs.assume_amort_depart_annees or 0.0) * 12)),
+            )
+            _mois_ecoul_as = max(
+                0,
+                int(round(float(inputs.assume_annees_ecoulees or 0.0) * 12)),
+            )
+            _mois_as = max(0, _mois_dep_as - _mois_ecoul_as)
+            _pret_origine_as = pret_origine_canadien(
+                _solde_as, _taux_as, _mois_dep_as, _mois_ecoul_as
             )
             _cfg_as = _dc_replace(
                 _cfg_par_prog["conventionnel"],
@@ -1975,7 +2008,10 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             assume_detail = {
                 "solde": round(_solde_as, 2),
                 "taux": _taux_as,
+                "amort_depart_annees": round(_mois_dep_as / 12.0, 4),
+                "annees_ecoulees": round(_mois_ecoul_as / 12.0, 4),
                 "amort_restant_annees": round(_mois_as / 12.0, 4),
+                "pret_origine": round(_pret_origine_as, 2),
                 "terme_restant_annees": float(
                     inputs.assume_terme_restant_annees or 0.0
                 ),

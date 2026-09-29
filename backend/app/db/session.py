@@ -2105,7 +2105,8 @@ async def init_db() -> None:
             # Assumation hypothécaire (Phil 2026-09-29).
             ("lead_analyses", "assume_solde", "NUMERIC(14,2)"),
             ("lead_analyses", "assume_taux_pct", "NUMERIC(6,3)"),
-            ("lead_analyses", "assume_amort_restant_annees", "NUMERIC(5,2)"),
+            ("lead_analyses", "assume_amort_depart_annees", "NUMERIC(5,2)"),
+            ("lead_analyses", "assume_annees_ecoulees", "NUMERIC(5,2)"),
             ("lead_analyses", "assume_terme_restant_annees", "NUMERIC(5,2)"),
             ("lead_analyses", "depenses_residentiel_json", "TEXT"),
             ("lead_analyses", "depenses_optimisation_supp", "NUMERIC(14,2)"),

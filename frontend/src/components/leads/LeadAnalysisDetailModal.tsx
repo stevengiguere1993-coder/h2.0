@@ -138,7 +138,8 @@ type LeadDetail = {
   /** Assumation hypothécaire (Phil 2026-09-29) : prêt existant repris. */
   assume_solde?: number | null;
   assume_taux_pct?: number | null;
-  assume_amort_restant_annees?: number | null;
+  assume_amort_depart_annees?: number | null;
+  assume_annees_ecoulees?: number | null;
   assume_terme_restant_annees?: number | null;
   balance_vente_montant: number | null;
   balance_vente_taux_pct: number | null;
@@ -3107,10 +3108,16 @@ function ManualAnalysisSection({
               format="percent"
             />
             <FieldNumber
-              label="Amortissement restant (ans)"
-              value={data.assume_amort_restant_annees ?? null}
-              onSave={(v) => onPatch("assume_amort_restant_annees", v)}
-              hint="Années qu'il reste à rembourser (ex. 25 ans au départ − 6 écoulés = 19) : sert au paiement mensuel."
+              label="Amortissement de départ (ans)"
+              value={data.assume_amort_depart_annees ?? null}
+              onSave={(v) => onPatch("assume_amort_depart_annees", v)}
+              hint="Amortissement du prêt à son origine (ex. 25 ans)."
+            />
+            <FieldNumber
+              label="Années déjà écoulées"
+              value={data.assume_annees_ecoulees ?? null}
+              onSave={(v) => onPatch("assume_annees_ecoulees", v)}
+              hint="Depuis le début du prêt : sert à calculer le prêt d'origine et le paiement mensuel."
             />
             <FieldNumber
               label="Terme restant (ans)"
@@ -3719,7 +3726,10 @@ type AnalysisResults = {
     assumation?: {
       solde: number;
       taux: number;
+      amort_depart_annees: number;
+      annees_ecoulees: number;
       amort_restant_annees: number;
+      pret_origine: number;
       terme_restant_annees: number;
       paiement_mensuel: number;
       paiement_annuel: number;
@@ -4981,14 +4991,17 @@ function TraditionnelAchatPanel({
       }
     >
       {t.assumation ? (
-        <div className="mb-3 grid gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-xs sm:grid-cols-5">
+        <div className="mb-3 grid gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-xs sm:grid-cols-3 lg:grid-cols-6">
           {(
             [
               ["Prêt repris (solde)", fmtMoney(t.assumation.solde)],
+              ["Prêt d'origine (calculé)", fmtMoney(t.assumation.pret_origine)],
               ["Taux", `${(t.assumation.taux * 100).toFixed(2)} %`],
               [
-                "Amortissement restant",
-                `${Number(t.assumation.amort_restant_annees.toFixed(2))} ans`
+                "Amortissement",
+                `${Number((t.assumation.amort_depart_annees ?? 0).toFixed(2))} ans · ${Number(
+                  t.assumation.amort_restant_annees.toFixed(2)
+                )} restants`
               ],
               [
                 "Terme restant",
