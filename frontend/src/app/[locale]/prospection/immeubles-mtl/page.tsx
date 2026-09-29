@@ -91,6 +91,9 @@ export default function ImmeublesMtlPage() {
   const { onOpenSidebar } = useProspectionLayout();
   const [properties, setProperties] = useState<Property[]>([]);
   const [total, setTotal] = useState(0);
+  //: Unités retirées par « Exclure les logements sociaux » (null = case
+  //: décochée) — affiché à côté du total.
+  const [sociauxExclus, setSociauxExclus] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -399,6 +402,9 @@ export default function ImmeublesMtlPage() {
       if (seq !== reqSeq.current) return;
       setProperties(data.properties);
       setTotal(data.total);
+      setSociauxExclus(
+        (data as { sociaux_exclus?: number | null }).sociaux_exclus ?? null
+      );
     } catch (e) {
       if ((e as Error).name === "AbortError") return;
       if (seq !== reqSeq.current) return;
@@ -873,6 +879,15 @@ export default function ImmeublesMtlPage() {
                 </span>{" "}
                 propriété{total > 1 ? "s" : ""} matchent les filtres ·
                 affichage {offset + 1}-{offset + filteredCount}
+                {sociauxExclus != null ? (
+                  <span className="text-white/50">
+                    {" "}
+                    · {sociauxExclus.toLocaleString("fr-CA")}{" "}
+                    {sociauxExclus > 1
+                      ? "logements sociaux exclus"
+                      : "logement social exclu"}
+                  </span>
+                ) : null}
               </>
             )}
           </p>
