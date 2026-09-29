@@ -87,16 +87,6 @@ function extensionVersion(): string {
   return (window as unknown as { __h2_extension?: string }).__h2_extension || "";
 }
 
-const SIZE_PRESETS = [
-  { label: "Tous", min: undefined as number | undefined, max: undefined as number | undefined },
-  { label: "4-10", min: 4, max: 10 },
-  { label: "8+", min: 8, max: undefined },
-  { label: "11-20", min: 11, max: 20 },
-  { label: "20+", min: 20, max: undefined },
-  { label: "50+", min: 50, max: undefined },
-  { label: "100+", min: 100, max: undefined }
-];
-
 export default function ImmeublesMtlPage() {
   const { onOpenSidebar } = useProspectionLayout();
   const [properties, setProperties] = useState<Property[]>([]);
@@ -105,9 +95,8 @@ export default function ImmeublesMtlPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Filtres
-  //: 8+ par défaut (Phil prospecte les 8 logements et plus ; avec 20+, un
-  //: 8 logements comme le 2420 Pie-IX était introuvable — 2026-09-29).
-  const [presetIdx, setPresetIdx] = useState(2);
+  //: Taille = champs min / max logements seulement (Phil 2026-09-29 :
+  //: « enlève le préréglage, base-toi juste sur min et max »). 8 par défaut.
   const [minLogements, setMinLogements] = useState<string>("8");
   const [maxLogements, setMaxLogements] = useState<string>("");
   //: Valeurs APPLIQUÉES (débouncées) des champs numériques. Taper « 12 »
@@ -169,16 +158,13 @@ export default function ImmeublesMtlPage() {
     null
   );
 
-  function applyPreset(i: number) {
-    setPresetIdx(i);
-    const p = SIZE_PRESETS[i];
-    setMinLogements(p.min != null ? String(p.min) : "");
-    setMaxLogements(p.max != null ? String(p.max) : "");
-    setFiltresNum((f) => ({
-      ...f,
-      minLogements: p.min != null ? String(p.min) : "",
-      maxLogements: p.max != null ? String(p.max) : ""
-    }));
+  //: Retire min / max logements : chercher une adresse précise ne doit
+  //: pas être bloqué par la taille (le 2420 Pie-IX, 8 logements, était
+  //: caché par un minimum de 20).
+  function retirerTaille() {
+    setMinLogements("");
+    setMaxLogements("");
+    setFiltresNum((f) => ({ ...f, minLogements: "", maxLogements: "" }));
     setOffset(0);
   }
 
@@ -575,27 +561,6 @@ export default function ImmeublesMtlPage() {
 
         {/* Filtres */}
         <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-4">
-          {/* Presets nb logements */}
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <span className="text-[11px] uppercase tracking-wider text-white/50">
-              Préréglage taille :
-            </span>
-            {SIZE_PRESETS.map((p, i) => (
-              <button
-                key={p.label}
-                type="button"
-                onClick={() => applyPreset(i)}
-                className={`rounded-full px-3 py-1 text-xs ${
-                  presetIdx === i
-                    ? "bg-brand-900 text-white"
-                    : "bg-brand-800 text-white/60 hover:text-white"
-                }`}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <label className="label">Min logements</label>
@@ -661,7 +626,7 @@ export default function ImmeublesMtlPage() {
                   const v = e.target.value;
                   setCiviqueSearch(v);
                   // Chercher UNE adresse : la taille ne doit pas la cacher.
-                  if (v.trim() && presetIdx !== 0) applyPreset(0);
+                  if (v.trim() && (minLogements || maxLogements)) retirerTaille();
                 }}
                 placeholder="Ex : 1660"
                 className="input text-sm"
@@ -679,8 +644,11 @@ export default function ImmeublesMtlPage() {
                     const v = e.target.value;
                     setRueSearch(v);
                     // « 2420 Pie-IX » = une adresse précise : taille retirée.
-                    if (/^\s*\d+\s*[,\s]\s*\S/.test(v) && presetIdx !== 0)
-                      applyPreset(0);
+                    if (
+                      /^\s*\d+\s*[,\s]\s*\S/.test(v) &&
+                      (minLogements || maxLogements)
+                    )
+                      retirerTaille();
                   }}
                   placeholder="Ex : Pie-IX, St-Clément, 2420 Pie-IX…"
                   className="input pl-8 text-sm"
@@ -1076,10 +1044,10 @@ export default function ImmeublesMtlPage() {
                   {filtresNum.minLogements || filtresNum.maxLogements ? (
                     <button
                       type="button"
-                      onClick={() => applyPreset(0)}
+                      onClick={() => retirerTaille()}
                       className="rounded-md border border-brand-700 px-2 py-1 text-white/80 hover:border-accent-500"
                     >
-                      Toutes les tailles
+                      Retirer min / max logements
                     </button>
                   ) : null}
                 </div>
