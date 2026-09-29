@@ -272,6 +272,12 @@ async def _completer_proprietaire_depuis(db) -> int:
     return len(items)
 
 
+#: Codes d'utilisation du rôle « résidences pour aînés » : 1541 personnes
+#: retraitées NON autonomes (dont CHSLD), 1543 autonomes (RPA), 1549 autres
+#: (Phil 2026-09-29 : « ça ne m'intéresse pas »).
+CODES_RESIDENCES_AINES = ("1541", "1543", "1549")
+
+
 def _filtres_mtl(
     *,
     min_logements: Optional[int] = None,
@@ -288,6 +294,7 @@ def _filtres_mtl(
     exclure_sociaux: bool = False,
     numero_civique: Optional[str] = None,
     proprietaire_min_annees: Optional[int] = None,
+    exclure_residences_aines: bool = False,
 ) -> list:
     """Conditions SQL des filtres de la page « Immeubles MTL » — UNE
     seule implémentation pour la liste, le compte et l'export CSV."""
@@ -425,6 +432,16 @@ def _filtres_mtl(
         # Filtre par arrondissement (Ville de MTL uniquement).
         filters.append(
             MontrealPropertyUnit.arrondissement == arrondissement.strip()
+        )
+
+    if exclure_residences_aines:
+        filters.append(
+            or_(
+                MontrealPropertyUnit.code_utilisation.is_(None),
+                MontrealPropertyUnit.code_utilisation.notin_(
+                    list(CODES_RESIDENCES_AINES)
+                ),
+            )
         )
 
     if exclure_sociaux:
@@ -595,6 +612,11 @@ async def list_properties(
         description="Propriétaire depuis au moins N ans (propriétaires "
         "collectés seulement).",
     ),
+    exclure_residences_aines: bool = Query(
+        default=False,
+        description="Exclut les résidences pour aînés (codes d'utilisation "
+        "1541, 1543, 1549 : RPA, CHSLD).",
+    ),
     sort_by: str = Query(
         default="nombre_logement_desc",
         pattern="^(nombre_logement_desc|nombre_logement_asc|"
@@ -624,6 +646,7 @@ async def list_properties(
         exclure_sociaux=exclure_sociaux,
         numero_civique=numero_civique,
         proprietaire_min_annees=proprietaire_min_annees,
+        exclure_residences_aines=exclure_residences_aines,
     )
     filters = _filtres_mtl(**filtres_kwargs)
 
@@ -828,6 +851,7 @@ async def matricules_a_collecter(
     exclure_sociaux: bool = Query(default=False),
     numero_civique: Optional[str] = Query(default=None),
     proprietaire_min_annees: Optional[int] = Query(default=None, ge=0, le=150),
+    exclure_residences_aines: bool = Query(default=False),
     sans_proprietaire: bool = Query(default=True),
     limite: int = Query(default=5000, ge=1, le=20000),
 ) -> MatriculesACollecterOut:
@@ -853,6 +877,7 @@ async def matricules_a_collecter(
         exclure_sociaux=exclure_sociaux,
         numero_civique=numero_civique,
         proprietaire_min_annees=proprietaire_min_annees,
+        exclure_residences_aines=exclure_residences_aines,
     )
     sans_owner = or_(
         MontrealPropertyUnit.owners_json.is_(None),
@@ -913,6 +938,7 @@ async def export_properties_csv(
     exclure_sociaux: bool = Query(default=False),
     numero_civique: Optional[str] = Query(default=None),
     proprietaire_min_annees: Optional[int] = Query(default=None, ge=0, le=150),
+    exclure_residences_aines: bool = Query(default=False),
 ) -> StreamingResponse:
     """TOUTES les unités qui matchent les filtres, en CSV (BOM + « ; »,
     lisible dans Excel), en flux : ~940 000 lignes passent sans
@@ -935,6 +961,7 @@ async def export_properties_csv(
         exclure_sociaux=exclure_sociaux,
         numero_civique=numero_civique,
         proprietaire_min_annees=proprietaire_min_annees,
+        exclure_residences_aines=exclure_residences_aines,
     )
     # Matricules déjà en lead (quelques milliers) — chargés une fois.
     deja_leads = {

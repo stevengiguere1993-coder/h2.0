@@ -217,6 +217,9 @@ export default function ImmeublesMtlPage() {
   //: Exclure HLM / coops / OBNL / SHDM (Phil 2026-09-28) — coché par défaut :
   //: on prospecte des immeubles à acheter, jamais du logement social.
   const [exclureSociaux, setExclureSociaux] = useState(true);
+  //: Exclure RPA / CHSLD (codes 1541, 1543, 1549) — Phil 2026-09-29 :
+  //: « des maisons pour personnes retraitées, ça ne m'intéresse pas ».
+  const [exclureAines, setExclureAines] = useState(true);
   const [offset, setOffset] = useState(0);
   const limit = 100;
 
@@ -266,6 +269,7 @@ export default function ImmeublesMtlPage() {
     if (distanceBand) params.set("distance_band", distanceBand);
     if (arrondissement) params.set("arrondissement", arrondissement);
     if (exclureSociaux) params.set("exclure_sociaux", "true");
+    if (exclureAines) params.set("exclure_residences_aines", "true");
     return params;
   }, [
     filtresNum,
@@ -275,7 +279,8 @@ export default function ImmeublesMtlPage() {
     selectedCodes,
     distanceBand,
     arrondissement,
-    exclureSociaux
+    exclureSociaux,
+    exclureAines
   ]);
 
   // ── Collecte en lot des propriétaires (Phil 2026-09-28) ──
@@ -441,6 +446,7 @@ export default function ImmeublesMtlPage() {
       if (distanceBand) params.set("distance_band", distanceBand);
       if (arrondissement) params.set("arrondissement", arrondissement);
       if (exclureSociaux) params.set("exclure_sociaux", "true");
+      if (exclureAines) params.set("exclure_residences_aines", "true");
       params.set("limit", String(limit));
       params.set("offset", String(offset));
 
@@ -478,6 +484,7 @@ export default function ImmeublesMtlPage() {
     distanceBand,
     arrondissement,
     exclureSociaux,
+    exclureAines,
     offset
   ]);
 
@@ -846,6 +853,25 @@ export default function ImmeublesMtlPage() {
                 </span>
               </label>
             </div>
+            <div className="flex items-end">
+              <label className="flex w-full cursor-pointer items-center gap-2 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2 text-sm text-white/80">
+                <input
+                  type="checkbox"
+                  checked={exclureAines}
+                  onChange={(e) => {
+                    setExclureAines(e.target.checked);
+                    setOffset(0);
+                  }}
+                  className="h-4 w-4 accent-accent-500"
+                />
+                <span>
+                  Exclure les résidences pour aînés
+                  <span className="block text-[10px] text-white/40">
+                    RPA et CHSLD (utilisation du rôle)
+                  </span>
+                </span>
+              </label>
+            </div>
           </div>
 
           {/* Filtre Type d'utilisation (collapse + checkboxes) */}
@@ -871,6 +897,38 @@ export default function ImmeublesMtlPage() {
                 {showUtilFilter ? "Replier ▲" : "Déplier ▼"}
               </span>
             </button>
+            {/* Raccourcis (Phil 2026-09-29) — la colonne « Utilisation »
+                de l'export vient du rôle : connue pour toutes les unités. */}
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+              <span className="text-white/50">Raccourcis :</span>
+              {(
+                [
+                  ["Logement seulement", ["1000"]],
+                  ["Tous les types", []]
+                ] as Array<[string, string[]]>
+              ).map(([label, codes]) => {
+                const actif =
+                  selectedCodes.size === codes.length &&
+                  codes.every((c) => selectedCodes.has(c));
+                return (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => {
+                      setSelectedCodes(new Set(codes));
+                      setOffset(0);
+                    }}
+                    className={`rounded-full px-3 py-1 ${
+                      actif
+                        ? "bg-accent-500/20 text-accent-300"
+                        : "bg-brand-800 text-white/60 hover:text-white"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
 
             {showUtilFilter ? (
               <div className="mt-3 space-y-2">
