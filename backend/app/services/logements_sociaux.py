@@ -14,7 +14,10 @@ pas connu comme social) :
    immeuble privé ;
 2. le nom du propriétaire collecté sur EvalWeb (Office d'habitation, SHDM,
    SHQ, coopérative d'habitation, habitations communautaires…), appliqué
-   au fil des collectes.
+   au fil des collectes ;
+3. le code d'utilisation du rôle lui-même : 1010 « Logements sociaux et
+   abordables » (Phil 2026-09-29 : un HLM de l'OMHM restait dans la liste
+   jusqu'à la collecte de son propriétaire).
 """
 from __future__ import annotations
 
@@ -35,6 +38,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.montreal_property_unit import MontrealPropertyUnit as U
 
 log = logging.getLogger(__name__)
+
+#: Code d'utilisation du rôle « Logements sociaux et abordables ».
+CODE_UTILISATION_SOCIAL = "1010"
 
 #: Fin du libellé des marquages déduits du NOM du propriétaire collecté
 #: (« Coop · propriétaire ») — ceux-là survivent au recalcul du fichier.
@@ -278,6 +284,17 @@ async def marquer_logements_sociaux(
         .values(logement_social=None)
     )
 
+    # 1 bis. Le rôle le dit lui-même : code d'utilisation 1010.
+    res_code = await db.execute(
+        update(table)
+        .where(
+            table.c.code_utilisation == CODE_UTILISATION_SOCIAL,
+            table.c.logement_social.is_(None),
+        )
+        .values(logement_social=libelle_social("Rôle", "logement social et abordable"))
+    )
+    marquees_code = int(res_code.rowcount or 0) if (res_code.rowcount or 0) > 0 else 0
+
     # 2. Unités de l'île dont le nombre de logements correspond à un projet
     #    — lues EN FLUX (~500 000 lignes : jamais tout en mémoire sur le
     #    serveur gratuit à 512 Mo).
@@ -349,14 +366,16 @@ async def marquer_logements_sociaux(
     )
     log.info(
         "Logements sociaux : %d projets, %d unités marquées (fichier), "
-        "%d projets ambigus, %d (propriétaire), %d au total",
-        len(projets), marquees_csv, ambigus, marquees_prop, total,
+        "%d (code 1010 du rôle), %d projets ambigus, %d (propriétaire), "
+        "%d au total",
+        len(projets), marquees_csv, marquees_code, ambigus, marquees_prop, total,
     )
     return {
         "projets": len(projets),
         "unites_candidates": nb_candidates,
         "source": source,
         "marquees_fichier": marquees_csv,
+        "marquees_code_role": marquees_code,
         "projets_ambigus": ambigus,
         "marquees_proprietaire": marquees_prop,
         "montreal_sans_arrondissement": sans_arrondissement,
