@@ -1935,6 +1935,8 @@ async def init_db() -> None:
             # Arrondissement (Ville de MTL) — dérivé via cross-référence
             # avec le dataset public « Adresses Civiques de Montréal ».
             ("mtl_property_units", "arrondissement", "VARCHAR(64)"),
+            # Logement social/communautaire (filtre d'exclusion, 2026-09-28).
+            ("mtl_property_units", "logement_social", "VARCHAR(64)"),
             # Priorité côté UI (Monday-style) sur les tâches d'entreprise.
             (
                 "entreprise_taches",
@@ -2906,6 +2908,11 @@ async def init_db() -> None:
                 "ix_mtl_units_arrondissement",
                 "mtl_property_units",
                 "(arrondissement)",
+            ),
+            (
+                "ix_mtl_units_logement_social",
+                "mtl_property_units",
+                "(logement_social)",
             ),
         )
         for idx_name, table, expr in additive_indexes:

@@ -17,6 +17,7 @@ import csv
 import io
 import json
 import logging
+import re
 import unicodedata
 from datetime import date as _date
 from typing import Dict, List, Optional, Tuple
@@ -81,6 +82,12 @@ class MtlPropertyRead(BaseModel):
     owner_inscription_dates: Optional[List[str]] = None  # Dates parallèles
                                                           # (idx aligné avec
                                                           # owner_names)
+    #: « HLM · Saint-Sulpice », « Coop · propriétaire »… ; None = pas connu
+    #: comme logement social (Phil 2026-09-28).
+    logement_social: Optional[str] = None
+    #: Années entières écoulées depuis l'inscription au rôle du 1er
+    #: propriétaire (« le propriétaire l'a depuis combien de temps ? »).
+    proprietaire_depuis_annees: Optional[int] = None
 
 
 class OwnerCandidate(BaseModel):
@@ -125,6 +132,54 @@ def _full_addr(p: MontrealPropertyUnit) -> str:
     return " ".join(x for x in parts if x).strip()
 
 
+_MOIS_FR = {
+    "janvier": 1, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5, "juin": 6,
+    "juillet": 7, "aout": 8, "septembre": 9, "octobre": 10, "novembre": 11,
+    "decembre": 12,
+}
+
+
+def _annees_depuis(texte: Optional[str]) -> Optional[int]:
+    """« 2017-03-15 », « 15/03/2017 », « 15 mars 2017 » → années entières
+    écoulées à aujourd'hui (None si illisible, 0 si dans le futur). Sert à
+    « propriétaire depuis N ans » (Phil 2026-09-28)."""
+    if not texte:
+        return None
+    t = (
+        unicodedata.normalize("NFD", str(texte))
+        .encode("ascii", "ignore")
+        .decode()
+        .strip()
+        .lower()
+    )
+    m = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", t)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    else:
+        m = re.search(r"(\d{1,2})[-/](\d{1,2})[-/](\d{4})", t)
+        if m:
+            d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        else:
+            m = re.search(r"(\d{1,2})(?:er)?\s+([a-z]+)\s+(\d{4})", t)
+            if m and m.group(2) in _MOIS_FR:
+                d, mo, y = int(m.group(1)), _MOIS_FR[m.group(2)], int(m.group(3))
+            else:
+                m = re.search(r"\b((?:19|20)\d{2})\b", t)
+                if not m:
+                    return None
+                y, mo, d = int(m.group(1)), 7, 1
+    try:
+        inscrit = _date(y, mo, d)
+    except ValueError:
+        return None
+    today = _date.today()
+    if inscrit > today:
+        return 0
+    return today.year - inscrit.year - (
+        (today.month, today.day) < (inscrit.month, inscrit.day)
+    )
+
+
 def _filtres_mtl(
     *,
     min_logements: Optional[int] = None,
@@ -138,6 +193,7 @@ def _filtres_mtl(
     nom_rue_contains: Optional[str] = None,
     arrondissement: Optional[str] = None,
     codes_utilisation: Optional[List[str]] = None,
+    exclure_sociaux: bool = False,
 ) -> list:
     """Conditions SQL des filtres de la page « Immeubles MTL » — UNE
     seule implémentation pour la liste, le compte et l'export CSV."""
@@ -236,6 +292,12 @@ def _filtres_mtl(
         filters.append(
             MontrealPropertyUnit.arrondissement == arrondissement.strip()
         )
+
+    if exclure_sociaux:
+        # HLM, coops, OBNL, SHDM… marqués par services/logements_sociaux
+        # (Phil 2026-09-28 : « un filtre pour exclure les logements
+        # sociaux »).
+        filters.append(MontrealPropertyUnit.logement_social.is_(None))
 
     # Filtre par distance depuis le centre-ville MTL via la table
     # quebec_distances. Matching insensible à la casse sur le nom de
@@ -382,6 +444,11 @@ async def list_properties(
         "Ex: ?codes_utilisation=1000&codes_utilisation=1099 pour "
         "logements unifamiliaux + multi.",
     ),
+    exclure_sociaux: bool = Query(
+        default=False,
+        description="Exclut les unités marquées logement social "
+        "(HLM, coops, OBNL, SHDM, Office d'habitation).",
+    ),
     sort_by: str = Query(
         default="nombre_logement_desc",
         pattern="^(nombre_logement_desc|nombre_logement_asc|"
@@ -406,6 +473,7 @@ async def list_properties(
         nom_rue_contains=nom_rue_contains,
         arrondissement=arrondissement,
         codes_utilisation=codes_utilisation,
+        exclure_sociaux=exclure_sociaux,
     )
 
     stmt = select(MontrealPropertyUnit)
@@ -468,6 +536,9 @@ async def list_properties(
                 if pairs:
                     d.owner_names = [n for n, _ in pairs]
                     d.owner_inscription_dates = [dt for _, dt in pairs]
+                    d.proprietaire_depuis_annees = _annees_depuis(
+                        d.owner_inscription_dates[0]
+                    )
                 else:
                     d.owner_names = None
                     d.owner_inscription_dates = None
@@ -501,8 +572,10 @@ _COLONNES_EXPORT = [
     "Superficie bâtiment (m²)",
     "Propriétaires",
     "Inscription des propriétaires",
+    "Propriétaire depuis (ans)",
     "Propriétaires vérifiés le",
     "Déjà un lead",
+    "Logement social",
 ]
 
 
@@ -556,6 +629,7 @@ async def matricules_a_collecter(
     nom_rue_contains: Optional[str] = Query(default=None),
     arrondissement: Optional[str] = Query(default=None),
     codes_utilisation: Optional[List[str]] = Query(default=None),
+    exclure_sociaux: bool = Query(default=False),
     sans_proprietaire: bool = Query(default=True),
     limite: int = Query(default=5000, ge=1, le=20000),
 ) -> MatriculesACollecterOut:
@@ -576,6 +650,7 @@ async def matricules_a_collecter(
         nom_rue_contains=nom_rue_contains,
         arrondissement=arrondissement,
         codes_utilisation=codes_utilisation,
+        exclure_sociaux=exclure_sociaux,
     )
     sans_owner = or_(
         MontrealPropertyUnit.owners_json.is_(None),
@@ -633,6 +708,7 @@ async def export_properties_csv(
     nom_rue_contains: Optional[str] = Query(default=None),
     arrondissement: Optional[str] = Query(default=None),
     codes_utilisation: Optional[List[str]] = Query(default=None),
+    exclure_sociaux: bool = Query(default=False),
 ) -> StreamingResponse:
     """TOUTES les unités qui matchent les filtres, en CSV (BOM + « ; »,
     lisible dans Excel), en flux : ~940 000 lignes passent sans
@@ -650,6 +726,7 @@ async def export_properties_csv(
         nom_rue_contains=nom_rue_contains,
         arrondissement=arrondissement,
         codes_utilisation=codes_utilisation,
+        exclure_sociaux=exclure_sociaux,
     )
     # Matricules déjà en lead (quelques milliers) — chargés une fois.
     deja_leads = {
@@ -669,6 +746,7 @@ async def export_properties_csv(
 
     def _ligne(p: MontrealPropertyUnit) -> list:
         noms, dates = _noms_proprietaires(p.owners_json)
+        depuis = _annees_depuis(dates.split(" | ")[0]) if dates else None
         return [
             p.matricule,
             _full_addr(p) or "",
@@ -688,12 +766,14 @@ async def export_properties_csv(
             float(p.superficie_batiment) if p.superficie_batiment is not None else "",
             noms,
             dates,
+            depuis if depuis is not None else "",
             (
                 p.owners_fetched_at.date().isoformat()
                 if p.owners_fetched_at
                 else ""
             ),
             "oui" if p.matricule in deja_leads else "non",
+            p.logement_social or "",
         ]
 
     async def _flux():

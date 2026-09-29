@@ -189,6 +189,22 @@ async def receive_evalweb_owners(
         if unit:
             unit.owners_json = json.dumps(enriched, ensure_ascii=False)
             unit.owners_fetched_at = datetime.now(timezone.utc)
+            # Bailleur social (Office d'habitation, SHDM, coop…) → unité
+            # marquée « logement social » pour le filtre d'exclusion.
+            if not getattr(unit, "logement_social", None):
+                try:
+                    from app.services.logements_sociaux import (
+                        categorie_depuis_proprietaires,
+                        libelle_social,
+                    )
+
+                    categorie = categorie_depuis_proprietaires(enriched)
+                    if categorie:
+                        unit.logement_social = libelle_social(
+                            categorie, "propriétaire"
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Marquage logement social échoué : %s", exc)
             persisted = True
             try:
                 from app.api.v1.endpoints.mtl_properties import (
