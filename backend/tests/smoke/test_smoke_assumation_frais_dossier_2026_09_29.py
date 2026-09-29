@@ -99,7 +99,8 @@ def _assumation(**kw):
             croissance_depenses=0.03,
             assume_solde=600_000.0,
             assume_taux=0.03,
-            assume_amort_restant_annees=20,
+            assume_amort_depart_annees=25,
+            assume_annees_ecoulees=5,
             assume_terme_restant_annees=3,
             **kw,
         ),
@@ -128,6 +129,13 @@ def test_assumation_hypothecaire_moteur():
         solde_pret_canadien(600_000.0, 0.03, 20, 5), 2
     )
     assert t["projection"][0]["solde_pret"] == 600_000.0
+    # Amortissement de DÉPART 25 ans, 5 écoulés → 20 restants ; le prêt
+    # d'origine est celui qui laisse 600 000 $ après 5 ans.
+    a = t["assumation"]
+    assert a["amort_depart_annees"] == 25 and a["annees_ecoulees"] == 5
+    assert a["amort_restant_annees"] == 20
+    assert abs(solde_pret_canadien(a["pret_origine"], 0.03, 25, 5) - 600_000.0) < 0.05
+    assert a["pret_origine"] > 600_000.0
 
     # Mise de fonds = prix − solde repris ; cash total = MDF nette + frais cash.
     d = t["detail_mdf_par_programme"]["assumation"]
@@ -196,7 +204,8 @@ def test_parcours_api_assumation(client, auth_headers, run):
             "strategie_acquisition": "assumation",
             "assume_solde": 600_000,
             "assume_taux_pct": 3.0,
-            "assume_amort_restant_annees": 20,
+            "assume_amort_depart_annees": 25,
+            "assume_annees_ecoulees": 5,
             "assume_terme_restant_annees": 3,
         },
     )
