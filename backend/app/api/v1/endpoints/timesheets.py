@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
@@ -82,23 +83,104 @@ def _today() -> date:
 
 
 async def _ensure_seed(db) -> None:
-    """Crée la liste de compagnies par défaut si la table est vide."""
+    """Crée la liste de compagnies par défaut si la table est vide, puis
+    aligne la liste sur le module Entreprises (``_sync_entreprises``)."""
     count = (
         await db.execute(select(func.count(TimesheetCompany.id)))
     ).scalar() or 0
-    if count:
-        return
-    for i, (label, taux) in enumerate(SEED_COMPANIES):
-        db.add(
-            TimesheetCompany(
-                label=label,
-                position=i,
-                taux_refacturation=taux,
-                heures_nr_autorisees=(label == "MGV Développement"),
-                is_active=True,
+    if not count:
+        for i, (label, taux) in enumerate(SEED_COMPANIES):
+            db.add(
+                TimesheetCompany(
+                    label=label,
+                    position=i,
+                    taux_refacturation=taux,
+                    heures_nr_autorisees=(label == "MGV Développement"),
+                    is_active=True,
+                )
             )
-        )
-    await db.flush()
+        await db.flush()
+    await _sync_entreprises(db)
+
+
+def _cle_label(texte: Optional[str]) -> str:
+    """Clé de comparaison des noms : minuscules, sans accents, espaces
+    normalisés (« Côte-Saint-Luc inc. » ≈ « cote-saint-luc inc »)."""
+    nfd = unicodedata.normalize("NFD", texte or "")
+    sans = "".join(c for c in nfd if not unicodedata.combining(c))
+    return " ".join(sans.lower().replace(".", "").split())
+
+
+def _meme_compagnie(a: str, b: str) -> bool:
+    """« 9417-1287 » ≈ « 9417-1287 Québec inc. » : égalité ou l'un commence
+    par l'autre (au moins 4 caractères pour éviter les faux amis)."""
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    court, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    return len(court) >= 4 and long_.startswith(court)
+
+
+async def _sync_entreprises(db) -> None:
+    """Toute fiche du module Entreprises a sa compagnie dans la feuille de
+    temps (Phil 2026-09-29 : « Groupe 1660 Saint-Clément devrait y être ») :
+    liaison par ``entreprise_id``, sinon par nom (les compagnies saisies à
+    la main avant la liaison sont reconnues, pas dupliquées), sinon
+    création. Le nom de la fiche fait foi ; une fiche désactivée rend sa
+    compagnie inactive (l'inverse n'est pas forcé : on peut cacher une
+    compagnie de la grille sans fermer l'entreprise)."""
+    from app.models.entreprise import Entreprise
+
+    entreprises = (await db.execute(select(Entreprise))).scalars().all()
+    if not entreprises:
+        return
+    compagnies = (await db.execute(select(TimesheetCompany))).scalars().all()
+    par_entreprise = {
+        c.entreprise_id: c for c in compagnies if c.entreprise_id is not None
+    }
+    libres = [c for c in compagnies if c.entreprise_id is None]
+    maxpos = max((c.position for c in compagnies), default=-1)
+    modifie = False
+    for e in entreprises:
+        nom = (e.name or "").strip()
+        if not nom:
+            continue
+        c = par_entreprise.get(e.id)
+        if c is None:
+            cle = _cle_label(nom)
+            candidats = [
+                x for x in libres if _meme_compagnie(_cle_label(x.label), cle)
+            ]
+            if candidats:
+                c = candidats[0]
+                c.entreprise_id = e.id
+                libres.remove(c)
+                par_entreprise[e.id] = c
+                modifie = True
+            else:
+                if not e.is_active:
+                    continue
+                maxpos += 1
+                c = TimesheetCompany(
+                    label=nom[:160],
+                    position=maxpos,
+                    is_active=True,
+                    refacturable=True,
+                    entreprise_id=e.id,
+                )
+                db.add(c)
+                par_entreprise[e.id] = c
+                modifie = True
+                continue
+        if c.label != nom[:160]:
+            c.label = nom[:160]
+            modifie = True
+        if not e.is_active and c.is_active:
+            c.is_active = False
+            modifie = True
+    if modifie:
+        await db.flush()
 
 
 def _line_rate(
@@ -143,6 +225,8 @@ class CompanyOut(BaseModel):
     heures_nr_autorisees: bool = False
     qbo_customer_id: Optional[str] = None
     qbo_customer_name: Optional[str] = None
+    #: Fiche Entreprises miroir (None = compagnie saisie à la main).
+    entreprise_id: Optional[int] = None
 
 
 class CompanyCreate(BaseModel):
@@ -369,6 +453,7 @@ async def list_companies(
         heures_nr_autorisees=bool(getattr(c, "heures_nr_autorisees", False)),
         qbo_customer_id=getattr(c, "qbo_customer_id", None),
         qbo_customer_name=getattr(c, "qbo_customer_name", None),
+        entreprise_id=getattr(c, "entreprise_id", None),
         )
         for c in rows
     ]
@@ -410,6 +495,7 @@ async def create_company(
         heures_nr_autorisees=bool(getattr(c, "heures_nr_autorisees", False)),
         qbo_customer_id=getattr(c, "qbo_customer_id", None),
         qbo_customer_name=getattr(c, "qbo_customer_name", None),
+        entreprise_id=getattr(c, "entreprise_id", None),
     )
 
 
@@ -451,6 +537,7 @@ async def update_company(
         heures_nr_autorisees=bool(getattr(c, "heures_nr_autorisees", False)),
         qbo_customer_id=getattr(c, "qbo_customer_id", None),
         qbo_customer_name=getattr(c, "qbo_customer_name", None),
+        entreprise_id=getattr(c, "entreprise_id", None),
     )
 
 

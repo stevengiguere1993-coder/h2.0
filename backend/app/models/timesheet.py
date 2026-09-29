@@ -82,6 +82,14 @@ class TimesheetCompany(Base, TimestampUpdateMixin):
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="1"
     )
+    # Fiche du module Entreprises dont cette compagnie est le miroir
+    # (Phil 2026-09-29 : « la feuille de temps ne rajoute pas
+    # automatiquement les nouvelles entreprises »). NULL = compagnie
+    # saisie à la main dans le modal. Le nom de la fiche fait foi.
+    # Colonne additive -> ensure_critical_columns.
+    entreprise_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, index=True
+    )
 
 
 class Timesheet(Base, TimestampUpdateMixin):
