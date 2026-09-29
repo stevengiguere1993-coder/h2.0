@@ -2079,8 +2079,13 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             ):
                 f[_k] = 0.0
             if _ov.get("courtier_hypothecaire_1") is None:
+                # Assumation : pas de nouveau prêt à placer → courtier 0
+                # par défaut (Phil 2026-09-29) ; un montant saisi sur la
+                # fiche garde le dernier mot.
                 f["courtier_hypothecaire_1"] = (
-                    _pc_trad["courtier_hypothecaire_1"]
+                    0.0
+                    if prog == "assumation"
+                    else _pc_trad["courtier_hypothecaire_1"]
                     * achat_cols[prog].financement
                 )
             if _ov.get("frais_dossier_preteur") is None:

@@ -740,6 +740,10 @@ _COLONNES_EXPORT = [
     "Superficie terrain (m²)",
     "Superficie bâtiment (m²)",
     "Propriétaires",
+    "Adresse postale des propriétaires",
+    "Statut des propriétaires",
+    "Téléphone des propriétaires",
+    "NEQ des propriétaires",
     "Inscription des propriétaires",
     "Propriétaire depuis (ans)",
     "Propriétaires vérifiés le",
@@ -764,6 +768,29 @@ def _noms_proprietaires(owners_json: Optional[str]) -> Tuple[str, str]:
         noms.append(str(o.get("name")).strip())
         dates.append(str(o.get("inscription_date") or "").strip())
     return " | ".join(noms), " | ".join(dates)
+
+
+def _details_proprietaires(owners_json: Optional[str]) -> Dict[str, str]:
+    """Adresse postale, statut, téléphone et NEQ des propriétaires collectés
+    (Phil 2026-09-28 : « le nom du propriétaire ainsi que l'adresse »),
+    dans l'ordre des noms, joints par « | » (best-effort, jamais
+    d'exception)."""
+    vide = {"adresses": "", "statuts": "", "telephones": "", "neqs": ""}
+    if not owners_json:
+        return vide
+    try:
+        data = json.loads(owners_json)
+    except Exception:  # noqa: BLE001
+        return vide
+    cols: Dict[str, List[str]] = {k: [] for k in vide}
+    for o in data or []:
+        if not isinstance(o, dict) or not o.get("name"):
+            continue
+        cols["adresses"].append(str(o.get("postal_address") or "").strip())
+        cols["statuts"].append(str(o.get("statut") or "").strip())
+        cols["telephones"].append(str(o.get("phone") or "").strip())
+        cols["neqs"].append(str(o.get("req_neq") or "").strip())
+    return {k: (" | ".join(v) if any(v) else "") for k, v in cols.items()}
 
 
 class MatriculesACollecterOut(BaseModel):
@@ -927,6 +954,7 @@ async def export_properties_csv(
 
     def _ligne(p: MontrealPropertyUnit) -> list:
         noms, dates = _noms_proprietaires(p.owners_json)
+        det = _details_proprietaires(p.owners_json)
         depuis_d = p.proprietaire_depuis or (
             min(
                 (x for x in (_date_inscription(t) for t in dates.split(" | ")) if x),
@@ -954,6 +982,10 @@ async def export_properties_csv(
             float(p.superficie_terrain) if p.superficie_terrain is not None else "",
             float(p.superficie_batiment) if p.superficie_batiment is not None else "",
             noms,
+            det["adresses"],
+            det["statuts"],
+            det["telephones"],
+            det["neqs"],
             dates,
             depuis if depuis is not None else "",
             (
