@@ -134,6 +134,11 @@ export default function ImmeublesMtlPage() {
   //: « 1660-1672 » du rôle sont reconnues côté serveur.
   const [civiqueSearch, setCiviqueSearch] = useState<string>("");
   const [civiqueDebounced, setCiviqueDebounced] = useState<string>("");
+  //: « Propriétaire depuis au moins N ans » (Phil 2026-09-29) — seulement
+  //: les propriétaires déjà collectés (date d'inscription au rôle).
+  const [proprioMinAns, setProprioMinAns] = useState<string>("");
+  const [proprioMinAnsDebounced, setProprioMinAnsDebounced] =
+    useState<string>("");
   const [sortBy, setSortBy] = useState("nombre_logement_desc");
   const [distanceBand, setDistanceBand] = useState<
     "" | "mtl_only" | "under_30" | "30_to_40" | "40_to_50" | "over_50"
@@ -191,6 +196,8 @@ export default function ImmeublesMtlPage() {
       params.set("nom_rue_contains", rueSearchDebounced.trim());
     if (civiqueDebounced.trim())
       params.set("numero_civique", civiqueDebounced.trim());
+    if (proprioMinAnsDebounced.trim())
+      params.set("proprietaire_min_annees", proprioMinAnsDebounced.trim());
     for (const code of selectedCodes) params.append("codes_utilisation", code);
     if (distanceBand) params.set("distance_band", distanceBand);
     if (arrondissement) params.set("arrondissement", arrondissement);
@@ -200,6 +207,7 @@ export default function ImmeublesMtlPage() {
     filtresNum,
     rueSearchDebounced,
     civiqueDebounced,
+    proprioMinAnsDebounced,
     selectedCodes,
     distanceBand,
     arrondissement,
@@ -377,6 +385,8 @@ export default function ImmeublesMtlPage() {
         params.set("nom_rue_contains", rueSearchDebounced.trim());
       if (civiqueDebounced.trim())
         params.set("numero_civique", civiqueDebounced.trim());
+      if (proprioMinAnsDebounced.trim())
+        params.set("proprietaire_min_annees", proprioMinAnsDebounced.trim());
       // codes_utilisation : multi-valeur, FastAPI accepte
       // ?codes_utilisation=A&codes_utilisation=B
       for (const code of selectedCodes) {
@@ -414,6 +424,7 @@ export default function ImmeublesMtlPage() {
     filtresNum,
     rueSearchDebounced,
     civiqueDebounced,
+    proprioMinAnsDebounced,
     selectedCodes,
     sortBy,
     distanceBand,
@@ -429,10 +440,11 @@ export default function ImmeublesMtlPage() {
     const id = setTimeout(() => {
       setRueSearchDebounced(rueSearch);
       setCiviqueDebounced(civiqueSearch);
+      setProprioMinAnsDebounced(proprioMinAns);
       setOffset(0);
     }, 350);
     return () => clearTimeout(id);
-  }, [rueSearch, civiqueSearch]);
+  }, [rueSearch, civiqueSearch, proprioMinAns]);
 
   // Même délai pour les bornes numériques : on interroge la table (~1 M
   // lignes) une fois la saisie terminée, pas à chaque chiffre.
@@ -757,7 +769,23 @@ export default function ImmeublesMtlPage() {
                 ))}
               </select>
             </div>
-            <div className="flex items-end lg:col-span-2">
+            <div>
+              <label className="label">Propriétaire depuis au moins (ans)</label>
+              <input
+                type="number"
+                min="0"
+                max="100"
+                value={proprioMinAns}
+                onChange={(e) => setProprioMinAns(e.target.value)}
+                placeholder="Ex : 5"
+                className="input text-sm"
+                title="Date d'inscription du propriétaire au rôle : connue seulement pour les immeubles dont le propriétaire a été collecté (bouton « Collecter les propriétaires »)."
+              />
+              <p className="mt-1 text-[10px] text-white/40">
+                Propriétaires déjà collectés seulement.
+              </p>
+            </div>
+            <div className="flex items-end">
               <label className="flex w-full cursor-pointer items-center gap-2 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2 text-sm text-white/80">
                 <input
                   type="checkbox"
@@ -771,8 +799,7 @@ export default function ImmeublesMtlPage() {
                 <span>
                   Exclure les logements sociaux
                   <span className="block text-[10px] text-white/40">
-                    HLM, OMHM, SHDM, coopératives et OBNL — jeu de données de
-                    la Ville + nom des propriétaires collectés
+                    HLM, OMHM, SHDM, coops, OBNL
                   </span>
                 </span>
               </label>
@@ -1028,6 +1055,13 @@ export default function ImmeublesMtlPage() {
               <p className="mt-3 text-sm text-white/50">
                 Aucune propriété ne correspond aux filtres.
               </p>
+              {proprioMinAnsDebounced.trim() ? (
+                <p className="mt-1 text-[11px] text-amber-300/80">
+                  « Propriétaire depuis » ne garde que les immeubles dont le
+                  propriétaire a déjà été collecté (bouton « Collecter les
+                  propriétaires »).
+                </p>
+              ) : null}
               {filtresNum.minLogements || filtresNum.maxLogements || exclureSociaux ? (
                 <div className="mt-2 flex flex-wrap items-center justify-center gap-2 text-[11px] text-white/60">
                   <span>

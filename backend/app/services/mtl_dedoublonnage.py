@@ -136,14 +136,20 @@ async def fusionner_jumelles(db: AsyncSession) -> Dict[str, Any]:
     arrondissements_reportes = 0
     a_reporter = (
         await db.execute(
-            select(U.matricule, U.owners_json, U.owners_fetched_at, U.arrondissement).where(
+            select(
+                U.matricule,
+                U.owners_json,
+                U.owners_fetched_at,
+                U.arrondissement,
+                U.proprietaire_depuis,
+            ).where(
                 prov,
                 jum,
                 or_(_a_des_proprietaires(U.owners_json), U.arrondissement.is_not(None)),
             )
         )
     ).all()
-    for mat, owners_json, fetched_at, arrondissement in a_reporter:
+    for mat, owners_json, fetched_at, arrondissement, depuis in a_reporter:
         ville = await _ligne_ville(db, mat)
         if ville is None:
             continue
@@ -152,6 +158,7 @@ async def fusionner_jumelles(db: AsyncSession) -> Dict[str, Any]:
         ):
             ville.owners_json = owners_json
             ville.owners_fetched_at = fetched_at
+            ville.proprietaire_depuis = depuis
             proprietaires_reportes += 1
         if arrondissement and not ville.arrondissement:
             ville.arrondissement = arrondissement

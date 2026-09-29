@@ -16,10 +16,10 @@ propriétaire on combine deux sources :
    personnes physiques + corporations, exact pour cette propriété
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Index, Integer, Numeric, String, Text
+from sqlalchemy import Date, DateTime, Index, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -110,6 +110,14 @@ class MontrealPropertyUnit(Base):
     # + nom des propriétaires collectés). Jamais écrasé par un ré-import.
     logement_social: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, index=True
+    )
+
+    # Propriétaire depuis (Phil 2026-09-29 : « minimum 5 ans ») : plus
+    # ancienne date d'inscription au rôle des propriétaires collectés sur
+    # EvalWeb (NULL = propriétaire pas encore collecté — l'info n'existe
+    # dans aucune donnée ouverte). Jamais écrasé par un ré-import.
+    proprietaire_depuis: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True, index=True
     )
 
     __table_args__ = (

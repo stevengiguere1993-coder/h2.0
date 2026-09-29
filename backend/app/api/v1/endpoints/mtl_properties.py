@@ -165,10 +165,9 @@ _MOIS_FR = {
 }
 
 
-def _annees_depuis(texte: Optional[str]) -> Optional[int]:
-    """« 2017-03-15 », « 15/03/2017 », « 15 mars 2017 » → années entières
-    écoulées à aujourd'hui (None si illisible, 0 si dans le futur). Sert à
-    « propriétaire depuis N ans » (Phil 2026-09-28)."""
+def _date_inscription(texte: Optional[str]) -> Optional[_date]:
+    """« 2017-03-15 », « 15/03/2017 », « 15 mars 2017 » → date (None si
+    illisible)."""
     if not texte:
         return None
     t = (
@@ -195,15 +194,78 @@ def _annees_depuis(texte: Optional[str]) -> Optional[int]:
                     return None
                 y, mo, d = int(m.group(1)), 7, 1
     try:
-        inscrit = _date(y, mo, d)
+        return _date(y, mo, d)
     except ValueError:
         return None
+
+
+def _annees_ecoulees(inscrit: _date) -> int:
+    """Années entières écoulées depuis ``inscrit`` (0 si dans le futur)."""
     today = _date.today()
     if inscrit > today:
         return 0
     return today.year - inscrit.year - (
         (today.month, today.day) < (inscrit.month, inscrit.day)
     )
+
+
+def _annees_depuis(texte: Optional[str]) -> Optional[int]:
+    """« 2017-03-15 » → années entières écoulées (None si illisible). Sert
+    à « propriétaire depuis N ans » (Phil 2026-09-28)."""
+    d = _date_inscription(texte)
+    return _annees_ecoulees(d) if d else None
+
+
+def date_inscription_min(owners) -> Optional[_date]:
+    """Plus ancienne date d'inscription parmi les propriétaires collectés
+    (dicts EvalWeb ``{"name", "inscription_date"}``) : un copropriétaire
+    ajouté plus tard ne rajeunit pas la détention de l'immeuble."""
+    dates = []
+    for o in owners or []:
+        if isinstance(o, dict):
+            d = _date_inscription(o.get("inscription_date"))
+            if d:
+                dates.append(d)
+    return min(dates) if dates else None
+
+
+async def _completer_proprietaire_depuis(db) -> int:
+    """Rattrapage : unités dont le propriétaire a été collecté avant la
+    colonne ``proprietaire_depuis`` (ou par un chemin qui ne la remplit
+    pas). Appelé seulement quand le filtre « propriétaire depuis » sert."""
+    from sqlalchemy import bindparam, update
+
+    rows = (
+        await db.execute(
+            select(MontrealPropertyUnit.matricule, MontrealPropertyUnit.owners_json)
+            .where(
+                MontrealPropertyUnit.proprietaire_depuis.is_(None),
+                MontrealPropertyUnit.owners_json.is_not(None),
+                MontrealPropertyUnit.owners_json.notin_(["", "[]"]),
+            )
+            .limit(20000)
+        )
+    ).all()
+    items = []
+    for mat, owners_json in rows:
+        try:
+            d = date_inscription_min(json.loads(owners_json or "[]"))
+        except Exception:  # noqa: BLE001
+            d = None
+        if d:
+            items.append({"m": mat, "d": d})
+    if not items:
+        return 0
+    table = MontrealPropertyUnit.__table__
+    stmt = (
+        update(table)
+        .where(table.c.matricule == bindparam("m"))
+        .values(proprietaire_depuis=bindparam("d"))
+    )
+    for i in range(0, len(items), 500):
+        await db.execute(stmt, items[i : i + 500])
+    await db.commit()
+    return len(items)
 
 
 def _filtres_mtl(
@@ -221,6 +283,7 @@ def _filtres_mtl(
     codes_utilisation: Optional[List[str]] = None,
     exclure_sociaux: bool = False,
     numero_civique: Optional[str] = None,
+    proprietaire_min_annees: Optional[int] = None,
 ) -> list:
     """Conditions SQL des filtres de la page « Immeubles MTL » — UNE
     seule implémentation pour la liste, le compte et l'export CSV."""
@@ -322,6 +385,16 @@ def _filtres_mtl(
                 MontrealPropertyUnit.search_key.like(f"%|%{'%'.join(toks)}%")
             )
         filters.append(or_(*conds))
+    if proprietaire_min_annees:
+        # « Propriétaire depuis au moins N ans » (Phil 2026-09-29) : ne
+        # garde que les propriétaires COLLECTÉS (la date d'inscription
+        # n'existe que sur la fiche montreal.ca).
+        t = _date.today()
+        try:
+            borne = t.replace(year=t.year - proprietaire_min_annees)
+        except ValueError:  # 29 février
+            borne = t.replace(year=t.year - proprietaire_min_annees, day=28)
+        filters.append(MontrealPropertyUnit.proprietaire_depuis <= borne)
     m_num = re.search(r"\d+", numero_civique or "")
     if m_num:
         # Numéro de porte (Phil 2026-09-29 : « disons 1660 ») : le début
@@ -511,6 +584,13 @@ async def list_properties(
         description="Numéro de porte (ex. 1660) — trouve aussi les plages "
         "« 1660-1672 ».",
     ),
+    proprietaire_min_annees: Optional[int] = Query(
+        default=None,
+        ge=0,
+        le=150,
+        description="Propriétaire depuis au moins N ans (propriétaires "
+        "collectés seulement).",
+    ),
     sort_by: str = Query(
         default="nombre_logement_desc",
         pattern="^(nombre_logement_desc|nombre_logement_asc|"
@@ -523,6 +603,8 @@ async def list_properties(
     """Filtre + paginate. Ne retourne JAMAIS plus de 1000 lignes
     par requête (sinon le navigateur crash sur 500k objets)."""
 
+    if proprietaire_min_annees:
+        await _completer_proprietaire_depuis(db)
     filters = _filtres_mtl(
         min_logements=min_logements,
         max_logements=max_logements,
@@ -537,6 +619,7 @@ async def list_properties(
         codes_utilisation=codes_utilisation,
         exclure_sociaux=exclure_sociaux,
         numero_civique=numero_civique,
+        proprietaire_min_annees=proprietaire_min_annees,
     )
 
     stmt = select(MontrealPropertyUnit)
@@ -599,8 +682,11 @@ async def list_properties(
                 if pairs:
                     d.owner_names = [n for n, _ in pairs]
                     d.owner_inscription_dates = [dt for _, dt in pairs]
-                    d.proprietaire_depuis_annees = _annees_depuis(
-                        d.owner_inscription_dates[0]
+                    depuis_d = r.proprietaire_depuis or date_inscription_min(
+                        owners_data
+                    )
+                    d.proprietaire_depuis_annees = (
+                        _annees_ecoulees(depuis_d) if depuis_d else None
                     )
                 else:
                     d.owner_names = None
@@ -694,6 +780,7 @@ async def matricules_a_collecter(
     codes_utilisation: Optional[List[str]] = Query(default=None),
     exclure_sociaux: bool = Query(default=False),
     numero_civique: Optional[str] = Query(default=None),
+    proprietaire_min_annees: Optional[int] = Query(default=None, ge=0, le=150),
     sans_proprietaire: bool = Query(default=True),
     limite: int = Query(default=5000, ge=1, le=20000),
 ) -> MatriculesACollecterOut:
@@ -702,6 +789,8 @@ async def matricules_a_collecter(
     filtres que la page Immeubles MTL ; par défaut seulement les unités
     SANS propriétaire connu, triées par matricule, plafonnées (l'extension
     les consulte une à une sur montreal.ca)."""
+    if proprietaire_min_annees:
+        await _completer_proprietaire_depuis(db)
     filters = _filtres_mtl(
         min_logements=min_logements,
         max_logements=max_logements,
@@ -716,6 +805,7 @@ async def matricules_a_collecter(
         codes_utilisation=codes_utilisation,
         exclure_sociaux=exclure_sociaux,
         numero_civique=numero_civique,
+        proprietaire_min_annees=proprietaire_min_annees,
     )
     sans_owner = or_(
         MontrealPropertyUnit.owners_json.is_(None),
@@ -775,11 +865,14 @@ async def export_properties_csv(
     codes_utilisation: Optional[List[str]] = Query(default=None),
     exclure_sociaux: bool = Query(default=False),
     numero_civique: Optional[str] = Query(default=None),
+    proprietaire_min_annees: Optional[int] = Query(default=None, ge=0, le=150),
 ) -> StreamingResponse:
     """TOUTES les unités qui matchent les filtres, en CSV (BOM + « ; »,
     lisible dans Excel), en flux : ~940 000 lignes passent sans
     charger la base en mémoire (demande Phil 2026-09-22 : « donne-moi
     ce fichier »). Mêmes filtres que la page ; tri par matricule."""
+    if proprietaire_min_annees:
+        await _completer_proprietaire_depuis(db)
     filters = _filtres_mtl(
         min_logements=min_logements,
         max_logements=max_logements,
@@ -794,6 +887,7 @@ async def export_properties_csv(
         codes_utilisation=codes_utilisation,
         exclure_sociaux=exclure_sociaux,
         numero_civique=numero_civique,
+        proprietaire_min_annees=proprietaire_min_annees,
     )
     # Matricules déjà en lead (quelques milliers) — chargés une fois.
     deja_leads = {
@@ -813,7 +907,15 @@ async def export_properties_csv(
 
     def _ligne(p: MontrealPropertyUnit) -> list:
         noms, dates = _noms_proprietaires(p.owners_json)
-        depuis = _annees_depuis(dates.split(" | ")[0]) if dates else None
+        depuis_d = p.proprietaire_depuis or (
+            min(
+                (x for x in (_date_inscription(t) for t in dates.split(" | ")) if x),
+                default=None,
+            )
+            if dates
+            else None
+        )
+        depuis = _annees_ecoulees(depuis_d) if depuis_d else None
         return [
             p.matricule,
             _full_addr(p) or "",

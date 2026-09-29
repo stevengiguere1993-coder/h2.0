@@ -1939,6 +1939,8 @@ async def init_db() -> None:
             ("mtl_property_units", "arrondissement", "VARCHAR(64)"),
             # Logement social/communautaire (filtre d'exclusion, 2026-09-28).
             ("mtl_property_units", "logement_social", "VARCHAR(64)"),
+            # Propriétaire depuis (date d'inscription collectée, 2026-09-29).
+            ("mtl_property_units", "proprietaire_depuis", "DATE"),
             # Priorité côté UI (Monday-style) sur les tâches d'entreprise.
             (
                 "entreprise_taches",
@@ -2915,6 +2917,11 @@ async def init_db() -> None:
                 "ix_mtl_units_logement_social",
                 "mtl_property_units",
                 "(logement_social)",
+            ),
+            (
+                "ix_mtl_units_proprietaire_depuis",
+                "mtl_property_units",
+                "(proprietaire_depuis)",
             ),
         )
         for idx_name, table, expr in additive_indexes:
