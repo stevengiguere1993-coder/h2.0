@@ -455,6 +455,8 @@ async def ensure_critical_columns() -> None:
         # (facturation de la refacturation, 2026-07-22).
         ("timesheet_companies", "qbo_customer_id", "VARCHAR(64)"),
         ("timesheet_companies", "qbo_customer_name", "VARCHAR(255)"),
+        # Feuille de temps : compagnie miroir d'une fiche Entreprises (2026-09-29).
+        ("timesheet_companies", "entreprise_id", "INTEGER"),
         (
             "imm_logements",
             "location_en_chambres",

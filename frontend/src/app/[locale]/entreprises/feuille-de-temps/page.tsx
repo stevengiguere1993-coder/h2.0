@@ -91,6 +91,8 @@ type Company = {
   qbo_customer_id?: string | null;
   qbo_customer_name?: string | null;
   is_active: boolean;
+  //: Fiche du module Entreprises dont la compagnie est le miroir.
+  entreprise_id?: number | null;
 };
 type QboOptions = {
   connected: boolean;
@@ -1574,8 +1576,9 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
         <div>
           <div className="text-base font-semibold">Compagnies</div>
           <div className="text-sm text-[var(--qg-text-faint)]">
-            Liste partagée par tous les employés. Les taux se règlent sur la
-            feuille de chaque employé.
+            Liste partagée par tous les employés. Les entreprises du module
+            Entreprises y sont ajoutées automatiquement (le nom suit la
+            fiche). Les taux se règlent sur la feuille de chaque employé.
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -1618,6 +1621,14 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
                     inactive
                   </span>
                 )}
+                {c.entreprise_id ? (
+                  <span
+                    className="badge badge-neutral"
+                    title="Ajoutée automatiquement depuis le module Entreprises : le nom suit la fiche"
+                  >
+                    fiche Entreprise
+                  </span>
+                ) : null}
                 {c.heures_nr_autorisees && (
                   <span
                     className="badge badge-neutral"
