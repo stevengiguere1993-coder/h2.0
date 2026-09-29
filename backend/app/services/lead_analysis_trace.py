@@ -759,7 +759,19 @@ def _section_traditionnel(res: FinanceResults) -> Optional[Dict[str, Any]]:
             ligne("Prêt initial", "assumation du prêt existant du vendeur", "Assumation hypothécaire", unite="txt", source="fiche"),
             ligne("Solde du prêt repris", "saisi sur la fiche", ad.get("solde"), source="fiche"),
             ligne("Taux du prêt repris", "saisi sur la fiche", ad.get("taux"), unite="%", source="fiche"),
-            ligne("Amortissement restant", "saisi sur la fiche", f"{ad.get('amort_restant_annees')} an(s)", unite="txt", source="fiche"),
+            ligne("Amortissement de départ", "saisi sur la fiche", f"{ad.get('amort_depart_annees')} an(s)", unite="txt", source="fiche"),
+            ligne("Années déjà écoulées", "saisi sur la fiche", f"{ad.get('annees_ecoulees')} an(s)", unite="txt", source="fiche"),
+            ligne(
+                "Amortissement restant",
+                f"{ad.get('amort_depart_annees')} − {ad.get('annees_ecoulees')}",
+                f"{ad.get('amort_restant_annees')} an(s)",
+                unite="txt",
+            ),
+            ligne(
+                "Prêt d'origine (calculé)",
+                f"montant qui laisse {_m(ad.get('solde'))} après {ad.get('annees_ecoulees')} an(s) à {_p(ad.get('taux'))} sur {ad.get('amort_depart_annees')} an(s)",
+                ad.get("pret_origine"),
+            ),
             ligne(
                 "Terme restant",
                 "information : taux supposé constant jusqu'au refinancement",

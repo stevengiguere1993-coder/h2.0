@@ -164,7 +164,8 @@ class LeadAnalysisRead(BaseModel):
     # Assumation hypothécaire (Phil 2026-09-29).
     assume_solde: Optional[float] = None
     assume_taux_pct: Optional[float] = None
-    assume_amort_restant_annees: Optional[float] = None
+    assume_amort_depart_annees: Optional[float] = None
+    assume_annees_ecoulees: Optional[float] = None
     assume_terme_restant_annees: Optional[float] = None
     depenses_residentiel_json: Optional[str] = None
     depenses_optimisation_supp: Optional[float] = None
@@ -317,8 +318,11 @@ class LeadAnalysisUpdate(BaseModel):
     # Assumation hypothécaire (Phil 2026-09-29) : prêt existant repris.
     assume_solde: Optional[float] = Field(default=None, ge=0)
     assume_taux_pct: Optional[float] = Field(default=None, ge=0, le=30)
-    assume_amort_restant_annees: Optional[float] = Field(
-        default=None, ge=0, le=40
+    assume_amort_depart_annees: Optional[float] = Field(
+        default=None, ge=0, le=50
+    )
+    assume_annees_ecoulees: Optional[float] = Field(
+        default=None, ge=0, le=50
     )
     assume_terme_restant_annees: Optional[float] = Field(
         default=None, ge=0, le=40
@@ -1941,7 +1945,8 @@ RECALC_INPUT_FIELDS = {
     "strategie_acquisition", "programme_achat", "refi_retenu",
     "balance_vente_montant", "cashback_montant", "optimisation_moment",
     "ltv_residentiel_pct", "amort_residentiel_annees",
-    "assume_solde", "assume_taux_pct", "assume_amort_restant_annees",
+    "assume_solde", "assume_taux_pct", "assume_amort_depart_annees",
+    "assume_annees_ecoulees",
     "assume_terme_restant_annees",
     "depenses_residentiel_json", "depenses_optimisation_supp",
     "balance_vente_taux_pct", "projection_horizon_annees",
@@ -2146,7 +2151,8 @@ async def _compute_and_store(rec, db) -> dict:
         # fiche ; vide = 0 (visible sur la fiche, aucun repli caché).
         assume_solde=float(rec.assume_solde or 0),
         assume_taux=float(rec.assume_taux_pct or 0) / 100.0,
-        assume_amort_restant_annees=float(rec.assume_amort_restant_annees or 0),
+        assume_amort_depart_annees=float(rec.assume_amort_depart_annees or 0),
+        assume_annees_ecoulees=float(rec.assume_annees_ecoulees or 0),
         assume_terme_restant_annees=float(rec.assume_terme_restant_annees or 0),
         depenses_residentiel=_parse_lignes_depenses(
             rec.depenses_residentiel_json

@@ -856,7 +856,10 @@ def _traditionnel_section(rl, trad: dict, *, s):
                 "Termes du prêt repris",
                 f"solde {_money(_as.get('solde'))} · taux "
                 f"{float(_as.get('taux') or 0) * 100:.2f} % · amortissement "
-                f"restant {_as.get('amort_restant_annees')} ans · terme "
+                f"de départ {_as.get('amort_depart_annees')} ans "
+                f"({_as.get('annees_ecoulees')} écoulés, "
+                f"{_as.get('amort_restant_annees')} restants) · prêt "
+                f"d'origine {_money(_as.get('pret_origine'))} · terme "
                 f"restant {_as.get('terme_restant_annees')} ans · paiement "
                 f"{_money(_as.get('paiement_mensuel'))}/mois",
             ),
