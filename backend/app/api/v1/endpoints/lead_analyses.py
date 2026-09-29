@@ -161,6 +161,11 @@ class LeadAnalysisRead(BaseModel):
     optimisation_moment: Optional[str] = None
     ltv_residentiel_pct: Optional[float] = None
     amort_residentiel_annees: Optional[int] = None
+    # Assumation hypothécaire (Phil 2026-09-29).
+    assume_solde: Optional[float] = None
+    assume_taux_pct: Optional[float] = None
+    assume_amort_restant_annees: Optional[float] = None
+    assume_terme_restant_annees: Optional[float] = None
     depenses_residentiel_json: Optional[str] = None
     depenses_optimisation_supp: Optional[float] = None
     balance_vente_taux_pct: Optional[float] = None
@@ -281,7 +286,7 @@ class LeadAnalysisUpdate(BaseModel):
     strategie_acquisition: Optional[str] = Field(
         default=None,
         pattern=(
-            r"^(preteur_b|traditionnel|conventionnel|schl_std|"
+            r"^(preteur_b|traditionnel|assumation|conventionnel|schl_std|"
             r"aph_50|aph_100|residentiel)$"
         ),
     )
@@ -309,6 +314,15 @@ class LeadAnalysisUpdate(BaseModel):
     # Mode résidentiel (2026-09-08).
     ltv_residentiel_pct: Optional[float] = Field(default=None, ge=0, le=100)
     amort_residentiel_annees: Optional[int] = Field(default=None, ge=1, le=40)
+    # Assumation hypothécaire (Phil 2026-09-29) : prêt existant repris.
+    assume_solde: Optional[float] = Field(default=None, ge=0)
+    assume_taux_pct: Optional[float] = Field(default=None, ge=0, le=30)
+    assume_amort_restant_annees: Optional[float] = Field(
+        default=None, ge=0, le=40
+    )
+    assume_terme_restant_annees: Optional[float] = Field(
+        default=None, ge=0, le=40
+    )
     depenses_residentiel_json: Optional[str] = Field(
         default=None, max_length=20_000
     )
@@ -1927,6 +1941,8 @@ RECALC_INPUT_FIELDS = {
     "strategie_acquisition", "programme_achat", "refi_retenu",
     "balance_vente_montant", "cashback_montant", "optimisation_moment",
     "ltv_residentiel_pct", "amort_residentiel_annees",
+    "assume_solde", "assume_taux_pct", "assume_amort_restant_annees",
+    "assume_terme_restant_annees",
     "depenses_residentiel_json", "depenses_optimisation_supp",
     "balance_vente_taux_pct", "projection_horizon_annees",
     "tri_croissance_loyers", "tri_croissance_depenses", "unites_json",
@@ -2126,6 +2142,12 @@ async def _compute_and_store(rec, db) -> dict:
         # Mode résidentiel (2026-09-08).
         ltv_residentiel=float(rec.ltv_residentiel_pct) / 100.0,
         amort_residentiel_annees=int(rec.amort_residentiel_annees),
+        # Assumation hypothécaire (Phil 2026-09-29) — saisie de la
+        # fiche ; vide = 0 (visible sur la fiche, aucun repli caché).
+        assume_solde=float(rec.assume_solde or 0),
+        assume_taux=float(rec.assume_taux_pct or 0) / 100.0,
+        assume_amort_restant_annees=float(rec.assume_amort_restant_annees or 0),
+        assume_terme_restant_annees=float(rec.assume_terme_restant_annees or 0),
         depenses_residentiel=_parse_lignes_depenses(
             rec.depenses_residentiel_json
         ),

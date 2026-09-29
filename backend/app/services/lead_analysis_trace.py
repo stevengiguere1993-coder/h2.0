@@ -174,6 +174,7 @@ def _section_fiche(res: FinanceResults) -> Dict[str, Any]:
     strat = {
         "preteur_b": "Prêteur B + optimisation + refinancement",
         "traditionnel": "Institution traditionnelle",
+        "assumation": "Assumation hypothécaire",
         "residentiel": "Résidentiel (cashflow)",
     }.get(i.strategie or "preteur_b", i.strategie or "preteur_b")
     L.append(ligne("Stratégie d'acquisition", None, strat, source="fiche", unite="txt"))
@@ -541,6 +542,8 @@ def _section_frais(res: FinanceResults) -> Dict[str, Any]:
     best_aph = res.refi_aph_100 if res.refi_aph_100 is not None else res.refi_aph_50
     base_c1 = (1 - mdf) * i.prix_achat if i.chantier_actif else i.prix_achat
     pret_init = i.prix_achat * res.achat.config.ltv
+    # Base du frais de dossier : bâtisse + frais financés (Phil 2026-09-29).
+    _fdb = getattr(res, "frais_dossier_preteur_base", None) or {}
     # Frais finançables (pour la formule des intérêts de portage).
     fin_total = 0.0
     for k, v in fr.__dict__.items():
@@ -580,7 +583,11 @@ def _section_frais(res: FinanceResults) -> Dict[str, Any]:
         "frais_developpement": "fiche",
         "frais_negociations": "fiche",
         "frais_travaux": "fiche (travaux estimés)",
-        "frais_dossier_preteur": f"{_p(i.frais_dossier_preteur_pct)} × prêt initial {_m(pret_init)} ({_m(i.prix_achat)} × {_p(res.achat.config.ltv)})",
+        "frais_dossier_preteur": (
+            f"{_p(i.frais_dossier_preteur_pct)} × (prêt bâtisse {_m(_fdb.get('pret_batisse'))} ({_p(_fdb.get('part_financee'))} × {_m(i.prix_achat)}) + frais financés {_m(_fdb.get('frais_finances'))} ({_p(_fdb.get('part_financee'))} × frais finançables {_m(_fdb.get('frais_financables'))}))"
+            if _fdb
+            else "montant saisi sur la fiche"
+        ),
         "interets": f"(1 − {_p(mdf)}) × ({_m(i.prix_achat)} + frais finançables {_m(fin_total)}) × {_p(i.taux_interet_preteur_b_projet)} × {i.duree_projet_annees} an(s)",
         "interets_balance_vente": f"{_m(i.balance_vente_montant)} × {_p(i.balance_vente_taux_pct)} × {i.duree_projet_annees} an(s)",
         "detention": "réserve saisie sur la fiche",
@@ -743,16 +750,41 @@ def _section_traditionnel(res: FinanceResults) -> Optional[Dict[str, Any]]:
     i = res.inputs
     labels = tr.get("labels") or {}
     prog = tr.get("programme_retenu")
-    L: List[Dict[str, Any]] = [
-        ligne(
-            "Programme d'achat retenu",
-            "choisi sur la fiche" if i.programme_achat else "automatique : le prêt le plus élevé",
-            labels.get(prog, prog),
-            unite="txt",
-            source="fiche" if i.programme_achat else "calcul",
-        ),
-        ligne("Horizon de détention", None, f"{tr.get('horizon')} an(s)", unite="txt", source="fiche"),
-    ]
+    # Assumation hypothécaire (Phil 2026-09-29) : prêt initial = solde repris.
+    est_as = tr.get("mode") == "assumation"
+    ad = tr.get("assumation") or {}
+    L: List[Dict[str, Any]]
+    if est_as:
+        L = [
+            ligne("Prêt initial", "assumation du prêt existant du vendeur", "Assumation hypothécaire", unite="txt", source="fiche"),
+            ligne("Solde du prêt repris", "saisi sur la fiche", ad.get("solde"), source="fiche"),
+            ligne("Taux du prêt repris", "saisi sur la fiche", ad.get("taux"), unite="%", source="fiche"),
+            ligne("Amortissement restant", "saisi sur la fiche", f"{ad.get('amort_restant_annees')} an(s)", unite="txt", source="fiche"),
+            ligne(
+                "Terme restant",
+                "information : taux supposé constant jusqu'au refinancement",
+                f"{ad.get('terme_restant_annees')} an(s)",
+                unite="txt",
+                source="fiche",
+            ),
+            ligne(
+                "Paiement mensuel du prêt repris",
+                f"paiement canadien sur {_m(ad.get('solde'))} à {_p(ad.get('taux'))}, {ad.get('amort_restant_annees')} an(s)",
+                ad.get("paiement_mensuel"),
+            ),
+            ligne("Horizon de détention", None, f"{tr.get('horizon')} an(s)", unite="txt", source="fiche"),
+        ]
+    else:
+        L = [
+            ligne(
+                "Programme d'achat retenu",
+                "choisi sur la fiche" if i.programme_achat else "automatique : le prêt le plus élevé",
+                labels.get(prog, prog),
+                unite="txt",
+                source="fiche" if i.programme_achat else "calcul",
+            ),
+            ligne("Horizon de détention", None, f"{tr.get('horizon')} an(s)", unite="txt", source="fiche"),
+        ]
     detail = tr.get("detail_mdf_par_programme") or {}
     for p, s in (tr.get("achat") or {}).items():
         if not s:
@@ -761,7 +793,9 @@ def _section_traditionnel(res: FinanceResults) -> Optional[Dict[str, Any]]:
         L.append(
             ligne(
                 f"{labels.get(p, p)} — prêt à l'achat",
-                f"valeur retenue {_m(s.get('valeur_retenue'))} × {_p(s.get('ltv'))}",
+                "solde du prêt repris (fiche)"
+                if p == "assumation"
+                else f"valeur retenue {_m(s.get('valeur_retenue'))} × {_p(s.get('ltv'))}",
                 s.get("financement"),
             )
         )
@@ -780,7 +814,7 @@ def _section_traditionnel(res: FinanceResults) -> Optional[Dict[str, Any]]:
         ligne("Prêt retenu", None, tr.get("pret_retenu"), gras=True),
         ligne(
             f"Solde du prêt à l'an {tr.get('horizon')}",
-            f"amortissement du prêt {_m(tr.get('pret_retenu'))} à {_p(i.taux_interet_achat)} pendant {tr.get('horizon')} an(s)",
+            f"amortissement du prêt {_m(tr.get('pret_retenu'))} à {_p(ad.get('taux') if est_as else i.taux_interet_achat)} pendant {tr.get('horizon')} an(s)",
             tr.get("solde_retenu_an_h"),
         ),
         ligne("Capital remboursé pendant la détention", f"{_m(tr.get('pret_retenu'))} − {_m(tr.get('solde_retenu_an_h'))}", tr.get("capital_rembourse")),
@@ -805,7 +839,11 @@ def _section_traditionnel(res: FinanceResults) -> Optional[Dict[str, Any]]:
     L.append(ligne("Référence de refinancement", None, br.get("label"), unite="txt", gras=True))
     L.append(ligne("Argent net dégagé (référence)", None, br.get("argent_dispo"), gras=True))
     return section(
-        "8 · Institution traditionnelle (achat, détention, refinancement)",
+        (
+            "8 · Assumation hypothécaire (achat, détention, refinancement)"
+            if est_as
+            else "8 · Institution traditionnelle (achat, détention, refinancement)"
+        ),
         L,
         "Les revenus et dépenses de chaque colonne de refinancement sont détaillés dans les sections de scénarios ; la projection année par année est dans l'onglet Projections.",
     )

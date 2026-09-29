@@ -28,6 +28,7 @@ from types import SimpleNamespace as _SimpleNamespace
 
 import math
 from dataclasses import dataclass, field
+from dataclasses import replace as _dc_replace
 from typing import Dict, List, Optional
 
 
@@ -1023,6 +1024,17 @@ class FinanceInputs:
     depenses_residentiel: List[dict] = field(default_factory=list)
     depenses_optimisation_supp: float = 0.0
 
+    # Sept. 2026 (Phil 2026-09-29) — 4e façon d'acheter : ASSUMATION
+    # HYPOTHÉCAIRE. Comme l'institution traditionnelle (frais, détention,
+    # refinancement à l'an H identiques), sauf le PRÊT INITIAL : on
+    # reprend le prêt existant du vendeur — solde, taux, amortissement
+    # restant (paiement mensuel calculé), terme restant (information).
+    # Mise de fonds = prix − solde repris. Taux en FRACTION.
+    assume_solde: float = 0.0
+    assume_taux: float = 0.0
+    assume_amort_restant_annees: float = 0.0
+    assume_terme_restant_annees: float = 0.0
+
     # True quand la fiche a explicitement choisi une stratégie
     # (chantier staging) : active l'indexation organique des loyers
     # non optimisés et des dépenses réelles au refi. False = calcul
@@ -1173,6 +1185,10 @@ class FinanceResults:
     projection_preteur_b: Optional[list] = None
     #: Sept. 2026 — mode RÉSIDENTIEL (None sinon).
     residentiel: Optional[dict] = None
+    #: Base du frais de dossier du prêteur B (retour Phil 2026-09-29) :
+    #: {pret_batisse, frais_financables, part_financee, frais_finances}
+    #: — None si le poste est saisi à la main ou masqué.
+    frais_dossier_preteur_base: Optional[dict] = None
 
     def to_dict(self) -> dict:
         """Pour persistance JSON dans `LeadAnalysis.analysis_results_json`."""
@@ -1670,6 +1686,53 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         else 0.25
     )
     _fin = set(inputs.frais_demarrage_financables or [])
+    # ── Frais de dossier du prêteur B sur son PRÊT COMPLET ────────
+    # Retour Phil 2026-09-29 : même pourcentage qu'avant, mais calculé
+    # sur tout ce que prête le prêteur B — la bâtisse ((1 − MDF %) ×
+    # prix, le VRAI prêt : « 80 % de 2 M » dans l'exemple de Phil ;
+    # avant, LTV d'achat 75 % fixe) ET la portion financée des frais
+    # finançables (travaux, frais connexes : (1 − MDF %) × Σ frais
+    # finançables) — soit exactement le « prêt prêteur B total ». Le frais lui-même et les intérêts (recalculés
+    # ci-dessous) sont exclus de la base : pas de circularité. Sans
+    # frais finançable, montant identique à avant. Un override de fiche
+    # ou un masquage garde le dernier mot.
+    frais_dossier_preteur_base: Optional[dict] = None
+    if (
+        (inputs.frais_demarrage_overrides or {}).get("frais_dossier_preteur")
+        is None
+        and "frais_dossier_preteur" not in masques
+    ):
+        _fin_fd = 0.0
+        for _k, _v in frais.__dict__.items():
+            if _k in (
+                "frais_custom",
+                "interets",
+                "interets_balance_vente",
+                "frais_dossier_preteur",
+            ):
+                continue
+            if _k in _fin:
+                try:
+                    _fin_fd += float(_v or 0)
+                except (TypeError, ValueError):
+                    pass
+        for _c in frais.frais_custom:
+            if str(_c.get("id", "")) in _fin:
+                try:
+                    _fin_fd += float(_c.get("montant", 0) or 0)
+                except (TypeError, ValueError):
+                    pass
+        _pret_batisse_fd = (1 - _mdf_pct) * inputs.prix_achat
+        _frais_finances_fd = (1 - _mdf_pct) * _fin_fd
+        frais.frais_dossier_preteur = inputs.frais_dossier_preteur_pct * (
+            _pret_batisse_fd + _frais_finances_fd
+        )
+        frais_dossier_preteur_base = {
+            "pret_batisse": round(_pret_batisse_fd, 2),
+            "frais_financables": round(_fin_fd, 2),
+            "part_financee": 1 - _mdf_pct,
+            "frais_finances": round(_frais_finances_fd, 2),
+        }
     _frais_fin_total = 0.0
     for _k, _v in frais.__dict__.items():
         if _k in ("frais_custom", "interets"):
@@ -1811,7 +1874,10 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
     # anciennes stratégies « achat direct » sont des alias.
     traditionnel: Optional[dict] = None
     _alias_trad = {"conventionnel", "schl_std", "aph_50", "aph_100"}
-    _est_trad = inputs.strategie == "traditionnel" or (
+    # Assumation hypothécaire (Phil 2026-09-29) : même chemin que le
+    # traditionnel — seul le prêt initial change (le solde repris).
+    _est_assume = inputs.strategie == "assumation"
+    _est_trad = inputs.strategie in ("traditionnel", "assumation") or (
         inputs.strategie in _alias_trad
     )
     if _est_trad:
@@ -1819,7 +1885,9 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         # programme ; « traditionnel » lit programme_achat ; None =
         # AUTOMATIQUE : le programme au prêt le plus élevé (résolu
         # après le calcul des colonnes — retour Phil 2026-09-02).
-        if inputs.strategie in _alias_trad:
+        if _est_assume:
+            programme = "assumation"
+        elif inputs.strategie in _alias_trad:
             programme = inputs.strategie
         elif inputs.programme_achat in _alias_trad:
             programme = inputs.programme_achat
@@ -1837,6 +1905,8 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             "aph_50": "SCHL Efficacité (50 pts)",
             "aph_100": "SCHL Abordabilité + Efficacité (100 pts)",
         }
+        if _est_assume:
+            _labels_prog = {"assumation": "Assumation hypothécaire", **_labels_prog}
         h_annees = max(1, int(inputs.projection_horizon_annees or 5))
         cl = float(inputs.croissance_loyers or 0.0)
         cd = float(inputs.croissance_depenses or 0.0)
@@ -1869,17 +1939,61 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             interets_balance_vente_annuels=0.0,
         )
         achat_cols: dict = {}
-        for prog, cfg_p in _cfg_par_prog.items():
-            achat_cols[prog] = compute_scenario(
-                config=cfg_p,
+        assume_detail: Optional[dict] = None
+        if _est_assume:
+            # Le prêt initial n'est PAS calculé par un programme : c'est
+            # le SOLDE repris, à SON taux, sur SON amortissement restant.
+            # Les valeurs économiques (TGA / RCD) de la colonne restent
+            # celles du conventionnel, à titre d'information.
+            _solde_as = max(0.0, float(inputs.assume_solde or 0.0))
+            _taux_as = max(0.0, float(inputs.assume_taux or 0.0))
+            _mois_as = max(
+                0,
+                int(round(float(inputs.assume_amort_restant_annees or 0.0) * 12)),
+            )
+            _cfg_as = _dc_replace(
+                _cfg_par_prog["conventionnel"],
+                name="assumation",
+                label="Assumation hypothécaire",
+                amort_annees=_mois_as / 12.0,
+            )
+            sc_as = compute_scenario(
+                config=_cfg_as,
                 nb_log=nb_log_achat,
                 loyer_mois=loyer_mois_achat,
                 revenus_totaux=revenus_achat_eff,
                 depenses=dep_achat_trad,
                 tga=inputs.tga,
-                taux_interet=inputs.taux_interet_achat,
+                taux_interet=_taux_as,
                 valeur_marchande=inputs.prix_achat,
             )
+            _pmt_as = pmt_canadian(_taux_as, _mois_as, _solde_as)
+            sc_as.financement = _solde_as
+            sc_as.paiement_mensuel_actuel = _pmt_as
+            sc_as.cashflow_annuel = sc_as.revenus_net - _pmt_as * 12.0
+            achat_cols["assumation"] = sc_as
+            assume_detail = {
+                "solde": round(_solde_as, 2),
+                "taux": _taux_as,
+                "amort_restant_annees": round(_mois_as / 12.0, 4),
+                "terme_restant_annees": float(
+                    inputs.assume_terme_restant_annees or 0.0
+                ),
+                "paiement_mensuel": round(_pmt_as, 2),
+                "paiement_annuel": round(_pmt_as * 12.0, 2),
+            }
+        else:
+            for prog, cfg_p in _cfg_par_prog.items():
+                achat_cols[prog] = compute_scenario(
+                    config=cfg_p,
+                    nb_log=nb_log_achat,
+                    loyer_mois=loyer_mois_achat,
+                    revenus_totaux=revenus_achat_eff,
+                    depenses=dep_achat_trad,
+                    tga=inputs.tga,
+                    taux_interet=inputs.taux_interet_achat,
+                    valeur_marchande=inputs.prix_achat,
+                )
         programme_auto = max(
             achat_cols, key=lambda k: achat_cols[k].financement
         )
@@ -1986,6 +2100,14 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
 
         pret_retenu = achat_cols[programme].financement
         mdf_cash = _mdf_prog(programme)
+        # Taux / amortissement du prêt INITIAL : ceux du programme
+        # retenu — en assumation, ceux du prêt repris.
+        if _est_assume:
+            _taux_init = _taux_as
+            _amort_init = _mois_as / 12.0
+        else:
+            _taux_init = inputs.taux_interet_achat
+            _amort_init = _cfg_par_prog[programme].amort_annees
 
         # ── Revenus/dépenses à l\'an H (refinancement) ──
         def _rev_trad(a: int) -> float:
@@ -2012,8 +2134,8 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         facteur_dep_h = (1 + cd) ** h_annees
         solde_retenu_h = solde_pret_canadien(
             pret_retenu,
-            inputs.taux_interet_achat,
-            _cfg_par_prog[programme].amort_annees,
+            _taux_init,
+            _amort_init,
             h_annees,
         )
 
@@ -2115,8 +2237,8 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
                 solde_a = (
                     solde_pret_canadien(
                         pret_retenu,
-                        inputs.taux_interet_achat,
-                        _cfg_par_prog[programme].amort_annees,
+                        _taux_init,
+                        _amort_init,
                         a,
                     )
                     + bv_trad
@@ -2150,6 +2272,10 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             })
 
         traditionnel = {
+            #: « traditionnel » ou « assumation » (Phil 2026-09-29) : même
+            #: structure, l'assumation n'a qu'une colonne d'achat.
+            "mode": "assumation" if _est_assume else "traditionnel",
+            "assumation": assume_detail,
             "programme_retenu": programme,
             "labels": _labels_prog,
             "horizon": h_annees,
@@ -2538,4 +2664,5 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         traditionnel=traditionnel,
         projection_preteur_b=projection_preteur_b,
         residentiel=residentiel,
+        frais_dossier_preteur_base=frais_dossier_preteur_base,
     )
