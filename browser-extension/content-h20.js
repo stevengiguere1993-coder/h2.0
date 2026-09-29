@@ -14,7 +14,7 @@
   // pour savoir si elle peut compter sur le scraping auto (et sur la
   // collecte en lot à partir de 1.2.0).
   try {
-    window.__h2_extension = "1.2.0";
+    window.__h2_extension = "1.2.1";
   } catch (_) {}
 
   const BATCH_MESSAGES = {
@@ -47,6 +47,21 @@
               matricule: data.matricule,
               ok: !!(response && response.ok),
             },
+            "*"
+          );
+        }
+      );
+      return;
+    }
+
+    // 1.2.1 — Kratos pousse l'adresse du serveur + la clé (plus de
+    // saisie manuelle dans la fenêtre de l'icône après une réinstallation).
+    if (data.type === "h2_extension_config" && data.backendUrl && data.apiKey) {
+      chrome.runtime.sendMessage(
+        { type: "SET_CONFIG", backendUrl: data.backendUrl, apiKey: data.apiKey },
+        (response) => {
+          window.postMessage(
+            { type: "h2_extension_config_ack", ok: !!(response && response.ok) },
             "*"
           );
         }

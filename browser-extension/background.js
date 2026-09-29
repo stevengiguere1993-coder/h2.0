@@ -324,6 +324,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(sendResponse);
     return true;
   }
+  if (message.type === "SET_CONFIG") {
+    // 1.2.1 — auto-configuration poussée par Kratos (page Rôles fonciers) :
+    // adresse du serveur + clé, plus rien à saisir dans la fenêtre de
+    // l'icône. Acceptée seulement depuis une page Kratos et vers un
+    // serveur Kratos (jamais un autre site hébergé sur onrender.com).
+    const okHote = (u) => {
+      try {
+        const h = new URL(u).hostname;
+        return (
+          /^h2-0[a-z0-9-]*\.onrender\.com$/.test(h) ||
+          h === "localhost" ||
+          h === "127.0.0.1" ||
+          /(^|\.)immohorizon\.(com|ca)$/.test(h) ||
+          /(^|\.)horizonimmo\.ca$/.test(h)
+        );
+      } catch (_) {
+        return false;
+      }
+    };
+    const backendUrl = String(message.backendUrl || "").trim().replace(/\/+$/, "");
+    const apiKey = String(message.apiKey || "").trim();
+    if (!backendUrl || !apiKey || !okHote(backendUrl) || !(sender && sender.url && okHote(sender.url))) {
+      sendResponse({ ok: false, error: "configuration refusée" });
+      return true;
+    }
+    chrome.storage.local.set({ backendUrl, apiKey }).then(() => {
+      log("Configuration reçue de Kratos : " + backendUrl);
+      sendResponse({ ok: true });
+    });
+    return true;
+  }
   if (message.type === "TEST_CONNECTION") {
     postJson("/api/v1/extension/ping", {})
       .then(sendResponse);

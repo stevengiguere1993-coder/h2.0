@@ -27,7 +27,9 @@ from fastapi.responses import StreamingResponse
 
 log = logging.getLogger(__name__)
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import Integer, and_, func, or_, select
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.sql.expression import FunctionElement
 
 from app.api.deps import CurrentAdmin, CurrentUser, DBSession
 from app.models.montreal_property_unit import MontrealPropertyUnit
@@ -132,6 +134,30 @@ def _full_addr(p: MontrealPropertyUnit) -> str:
     return " ".join(x for x in parts if x).strip()
 
 
+class _CiviqueInt(FunctionElement):
+    """Numéro civique (VARCHAR) → entier, sans jamais faire échouer la
+    requête sur une valeur non numérique (« 12A ») : NULL dans ce cas."""
+
+    type = Integer()
+    name = "civique_int"
+    inherit_cache = True
+
+
+@compiles(_CiviqueInt)
+def _civique_int_defaut(element, compiler, **kw):  # SQLite (tests)
+    arg = compiler.process(list(element.clauses)[0], **kw)
+    return f"CAST(NULLIF(TRIM({arg}), '') AS INTEGER)"
+
+
+@compiles(_CiviqueInt, "postgresql")
+def _civique_int_pg(element, compiler, **kw):
+    arg = compiler.process(list(element.clauses)[0], **kw)
+    return (
+        f"(CASE WHEN TRIM({arg}) <> '' AND TRIM({arg}) !~ '[^0-9]' "
+        f"AND length(TRIM({arg})) <= 9 THEN CAST(TRIM({arg}) AS INTEGER) END)"
+    )
+
+
 _MOIS_FR = {
     "janvier": 1, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5, "juin": 6,
     "juillet": 7, "aout": 8, "septembre": 9, "octobre": 10, "novembre": 11,
@@ -194,6 +220,7 @@ def _filtres_mtl(
     arrondissement: Optional[str] = None,
     codes_utilisation: Optional[List[str]] = None,
     exclure_sociaux: bool = False,
+    numero_civique: Optional[str] = None,
 ) -> list:
     """Conditions SQL des filtres de la page « Immeubles MTL » — UNE
     seule implémentation pour la liste, le compte et l'export CSV."""
@@ -272,10 +299,40 @@ def _filtres_mtl(
                     _variants(names)
                 )
             )
-    if nom_rue_contains:
+    if nom_rue_contains and nom_rue_contains.strip():
+        brut = nom_rue_contains.strip()
+        # « 2420 Pie-IX » tapé dans le champ rue : le numéro devient le
+        # filtre de numéro civique (Phil 2026-09-29).
+        m_adr = re.match(r"^(\d+)[a-zA-Z]?\s*[,\s]\s*(\S.*)$", brut)
+        if m_adr and not (numero_civique or "").strip():
+            numero_civique, brut = m_adr.group(1), m_adr.group(2).strip()
+        from app.integrations.roles_evaluation.montreal import normalize_street
+
+        # Tolérant : accents, tirets, type de voie, « St »/« Ste »
+        # (« pie ix » trouve « boulevard Pie-IX », « St-Clément » trouve
+        # « rue Saint-Clément ») via la clé normalisée `search_key`
+        # (« <civique>|<rue normalisée> »).
+        cle = normalize_street(brut)
+        cle = re.sub(r"\bste\b", "sainte", cle)
+        cle = re.sub(r"\bst\b", "saint", cle)
+        toks = cle.split()
+        conds = [MontrealPropertyUnit.nom_rue.ilike(f"%{brut}%")]
+        if toks:
+            conds.append(
+                MontrealPropertyUnit.search_key.like(f"%|%{'%'.join(toks)}%")
+            )
+        filters.append(or_(*conds))
+    m_num = re.search(r"\d+", numero_civique or "")
+    if m_num:
+        # Numéro de porte (Phil 2026-09-29 : « disons 1660 ») : le début
+        # du civique, ou une plage « 1660-1672 » qui le contient.
+        num = int(m_num.group(0)[:9])
+        debut = _CiviqueInt(MontrealPropertyUnit.civique_debut)
+        fin = _CiviqueInt(MontrealPropertyUnit.civique_fin)
         filters.append(
-            MontrealPropertyUnit.nom_rue.ilike(
-                f"%{nom_rue_contains.strip()}%"
+            or_(
+                debut == num,
+                and_(debut <= num, fin >= num, fin - debut <= 400),
             )
         )
     if codes_utilisation:
@@ -449,6 +506,11 @@ async def list_properties(
         description="Exclut les unités marquées logement social "
         "(HLM, coops, OBNL, SHDM, Office d'habitation).",
     ),
+    numero_civique: Optional[str] = Query(
+        default=None,
+        description="Numéro de porte (ex. 1660) — trouve aussi les plages "
+        "« 1660-1672 ».",
+    ),
     sort_by: str = Query(
         default="nombre_logement_desc",
         pattern="^(nombre_logement_desc|nombre_logement_asc|"
@@ -474,6 +536,7 @@ async def list_properties(
         arrondissement=arrondissement,
         codes_utilisation=codes_utilisation,
         exclure_sociaux=exclure_sociaux,
+        numero_civique=numero_civique,
     )
 
     stmt = select(MontrealPropertyUnit)
@@ -630,6 +693,7 @@ async def matricules_a_collecter(
     arrondissement: Optional[str] = Query(default=None),
     codes_utilisation: Optional[List[str]] = Query(default=None),
     exclure_sociaux: bool = Query(default=False),
+    numero_civique: Optional[str] = Query(default=None),
     sans_proprietaire: bool = Query(default=True),
     limite: int = Query(default=5000, ge=1, le=20000),
 ) -> MatriculesACollecterOut:
@@ -651,6 +715,7 @@ async def matricules_a_collecter(
         arrondissement=arrondissement,
         codes_utilisation=codes_utilisation,
         exclure_sociaux=exclure_sociaux,
+        numero_civique=numero_civique,
     )
     sans_owner = or_(
         MontrealPropertyUnit.owners_json.is_(None),
@@ -709,6 +774,7 @@ async def export_properties_csv(
     arrondissement: Optional[str] = Query(default=None),
     codes_utilisation: Optional[List[str]] = Query(default=None),
     exclure_sociaux: bool = Query(default=False),
+    numero_civique: Optional[str] = Query(default=None),
 ) -> StreamingResponse:
     """TOUTES les unités qui matchent les filtres, en CSV (BOM + « ; »,
     lisible dans Excel), en flux : ~940 000 lignes passent sans
@@ -727,6 +793,7 @@ async def export_properties_csv(
         arrondissement=arrondissement,
         codes_utilisation=codes_utilisation,
         exclure_sociaux=exclure_sociaux,
+        numero_civique=numero_civique,
     )
     # Matricules déjà en lead (quelques milliers) — chargés une fois.
     deja_leads = {
