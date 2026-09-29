@@ -2102,6 +2102,11 @@ async def init_db() -> None:
             ("lead_analyses", "optimisation_moment", "VARCHAR(16)"),
             ("lead_analyses", "ltv_residentiel_pct", "NUMERIC(5,2)"),
             ("lead_analyses", "amort_residentiel_annees", "INTEGER"),
+            # Assumation hypothécaire (Phil 2026-09-29).
+            ("lead_analyses", "assume_solde", "NUMERIC(14,2)"),
+            ("lead_analyses", "assume_taux_pct", "NUMERIC(6,3)"),
+            ("lead_analyses", "assume_amort_restant_annees", "NUMERIC(5,2)"),
+            ("lead_analyses", "assume_terme_restant_annees", "NUMERIC(5,2)"),
             ("lead_analyses", "depenses_residentiel_json", "TEXT"),
             ("lead_analyses", "depenses_optimisation_supp", "NUMERIC(14,2)"),
             ("lead_analyses", "projection_horizon_annees", "INTEGER"),

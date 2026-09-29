@@ -484,7 +484,7 @@ def _key_results_band(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
             ),
         ]
     elif _direct_band and getattr(rec, "strategie_acquisition", None) in (
-        "traditionnel", "conventionnel", "schl_std", "aph_50", "aph_100"
+        "traditionnel", "assumation", "conventionnel", "schl_std", "aph_50", "aph_100"
     ):
         _bb = _direct_band.get("best_refi") or {}
         _retenu = (_direct_band.get("achat") or {}).get(
@@ -847,15 +847,32 @@ def _traditionnel_section(rl, trad: dict, *, s):
     refi = trad.get("refi") or {}
     retenu = achat.get(retenu_key) or {}
 
-    rows = [
-        ("Programme retenu à l'achat",
-         str(labels.get(retenu_key, retenu_key))),
-        (
-            "Termes du programme retenu",
-            f"LTV {float(retenu.get('ltv') or 0) * 100:.0f} % · "
-            f"amortissement {retenu.get('amort_annees')} ans · "
-            f"RCD {float(retenu.get('rcd') or 0):.2f}",
-        ),
+    _as = trad.get("assumation") or None
+    if _as:
+        # Assumation hypothécaire (Phil 2026-09-29) : prêt repris.
+        _tete = [
+            ("Prêt initial", "Assumation hypothécaire (prêt du vendeur repris)"),
+            (
+                "Termes du prêt repris",
+                f"solde {_money(_as.get('solde'))} · taux "
+                f"{float(_as.get('taux') or 0) * 100:.2f} % · amortissement "
+                f"restant {_as.get('amort_restant_annees')} ans · terme "
+                f"restant {_as.get('terme_restant_annees')} ans · paiement "
+                f"{_money(_as.get('paiement_mensuel'))}/mois",
+            ),
+        ]
+    else:
+        _tete = [
+            ("Programme retenu à l'achat",
+             str(labels.get(retenu_key, retenu_key))),
+            (
+                "Termes du programme retenu",
+                f"LTV {float(retenu.get('ltv') or 0) * 100:.0f} % · "
+                f"amortissement {retenu.get('amort_annees')} ans · "
+                f"RCD {float(retenu.get('rcd') or 0):.2f}",
+            ),
+        ]
+    rows = _tete + [
         ("Prêt accordé à l'achat", _money(trad.get("pret_retenu"))),
         ("Cash à sortir (MDF nette + frais)", _money(trad.get("mdf_cash"))),
         (
@@ -1401,8 +1418,10 @@ def _amortissement_tri(results: dict, rec=None) -> dict:
     if isinstance(trad, dict) and isinstance(trad.get("refi"), dict):
         achat = (trad.get("achat") or {}).get(trad.get("programme_retenu") or "") or {}
         best = (trad.get("refi") or {}).get((trad.get("best_refi") or {}).get("key")) or {}
+        # Assumation : le prêt initial est celui du vendeur (son taux).
+        _as_t = (trad.get("assumation") or {}).get("taux")
         return {
-            "taux_achat": float(taux_achat or 0),
+            "taux_achat": float(_as_t if _as_t is not None else (taux_achat or 0)),
             "amort_achat": int(achat.get("amort_annees") or 25),
             "amortissement_initial": True,
             "taux_refi": float(taux_refi or 0),
@@ -1928,7 +1947,7 @@ def _render_bytes(
     _trad_comp = (
         (results or {}).get("traditionnel")
         if _strat_pdf in (
-            "traditionnel", "conventionnel", "schl_std",
+            "traditionnel", "assumation", "conventionnel", "schl_std",
             "aph_50", "aph_100",
         )
         else (results or {}).get("residentiel")
@@ -1939,6 +1958,7 @@ def _render_bytes(
         story.append(Paragraph(
             "COMPOSITION DE LA MISE DE FONDS — "
             + ("RÉSIDENTIEL" if _strat_pdf == "residentiel"
+               else "ASSUMATION HYPOTHÉCAIRE" if _strat_pdf == "assumation"
                else "INSTITUTION TRADITIONNELLE"), s["section"]
         ))
         story.append(_trad_composition_table(rl, _trad_comp, s=s))
@@ -2194,7 +2214,7 @@ def _render_bytes(
         and _direct
         and getattr(rec, "strategie_acquisition", None)
         in (
-            "traditionnel", "conventionnel", "schl_std",
+            "traditionnel", "assumation", "conventionnel", "schl_std",
             "aph_50", "aph_100",
         )
     )
@@ -2209,13 +2229,19 @@ def _render_bytes(
         ))
         story.extend(_residentiel_section(rl, _res_pdf, s=s))
     elif _mode_direct:
+        _est_as_pdf = (_direct or {}).get("mode") == "assumation"
         story.append(Paragraph(
-            "INSTITUTION TRADITIONNELLE — ACHAT, DÉTENTION ET "
-            "REFINANCEMENT", s["section"]
+            ("ASSUMATION HYPOTHÉCAIRE" if _est_as_pdf
+             else "INSTITUTION TRADITIONNELLE")
+            + " — ACHAT, DÉTENTION ET REFINANCEMENT", s["section"]
         ))
         story.extend(_traditionnel_section(rl, _direct, s=s))
         story.append(Spacer(1, 3))
         story.append(Paragraph(
+            "Achat avec reprise du prêt existant du vendeur (solde, "
+            "taux et amortissement restants) ; détention avec "
+            "croissance organique ; refinancement comparé à l'horizon "
+            "choisi." if _est_as_pdf else
             "Achat financé sur les loyers actuels (4 programmes "
             "comparés, le retenu pilote la mise de fonds) ; détention "
             "avec croissance organique ; refinancement comparé à "
