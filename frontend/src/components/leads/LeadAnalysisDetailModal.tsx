@@ -5057,7 +5057,9 @@ function TraditionnelAchatPanel({
           ? ` (dont ${fmtMoney(t.frais_demarrage_cash)} cash)`
           : ""}{" "}
         — sans double courtier/notaire ni intérêts de chantier ;
-        courtier 1 sur le prêt, frais de dossier fixes.
+        {t.mode === "assumation"
+          ? "pas de courtier (prêt repris), frais de dossier fixes."
+          : "courtier 1 sur le prêt, frais de dossier fixes."}
         {t.cashback && t.cashback > 0
           ? ` Cashback ${fmtMoney(t.cashback)} reçu au notaire — coût réel de l'immeuble ${fmtMoney(t.prix_reel ?? 0)}.`
           : ""}

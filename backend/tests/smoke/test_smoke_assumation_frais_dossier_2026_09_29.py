@@ -142,11 +142,12 @@ def test_assumation_hypothecaire_moteur():
     assert d["mdf_brute"] == 400_000.0
     assert t["mdf_cash"] == round(d["mdf_nette"] + d["frais_cash"], 2)
 
-    # Frais : ceux du traditionnel (dossier fixe, courtier 1 sur le prêt
-    # repris, pas de rapport d'efficacité).
+    # Frais : ceux du traditionnel (dossier fixe, pas de rapport
+    # d'efficacité) SAUF le courtier : 0 par défaut en assumation (Phil
+    # 2026-09-29 : pas de nouveau prêt à placer).
     f = t["frais_demarrage"]
     assert f["frais_dossier_preteur"] == 5_000.0
-    assert f["courtier_hypothecaire_1"] == 6_000.0
+    assert f["courtier_hypothecaire_1"] == 0.0
     assert f["rapport_efficacite"] == 0.0
 
     # Trace : section dédiée.
@@ -229,3 +230,9 @@ def test_parcours_api_assumation(client, auth_headers, run):
     # Valeur hors borne refusée.
     r = client.patch(base, headers=auth_headers, json={"assume_taux_pct": 45})
     assert r.status_code == 422
+
+
+def test_assumation_courtier_saisi_sur_la_fiche():
+    r = _assumation(frais_demarrage_overrides={"courtier_hypothecaire_1": 2_500.0})
+    f = r.to_dict()["traditionnel"]["frais_demarrage"]
+    assert f["courtier_hypothecaire_1"] == 2_500.0
