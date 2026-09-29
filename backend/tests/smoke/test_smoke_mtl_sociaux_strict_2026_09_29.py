@@ -90,3 +90,51 @@ def test_copie_embarquee_si_telechargement_bloque(run):
     texte, source = run(_go())
     assert source.startswith("copie")
     assert len(ls.charger_projets(texte)) > 1500
+
+
+def test_code_utilisation_1010_du_role(client, auth_headers, run):
+    """Le rôle marque lui-même les « Logements sociaux et abordables »
+    (code 1010) : exclus dès le départ, sans attendre la collecte du
+    propriétaire (Phil 2026-09-29 : 12 collectés, 11 affichés)."""
+
+    async def _seed():
+        async with TestSessionLocal() as s:
+            s.add(
+                MontrealPropertyUnit(
+                    matricule="C1010-1", region="mtl-island", municipalite="Montréal",
+                    arrondissement="Verdun", nom_rue="rue Du Quesne  (MTL)",
+                    nombre_logement=186, annee_construction=2094,
+                    code_utilisation="1010",
+                    libelle_utilisation="Logements sociaux et abordables",
+                )
+            )
+            await s.commit()
+
+    run(_seed())
+
+    async def _marquer():
+        async with TestSessionLocal() as s:
+            res = await marquer_logements_sociaux(s, texte_csv=_CSV)
+            await s.commit()
+            return res
+
+    res = run(_marquer())
+    assert res["marquees_code_role"] >= 1
+    r = client.get(
+        "/api/v1/prospection/mtl-properties?min_annee=2094&max_annee=2094",
+        headers=auth_headers,
+    )
+    p = r.json()["properties"][0]
+    assert p["logement_social"] == "Rôle · logement social et abordable"
+    r = client.get(
+        "/api/v1/prospection/mtl-properties?min_annee=2094&max_annee=2094&exclure_sociaux=true",
+        headers=auth_headers,
+    )
+    assert r.json()["total"] == 0 and r.json()["sociaux_exclus"] == 1
+    # Rejouer : recalculé, toujours marqué.
+    run(_marquer())
+    r = client.get(
+        "/api/v1/prospection/mtl-properties?min_annee=2094&max_annee=2094",
+        headers=auth_headers,
+    )
+    assert r.json()["properties"][0]["logement_social"] == "Rôle · logement social et abordable"
