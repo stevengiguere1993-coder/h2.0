@@ -20,6 +20,7 @@ import logging
 import re
 import unicodedata
 from datetime import date as _date
+from datetime import datetime as _datetime
 from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -87,6 +88,13 @@ class MtlPropertyRead(BaseModel):
     #: « HLM · Saint-Sulpice », « Coop · propriétaire »… ; None = pas connu
     #: comme logement social (Phil 2026-09-28).
     logement_social: Optional[str] = None
+    #: Fiche d'immeuble (Phil 2026-09-30) : tout ce que sort l'export.
+    arrondissement: Optional[str] = None
+    region: Optional[str] = None
+    owners_fetched_at: Optional[_datetime] = None
+    #: Propriétaires collectés, un par entrée : nom, statut, adresse
+    #: postale, date d'inscription, téléphone, NEQ, conditions.
+    owners: Optional[List[Dict[str, Optional[str]]]] = None
     #: Années entières écoulées depuis l'inscription au rôle du 1er
     #: propriétaire (« le propriétaire l'a depuis combien de temps ? »).
     proprietaire_depuis_annees: Optional[int] = None
@@ -295,6 +303,7 @@ def _filtres_mtl(
     numero_civique: Optional[str] = None,
     proprietaire_min_annees: Optional[int] = None,
     exclure_residences_aines: bool = False,
+    proprietaire_collecte: Optional[str] = None,
 ) -> list:
     """Conditions SQL des filtres de la page « Immeubles MTL » — UNE
     seule implémentation pour la liste, le compte et l'export CSV."""
@@ -433,6 +442,15 @@ def _filtres_mtl(
         filters.append(
             MontrealPropertyUnit.arrondissement == arrondissement.strip()
         )
+
+    if proprietaire_collecte in ("oui", "non"):
+        # Propriétaire déjà collecté sur montreal.ca ? (Phil 2026-09-30 :
+        # « un filtre pour ceux qu'on a scrappés »)
+        _a_proprio = and_(
+            MontrealPropertyUnit.owners_json.is_not(None),
+            MontrealPropertyUnit.owners_json.notin_(["", "[]"]),
+        )
+        filters.append(_a_proprio if proprietaire_collecte == "oui" else ~_a_proprio)
 
     if exclure_residences_aines:
         filters.append(
@@ -617,6 +635,11 @@ async def list_properties(
         description="Exclut les résidences pour aînés (codes d'utilisation "
         "1541, 1543, 1549 : RPA, CHSLD).",
     ),
+    proprietaire_collecte: Optional[str] = Query(
+        default=None,
+        pattern="^(oui|non)$",
+        description="oui = propriétaire déjà collecté ; non = pas encore.",
+    ),
     sort_by: str = Query(
         default="nombre_logement_desc",
         pattern="^(nombre_logement_desc|nombre_logement_asc|"
@@ -647,6 +670,7 @@ async def list_properties(
         numero_civique=numero_civique,
         proprietaire_min_annees=proprietaire_min_annees,
         exclure_residences_aines=exclure_residences_aines,
+        proprietaire_collecte=proprietaire_collecte,
     )
     filters = _filtres_mtl(**filtres_kwargs)
 
@@ -707,6 +731,25 @@ async def list_properties(
                     for o in owners_data
                     if o.get("name")
                 ]
+                d.owners = [
+                    {
+                        "name": str(o.get("name") or "").strip(),
+                        "statut": (str(o.get("statut") or "").strip() or None),
+                        "postal_address": (
+                            str(o.get("postal_address") or "").strip() or None
+                        ),
+                        "inscription_date": (
+                            str(o.get("inscription_date") or "").strip() or None
+                        ),
+                        "phone": (str(o.get("phone") or "").strip() or None),
+                        "neq": (str(o.get("req_neq") or "").strip() or None),
+                        "conditions": (
+                            str(o.get("conditions") or "").strip() or None
+                        ),
+                    }
+                    for o in owners_data
+                    if isinstance(o, dict) and o.get("name")
+                ] or None
                 if pairs:
                     d.owner_names = [n for n, _ in pairs]
                     d.owner_inscription_dates = [dt for _, dt in pairs]
@@ -852,6 +895,7 @@ async def matricules_a_collecter(
     numero_civique: Optional[str] = Query(default=None),
     proprietaire_min_annees: Optional[int] = Query(default=None, ge=0, le=150),
     exclure_residences_aines: bool = Query(default=False),
+    proprietaire_collecte: Optional[str] = Query(default=None, pattern="^(oui|non)$"),
     sans_proprietaire: bool = Query(default=True),
     limite: int = Query(default=5000, ge=1, le=20000),
 ) -> MatriculesACollecterOut:
@@ -878,6 +922,7 @@ async def matricules_a_collecter(
         numero_civique=numero_civique,
         proprietaire_min_annees=proprietaire_min_annees,
         exclure_residences_aines=exclure_residences_aines,
+        proprietaire_collecte=proprietaire_collecte,
     )
     sans_owner = or_(
         MontrealPropertyUnit.owners_json.is_(None),
@@ -939,6 +984,7 @@ async def export_properties_csv(
     numero_civique: Optional[str] = Query(default=None),
     proprietaire_min_annees: Optional[int] = Query(default=None, ge=0, le=150),
     exclure_residences_aines: bool = Query(default=False),
+    proprietaire_collecte: Optional[str] = Query(default=None, pattern="^(oui|non)$"),
 ) -> StreamingResponse:
     """TOUTES les unités qui matchent les filtres, en CSV (BOM + « ; »,
     lisible dans Excel), en flux : ~940 000 lignes passent sans
@@ -962,6 +1008,7 @@ async def export_properties_csv(
         numero_civique=numero_civique,
         proprietaire_min_annees=proprietaire_min_annees,
         exclure_residences_aines=exclure_residences_aines,
+        proprietaire_collecte=proprietaire_collecte,
     )
     # Matricules déjà en lead (quelques milliers) — chargés une fois.
     deja_leads = {
