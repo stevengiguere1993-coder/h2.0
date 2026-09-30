@@ -451,10 +451,14 @@ async def relever_tout_endpoint(data: ReleveToutRequest, _: RequireManager) -> d
 @router.get("/materiaux/prix/chercher/etat")
 async def etat_recherche(_: CurrentUser) -> dict:
     """État de la dernière recherche automatique de prix (en cours /
-    terminée + statistiques)."""
-    from app.services.materiaux_recherche import DERNIERE_RECHERCHE
+    terminée + statistiques EN DIRECT) et du scraper VPS (Rona / BMR)."""
+    import copy
 
-    return dict(DERNIERE_RECHERCHE)
+    from app.services.materiaux_recherche import DERNIERE_RECHERCHE, etat_scraper_vps
+
+    etat = copy.deepcopy(DERNIERE_RECHERCHE)
+    etat["scraper"] = await etat_scraper_vps()
+    return etat
 
 
 @router.post("/materiaux/prix/chercher")
