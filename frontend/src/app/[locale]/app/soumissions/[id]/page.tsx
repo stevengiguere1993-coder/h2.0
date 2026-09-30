@@ -1065,10 +1065,26 @@ export default function SoumissionDetailPage() {
                   <Briefcase className="h-4 w-4" />
                   Convertir en projet
                 </button>
+                {/* Devis accepté = figé : la modification passe par un
+                    avenant. Le bouton existe aussi sous la liste des
+                    items, mais il était introuvable sans dérouler la page
+                    (retour Phil 2026-09-30). */}
+                <button
+                  type="button"
+                  onClick={() => setAvenantModalOpen(true)}
+                  className="btn-accent btn-sm"
+                  title="Modifier le devis accepté (ajouts, retraits, changements de prix) par un avenant numéroté"
+                >
+                  <Plus className="h-4 w-4" />
+                  Modifier par avenant
+                  {avenants.length > 0 ? ` (${avenants.length})` : ""}
+                </button>
                 <p className="w-full text-xs text-white/50">
-                  Crée le projet et génère automatiquement une facture
-                  d&apos;acompte de 30 % du sous-total (+ TPS + TVQ) dans la
-                  facturation.
+                  Convertir : crée le projet et génère automatiquement une
+                  facture d&apos;acompte de 30 % du sous-total (+ TPS + TVQ)
+                  dans la facturation. Modifier : le devis signé reste
+                  figé, chaque changement devient un avenant (AV-1, AV-2…)
+                  visible sous la liste des items.
                 </p>
               </div>
             ) : null}
