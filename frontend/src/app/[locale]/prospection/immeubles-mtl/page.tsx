@@ -10,6 +10,7 @@ import {
   Loader2,
   MapPin,
   Plus,
+  Puzzle,
   RefreshCw,
   Search,
   Users,
@@ -81,6 +82,13 @@ type BatchState = {
   raison?: string | null;
   startedAt?: number | null;
 };
+
+//: Extension Chrome « Horizon h2.0 Helper » (collecte des propriétaires
+//: sur montreal.ca) — zip servi par Kratos (Phil 2026-09-30 : lien de
+//: téléchargement en haut à droite). Version = browser-extension/
+//: manifest.json (vérifié par tests/test_extension_zip.py).
+const EXTENSION_VERSION = "1.2.1";
+const EXTENSION_ZIP = "/telechargements/extension-horizon-h2.zip";
 
 //: Détection de l'extension (Phil 2026-09-29 : « Backend URL non
 //: configurée ») : le content script vit dans un monde ISOLÉ — la page ne
@@ -635,9 +643,29 @@ export default function ImmeublesMtlPage() {
             </span>
           ) : extStatut === "ancienne" ? (
             <span className="text-[11px] text-amber-300">
-              Extension à mettre à jour (1.2.1)
+              Extension à mettre à jour ({EXTENSION_VERSION})
+            </span>
+          ) : extStatut === "absente" ? (
+            <span className="text-[11px] text-amber-300">
+              Extension non détectée
             </span>
           ) : null}
+          <a
+            href={EXTENSION_ZIP}
+            download={`extension-horizon-h2-${EXTENSION_VERSION}.zip`}
+            title={`Extension Chrome Horizon ${EXTENSION_VERSION} (collecte des propriétaires). Installation : décompresse le zip → chrome://extensions → active « Mode développeur » → « Charger l'extension non empaquetée » → choisis le dossier extension-horizon-h2 → recharge cette page (elle se configure toute seule).`}
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition ${
+              extStatut === "absente" || extStatut === "ancienne"
+                ? "border-amber-400/60 bg-amber-500/10 text-amber-200 hover:border-amber-300"
+                : "border-brand-700 bg-brand-950 text-white hover:border-accent-500"
+            }`}
+          >
+            <Puzzle className="h-4 w-4" />
+            Extension Chrome
+            <span className="text-[10px] text-white/50">
+              v{EXTENSION_VERSION}
+            </span>
+          </a>
         </header>
 
         {/* Filtres */}

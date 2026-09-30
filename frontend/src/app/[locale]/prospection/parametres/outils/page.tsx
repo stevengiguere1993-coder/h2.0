@@ -78,9 +78,8 @@ function BrowserExtensionSection() {
 
       <div className="mt-4 space-y-3">
         <a
-          href="https://github.com/stevengiguere1993-coder/h2.0/archive/refs/heads/main.zip"
-          target="_blank"
-          rel="noopener"
+          href="/telechargements/extension-horizon-h2.zip"
+          download="extension-horizon-h2.zip"
           className="btn-outline-accent btn-sm"
         >
           <Download className="h-4 w-4" />
@@ -95,13 +94,9 @@ function BrowserExtensionSection() {
             <li>
               Décompresse le ZIP. Tu obtiendras un dossier{" "}
               <code className="rounded bg-brand-800 px-1 text-emerald-300">
-                h2.0-main
+                extension-horizon-h2
               </code>{" "}
-              — à l&apos;intérieur, le sous-dossier{" "}
-              <code className="rounded bg-brand-800 px-1 text-emerald-300">
-                browser-extension/
-              </code>{" "}
-              est ce qu&apos;on va charger.
+              : c&apos;est ce qu&apos;on va charger.
             </li>
             <li>
               Ouvre Chrome ou Edge, va sur{" "}
@@ -121,28 +116,16 @@ function BrowserExtensionSection() {
               Clique <strong>Charger non empaquetée</strong> et
               sélectionne le dossier{" "}
               <code className="rounded bg-brand-800 px-1 text-emerald-300">
-                browser-extension/
+                extension-horizon-h2
               </code>
               .
             </li>
             <li>
-              Clique l&apos;icône de l&apos;extension dans la barre
-              d&apos;outils.
-              <ul className="mt-1 ml-4 list-disc space-y-1">
-                <li>
-                  <strong>Backend URL</strong> :{" "}
-                  <code className="rounded bg-brand-800 px-1">
-                    https://h2-0.onrender.com
-                  </code>
-                </li>
-                <li>
-                  <strong>API Key</strong> : demande à l&apos;admin
-                  (variable env <code>EXTENSION_API_KEY</code>)
-                </li>
-              </ul>
-            </li>
-            <li>
-              Clique <strong>Tester</strong> → tu dois voir « Connexion OK ».
+              Ouvre (ou recharge) la page{" "}
+              <strong>Prospection → Rôles fonciers</strong> : Kratos
+              configure l&apos;extension tout seul (adresse du serveur
+              et clé). Tu dois voir « Extension configurée » en haut de
+              la page — rien à saisir dans la fenêtre de l&apos;icône.
             </li>
             <li>
               Navigue sur{" "}
@@ -168,9 +151,9 @@ function BrowserExtensionSection() {
             </li>
           </ol>
           <p className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/5 p-2 text-[11px] text-amber-200/80">
-            Mises à jour : à chaque nouveau commit, re-télécharge le
-            ZIP, remplace le dossier{" "}
-            <code className="rounded bg-brand-800 px-1">browser-extension/</code>,
+            Mises à jour : quand Rôles fonciers affiche « Extension à
+            mettre à jour », re-télécharge le ZIP, remplace le dossier{" "}
+            <code className="rounded bg-brand-800 px-1">extension-horizon-h2</code>,
             puis dans la page extensions clique « Recharger » sur
             Horizon h2.0 Helper.
           </p>
