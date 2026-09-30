@@ -1566,6 +1566,25 @@ async def transferer_unite(
     if bail is None:
         raise HTTPException(status_code=404, detail="Bail introuvable.")
     if bail.status != BailStatus.ACTIF.value:
+        # Déjà transféré : message explicite (409) même quand l'ancien
+        # bail est déjà terminé — cas d'un transfert au 1er du mois fait
+        # le dernier jour du mois précédent (le bail finit le jour même).
+        from app.services.locatif_depart import (
+            bail_issu_du_transfert as _deja_transfere,
+        )
+
+        _deja = await _deja_transfere(db, bail.id)
+        if _deja is not None:
+            _lg_d = await db.get(Logement, _deja.logement_id)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Ce bail a déjà été transféré vers le logement "
+                    f"{_lg_d.numero if _lg_d else _deja.logement_id} — annule ce "
+                    "transfert (Locations → « Retirer le locataire ») avant "
+                    "d'en faire un autre."
+                ),
+            )
         raise HTTPException(
             status_code=400,
             detail="Seul un bail actif peut être transféré.",
