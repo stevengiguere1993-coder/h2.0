@@ -11,7 +11,9 @@
 # Configuration (une seule fois) — GitHub → repo → Settings → Secrets and
 # variables → Actions → New repository secret :
 #   - SCRAPER_SSH_HOST  : IP ou nom du VPS (ex. scraper.immohorizon.com)
-#   - SCRAPER_SSH_USER  : utilisateur SSH (ex. deploy)
+#   - SCRAPER_SSH_USER  : utilisateur SSH (root si le VPS n'a pas
+#                         d'utilisateur deploy — le conteneur est retrouvé
+#                         par son nom, quel que soit le dossier)
 #   - SCRAPER_SSH_KEY   : clé PRIVÉE SSH (OpenSSH, ed25519 ou rsa) dont la
 #                         clé publique est dans ~/.ssh/authorized_keys de
 #                         cet utilisateur sur le VPS
@@ -102,7 +104,11 @@ jobs:
         run: |
           ssh -p "${PORT:-22}" -i ~/.ssh/scraper_key "$USER@$HOST" 'bash -s' <<'EOF'
           set -euo pipefail
-          DIR="$HOME/scraping"
+          # Dossier du service : celui du conteneur « horizon-scraper » déjà
+          # en place (label docker compose), sinon $HOME/scraping (guide).
+          DIR="$(docker inspect horizon-scraper --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' 2>/dev/null || true)"
+          if [ -z "$DIR" ] || [ ! -d "$DIR" ]; then DIR="$HOME/scraping"; fi
+          echo "Dossier du scraper : $DIR"
           mkdir -p "$DIR"
           cd "$DIR"
           # Le .env (SCRAPING_API_KEY, identifiants QUB) reste en place :
