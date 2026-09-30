@@ -115,6 +115,45 @@ function fmtDate(iso: string | null | undefined): string {
   );
 }
 
+function fmtDateTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  return new Date(iso).toLocaleString("fr-CA", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+type RechercheStats = {
+  total?: number;
+  examines?: number;
+  trouves?: number;
+  aucun?: number;
+  erreurs?: number;
+  error?: string;
+  dernier?: {
+    magasin: string;
+    statut: string;
+    title: string | null;
+    price: number | null;
+    error: string | null;
+  } | null;
+};
+
+type RechercheEtat = {
+  en_cours: boolean;
+  lance_a: string | null;
+  termine_a: string | null;
+  stats: RechercheStats | null;
+  scraper?: { en_ligne: boolean | null; detail: string | null; verifie_a: string | null } | null;
+};
+
+function resumeRecherche(st: RechercheStats | null | undefined): string {
+  const x = st || {};
+  return `${x.examines ?? 0}${x.total ? ` / ${x.total}` : ""} couples matériau × magasin examinés, ${x.trouves ?? 0} prix posés, ${x.aucun ?? 0} sans correspondance, ${x.erreurs ?? 0} erreurs de site.`;
+}
+
 async function readError(res: Response): Promise<string> {
   try {
     const j = (await res.json()) as { detail?: string };
@@ -144,6 +183,8 @@ export function MateriauxCatalogue() {
   const [importing, setImporting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [rechercheEtat, setRechercheEtat] = useState<RechercheEtat | null>(null);
+  const suiviRef = useRef(false);
   const [classifying, setClassifying] = useState(false);
   const [storesOpen, setStoresOpen] = useState(false);
   const [releveEtat, setReleveEtat] = useState<{
@@ -174,6 +215,7 @@ export function MateriauxCatalogue() {
       if (cr.ok) setCategories((await cr.json()) as string[]);
       await loadMagasins();
       void loadReleveEtat();
+      void loadRechercheEtat();
     } catch (e) {
       setError(`Chargement du catalogue échoué : ${(e as Error).message}`);
     } finally {
@@ -188,6 +230,53 @@ export function MateriauxCatalogue() {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, cat]);
+
+  async function loadRechercheEtat(): Promise<RechercheEtat | null> {
+    try {
+      const r = await authedFetch("/api/v1/materiaux/prix/chercher/etat");
+      if (r.ok) {
+        const e = (await r.json()) as RechercheEtat;
+        setRechercheEtat(e);
+        // Recherche lancée avant un rechargement de la page (ou par le
+        // cron) : on reprend le suivi au lieu de la perdre de vue.
+        if (e.en_cours && !suiviRef.current) void suivreRecherche();
+        return e;
+      }
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+
+  /** Suit une recherche en cours (état toutes les 5 s) jusqu'à sa fin,
+   *  puis recharge le catalogue pour afficher les prix posés. */
+  async function suivreRecherche() {
+    if (suiviRef.current) return;
+    suiviRef.current = true;
+    setSearching(true);
+    try {
+      for (let i = 0; i < 720; i += 1) {
+        await new Promise((r) => setTimeout(r, 5000));
+        const er = await authedFetch("/api/v1/materiaux/prix/chercher/etat");
+        if (!er.ok) continue;
+        const e = (await er.json()) as RechercheEtat;
+        setRechercheEtat(e);
+        if (!e.en_cours) {
+          const st = e.stats || {};
+          setNotice(
+            st.error
+              ? `Recherche terminée avec une erreur : ${st.error}`
+              : `Recherche terminée : ${resumeRecherche(st)} Sans correspondance : précise le nom (dimensions, format, marque).`
+          );
+          await load();
+          break;
+        }
+      }
+    } finally {
+      suiviRef.current = false;
+      setSearching(false);
+    }
+  }
 
   async function loadReleveEtat() {
     try {
@@ -373,28 +462,22 @@ export function MateriauxCatalogue() {
         body: JSON.stringify({ limit: 150 })
       });
       if (!res.ok) throw new Error(await readError(res));
+      const launched = (await res.json()) as { lance: boolean; raison?: string } & Partial<RechercheEtat>;
       setNotice(
-        "Recherche lancée : chaque matériau sans lien est cherché sur le site de chaque quincaillerie principale (un magasin à la fois). Ça peut prendre plusieurs minutes."
+        launched.lance
+          ? "Recherche lancée : chaque matériau sans lien est cherché sur le site de chaque quincaillerie principale. La progression s'affiche ci-dessous."
+          : launched.raison || "Une recherche est déjà en cours."
       );
-      for (let i = 0; i < 180; i += 1) {
-        await new Promise((r) => setTimeout(r, 5000));
-        const er = await authedFetch("/api/v1/materiaux/prix/chercher/etat");
-        if (!er.ok) continue;
-        const e = (await er.json()) as { en_cours: boolean; stats: Record<string, unknown> | null };
-        if (!e.en_cours) {
-          const st = (e.stats || {}) as Record<string, number | string>;
-          setNotice(
-            st.error
-              ? `Recherche terminée avec une erreur : ${st.error}`
-              : `Recherche terminée : ${st.examines ?? 0} couples matériau × magasin examinés, ${st.trouves ?? 0} prix posés, ${st.aucun ?? 0} sans correspondance (précise le nom : dimensions, format, marque), ${st.erreurs ?? 0} erreurs de site.`
-          );
-          await load();
-          break;
-        }
-      }
+      setRechercheEtat((prev) => ({
+        en_cours: true,
+        lance_a: launched.lance_a ?? prev?.lance_a ?? null,
+        termine_a: null,
+        stats: launched.stats ?? null,
+        scraper: prev?.scraper
+      }));
+      await suivreRecherche();
     } catch (e) {
       setError(`Recherche non lancée : ${(e as Error).message}`);
-    } finally {
       setSearching(false);
     }
   }
@@ -519,6 +602,56 @@ export function MateriauxCatalogue() {
       {notice ? (
         <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-300">
           {notice}
+        </p>
+      ) : null}
+      {rechercheEtat?.en_cours ? (
+        <div className="rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2 text-sm text-white">
+          <p className="flex items-center gap-2 font-semibold">
+            <Loader2 className="h-4 w-4 animate-spin text-accent-500" />
+            Recherche de prix en cours depuis {fmtDateTime(rechercheEtat.lance_a)} —{" "}
+            {resumeRecherche(rechercheEtat.stats)}
+          </p>
+          {rechercheEtat.stats?.dernier ? (
+            <p className="mt-1 text-xs text-white/70">
+              Dernier examiné : {rechercheEtat.stats.dernier.magasin} —{" "}
+              {rechercheEtat.stats.dernier.statut === "trouve" || rechercheEtat.stats.dernier.statut === "deja"
+                ? `${rechercheEtat.stats.dernier.title || "produit"}${
+                    rechercheEtat.stats.dernier.price != null ? ` à ${rechercheEtat.stats.dernier.price.toFixed(2)} $` : ""
+                  }`
+                : rechercheEtat.stats.dernier.statut === "erreur"
+                  ? `erreur de site (${rechercheEtat.stats.dernier.error || "inconnue"})`
+                  : "aucune correspondance"}
+            </p>
+          ) : null}
+        </div>
+      ) : rechercheEtat?.termine_a ? (
+        <p className="text-xs text-white/60">
+          Dernière recherche de prix terminée le {fmtDateTime(rechercheEtat.termine_a)} :{" "}
+          {rechercheEtat.stats?.error
+            ? `arrêtée sur une erreur (${rechercheEtat.stats.error})`
+            : resumeRecherche(rechercheEtat.stats)}
+        </p>
+      ) : null}
+      {rechercheEtat?.scraper ? (
+        <p className="flex items-center gap-2 text-xs text-white/60">
+          <span
+            className={`inline-block h-2 w-2 rounded-full ${
+              rechercheEtat.scraper.en_ligne ? "bg-emerald-400" : "bg-rose-400"
+            }`}
+            aria-hidden
+          />
+          Scraper VPS (Rona, BMR) :{" "}
+          {rechercheEtat.scraper.en_ligne ? (
+            <span className="text-emerald-300">en ligne</span>
+          ) : (
+            <span className="text-rose-300">
+              hors ligne{rechercheEtat.scraper.detail ? ` — ${rechercheEtat.scraper.detail}` : ""} ; Rona et BMR
+              ne seront pas cherchés
+            </span>
+          )}
+          {rechercheEtat.scraper.verifie_a ? (
+            <span className="text-white/40">(vérifié {fmtDateTime(rechercheEtat.scraper.verifie_a)})</span>
+          ) : null}
         </p>
       ) : null}
 

@@ -280,9 +280,14 @@ async def chercher_tout(
     materiau_id: Optional[int] = None,
     max_age_days: Optional[float] = None,
     session_factory=None,
+    stats_live: Optional[dict] = None,
 ) -> dict:
     """Comble les manques (matériau × magasin principal sans lien), au
     plus ``limit`` couples.
+
+    - ``stats_live`` : dict mis à jour EN DIRECT à chaque couple (compteurs,
+      total prévu, dernier résultat) — c'est ce que lit
+      ``GET /materiaux/prix/chercher/etat`` pendant la course.
 
     - ``session_factory`` (prod : ``AsyncSessionLocal``) : un magasin par
       tâche, chacune avec SA session et un commit par couple — une
@@ -292,16 +297,23 @@ async def chercher_tout(
     - sans fabrique (tests) : séquentiel sur ``db``, l'appelant committe.
     """
     magasins = await magasins_recherchables(db, magasin_id)
-    stats = {"magasins": len(magasins), "examines": 0, "trouves": 0, "aucun": 0, "erreurs": 0, "par_magasin": {}, "details": []}
+    stats = stats_live if stats_live is not None else {}
+    stats.update({"magasins": len(magasins), "total": 0, "examines": 0, "trouves": 0, "aucun": 0, "erreurs": 0, "par_magasin": {}, "details": [], "dernier": None})
     if not magasins:
         return stats
     travail = await _couples_a_chercher(db, magasins, limit=limit, materiau_id=materiau_id, max_age_days=max_age_days)
+    stats["total"] = sum(len(ids) for ids in travail.values())
     sem = asyncio.Semaphore(PARALLELISME)
 
     def _compter(mag: Magasin, materiau_id_: int, r: ResultatRecherche) -> bool:
         """Met à jour les stats ; True = arrêter ce magasin aujourd'hui."""
         d = stats["par_magasin"].setdefault(mag.name, {"trouves": 0, "aucun": 0, "erreurs": 0})
         stats["examines"] += 1
+        stats["dernier"] = {
+            "magasin": mag.name, "materiau_id": materiau_id_, "statut": r.statut,
+            "title": (r.title or "")[:120] or None, "price": r.price, "error": (r.error or "")[:160] or None,
+            "a": datetime.now(timezone.utc).isoformat(),
+        }
         if r.ok:
             stats["trouves"] += 1
             d["trouves"] += 1
@@ -353,6 +365,37 @@ async def chercher_tout(
 
 DERNIERE_RECHERCHE: dict = {"en_cours": False, "lance_a": None, "termine_a": None, "stats": None}
 
+_SCRAPER_ETAT: dict = {"verifie_a": None, "en_ligne": None, "detail": None}
+
+
+async def etat_scraper_vps(max_age_s: float = 60.0) -> dict:
+    """Ping du VPS de scraping (Rona / BMR) — ``/health`` avec un court
+    délai, mis en cache ``max_age_s`` pour ne pas marteler le VPS à chaque
+    rafraîchissement de la page catalogue."""
+    import httpx
+
+    from app.integrations.scraping_proxy import VPS_KEY, VPS_URL
+
+    now = datetime.now(timezone.utc)
+    v = _SCRAPER_ETAT.get("verifie_a")
+    if v and (now - datetime.fromisoformat(v)).total_seconds() < max_age_s:
+        return dict(_SCRAPER_ETAT)
+    en_ligne, detail = False, None
+    if not VPS_URL:
+        detail = "SCRAPING_VPS_URL non défini"
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(6.0, connect=4.0)) as client:
+                r = await client.get(f"{VPS_URL}/health")
+            en_ligne = r.status_code == 200
+            detail = None if en_ligne else f"HTTP {r.status_code}"
+            if en_ligne and not VPS_KEY:
+                en_ligne, detail = False, "SCRAPING_VPS_KEY non défini sur l'API"
+        except Exception as exc:  # noqa: BLE001
+            detail = str(exc)[:160] or exc.__class__.__name__
+    _SCRAPER_ETAT.update(verifie_a=now.isoformat(), en_ligne=en_ligne, detail=detail, url=VPS_URL)
+    return dict(_SCRAPER_ETAT)
+
 
 async def chercher_tout_en_arriere_plan(**kwargs) -> None:
     """Course complète avec une session par magasin (voir chercher_tout).
@@ -361,10 +404,11 @@ async def chercher_tout_en_arriere_plan(**kwargs) -> None:
 
     if DERNIERE_RECHERCHE.get("en_cours"):
         return
-    DERNIERE_RECHERCHE.update(en_cours=True, lance_a=datetime.now(timezone.utc).isoformat(), termine_a=None)
+    live: dict = {}
+    DERNIERE_RECHERCHE.update(en_cours=True, lance_a=datetime.now(timezone.utc).isoformat(), termine_a=None, stats=live)
     try:
         async with AsyncSessionLocal() as db:
-            stats = await chercher_tout(db, session_factory=AsyncSessionLocal, **kwargs)
+            stats = await chercher_tout(db, session_factory=AsyncSessionLocal, stats_live=live, **kwargs)
         DERNIERE_RECHERCHE["stats"] = stats
     except Exception as exc:  # noqa: BLE001
         log.exception("Recherche prix matériaux en arrière-plan échouée")
