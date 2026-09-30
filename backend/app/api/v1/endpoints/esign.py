@@ -65,6 +65,7 @@ from app.models.esign import (
     EsignTemplateField,
 )
 from app.services.esign_pdf import (
+    content_disposition,
     final_pdf_filename,
     page_png,
     pdf_page_count,
@@ -592,7 +593,7 @@ async def document_pdf(
         content=bytes(doc.pdf_blob),
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'inline; filename="{doc.filename}"'
+            "Content-Disposition": content_disposition(doc.filename)
         },
     )
 
@@ -622,8 +623,7 @@ async def document_signed_pdf(
         content=bytes(doc.signed_pdf_blob),
         media_type="application/pdf",
         headers={
-            "Content-Disposition":
-                f'inline; filename="{final_pdf_filename(doc)}"'
+            "Content-Disposition": content_disposition(final_pdf_filename(doc))
         },
     )
 
@@ -1203,7 +1203,7 @@ async def attachment_pdf(
         content=bytes(att.blob),
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'inline; filename="{att.filename}"'
+            "Content-Disposition": content_disposition(att.filename)
         },
     )
 

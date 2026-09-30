@@ -52,6 +52,7 @@ from app.models.esign import (
     EsignSigner,
 )
 from app.services.esign_pdf import (
+    content_disposition,
     build_final_pdf,
     date_fr_ca_long,
     final_pdf_filename,
@@ -488,7 +489,7 @@ async def esign_pdf(token: str, db: DBSession) -> Response:
         content=bytes(doc_blob.pdf_blob),
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'inline; filename="{doc.filename}"'
+            "Content-Disposition": content_disposition(doc.filename)
         },
     )
 
@@ -517,7 +518,7 @@ async def esign_attachment(
         content=bytes(att.blob),
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'inline; filename="{att.filename}"'
+            "Content-Disposition": content_disposition(att.filename)
         },
     )
 
@@ -544,8 +545,7 @@ async def esign_signed_pdf(token: str, db: DBSession) -> Response:
         content=bytes(doc_blob.signed_pdf_blob),
         media_type="application/pdf",
         headers={
-            "Content-Disposition":
-                f'inline; filename="{final_pdf_filename(doc)}"'
+            "Content-Disposition": content_disposition(final_pdf_filename(doc))
         },
     )
 

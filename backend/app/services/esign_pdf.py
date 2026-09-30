@@ -463,4 +463,27 @@ def final_pdf_filename(doc: EsignDocument) -> str:
     safe = "".join(
         ch if ch.isalnum() or ch in " -_." else "_" for ch in base
     ).strip()[:80]
-    return f"{safe} — signé.pdf"
+    # Tiret simple : un tiret cadratin (« — ») n'est pas encodable en
+    # latin-1 dans l'en-tête Content-Disposition → HTTP 500 sur le
+    # téléchargement (retour Phil 2026-09-30, « PDF signé : Erreur 500 »).
+    return f"{safe} - signe.pdf"
+
+
+def content_disposition(filename: str, *, inline: bool = True) -> str:
+    """En-tête Content-Disposition sûr : un nom ASCII de repli pour tous
+    les clients + le vrai nom en UTF-8 (RFC 5987). Les en-têtes HTTP sont
+    encodés en latin-1 : un « — », « ’ » ou « œ » dans le nom faisait
+    planter la réponse."""
+    import unicodedata
+    from urllib.parse import quote
+
+    ascii_name = (
+        unicodedata.normalize("NFKD", filename)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .replace('"', "'")
+        .replace("\\", "_")
+        .strip()
+    ) or "document.pdf"
+    disp = "inline" if inline else "attachment"
+    return f"{disp}; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
