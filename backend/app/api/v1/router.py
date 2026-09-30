@@ -133,6 +133,7 @@ from app.api.v1.endpoints import (
     public_devlog_soumission,
     public_facture,
     public_purchase_agreement,
+    public_avenant,
     public_soumission,
     purchase_agreement_milestones,
     purchase_agreement_template,
@@ -297,6 +298,7 @@ api_router.include_router(blog.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(voice.router)
 api_router.include_router(public_soumission.router)
+api_router.include_router(public_avenant.router)
 api_router.include_router(public_contract.router)
 api_router.include_router(public_facture.router)
 api_router.include_router(contract_sign.router)

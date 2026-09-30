@@ -21,10 +21,12 @@ son nouveau montant, la réponse le signale (crédit à prévoir).
 """
 
 import json
+from datetime import datetime
 from typing import List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi.responses import Response
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, DBSession
@@ -65,6 +67,21 @@ class AvenantRead(BaseModel):
     impact_subtotal: float
     created_by_email: Optional[str]
     created_at: Optional[object] = None
+    #: Signature client (2026-09-30) : interne | envoye | signe | refuse.
+    signature_status: str = "interne"
+    sent_at: Optional[datetime] = None
+    sent_to: Optional[str] = None
+    client_opened_at: Optional[datetime] = None
+    signed_at: Optional[datetime] = None
+    signed_name: Optional[str] = None
+    declined_at: Optional[datetime] = None
+    decline_reason: Optional[str] = None
+
+
+class AvenantSendRequest(BaseModel):
+    to: List[EmailStr] = Field(..., min_length=1)
+    cc: Optional[List[EmailStr]] = None
+    message: Optional[str] = Field(default=None, max_length=4000)
 
 
 class AvenantResult(BaseModel):
@@ -306,3 +323,103 @@ async def create_avenant(
         contrat_courant=float(sm.subtotal or 0),
         surfactures=surfactures,
     )
+
+
+# ───────────── Signature de l'avenant par le client (2026-09-30) ─────────────
+
+
+async def _avenant_du_devis(db, soumission_id: int, avenant_id: int) -> SoumissionAvenant:
+    av = (
+        await db.execute(
+            select(SoumissionAvenant).where(
+                SoumissionAvenant.id == avenant_id,
+                SoumissionAvenant.soumission_id == soumission_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if av is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Avenant introuvable.")
+    return av
+
+
+@router.get(
+    "/{soumission_id}/avenants/{avenant_id}/pdf",
+    summary="PDF de l'avenant (signé si le client l'a signé)",
+)
+async def avenant_pdf(soumission_id: int, avenant_id: int, db: DBSession, _: CurrentUser) -> Response:
+    from app.services.avenant_pdf import avenant_pdf_filename, render_avenant_pdf
+
+    av = await _avenant_du_devis(db, soumission_id, avenant_id)
+    if av.signature_status == "signe":
+        blob = (
+            await db.execute(
+                select(SoumissionAvenant.signed_pdf_blob).where(SoumissionAvenant.id == av.id)
+            )
+        ).scalar_one_or_none()
+        if blob:
+            sm = (await db.execute(select(Soumission).where(Soumission.id == soumission_id))).scalar_one()
+            return Response(
+                content=bytes(blob), media_type="application/pdf",
+                headers={"Content-Disposition": f'inline; filename="{avenant_pdf_filename(av, sm, signe=True)}"'},
+            )
+    rendered = await render_avenant_pdf(db, av.id)
+    if rendered is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Avenant introuvable.")
+    av, sm, pdf = rendered
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{avenant_pdf_filename(av, sm)}"'},
+    )
+
+
+@router.post(
+    "/{soumission_id}/avenants/{avenant_id}/envoyer",
+    response_model=AvenantRead,
+    summary="Envoie l'avenant au client pour signature (PDF + lien public)",
+)
+async def envoyer_avenant(
+    soumission_id: int, avenant_id: int, data: AvenantSendRequest, db: DBSession, _: CurrentUser
+) -> AvenantRead:
+    from app.services.avenant_send import AvenantSendError, send_avenant
+
+    await _avenant_du_devis(db, soumission_id, avenant_id)
+    try:
+        av = await send_avenant(
+            db, avenant_id, to=[str(a) for a in data.to], cc=[str(a) for a in (data.cc or [])],
+            message=data.message,
+        )
+    except AvenantSendError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return AvenantRead.model_validate(av)
+
+
+@router.get(
+    "/{soumission_id}/documents-signes",
+    summary="PDF signés du contrat dans l'ordre : original puis avenants",
+)
+async def documents_signes(soumission_id: int, db: DBSession, _: CurrentUser) -> list[dict]:
+    sm = (await db.execute(select(Soumission).where(Soumission.id == soumission_id))).scalar_one_or_none()
+    if sm is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Soumission introuvable.")
+    out: list[dict] = []
+    if sm.status == "accepted":
+        out.append({
+            "kind": "original", "reference": sm.reference, "label": f"Soumission {sm.reference} (original signé)",
+            "signed_name": sm.signed_name, "signed_at": (sm.accepted_at.isoformat() if sm.accepted_at else None),
+            "pdf_path": f"/api/v1/soumissions/{sm.id}/pdf",
+        })
+    rows = (
+        await db.execute(
+            select(SoumissionAvenant).where(SoumissionAvenant.soumission_id == soumission_id)
+            .order_by(SoumissionAvenant.numero.asc())
+        )
+    ).scalars().all()
+    for av in rows:
+        out.append({
+            "kind": "avenant", "reference": av.reference,
+            "label": f"Avenant {av.reference}" + (" (signé)" if av.signature_status == "signe" else f" ({av.signature_status})"),
+            "status": av.signature_status, "signed_name": av.signed_name,
+            "signed_at": (av.signed_at.isoformat() if av.signed_at else None),
+            "pdf_path": f"/api/v1/soumissions/{sm.id}/avenants/{av.id}/pdf",
+        })
+    return out

@@ -17,10 +17,11 @@ pourcentages). Nouvelle table + colonnes additives → create_all /
 ajouter_colonnes_manquantes, aucune migration.
 """
 
+from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import ForeignKey, Integer, Numeric, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, Numeric, String, Text
+from sqlalchemy.orm import Mapped, deferred, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
 
@@ -55,4 +56,34 @@ class SoumissionAvenant(Base, TimestampUpdateMixin):
 
     created_by_email: Mapped[Optional[str]] = mapped_column(
         String(256), nullable=True
+    )
+
+    # ── Signature de l'avenant par le client (retour Phil 2026-09-30) ──
+    # Comme le devis : lien public, signature tracée obligatoire, PDF
+    # signé archivé. L'original signé reste intact ; chaque avenant a son
+    # propre PDF signé (original, AV-1, AV-2…).
+    #: interne | envoye | signe | refuse
+    signature_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="interne", server_default="interne"
+    )
+    signature_token: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_to: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+    client_opened_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    signed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    signed_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    signed_ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    declined_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    decline_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    signature_image: Mapped[Optional[bytes]] = deferred(
+        mapped_column(LargeBinary, nullable=True)
+    )
+    signature_image_content_type: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True
+    )
+    #: PDF de l'avenant signé (avec la signature tracée), archivé.
+    signed_pdf_blob: Mapped[Optional[bytes]] = deferred(
+        mapped_column(LargeBinary, nullable=True)
     )

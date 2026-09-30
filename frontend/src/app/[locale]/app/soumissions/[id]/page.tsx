@@ -108,6 +108,29 @@ type Avenant = {
   impact_subtotal: number;
   created_by_email: string | null;
   created_at?: string | null;
+  // Signature par le client (2026-09-30) : interne | envoye | signe | refuse.
+  signature_status?: string;
+  sent_at?: string | null;
+  sent_to?: string | null;
+  client_opened_at?: string | null;
+  signed_at?: string | null;
+  signed_name?: string | null;
+  declined_at?: string | null;
+  decline_reason?: string | null;
+};
+
+const AVENANT_SIG_LABEL: Record<string, string> = {
+  interne: "Non envoyé",
+  envoye: "Envoyé au client",
+  signe: "Signé",
+  refuse: "Refusé"
+};
+
+const AVENANT_SIG_CLASS: Record<string, string> = {
+  interne: "badge-neutral",
+  envoye: "badge-blue",
+  signe: "badge-emerald",
+  refuse: "badge-rose"
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -227,6 +250,9 @@ export default function SoumissionDetailPage() {
   const [avenants, setAvenants] = useState<Avenant[]>([]);
   const [avenantModalOpen, setAvenantModalOpen] = useState(false);
   const [avenantNotices, setAvenantNotices] = useState<string[]>([]);
+  // Envoi d'un avenant au client pour signature : petit formulaire en ligne.
+  const [avenantSend, setAvenantSend] = useState<{ id: number; to: string; message: string } | null>(null);
+  const [avenantBusy, setAvenantBusy] = useState<number | null>(null);
 
   const estAccepte = s?.status === "accepted";
 
@@ -572,6 +598,55 @@ export default function SoumissionDetailPage() {
       );
     } finally {
       setSendingForSignature(false);
+    }
+  }
+
+  // PDF d'un avenant (signé si le client l'a signé). Onglet ouvert dans
+  // le clic, rempli après la requête (sinon bloqué par l'anti-popup).
+  async function openAvenantPdf(av: Avenant) {
+    const win = window.open("", "_blank");
+    try {
+      const res = await authedFetch(`/api/v1/soumissions/${id}/avenants/${av.id}/pdf`);
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      if (win) win.location.href = url;
+      else window.open(url, "_blank", "noopener,noreferrer");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      win?.close();
+      setSendNotice(`PDF de l'avenant : ${(err as Error).message.slice(0, 240)}`);
+    }
+  }
+
+  async function sendAvenant() {
+    if (!avenantSend) return;
+    const to = avenantSend.to
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+    if (to.length === 0) {
+      setSendNotice("Indique le courriel du client pour l'avenant.");
+      return;
+    }
+    setAvenantBusy(avenantSend.id);
+    try {
+      const res = await authedFetch(
+        `/api/v1/soumissions/${id}/avenants/${avenantSend.id}/envoyer`,
+        { method: "POST", body: JSON.stringify({ to, message: avenantSend.message.trim() || null }) }
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(body?.detail || `http_${res.status}`);
+      }
+      const updated = (await res.json()) as Avenant;
+      setAvenants((xs) => xs.map((a) => (a.id === updated.id ? { ...a, ...updated } : a)));
+      setAvenantSend(null);
+      setSendNotice(`Avenant ${updated.reference} envoyé à ${to.join(", ")} pour signature.`);
+    } catch (err) {
+      setSendNotice(`Envoi de l'avenant échoué : ${(err as Error).message}`);
+    } finally {
+      setAvenantBusy(null);
     }
   }
 
@@ -1324,6 +1399,13 @@ export default function SoumissionDetailPage() {
                     </div>
                   ) : null}
                   {avenants.length > 0 ? (
+                    <p className="mt-3 text-[11px] text-white/60">
+                      Documents signés, dans l&apos;ordre : l&apos;original (bouton « Prévisualiser le PDF »,
+                      avec la signature du client), puis chaque avenant signé ci-dessous. Un avenant
+                      envoyé au client se signe en ligne comme le devis.
+                    </p>
+                  ) : null}
+                  {avenants.length > 0 ? (
                     <ul className="mt-3 space-y-1.5">
                       {avenants.map((a) => (
                         <li
@@ -1346,12 +1428,79 @@ export default function SoumissionDetailPage() {
                           <span className="text-white/70">
                             {a.note || "—"}
                           </span>
-                          {a.created_at ? (
-                            <span className="ml-auto text-white/40">
-                              {new Date(a.created_at).toLocaleDateString(
-                                "fr-CA"
-                              )}
-                            </span>
+                          <span className={`${AVENANT_SIG_CLASS[a.signature_status || "interne"]} text-[10px]`}>
+                            {AVENANT_SIG_LABEL[a.signature_status || "interne"]}
+                            {a.signature_status === "signe" && a.signed_name ? ` par ${a.signed_name}` : ""}
+                          </span>
+                          {a.signature_status === "envoye" && a.client_opened_at ? (
+                            <span className="text-white/60">ouvert par le client</span>
+                          ) : null}
+                          {a.signature_status === "refuse" && a.decline_reason ? (
+                            <span className="text-rose-300">« {a.decline_reason} »</span>
+                          ) : null}
+                          <span className="ml-auto flex items-center gap-1">
+                            {a.created_at ? (
+                              <span className="mr-2 text-white/40">
+                                {new Date(a.created_at).toLocaleDateString("fr-CA")}
+                              </span>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => void openAvenantPdf(a)}
+                              className="btn-secondary btn-xs"
+                              title={a.signature_status === "signe" ? "PDF signé de l'avenant" : "PDF de l'avenant"}
+                            >
+                              <FileText className="h-3 w-3" />
+                              {a.signature_status === "signe" ? "PDF signé" : "PDF"}
+                            </button>
+                            {a.signature_status !== "signe" ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setAvenantSend(
+                                    avenantSend?.id === a.id
+                                      ? null
+                                      : { id: a.id, to: a.sent_to || clientEmail || "", message: "" }
+                                  )
+                                }
+                                className="btn-accent btn-xs"
+                                title="Envoyer l'avenant au client pour signature (PDF + lien)"
+                              >
+                                <Send className="h-3 w-3" />
+                                {a.signature_status === "interne" ? "Envoyer pour signature" : "Renvoyer"}
+                              </button>
+                            ) : null}
+                          </span>
+                          {avenantSend?.id === a.id ? (
+                            <div className="mt-2 flex w-full flex-wrap items-end gap-2 border-t border-brand-800 pt-2">
+                              <label className="flex-1 text-[11px] text-white/70">
+                                Courriel du client
+                                <input
+                                  value={avenantSend.to}
+                                  onChange={(e) => setAvenantSend({ ...avenantSend, to: e.target.value })}
+                                  placeholder="client@exemple.com"
+                                  className="input mt-1 w-full"
+                                />
+                              </label>
+                              <label className="flex-[2] text-[11px] text-white/70">
+                                Message (facultatif)
+                                <input
+                                  value={avenantSend.message}
+                                  onChange={(e) => setAvenantSend({ ...avenantSend, message: e.target.value })}
+                                  placeholder="Ex. Voici l'avenant discuté sur le chantier ce matin."
+                                  className="input mt-1 w-full"
+                                />
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => void sendAvenant()}
+                                disabled={avenantBusy === a.id}
+                                className="btn-accent btn-sm disabled:opacity-60"
+                              >
+                                {avenantBusy === a.id ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1 h-3.5 w-3.5" />}
+                                Envoyer
+                              </button>
+                            </div>
                           ) : null}
                         </li>
                       ))}
