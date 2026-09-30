@@ -184,16 +184,27 @@ Le workflow GitHub `.github/workflows/deploy-scraper.yml` copie
 | Secret | Valeur |
 |---|---|
 | `SCRAPER_SSH_HOST` | `scraper.immohorizon.com` (ou l'IP du VPS) |
-| `SCRAPER_SSH_USER` | `deploy` |
-| `SCRAPER_SSH_KEY` | la clé PRIVÉE SSH (OpenSSH) dont la clé publique est dans `/home/deploy/.ssh/authorized_keys` |
+| `SCRAPER_SSH_USER` | `root` (le VPS n'a pas d'utilisateur `deploy`) |
+| `SCRAPER_SSH_KEY` | le contenu COMPLET du fichier de clé PRIVÉE, de la ligne `-----BEGIN OPENSSH PRIVATE KEY-----` à la ligne `-----END OPENSSH PRIVATE KEY-----` incluses |
 
-Pour créer une clé dédiée au déploiement (sur ton poste) :
+Pour créer une clé dédiée au déploiement (sur ton poste, PowerShell) :
 
-```bash
-ssh-keygen -t ed25519 -f ~/.ssh/horizon-scraper-deploy -N "" -C "github-deploy-scraper"
-ssh-copy-id -i ~/.ssh/horizon-scraper-deploy.pub deploy@scraper.immohorizon.com
-cat ~/.ssh/horizon-scraper-deploy      # → contenu du secret SCRAPER_SSH_KEY
+```powershell
+ssh-keygen -t ed25519 -f "$HOME\.ssh\horizon-scraper-deploy" -N '""' -C "github-deploy-scraper"
+# Installer la clé publique sur le VPS (mot de passe root demandé une fois) :
+type "$HOME\.ssh\horizon-scraper-deploy.pub" | ssh root@scraper.immohorizon.com "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"
+# Copier la clé PRIVÉE dans le presse-papiers → coller telle quelle dans le secret SCRAPER_SSH_KEY :
+Get-Content "$HOME\.ssh\horizon-scraper-deploy" -Raw | Set-Clipboard
+# Tester : doit ouvrir une session sans mot de passe
+ssh -i "$HOME\.ssh\horizon-scraper-deploy" root@scraper.immohorizon.com "echo OK"
 ```
+
+Il n'y a rien à « composer » entre `BEGIN` et `END` : `ssh-keygen` a déjà
+écrit tout le bloc dans le fichier `horizon-scraper-deploy` (sans `.pub`).
+Le secret, c'est ce fichier tel quel, sauts de ligne compris.
+
+Sur macOS / Linux : `ssh-copy-id -i ~/.ssh/horizon-scraper-deploy.pub root@scraper.immohorizon.com`
+puis `cat ~/.ssh/horizon-scraper-deploy`.
 
 Le `.env` du VPS (clé API, identifiants QUB) n'est jamais écrasé. Le
 workflow vérifie ensuite que `POST /scrape/fetch-html` répond 401 (présent)
@@ -202,9 +213,9 @@ et non 404.
 Mise à jour manuelle (si les secrets ne sont pas encore posés) :
 
 ```bash
-cd /home/deploy/scraping
+cd "$(docker inspect horizon-scraper --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}')"
 # Push tes changements en local, puis sur le VPS :
-# scp -r ./scraping_vps/* deploy@<ip>:/home/deploy/scraping/
+# scp -r ./scraping_vps/* root@<ip>:<ce dossier>/
 docker compose up -d --build
 ```
 
