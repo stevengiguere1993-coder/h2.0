@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import {
   Building2,
   CheckCircle2,
@@ -45,6 +52,23 @@ type Property = {
   logement_social: string | null;
   //: Années écoulées depuis l'inscription du 1er propriétaire au rôle.
   proprietaire_depuis_annees: number | null;
+  //: Fiche d'immeuble (Phil 2026-09-30) : tout ce que sort l'export.
+  civique_fin?: string | null;
+  categorie_uef?: string | null;
+  arrondissement?: string | null;
+  region?: string | null;
+  owners_fetched_at?: string | null;
+  owners?: ProprietaireCollecte[] | null;
+};
+
+type ProprietaireCollecte = {
+  name: string;
+  statut: string | null;
+  postal_address: string | null;
+  inscription_date: string | null;
+  phone: string | null;
+  neq: string | null;
+  conditions: string | null;
 };
 
 type UtilisationType = {
@@ -228,6 +252,12 @@ export default function ImmeublesMtlPage() {
   //: Exclure RPA / CHSLD (codes 1541, 1543, 1549) — Phil 2026-09-29 :
   //: « des maisons pour personnes retraitées, ça ne m'intéresse pas ».
   const [exclureAines, setExclureAines] = useState(true);
+  //: Propriétaire déjà collecté ? (Phil 2026-09-30 : « un filtre pour ceux
+  //: qu'on a scrappés ») — "" = tous.
+  const [proprioCollecte, setProprioCollecte] = useState<"" | "oui" | "non">(
+    ""
+  );
+  const [ficheFor, setFicheFor] = useState<Property | null>(null);
   const [offset, setOffset] = useState(0);
   const limit = 100;
 
@@ -278,6 +308,7 @@ export default function ImmeublesMtlPage() {
     if (arrondissement) params.set("arrondissement", arrondissement);
     if (exclureSociaux) params.set("exclure_sociaux", "true");
     if (exclureAines) params.set("exclure_residences_aines", "true");
+    if (proprioCollecte) params.set("proprietaire_collecte", proprioCollecte);
     return params;
   }, [
     filtresNum,
@@ -288,7 +319,8 @@ export default function ImmeublesMtlPage() {
     distanceBand,
     arrondissement,
     exclureSociaux,
-    exclureAines
+    exclureAines,
+    proprioCollecte
   ]);
 
   // ── Collecte en lot des propriétaires (Phil 2026-09-28) ──
@@ -455,6 +487,7 @@ export default function ImmeublesMtlPage() {
       if (arrondissement) params.set("arrondissement", arrondissement);
       if (exclureSociaux) params.set("exclure_sociaux", "true");
       if (exclureAines) params.set("exclure_residences_aines", "true");
+      if (proprioCollecte) params.set("proprietaire_collecte", proprioCollecte);
       params.set("limit", String(limit));
       params.set("offset", String(offset));
 
@@ -493,6 +526,7 @@ export default function ImmeublesMtlPage() {
     arrondissement,
     exclureSociaux,
     exclureAines,
+    proprioCollecte,
     offset
   ]);
 
@@ -900,6 +934,22 @@ export default function ImmeublesMtlPage() {
                 </span>
               </label>
             </div>
+            <div>
+              <label className="label">Propriétaire collecté</label>
+              <select
+                value={proprioCollecte}
+                onChange={(e) => {
+                  setProprioCollecte(e.target.value as "" | "oui" | "non");
+                  setOffset(0);
+                }}
+                className="input text-sm"
+                title="Propriétaire déjà récupéré sur montreal.ca (nom, adresse postale, date d'inscription)"
+              >
+                <option value="">Tous</option>
+                <option value="oui">Collectés seulement</option>
+                <option value="non">Pas encore collectés</option>
+              </select>
+            </div>
           </div>
 
           {/* Filtre Type d'utilisation (collapse + checkboxes) */}
@@ -1233,6 +1283,7 @@ export default function ImmeublesMtlPage() {
                   <tr>
                     <th className="px-3 py-2.5">Adresse</th>
                     <th className="px-3 py-2.5">Propriétaire</th>
+                    <th className="px-3 py-2.5">Adresse du propriétaire</th>
                     <th className="px-3 py-2.5 text-right">
                       # logements
                     </th>
@@ -1248,14 +1299,19 @@ export default function ImmeublesMtlPage() {
                   {properties.map((p) => (
                     <tr
                       key={p.matricule}
-                      className="transition hover:bg-brand-800/40"
+                      onClick={() => setFicheFor(p)}
+                      className="cursor-pointer transition hover:bg-brand-800/40"
+                      title="Ouvrir la fiche de l'immeuble"
                     >
                       <td className="px-3 py-2.5 text-white/80">
                         <button
                           type="button"
-                          onClick={() => setStreetViewFor(p)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setFicheFor(p);
+                          }}
                           className="text-left hover:text-accent-500 hover:underline"
-                          title="Ouvrir Street View"
+                          title="Ouvrir la fiche de l'immeuble"
                         >
                           {p.full_address || "—"}
                         </button>
@@ -1277,7 +1333,10 @@ export default function ImmeublesMtlPage() {
                         {p.owner_names && p.owner_names.length > 0 ? (
                           <button
                             type="button"
-                            onClick={() => setOwnerModalFor(p)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setOwnerModalFor(p);
+                            }}
                             className="text-left text-[11px] text-accent-500 hover:text-accent-400 hover:underline"
                             title="Voir les détails du propriétaire"
                           >
@@ -1299,6 +1358,24 @@ export default function ImmeublesMtlPage() {
                           </button>
                         ) : (
                           <span className="text-[11px] text-white/30">—</span>
+                        )}
+                      </td>
+                      <td className="max-w-[220px] px-3 py-2.5 text-[11px] text-white/70">
+                        {adressesProprietaires(p).length > 0 ? (
+                          <span
+                            className="line-clamp-2"
+                            title={adressesProprietaires(p).join("\n")}
+                          >
+                            {adressesProprietaires(p)[0]}
+                            {adressesProprietaires(p).length > 1 ? (
+                              <span className="text-[10px] text-white/40">
+                                {" "}
+                                +{adressesProprietaires(p).length - 1}
+                              </span>
+                            ) : null}
+                          </span>
+                        ) : (
+                          <span className="text-white/30">—</span>
                         )}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums font-bold text-emerald-300">
@@ -1339,7 +1416,10 @@ export default function ImmeublesMtlPage() {
                           <span className="text-white/30">—</span>
                         )}
                       </td>
-                      <td className="px-3 py-2.5">
+                      <td
+                        className="px-3 py-2.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <div className="flex flex-wrap gap-1">
                           <button
                             type="button"
@@ -1407,7 +1487,208 @@ export default function ImmeublesMtlPage() {
           onClose={() => setStreetViewFor(null)}
         />
       ) : null}
+
+      {ficheFor ? (
+        <FicheImmeubleModal
+          property={ficheFor}
+          onClose={() => setFicheFor(null)}
+          onStreetView={() => {
+            const p = ficheFor;
+            setFicheFor(null);
+            setStreetViewFor(p);
+          }}
+          onProprietaire={() => {
+            const p = ficheFor;
+            setFicheFor(null);
+            setOwnerModalFor(p);
+          }}
+        />
+      ) : null}
     </>
+  );
+}
+
+//: Adresses postales distinctes des propriétaires collectés (la Ville ne
+//: l'affiche qu'une fois pour des copropriétaires).
+function adressesProprietaires(p: Property): string[] {
+  const vues = new Set<string>();
+  for (const o of p.owners ?? []) {
+    const a = (o.postal_address || "").trim();
+    if (a) vues.add(a);
+  }
+  return Array.from(vues);
+}
+
+/** Fiche d'un immeuble du rôle (Phil 2026-09-30) : toutes les infos de
+ *  l'export Excel — identification, bâtiment, propriétaires collectés. */
+function FicheImmeubleModal({
+  property: p,
+  onClose,
+  onStreetView,
+  onProprietaire
+}: {
+  property: Property;
+  onClose: () => void;
+  onStreetView: () => void;
+  onProprietaire: () => void;
+}) {
+  const aire = (n: number | null | undefined) =>
+    n == null ? "—" : `${Math.round(n).toLocaleString("fr-CA")} m²`;
+  const civique =
+    p.civique_fin && p.civique_fin !== p.civique_debut
+      ? `${p.civique_debut ?? ""} à ${p.civique_fin}`
+      : p.civique_debut ?? "—";
+  const lignes = (rows: Array<[string, ReactNode]>) => (
+    <dl className="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
+      {rows.map(([label, val]) => (
+        <div key={label} className="min-w-0">
+          <dt className="text-[10px] uppercase tracking-wider text-white/40">
+            {label}
+          </dt>
+          <dd className="break-words text-sm text-white/90">{val || "—"}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+  const owners = p.owners ?? [];
+  return (
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/80 p-4 backdrop-blur-sm"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="my-6 w-full max-w-3xl rounded-2xl border border-brand-700 bg-brand-900 p-5 shadow-2xl"
+      >
+        <header className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-lg font-bold text-white">
+              {p.full_address || "Immeuble"}
+            </h2>
+            <p className="text-xs text-white/50">
+              {[p.arrondissement, p.municipalite].filter(Boolean).join(" · ")}
+            </p>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {p.already_lead ? (
+                <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
+                  Déjà un lead
+                </span>
+              ) : null}
+              {p.logement_social ? (
+                <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-medium text-rose-300">
+                  Social · {p.logement_social}
+                </span>
+              ) : null}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Fermer"
+            className="rounded-lg border border-brand-700 p-1.5 text-white/70 hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <section className="mt-4 rounded-xl border border-brand-800 bg-brand-950/50 p-4">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-accent-500">
+            Immeuble
+          </h3>
+          {lignes([
+            ["Matricule", <span key="m" className="font-mono text-xs">{p.matricule}</span>],
+            ["Numéro civique", civique],
+            ["Rue", p.nom_rue],
+            ["Suite", p.suite_debut],
+            ["Municipalité", p.municipalite],
+            ["Arrondissement", p.arrondissement],
+            ["Nombre de logements", p.nombre_logement],
+            [
+              "Année de construction",
+              p.annee_construction === 9999 ? "Inconnue" : p.annee_construction
+            ],
+            [
+              "Utilisation",
+              [p.code_utilisation, p.libelle_utilisation].filter(Boolean).join(" · ")
+            ],
+            ["Catégorie", p.categorie_uef],
+            ["Superficie du terrain", aire(p.superficie_terrain)],
+            ["Superficie du bâtiment", aire(p.superficie_batiment)]
+          ])}
+        </section>
+
+        <section className="mt-3 rounded-xl border border-brand-800 bg-brand-950/50 p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-accent-500">
+              Propriétaire{owners.length > 1 ? "s" : ""}
+            </h3>
+            {p.owners_fetched_at ? (
+              <span className="text-[10px] text-white/40">
+                Vérifié le{" "}
+                {new Date(p.owners_fetched_at).toLocaleDateString("fr-CA")}
+                {p.proprietaire_depuis_annees != null
+                  ? ` · propriétaire depuis ${
+                      p.proprietaire_depuis_annees === 0
+                        ? "moins d'un an"
+                        : `${p.proprietaire_depuis_annees} an${
+                            p.proprietaire_depuis_annees > 1 ? "s" : ""
+                          }`
+                    }`
+                  : ""}
+              </span>
+            ) : null}
+          </div>
+          {owners.length === 0 ? (
+            <p className="text-sm text-white/50">
+              Propriétaire pas encore collecté. Utilise « Collecter les
+              propriétaires » (en lot) ou le bouton ci-dessous.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {owners.map((o, i) => (
+                <div
+                  key={`${o.name}-${i}`}
+                  className="rounded-lg border border-brand-800 bg-brand-900 p-3"
+                >
+                  <p className="mb-2 text-sm font-semibold text-white">
+                    {o.name}
+                  </p>
+                  {lignes([
+                    ["Statut", o.statut],
+                    ["Adresse postale", o.postal_address],
+                    ["Inscription au rôle", o.inscription_date],
+                    ["Téléphone", o.phone],
+                    ["NEQ", o.neq],
+                    ["Conditions d'inscription", o.conditions]
+                  ])}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <footer className="mt-4 flex flex-wrap justify-end gap-2">
+          <button
+            type="button"
+            onClick={onStreetView}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 hover:bg-amber-500/20"
+          >
+            <Eye className="h-4 w-4" />
+            Street View
+          </button>
+          <button
+            type="button"
+            onClick={onProprietaire}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200 hover:bg-emerald-500/20"
+          >
+            <Users className="h-4 w-4" />
+            {owners.length > 0
+              ? "Détails et mise à jour du propriétaire"
+              : "Récupérer le propriétaire"}
+          </button>
+        </footer>
+      </div>
+    </div>
   );
 }
 
