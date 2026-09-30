@@ -234,6 +234,7 @@ export default function SignatureDocPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
 
   // Zones locales (éditeur) + auto-save.
   const [fields, setFields] = useState<FieldT[]>([]);
@@ -689,24 +690,105 @@ export default function SignatureDocPage() {
     );
   }
 
+  async function explainPdfError(res: Response): Promise<string> {
+    try {
+      const j = (await res.json()) as { detail?: string };
+      if (typeof j.detail === "string") return j.detail;
+    } catch {
+      /* corps non JSON */
+    }
+    return `Erreur ${res.status}`;
+  }
+
+  // Ouvre un PDF servi par l'API dans un nouvel onglet. L'onglet est
+  // ouvert AVANT la requête (dans le clic) : un `window.open` fait après
+  // un `await` de plusieurs secondes (gros PDF, Render à froid) est
+  // bloqué en silence par le navigateur — « ça ne fait rien ».
+  async function openPdfInTab(apiPath: string, label: string) {
+    const win = window.open("", "_blank");
+    if (win) win.document.title = `${label}…`;
+    try {
+      const res = await authedFetch(apiPath);
+      if (!res.ok) {
+        win?.close();
+        setBanner(`${label} : ${await explainPdfError(res)}`);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      if (win) win.location.href = url;
+      else window.open(url, "_blank", "noopener");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      win?.close();
+      setBanner(`${label} : ${(e as Error).message}`);
+    }
+  }
+
+  // Télécharge un PDF servi par l'API (lien <a download> : jamais bloqué
+  // par un anti-popup, même après un long téléchargement).
+  async function downloadPdf(apiPath: string, filename: string, label: string) {
+    setPdfBusy(true);
+    try {
+      const res = await authedFetch(apiPath);
+      if (!res.ok) {
+        setBanner(`${label} : ${await explainPdfError(res)}`);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      setBanner(`${label} : ${(e as Error).message}`);
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
   async function openAttachment(id: number) {
-    const res = await authedFetch(`/api/v1/esign/attachments/${id}/pdf`);
-    if (!res.ok) return;
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    window.open(url, "_blank", "noopener");
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    await openPdfInTab(`/api/v1/esign/attachments/${id}/pdf`, "Annexe");
   }
 
   async function openPdf(path: "pdf" | "signed-pdf") {
-    const res = await authedFetch(
-      `/api/v1/esign/documents/${docId}/${path}`
-    );
-    if (!res.ok) return;
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    window.open(url, "_blank", "noopener");
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    if (path === "signed-pdf") {
+      const base = (doc?.filename || "document.pdf").replace(/\.pdf$/i, "");
+      await downloadPdf(
+        `/api/v1/esign/documents/${docId}/signed-pdf`,
+        `${base} - signe.pdf`,
+        "PDF signé"
+      );
+      return;
+    }
+    await openPdfInTab(`/api/v1/esign/documents/${docId}/pdf`, "PDF original");
+  }
+
+  // Le PDF final se génère après la dernière signature ; si cette étape a
+  // échoué (délai Render, gros document), on peut la relancer ici.
+  async function regenerateSignedPdf() {
+    setPdfBusy(true);
+    setBanner(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/esign/documents/${docId}/regenerate-signed-pdf`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        setBanner(`Génération du PDF signé : ${await explainPdfError(res)}`);
+        return;
+      }
+      await load();
+      setBanner("PDF signé généré. Clique « PDF signé » pour le télécharger.");
+    } catch (e) {
+      setBanner(`Génération du PDF signé : ${(e as Error).message}`);
+    } finally {
+      setPdfBusy(false);
+    }
   }
 
   /* --------------------------- Signataires --------------------------- */
@@ -903,10 +985,31 @@ export default function SignatureDocPage() {
                   <button
                     type="button"
                     onClick={() => void openPdf("signed-pdf")}
-                    className="btn-accent btn-sm inline-flex items-center gap-1.5"
+                    disabled={pdfBusy}
+                    className="btn-accent btn-sm inline-flex items-center gap-1.5 disabled:opacity-60"
+                    title="Télécharger le PDF final (signatures apposées + certificat)"
                   >
-                    <Download className="h-3.5 w-3.5" />
+                    {pdfBusy ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Download className="h-3.5 w-3.5" />
+                    )}
                     PDF signé
+                  </button>
+                ) : doc.status === "complete" ? (
+                  <button
+                    type="button"
+                    onClick={() => void regenerateSignedPdf()}
+                    disabled={pdfBusy}
+                    className="btn-accent btn-sm inline-flex items-center gap-1.5 disabled:opacity-60"
+                    title="Le PDF final n'a pas été généré après la dernière signature — le produire maintenant"
+                  >
+                    {pdfBusy ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Download className="h-3.5 w-3.5" />
+                    )}
+                    Générer le PDF signé
                   </button>
                 ) : null}
                 {doc.status === "envoye" ? (

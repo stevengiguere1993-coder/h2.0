@@ -1023,6 +1023,37 @@ async def cancel_document(
     return await _doc_to_detail(db, doc)
 
 
+@router.post(
+    "/documents/{doc_id}/regenerate-signed-pdf",
+    response_model=DocumentDetail,
+    summary="(Re)génère le PDF final d'un document complété",
+)
+async def regenerate_signed_pdf(
+    doc_id: int, db: DBSession, user: CurrentUser
+) -> DocumentDetail:
+    """La génération du PDF final suit la dernière signature en
+    arrière-plan ; si elle a échoué (délai, gros document), le bouton
+    « PDF signé » n'apparaît pas. Cette route la relance, sans renvoyer
+    de copies courriel aux parties."""
+    doc = await _load_doc(db, doc_id)
+    if doc.status != EsignDocumentStatus.COMPLETE.value:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Le PDF final n'existe que pour un document signé par toutes les parties.",
+        )
+    from app.api.v1.endpoints.public_esign import _finalize_document
+
+    ok = await _finalize_document(db, doc.id, send_emails=False)
+    if not ok:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            "La génération du PDF final a échoué (voir les journaux) — réessaie ou contacte le support.",
+        )
+    await _add_event(db, doc, "pdf_final_regenere", detail=f"par {user.email}")
+    doc = await _load_doc(db, doc_id)
+    return await _doc_to_detail(db, doc)
+
+
 # --------------------------- Observateurs (V2) ---------------------------
 
 
