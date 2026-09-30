@@ -911,9 +911,13 @@ async def sign_esign(
     return await _to_public(db, signer, doc)
 
 
-async def _finalize_document(db: AsyncSession, doc_id: int) -> None:
+async def _finalize_document(
+    db: AsyncSession, doc_id: int, *, send_emails: bool = True
+) -> bool:
     """Génère et stocke le PDF final + envoie les copies. Best-effort :
-    la signature DB est déjà commitée, rien ici ne doit lever."""
+    la signature DB est déjà commitée, rien ici ne doit lever. Retourne
+    True si le PDF final a été produit. ``send_emails=False`` pour une
+    régénération manuelle (pas de nouvelles copies aux parties)."""
     try:
         doc = (
             await db.execute(
@@ -976,6 +980,8 @@ async def _finalize_document(db: AsyncSession, doc_id: int) -> None:
             "eSign : PDF final généré pour le doc %s (%d octets)",
             doc_id, len(final_pdf),
         )
+        if not send_emails:
+            return True
 
         # Copies courriel à toutes les parties + créateur du document
         # + observateurs en copie (V2).
@@ -1009,11 +1015,17 @@ async def _finalize_document(db: AsyncSession, doc_id: int) -> None:
         await send_completion_emails(
             doc, signers, final_pdf, final_pdf_filename(doc), extra
         )
+        return True
     except Exception:  # noqa: BLE001
         log.exception(
             "eSign : finalisation du doc %s échouée — signatures "
             "conservées en DB, PDF final regénérable.", doc_id,
         )
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return False
 
 
 @router.post(
