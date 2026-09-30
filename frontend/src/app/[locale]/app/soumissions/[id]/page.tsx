@@ -1272,8 +1272,6 @@ export default function SoumissionDetailPage() {
                           Coût mat. $/u 🔒
                         </th>
                         <th className="px-3 py-3 text-right font-semibold">Prix unit.</th>
-                        <th className="px-3 py-3 text-center font-semibold" title="TPS applicable">TPS</th>
-                        <th className="px-3 py-3 text-center font-semibold" title="TVQ applicable">TVQ</th>
                         <th className="px-3 py-3 text-right font-semibold">Total</th>
                         <th className="px-3 py-3"></th>
                       </tr>
@@ -1335,12 +1333,6 @@ export default function SoumissionDetailPage() {
                                 </td>
                                 <td className="px-3 py-3 text-right text-white/80">
                                   {fmtMoney(it.unit_price)}
-                                </td>
-                                <td className="px-3 py-3 text-center text-white/50">
-                                  {it.tps_applicable ? "✓" : "—"}
-                                </td>
-                                <td className="px-3 py-3 text-center text-white/50">
-                                  {it.tvq_applicable ? "✓" : "—"}
                                 </td>
                                 <td
                                   className={`px-3 py-3 text-right font-semibold ${
@@ -2354,24 +2346,6 @@ function ItemRow({
           </p>
         ) : null}
       </td>
-      <td className="px-3 py-3 w-12 text-center">
-        <input
-          type="checkbox"
-          checked={item.tps_applicable}
-          onChange={(e) => onPatch({ tps_applicable: e.target.checked })}
-          className="h-4 w-4 accent-accent-500"
-          aria-label="TPS applicable"
-        />
-      </td>
-      <td className="px-3 py-3 w-12 text-center">
-        <input
-          type="checkbox"
-          checked={item.tvq_applicable}
-          onChange={(e) => onPatch({ tvq_applicable: e.target.checked })}
-          className="h-4 w-4 accent-accent-500"
-          aria-label="TVQ applicable"
-        />
-      </td>
       <td className="px-3 py-3 w-32 whitespace-nowrap text-right text-sm font-semibold text-white">
         <span
           className={
@@ -2385,6 +2359,11 @@ function ItemRow({
         {item.kind !== "service" ? (
           <span className="badge badge-neutral ml-1 uppercase">
             {item.kind}
+          </span>
+        ) : null}
+        {!item.tps_applicable && !item.tvq_applicable ? (
+          <span className="badge badge-neutral ml-1" title="Ligne non taxée (frais)">
+            hors taxes
           </span>
         ) : null}
       </td>
@@ -2420,7 +2399,7 @@ function ItemRow({
     </tr>
     {expanded ? (
       <tr className="bg-brand-900/40">
-        <td colSpan={10} className="px-4 pb-5 pt-1">
+        <td colSpan={8} className="px-4 pb-5 pt-1">
           {/* Édition pleine largeur — lisible sur mobile. Mêmes états +
               commit que les cellules compactes, donc tout reste synchro. */}
           <div className="grid gap-3 sm:grid-cols-2">
@@ -2506,28 +2485,11 @@ function ItemRow({
               ) : null}
             </div>
             <div className="flex items-center gap-5 sm:col-span-2">
-              <label className="flex items-center gap-2 text-sm text-white/80">
-                <input
-                  type="checkbox"
-                  checked={item.tps_applicable}
-                  onChange={(e) =>
-                    onPatch({ tps_applicable: e.target.checked })
-                  }
-                  className="h-4 w-4 accent-accent-500"
-                />
-                TPS applicable
-              </label>
-              <label className="flex items-center gap-2 text-sm text-white/80">
-                <input
-                  type="checkbox"
-                  checked={item.tvq_applicable}
-                  onChange={(e) =>
-                    onPatch({ tvq_applicable: e.target.checked })
-                  }
-                  className="h-4 w-4 accent-accent-500"
-                />
-                TVQ applicable
-              </label>
+              <span className="text-xs text-white/60">
+                {item.tps_applicable || item.tvq_applicable
+                  ? "TPS + TVQ appliquées automatiquement"
+                  : "Ligne hors taxes (frais)"}
+              </span>
               <span className="ml-auto text-sm font-semibold text-white">
                 Total {fmtMoney(computedTotal)}
               </span>

@@ -49,6 +49,20 @@ class AvenantOperation(BaseModel):
     quantity: Optional[float] = None
     unit_price: Optional[float] = None
     cost_per_unit: Optional[float] = Field(default=None, ge=0)
+    #: Ventilation du coûtant comme sur le devis (2026-09-30) ; la somme
+    #: alimente cost_per_unit.
+    cost_labor_per_unit: Optional[float] = Field(default=None, ge=0)
+    cost_material_per_unit: Optional[float] = Field(default=None, ge=0)
+
+
+def _cout_total(op: "AvenantOperation", base: Optional[float] = None) -> Optional[float]:
+    """cost_per_unit = M.O. + matériaux quand l'un des deux est donné,
+    sinon cost_per_unit tel quel, sinon ``base`` (inchangé)."""
+    if op.cost_labor_per_unit is not None or op.cost_material_per_unit is not None:
+        return round(float(op.cost_labor_per_unit or 0) + float(op.cost_material_per_unit or 0), 2)
+    if op.cost_per_unit is not None:
+        return float(op.cost_per_unit)
+    return base
 
 
 class AvenantCreate(BaseModel):
@@ -194,7 +208,10 @@ async def create_avenant(
             )
         if op.op == "modification" and not any(
             v is not None
-            for v in (op.description, op.unit, op.quantity, op.unit_price)
+            for v in (
+                op.description, op.unit, op.quantity, op.unit_price,
+                op.cost_per_unit, op.cost_labor_per_unit, op.cost_material_per_unit,
+            )
         ):
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -243,7 +260,9 @@ async def create_avenant(
                 unit=(op.unit or None),
                 quantity=qty,
                 unit_price=price,
-                cost_per_unit=float(op.cost_per_unit or 0),
+                cost_per_unit=float(_cout_total(op) or 0),
+                cost_labor_per_unit=op.cost_labor_per_unit,
+                cost_material_per_unit=op.cost_material_per_unit,
                 total=round(qty * price, 2),
                 avenant_id=av.id,
             )
@@ -272,7 +291,15 @@ async def create_avenant(
                 it.quantity = float(op.quantity)
             if op.unit_price is not None:
                 it.unit_price = float(op.unit_price)
-            if op.cost_per_unit is not None:
+            if op.cost_labor_per_unit is not None:
+                it.cost_labor_per_unit = float(op.cost_labor_per_unit)
+            if op.cost_material_per_unit is not None:
+                it.cost_material_per_unit = float(op.cost_material_per_unit)
+            if op.cost_labor_per_unit is not None or op.cost_material_per_unit is not None:
+                it.cost_per_unit = round(
+                    float(it.cost_labor_per_unit or 0) + float(it.cost_material_per_unit or 0), 2
+                )
+            elif op.cost_per_unit is not None:
                 it.cost_per_unit = float(op.cost_per_unit)
             it.total = round(float(it.quantity) * float(it.unit_price), 2)
             impact += float(it.total or 0) - avant["total"]

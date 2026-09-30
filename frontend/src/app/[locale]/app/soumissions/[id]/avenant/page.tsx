@@ -41,6 +41,10 @@ type Item = {
   quantity: number;
   unit_price: number;
   cost_per_unit: number;
+  cost_labor_per_unit?: number | null;
+  cost_material_per_unit?: number | null;
+  tps_applicable?: boolean;
+  tvq_applicable?: boolean;
   total: number;
   avenant_id?: number | null;
   retire_par_avenant_id?: number | null;
@@ -54,10 +58,25 @@ type Row = {
   unit: string;
   quantity: string;
   unit_price: string;
-  cost_per_unit: string;
+  cost_labor: string;
+  cost_material: string;
   retire: boolean;
   original: Item | null;
 };
+
+const QUIET_INPUT =
+  "w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm text-white placeholder:text-white/30 focus:border-brand-700 focus:outline-none disabled:opacity-60";
+const COST_INPUT =
+  "w-full rounded-md border-2 border-amber-500/60 bg-amber-500/15 px-2 py-1.5 text-right text-sm font-semibold text-amber-500 placeholder:text-amber-500/40 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30 disabled:opacity-60";
+
+function costStr(it: Item, which: "labor" | "material"): string {
+  const v = which === "labor" ? it.cost_labor_per_unit : it.cost_material_per_unit;
+  if (v != null) return String(v);
+  // Ancien item sans ventilation : le coûtant total est réputé main-d'œuvre.
+  if (which === "labor" && it.cost_labor_per_unit == null && it.cost_material_per_unit == null && it.cost_per_unit)
+    return String(it.cost_per_unit);
+  return "";
+}
 
 type Avenant = {
   id: number;
@@ -145,7 +164,8 @@ export default function AvenantPage() {
               unit: it.unit || "",
               quantity: String(it.quantity),
               unit_price: String(it.unit_price),
-              cost_per_unit: it.cost_per_unit ? String(it.cost_per_unit) : "",
+              cost_labor: costStr(it, "labor"),
+              cost_material: costStr(it, "material"),
               retire: false,
               original: it
             }))
@@ -193,7 +213,8 @@ export default function AvenantPage() {
         unit: "unité",
         quantity: "1",
         unit_price: "",
-        cost_per_unit: "",
+        cost_labor: "",
+        cost_material: "",
         retire: false,
         original: null
       }
@@ -211,7 +232,8 @@ export default function AvenantPage() {
           unit: it.unit || "",
           quantity: String(it.quantity),
           unit_price: String(it.unit_price),
-          cost_per_unit: it.cost_per_unit ? String(it.cost_per_unit) : "",
+          cost_labor: costStr(it, "labor"),
+          cost_material: costStr(it, "material"),
           retire: false
         };
       })
@@ -236,8 +258,10 @@ export default function AvenantPage() {
       if ((r.unit || "") !== (it.unit || "")) fields.push("unité");
       if (Math.abs(num(r.quantity) - Number(it.quantity)) > 1e-9) fields.push("quantité");
       if (Math.abs(num(r.unit_price) - Number(it.unit_price)) > 0.004) fields.push("prix");
-      if (r.cost_per_unit.trim() !== "" && Math.abs(num(r.cost_per_unit) - Number(it.cost_per_unit || 0)) > 0.004)
-        fields.push("coût");
+      if (r.cost_labor.trim() !== costStr(it, "labor") && Math.abs(num(r.cost_labor) - num(costStr(it, "labor"))) > 0.004)
+        fields.push("coût M.O.");
+      if (r.cost_material.trim() !== costStr(it, "material") && Math.abs(num(r.cost_material) - num(costStr(it, "material"))) > 0.004)
+        fields.push("coût mat.");
       if (fields.length > 0) out.push({ op: "modification", row: r, fields });
     }
     return out;
@@ -278,7 +302,8 @@ export default function AvenantPage() {
           unit: r.unit.trim() || null,
           quantity: num(r.quantity) || 1,
           unit_price: num(r.unit_price),
-          cost_per_unit: r.cost_per_unit.trim() ? num(r.cost_per_unit) : null
+          cost_labor_per_unit: r.cost_labor.trim() ? num(r.cost_labor) : null,
+          cost_material_per_unit: r.cost_material.trim() ? num(r.cost_material) : null
         });
       } else if (c.op === "retrait") {
         operations.push({ op: "retrait", item_id: r.id });
@@ -288,7 +313,10 @@ export default function AvenantPage() {
         if (c.fields.includes("unité")) op.unit = r.unit.trim();
         if (c.fields.includes("quantité")) op.quantity = num(r.quantity);
         if (c.fields.includes("prix")) op.unit_price = num(r.unit_price);
-        if (c.fields.includes("coût")) op.cost_per_unit = num(r.cost_per_unit);
+        if (c.fields.includes("coût M.O.") || c.fields.includes("coût mat.")) {
+          op.cost_labor_per_unit = num(r.cost_labor);
+          op.cost_material_per_unit = num(r.cost_material);
+        }
         operations.push(op);
       }
     }
@@ -444,14 +472,14 @@ export default function AvenantPage() {
                       type="button"
                       onClick={() => void envoyer()}
                       disabled={sendState === "busy"}
-                      className="btn-accent btn-sm disabled:opacity-60"
+                      className="btn-accent disabled:opacity-60"
                     >
                       {sendState === "busy" ? (
                         <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
                       ) : (
                         <Send className="mr-1 h-3.5 w-3.5" />
                       )}
-                      Envoyer pour signature
+                      Envoyer l&apos;avenant au client pour signature
                     </button>
                     <button type="button" onClick={() => router.push(back)} className="btn-secondary btn-sm">
                       Plus tard — retour à la soumission
@@ -478,104 +506,134 @@ export default function AvenantPage() {
               </p>
             </header>
 
-            <section className="overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brand-800 px-5 py-3">
+            <section className="rounded-xl border border-brand-800 bg-brand-900">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brand-800 px-5 py-4">
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-                  Items du devis signé
+                  Items de la soumission
                 </h2>
-                <button type="button" onClick={addRow} className="btn-secondary btn-sm">
-                  <Plus className="mr-1 h-3.5 w-3.5" /> Ajouter des travaux
-                </button>
+                <span className="text-xs text-white/60">
+                  Ligne modifiée en ambre, ajoutée en vert, retirée barrée.
+                </span>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[820px] text-sm">
-                  <thead className="text-left text-[11px] uppercase tracking-wider text-white/60">
+                <datalist id="avenant-units">
+                  {["unité", "pièce", "forfait", "ft²", "pi²", "m²", "ft", "pi", "m", "verge²", "verge³", "heure", "jour", "semaine", "lot", "kg", "lb", "L", "gal"].map((u) => (
+                    <option key={u} value={u} />
+                  ))}
+                </datalist>
+                <table className="w-full text-sm">
+                  <thead className="border-b border-brand-800 text-xs uppercase tracking-wider text-white/50">
                     <tr>
-                      <th className="px-3 py-2">Description</th>
-                      <th className="w-20 px-2 py-2 text-right">Qté</th>
-                      <th className="w-24 px-2 py-2">Unité</th>
-                      <th className="w-28 px-2 py-2 text-right">Prix unit.</th>
-                      <th className="w-24 px-2 py-2 text-right" title="Coût interne $/u (optionnel)">
-                        Coût $/u
+                      <th className="px-5 py-3 text-left font-semibold">Description</th>
+                      <th className="px-3 py-3 text-right font-semibold">Qté</th>
+                      <th className="px-3 py-3 text-left font-semibold">Unité</th>
+                      <th className="px-3 py-3 text-right font-bold text-amber-500" title="Coût main-d'œuvre — interne, invisible par le client">
+                        Coût M.O. $/u 🔒
                       </th>
-                      <th className="w-28 px-2 py-2 text-right">Total</th>
-                      <th className="w-28 px-2 py-2" />
+                      <th className="px-3 py-3 text-right font-bold text-amber-500" title="Coût matériaux — interne, invisible par le client">
+                        Coût mat. $/u 🔒
+                      </th>
+                      <th className="px-3 py-3 text-right font-semibold">Prix unit.</th>
+                      <th className="px-3 py-3 text-right font-semibold">Total</th>
+                      <th className="px-3 py-3"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-brand-800">
                     {rows.map((r) => {
                       const it = r.original;
                       const modified =
-                        !!it &&
-                        !r.retire &&
-                        changes.some((c) => c.op === "modification" && c.row.key === r.key);
+                        !!it && !r.retire && changes.some((c) => c.op === "modification" && c.row.key === r.key);
+                      const rowClass = r.retire
+                        ? "bg-rose-500/5 opacity-60"
+                        : !it
+                          ? "bg-emerald-500/5"
+                          : modified
+                            ? "bg-amber-500/5"
+                            : "";
                       return (
-                        <tr
-                          key={r.key}
-                          className={
-                            r.retire
-                              ? "bg-rose-500/5 opacity-70"
-                              : !it
-                                ? "bg-emerald-500/5"
-                                : modified
-                                  ? "bg-amber-500/5"
-                                  : ""
-                          }
-                        >
-                          <td className="px-3 py-1.5">
-                            <input
+                        <tr key={r.key} className={`align-top ${rowClass}`}>
+                          <td className="px-5 py-3">
+                            <textarea
+                              rows={Math.min(6, Math.max(1, r.description.split("\n").length))}
                               value={r.description}
                               onChange={(e) => update(r.key, { description: e.target.value })}
                               disabled={r.retire}
                               placeholder={it ? "" : "Description des nouveaux travaux"}
-                              className={`input w-full ${r.retire ? "line-through" : ""}`}
+                              className={`${QUIET_INPUT} resize-y leading-snug ${r.retire ? "line-through" : ""}`}
                             />
                             {it && modified ? (
-                              <p className="mt-0.5 text-[11px] text-white/60">
+                              <p className="px-2 text-[11px] text-white/60">
                                 Devis signé : {it.quantity} × {money(Number(it.unit_price))} = {money(Number(it.total))}
                               </p>
                             ) : null}
+                            {!it ? (
+                              <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">
+                                Ajouté par cet avenant
+                              </span>
+                            ) : r.retire ? (
+                              <span className="ml-2 rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-rose-300">
+                                Retiré par cet avenant
+                              </span>
+                            ) : null}
                           </td>
-                          <td className="px-2 py-1.5">
+                          <td className="w-28 px-3 py-3">
                             <input
+                              type="number"
+                              step="0.001"
+                              min="0"
                               value={r.quantity}
                               onChange={(e) => update(r.key, { quantity: e.target.value })}
                               disabled={r.retire}
-                              inputMode="decimal"
-                              className="input w-full text-right"
+                              className={`${QUIET_INPUT} text-right`}
                             />
                           </td>
-                          <td className="px-2 py-1.5">
+                          <td className="w-28 px-3 py-3">
                             <input
+                              type="text"
+                              list="avenant-units"
                               value={r.unit}
                               onChange={(e) => update(r.key, { unit: e.target.value })}
                               disabled={r.retire}
-                              className="input w-full"
+                              placeholder="—"
+                              className={QUIET_INPUT}
                             />
                           </td>
-                          <td className="px-2 py-1.5">
+                          <td className="w-24 px-3 py-3">
                             <input
+                              type="number"
+                              step="0.01"
+                              value={r.cost_labor}
+                              onChange={(e) => update(r.key, { cost_labor: e.target.value })}
+                              disabled={r.retire}
+                              className={COST_INPUT}
+                              aria-label="Coût main-d'œuvre par unité (interne)"
+                            />
+                          </td>
+                          <td className="w-24 px-3 py-3">
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={r.cost_material}
+                              onChange={(e) => update(r.key, { cost_material: e.target.value })}
+                              disabled={r.retire}
+                              className={COST_INPUT}
+                              aria-label="Coût matériaux par unité (interne)"
+                            />
+                          </td>
+                          <td className="w-32 px-3 py-3">
+                            <input
+                              type="number"
+                              step="0.01"
                               value={r.unit_price}
                               onChange={(e) => update(r.key, { unit_price: e.target.value })}
                               disabled={r.retire}
-                              inputMode="decimal"
-                              className="input w-full text-right"
+                              className={`${QUIET_INPUT} text-right`}
                             />
                           </td>
-                          <td className="px-2 py-1.5">
-                            <input
-                              value={r.cost_per_unit}
-                              onChange={(e) => update(r.key, { cost_per_unit: e.target.value })}
-                              disabled={r.retire}
-                              inputMode="decimal"
-                              placeholder="—"
-                              className="input w-full text-right"
-                            />
+                          <td className={`px-3 py-3 text-right font-semibold ${r.retire ? "text-white/40 line-through" : "text-white"}`}>
+                            {money(r.retire && it ? Number(it.total) : rowTotal(r))}
                           </td>
-                          <td className="px-2 py-1.5 text-right font-semibold text-white">
-                            {r.retire ? <span className="text-rose-300">Retiré</span> : money(rowTotal(r))}
-                          </td>
-                          <td className="px-2 py-1.5 text-right">
+                          <td className="px-3 py-3 text-right whitespace-nowrap">
                             {it ? (
                               <span className="inline-flex gap-1">
                                 {modified || r.retire ? (
@@ -613,6 +671,14 @@ export default function AvenantPage() {
                     })}
                   </tbody>
                 </table>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-brand-800 px-5 py-4">
+                <p className="text-xs text-white/60">
+                  Le devis signé reste figé : ce que tu changes ici forme l&apos;avenant.
+                </p>
+                <button type="button" onClick={addRow} className="btn-accent text-xs">
+                  <Plus className="mr-1.5 h-3.5 w-3.5" /> Ajouter un item
+                </button>
               </div>
             </section>
 
