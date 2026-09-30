@@ -113,14 +113,32 @@ async def ajouter_colonnes_manquantes(
             )
             continue
         type_sql = col.type.compile(dialect=dialect)
-        defaut = ""
-        if col.server_default is not None and getattr(
-            col.server_default, "arg", None
-        ) is not None:
-            arg = col.server_default.arg
-            defaut = f" DEFAULT {getattr(arg, 'text', arg)}"
+        # Définition rendue par SQLAlchemy lui-même : un défaut serveur
+        # textuel est correctement CITÉ (« DEFAULT 'interne' »). L'ancien
+        # rendu maison écrivait « DEFAULT interne » → PostgreSQL refusait
+        # l'ALTER, la colonne manquait et toute insertion plantait
+        # (incident avenants 2026-09-30).
+        try:
+            from sqlalchemy.schema import CreateColumn
+
+            definition = str(CreateColumn(col).compile(dialect=dialect)).strip()
+            # « nom TYPE DEFAULT … NOT NULL » → on garde tout sauf le nom,
+            # et on retire NOT NULL : une colonne ajoutée à une table déjà
+            # remplie prend son défaut, la contrainte viendrait après.
+            definition = definition.split(" ", 1)[1] if " " in definition else type_sql
+            definition = definition.replace(" NOT NULL", "")
+        except Exception:  # noqa: BLE001 — repli sur l'ancien rendu, défaut cité
+            defaut = ""
+            if col.server_default is not None and getattr(col.server_default, "arg", None) is not None:
+                arg = col.server_default.arg
+                txt = getattr(arg, "text", None)
+                if txt is not None:
+                    defaut = f" DEFAULT {txt}"
+                else:
+                    defaut = " DEFAULT '" + str(arg).replace("'", "''") + "'"
+            definition = f"{type_sql}{defaut}"
         if_not_exists = "IF NOT EXISTS " if dialect.name == "postgresql" else ""
-        stmt = f"ALTER TABLE {tname} ADD COLUMN {if_not_exists}{cname} {type_sql}{defaut}"
+        stmt = f"ALTER TABLE {tname} ADD COLUMN {if_not_exists}{cname} {definition}"
         derniere: Optional[Exception] = None
         for tentative in range(1, 4):
             try:
