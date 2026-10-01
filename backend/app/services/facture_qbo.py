@@ -73,6 +73,123 @@ async def _load_client(
     ).scalar_one_or_none()
 
 
+#: Mémo interne posé sur chaque Invoice créée par Kratos : c'est la
+#: signature « cette facture QB est de Kratos » (lisible dans QB, champ
+#: « Mémo / note interne »).
+MEMO_KRATOS = "Kratos facture #{id}"
+#: Tolérance sur le total pour reconnaître « la même facture » (migration
+#: d'une facture saisie dans QB avant Kratos).
+TOLERANCE_TOTAL = 0.05
+
+
+def _qb_total(inv: Dict[str, Any]) -> Optional[float]:
+    try:
+        return float(inv.get("TotalAmt"))
+    except (TypeError, ValueError):
+        return None
+
+
+async def facture_kratos_liee(db: AsyncSession, qb_invoice_id: str) -> Optional[Facture]:
+    """La facture Kratos déjà liée à cette Invoice QB, s'il y en a une."""
+    if not qb_invoice_id:
+        return None
+    return (
+        await db.execute(
+            select(Facture).where(Facture.qbo_invoice_id == str(qb_invoice_id))
+        )
+    ).scalar_one_or_none()
+
+
+def _est_de_kratos(inv: Dict[str, Any]) -> bool:
+    return "kratos" in str(inv.get("PrivateNote") or "").lower()
+
+
+def _meme_facture(
+    inv: Dict[str, Any], fa: Facture, customer_ids: set[str]
+) -> bool:
+    """Une Invoice QB du même numéro est « la nôtre » (facture saisie dans
+    QB avant Kratos, lien perdu) si elle est au MÊME client (parent ou
+    sous-client/projet) ET au même total. Sinon c'est une autre facture
+    qui porte ce numéro par hasard : on ne l'écrase JAMAIS."""
+    cust = str((inv.get("CustomerRef") or {}).get("value") or "")
+    if not cust or cust not in {str(c) for c in customer_ids if c}:
+        return False
+    tot = _qb_total(inv)
+    try:
+        notre = float(fa.total if fa.total is not None else 0)
+    except (TypeError, ValueError):
+        return False
+    return tot is not None and abs(tot - notre) <= TOLERANCE_TOTAL
+
+
+def message_conflit_numero(ref: str, inv: Dict[str, Any]) -> str:
+    cust = (inv.get("CustomerRef") or {}).get("name") or "client inconnu"
+    tot = _qb_total(inv)
+    tot_s = f"{tot:,.2f} $".replace(",", " ") if tot is not None else "montant inconnu"
+    date = inv.get("TxnDate") or ""
+    return (
+        f"Une facture {ref} existe déjà dans QuickBooks et elle n'est pas de "
+        f"Kratos ({cust}, {tot_s}{', ' + date if date else ''}). Elle n'a pas "
+        "été touchée. Change le numéro de la facture Kratos (crayon à côté du "
+        "numéro, ex. le prochain numéro libre) puis resynchronise."
+    )
+
+
+async def numero_pris_hors_kratos(
+    db: AsyncSession, ref: str
+) -> Optional[Dict[str, Any]]:
+    """L'Invoice QB qui porte déjà ce DocNumber et qui n'est NI liée à une
+    facture Kratos NI signée Kratos — sinon None. None aussi si QB n'est
+    pas configuré ou ne répond pas (on ne bloque pas la numérotation)."""
+    ref = (ref or "").strip()
+    if not ref:
+        return None
+    try:
+        qbo = get_qbo()
+        await qbo._load_refresh_from_db()
+        if not qbo.ready:
+            return None
+        inv = await qbo.find_invoice_by_docnumber(ref)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Vérification du numéro %s dans QB impossible : %s", ref, exc)
+        return None
+    if not inv:
+        return None
+    if _est_de_kratos(inv):
+        return None
+    if await facture_kratos_liee(db, str(inv.get("Id") or "")) is not None:
+        return None
+    return inv
+
+
+async def detacher_facture_qbo(db: AsyncSession, facture_id: int) -> Dict[str, Any]:
+    """Oublie le lien Kratos ↔ Invoice QB (et les liens de paiements) SANS
+    toucher à QuickBooks. Sert quand Kratos s'est accroché à la mauvaise
+    Invoice (même numéro, autre facture) : on détache, on renumérote, on
+    resynchronise → nouvelle Invoice QB."""
+    from app.models.payment import Payment
+
+    fa = await _load_facture(db, facture_id)
+    if fa is None:
+        raise FactureSyncError(f"Facture {facture_id} introuvable")
+    ancien = {"qbo_invoice_id": fa.qbo_invoice_id, "qbo_doc_number": fa.qbo_doc_number}
+    fa.qbo_invoice_id = None
+    fa.qbo_sync_token = None
+    fa.qbo_doc_number = None
+    fa.qbo_sync_error = None
+    fa.qbo_payment_id = None
+    pays = (
+        await db.execute(select(Payment).where(Payment.facture_id == facture_id))
+    ).scalars().all()
+    n_pay = 0
+    for pmt in pays:
+        if getattr(pmt, "qbo_payment_id", None):
+            pmt.qbo_payment_id = None
+            n_pay += 1
+    await db.flush()
+    return {"detache": True, "paiements_detaches": n_pay, **ancien}
+
+
 async def _build_lines(
     qbo, items: list[FactureItem], fallback_name: str
 ) -> list[Dict[str, Any]]:
@@ -226,6 +343,10 @@ def _build_invoice_payload(
         payload["Id"] = existing_invoice_id
         payload["SyncToken"] = existing_sync_token
         payload["sparse"] = True
+    else:
+        # Signature Kratos (mémo interne, invisible du client) : permet de
+        # distinguer nos Invoices d'une facture saisie à la main dans QB.
+        payload["PrivateNote"] = MEMO_KRATOS.format(id=facture.id)
 
     return payload
 
@@ -671,6 +792,18 @@ async def sync_facture_to_qbo(
                 )
                 inv0 = None
             if inv0:
+                autre = await facture_kratos_liee(db, str(inv0.get("Id") or ""))
+                if autre is not None and autre.id != fa.id:
+                    raise FactureSyncError(
+                        f"Le numéro {fa.reference} est déjà utilisé dans QuickBooks par la "
+                        f"facture Kratos {autre.reference} (#{autre.id}). Change le numéro de "
+                        "cette facture puis resynchronise."
+                    )
+                _famille = {customer_id, invoice_customer_id, str(getattr(client, "qbo_customer_id", "") or "")}
+                if not (_est_de_kratos(inv0) or _meme_facture(inv0, fa, _famille)):
+                    # Une AUTRE facture porte ce numéro dans QB : on ne
+                    # l'écrase pas (incident facture 145, Phil 2026-10-01).
+                    raise FactureSyncError(message_conflit_numero(fa.reference, inv0))
                 fa.qbo_invoice_id = str(inv0.get("Id") or "") or None
                 fa.qbo_sync_token = str(inv0.get("SyncToken") or "") or None
                 await db.flush()
@@ -752,9 +885,13 @@ async def sync_facture_to_qbo(
                         else None
                     )
                     if found and found.get("Id"):
+                        _fam = {customer_id, invoice_customer_id, str(getattr(client, "qbo_customer_id", "") or "")}
+                        if not (_est_de_kratos(found) or _meme_facture(found, fa, _fam)):
+                            raise FactureSyncError(message_conflit_numero(fa.reference, found)) from exc
                         p["Id"] = str(found["Id"])
                         p["SyncToken"] = str(found.get("SyncToken") or "0")
                         p["sparse"] = True
+                        p.pop("PrivateNote", None)
                         return await qbo.create_invoice(p)
                 # Id obsolète/supprimé → recréer à neuf.
                 if p.get("Id") and any(k in m for k in _STALE_KEYS):
@@ -766,6 +903,8 @@ async def sync_facture_to_qbo(
 
         invoice = await _push_invoice(payload)
 
+    except FactureSyncError:
+        raise
     except QuickBooksError as exc:
         # Le corps de la facture n'a pas pu être poussé/mis à jour. Si une
         # Invoice QB existe DÉJÀ (facture déjà synchronisée), on NE bloque

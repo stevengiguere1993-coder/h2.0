@@ -7,7 +7,11 @@ from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, DBSession
 from app.services.permissions_service import user_has_capability
-from app.services.facture_qbo import FactureSyncError, sync_facture_to_qbo
+from app.services.facture_qbo import (
+    FactureSyncError,
+    detacher_facture_qbo,
+    sync_facture_to_qbo,
+)
 
 
 router = APIRouter(prefix="/factures", tags=["facture-qbo"])
@@ -57,3 +61,36 @@ async def sync_facture(
         sync_warning=result.get("sync_warning"),
         sync_note=result.get("sync_note"),
     )
+
+
+class QboDetachResult(BaseModel):
+    detache: bool
+    paiements_detaches: int = 0
+    qbo_invoice_id: Optional[str] = None
+    qbo_doc_number: Optional[str] = None
+
+
+@router.post(
+    "/{facture_id}/qbo/detacher",
+    response_model=QboDetachResult,
+    summary="Oublier le lien avec l'Invoice QuickBooks (sans toucher à QB)",
+)
+async def detach_facture(
+    facture_id: int,
+    db: DBSession,
+    user: CurrentUser,
+) -> QboDetachResult:
+    """Quand Kratos s'est accroché à la MAUVAISE Invoice QB (même numéro,
+    autre facture) : on détache ici, on renumérote la facture (crayon),
+    puis « Envoyer vers QuickBooks » crée une nouvelle Invoice. QuickBooks
+    n'est pas modifié."""
+    if not await user_has_capability(db, user, "qbo.push"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permissions insuffisantes pour cette action.",
+        )
+    try:
+        res = await detacher_facture_qbo(db, facture_id)
+    except FactureSyncError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc))
+    return QboDetachResult(**res)
