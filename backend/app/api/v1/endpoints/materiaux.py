@@ -425,9 +425,17 @@ class RechercheMagasinResult(BaseModel):
     raison_ia: Optional[str] = None
 
 
+def _ia_dispo() -> bool:
+    from app.services.prix_magasins import appariement_ia as _ia
+
+    return bool(_ia.disponible() or _ia.web_disponible())
+
+
 class RechercheMateriauResult(BaseModel):
     materiau: MateriauRead
     resultats: List[RechercheMagasinResult]
+    #: L'IA (Gemini) était disponible pour cette recherche.
+    ia_disponible: bool = True
 
 
 @router.get("/materiaux/prix/etat")
@@ -526,8 +534,11 @@ async def etat_recherche(_: CurrentUser) -> dict:
 
     from app.services.materiaux_recherche import DERNIERE_RECHERCHE, etat_scraper_vps
 
+    from app.services.prix_magasins import appariement_ia as _ia
+
     etat = copy.deepcopy(DERNIERE_RECHERCHE)
     etat["scraper"] = await etat_scraper_vps()
+    etat["ia"] = {"configuree": _ia.disponible() or _ia.web_disponible(), "web": _ia.web_disponible()}
     return etat
 
 
@@ -579,6 +590,7 @@ async def chercher_materiau_endpoint(
     return RechercheMateriauResult(
         materiau=_materiau_read(m, await _magasins_map(db)),
         resultats=[RechercheMagasinResult(**r.__dict__) for r in rs],
+        ia_disponible=_ia_dispo(),
     )
 
 

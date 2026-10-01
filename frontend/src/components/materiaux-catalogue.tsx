@@ -186,6 +186,7 @@ type RechercheEtat = {
   termine_a: string | null;
   stats: RechercheStats | null;
   scraper?: { en_ligne: boolean | null; detail: string | null; verifie_a: string | null } | null;
+  ia?: { configuree: boolean; web: boolean } | null;
 };
 
 type AnalyseEtat = {
@@ -755,6 +756,20 @@ export function MateriauxCatalogue() {
           Dernier job de nuit hebdomadaire (prix, rabais, analyse IA) : {fmtDateTime(analyseEtat.hebdo.termine_a)}.
         </p>
       ) : null}
+      {rechercheEtat?.ia ? (
+        <p className="flex items-center gap-2 text-xs text-white/60">
+          <span
+            className={`inline-block h-2 w-2 rounded-full ${rechercheEtat.ia.configuree ? "bg-emerald-400" : "bg-rose-400"}`}
+            aria-hidden
+          />
+          IA (Gemini) pour l&apos;appariement et la recherche web :{" "}
+          {rechercheEtat.ia.configuree ? (
+            <span className="text-emerald-300">active{rechercheEtat.ia.web ? " (recherche Google incluse)" : ""}</span>
+          ) : (
+            <span className="text-rose-300">non configurée — ajoute GEMINI_API_KEY sur le service Render de l&apos;API</span>
+          )}
+        </p>
+      ) : null}
       {rechercheEtat?.scraper ? (
         <p className="flex items-center gap-2 text-xs text-white/60">
           <span
@@ -1133,14 +1148,15 @@ function MateriauRow({
       const j = (await res.json()) as {
         materiau: Materiau;
         resultats: Array<{ magasin_name: string; ok: boolean; statut: string; title: string | null; price: number | null; error: string | null; appariement?: string }>;
+        ia_disponible?: boolean;
       };
       onSaved(j.materiau);
       const manques = j.resultats.filter((r) => !r.ok && r.statut !== "deja");
       if (manques.length > 0) {
         onError(
           `« ${m.name} » — ${j.resultats.filter((r) => r.statut === "trouve").length} prix posé(s)${
-            j.resultats.some((r) => r.statut === "trouve" && r.appariement === "ia") ? " (dont apparié par IA, à vérifier)" : ""
-          }. Sans résultat : ${manques
+            j.resultats.some((r) => r.statut === "trouve" && (r.appariement === "ia" || r.appariement === "ia_web")) ? " (dont trouvé par l'IA, à vérifier)" : ""
+          }${j.ia_disponible === false ? " · IA non configurée sur le serveur (GEMINI_API_KEY)" : ""}. Sans résultat : ${manques
             .map((r) => `${r.magasin_name} (${r.error || r.statut})`)
             .join(" · ")}`
         );
