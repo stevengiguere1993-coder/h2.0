@@ -19,6 +19,13 @@
     GET    /materiaux/rabais                     rabais du jour sur les
                                                  lignes à acheter de tous
                                                  les chantiers ouverts
+    GET    /projects/{id}/materiaux/plan         PLAN D'ACHAT (principe
+                                                 batirarabais, 2026-10-01) :
+                                                 par phase, quoi acheter
+                                                 maintenant / attendre et
+                                                 pourquoi ; meilleur prix
+                                                 par ligne vs tout au même
+                                                 magasin
 """
 
 from __future__ import annotations
@@ -49,6 +56,7 @@ from app.services.materiaux_alertes import (
     rabais_en_cours,
 )
 from app.services.materiaux_import import categorie_standard, categoriser_par_nom, norm_key
+from app.services.materiaux_plan_achat import plan_achat
 from app.services.numbering import next_po_number
 
 router = APIRouter(prefix="/projects", tags=["projet-materiaux"])
@@ -200,6 +208,67 @@ class RabaisRead(BaseModel):
     economie: float = 0
     url: Optional[str] = None
     deja_signale: bool = False
+
+
+class PlanLigneRead(BaseModel):
+    ligne_id: int
+    materiau_id: int
+    materiau_name: str
+    phase_id: Optional[int] = None
+    quantity: float
+    unit: Optional[str] = None
+    #: maintenant | attendre | sans_prix
+    moment: str
+    raison: str
+    magasin_id: Optional[int] = None
+    magasin_name: Optional[str] = None
+    unit_price: Optional[float] = None
+    total: Optional[float] = None
+    regular_price: Optional[float] = None
+    on_sale: bool = False
+    sale_end: Optional[date] = None
+    url: Optional[str] = None
+    plus_bas: Optional[float] = None
+    plus_bas_magasin: Optional[str] = None
+    plus_bas_le: Optional[date] = None
+    ecart_plus_bas: Optional[float] = None
+    economie_rabais: float = 0
+
+
+class PlanPhaseRead(BaseModel):
+    phase_id: Optional[int] = None
+    name: str
+    start_date: Optional[date] = None
+    jours_avant: Optional[int] = None
+    acheter_avant: Optional[date] = None
+    lignes: List[PlanLigneRead] = []
+    total_maintenant: float = 0
+    total_attendre: float = 0
+    nb_sans_prix: int = 0
+
+
+class PlanMagasinRead(BaseModel):
+    magasin_id: int
+    magasin_name: str
+    nb_lignes: int
+    total: float
+    nb_manquantes: int = 0
+
+
+class PlanRead(BaseModel):
+    phases: List[PlanPhaseRead]
+    par_magasin: List[PlanMagasinRead]
+    total_meilleur: float
+    nb_magasins: int
+    un_seul_magasin: Optional[PlanMagasinRead] = None
+    economie_vs_un_seul: float = 0
+    nb_lignes: int
+    nb_maintenant: int
+    nb_attendre: int
+    nb_sans_prix: int
+    total_maintenant: float
+    total_attendre: float
+    economie_rabais: float
 
 
 # ───────────────────────────── Helpers ─────────────────────────────
@@ -383,6 +452,21 @@ async def _liste_read(db, project: Project) -> ListeRead:
 async def liste_materiaux(project_id: int, db: DBSession, user: CurrentUser) -> ListeRead:
     p = await _projet_visible(db, project_id, user)
     return await _liste_read(db, p)
+
+
+@router.get("/{project_id}/materiaux/plan", response_model=PlanRead)
+async def plan_achat_projet(project_id: int, db: DBSession, user: CurrentUser) -> PlanRead:
+    """Plan d'achat : pour chaque phase, les lignes encore à acheter avec
+    le MOMENT conseillé (maintenant / attendre / sans prix) et la raison
+    (rabais et sa fin, plus bas prix connu sur 6 mois, date de la phase) ;
+    plan « meilleur prix par ligne » par magasin vs « tout au même
+    magasin »."""
+    p = await _projet_visible(db, project_id, user)
+    magasins = await _magasins_map(db)
+    plan = await plan_achat(db, await _lignes(db, p.id), await _phases(db, p.id), magasins)
+    from dataclasses import asdict
+
+    return PlanRead(**asdict(plan))
 
 
 @router.post("/{project_id}/materiaux", response_model=ListeRead, status_code=201)
