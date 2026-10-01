@@ -743,6 +743,7 @@ export default function FactureDetailPage() {
         qbo_invoice_id: string;
         qbo_doc_number: string;
         sync_warning?: string | null;
+        sync_note?: string | null;
       };
       setF((cur) =>
         cur
@@ -758,6 +759,8 @@ export default function FactureDetailPage() {
       // pour déclencher le style d'alerte plutôt que le vert de succès.
       if (r.sync_warning) {
         setQboNotice(`⚠️ Facture synchronisée, mais : ${r.sync_warning}`);
+      } else if (r.sync_note) {
+        setQboNotice(`Synchronisée avec QuickBooks (Invoice ${r.qbo_invoice_id}). ${r.sync_note}`);
       } else {
         setQboNotice(
           `Synchronisée avec QuickBooks (Invoice ${r.qbo_invoice_id}).`

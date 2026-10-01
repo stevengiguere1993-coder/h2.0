@@ -613,6 +613,8 @@ async def sync_facture_to_qbo(
     # déjà, on pousse quand même les paiements).
     customer_id = ""
     invoice_warning: Optional[str] = None
+    #: Notes d'information (facture liée dans QB : client QB conservé).
+    _notes: list[str] = []
     try:
         customer = await qbo.ensure_customer(
             display_name=client.name,
@@ -700,12 +702,47 @@ async def sync_facture_to_qbo(
             "not found", "object not found", "introuvable", "deleted",
             "stale", "invalid reference", "5010", "610", "2010",
         )
+        # « Vous avez tenté d'établir une facture pour une imputation, un
+        # crédit, une dépense facturable, des heures ou un devis qui
+        # n'existent pas » : l'Invoice QB est LIÉE (devis / heures /
+        # dépense facturable) à un autre sous-client, et la MAJ change le
+        # CustomerRef (deux projets du même client mélangés, Phil
+        # 2026-10-01). QB refuse tout changement de client sur une facture
+        # liée → on garde le client QB et les liens de l'Invoice existante.
+        _LINK_KEYS = (
+            "n'existent pas", "n\u2019existent pas", "does not exist",
+            "d\u00e9pense facturable", "billable expense",
+        )
 
-        async def _push_invoice(p: Dict[str, Any]) -> Dict[str, Any]:
+        async def _push_invoice(p: Dict[str, Any], _lie_essaye: bool = False) -> Dict[str, Any]:
             try:
                 return await qbo.create_invoice(p)
             except QuickBooksError as exc:
                 m = str(exc).lower()
+                if p.get("Id") and not _lie_essaye and any(k in m for k in _LINK_KEYS):
+                    cur = await qbo.get_invoice(str(p["Id"]))
+                    cur = cur.get("Invoice") or cur
+                    if cur.get("Id"):
+                        p2 = dict(p)
+                        if cur.get("LinkedTxn"):
+                            p2["LinkedTxn"] = cur["LinkedTxn"]
+                        cust_qb = str((cur.get("CustomerRef") or {}).get("value") or "")
+                        cust_voulu = str((p2.get("CustomerRef") or {}).get("value") or "")
+                        if cust_qb and cust_qb != cust_voulu:
+                            p2["CustomerRef"] = {"value": cust_qb}
+                            nom_qb = (cur.get("CustomerRef") or {}).get("name") or cust_qb
+                            _notes.append(
+                                "Facture QB liée à un devis / des heures d'un autre "
+                                f"sous-client : client QB conservé (« {nom_qb} »), le reste "
+                                "mis à jour. Vérifie le projet de cette facture dans QuickBooks."
+                            )
+                        if cur.get("SyncToken") is not None:
+                            p2["SyncToken"] = str(cur.get("SyncToken"))
+                        log.warning(
+                            "Facture %s : Invoice QB %s liée, MAJ rejouée avec le client QB %s",
+                            fa.id, p["Id"], cust_qb,
+                        )
+                        return await _push_invoice(p2, _lie_essaye=True)
                 # Doublon de numéro → relier à la facture existante + MAJ.
                 if not p.get("Id") and any(k in m for k in _DUP_KEYS):
                     docnum = str(p.get("DocNumber") or "").strip()
@@ -771,6 +808,13 @@ async def sync_facture_to_qbo(
     warnings: list[str] = []
     if invoice_warning:
         warnings.append(invoice_warning)
+    for n in _notes:
+        # Information, pas un échec : la facture EST à jour dans QB.
+        log.warning("Facture %s : %s", fa.id, n)
+        result_notes = n
+        break
+    else:
+        result_notes = None
     if payment_errors:
         warnings.append(
             "Paiement(s) non enregistré(s) dans QuickBooks : "
@@ -782,6 +826,8 @@ async def sync_facture_to_qbo(
     }
     if warnings:
         result["sync_warning"] = " | ".join(warnings)
+    if result_notes:
+        result["sync_note"] = result_notes
     # Persiste l'état de la dernière synchro sur la facture : l'échec
     # partiel (paiement refusé, corps non mis à jour) devient VISIBLE sur
     # la fiche ; une synchro propre efface l'erreur précédente.
