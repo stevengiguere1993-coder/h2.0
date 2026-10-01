@@ -17,12 +17,17 @@ souhaité plus tard, on l'ajoute à la lecture.
 from __future__ import annotations
 
 import re
+import logging
+
 from typing import Literal, Optional
 
 from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.numbering_counter import NumberingCounter
+
+
+log = logging.getLogger(__name__)
 
 
 async def _ensure_row(db: AsyncSession) -> NumberingCounter:
@@ -100,14 +105,44 @@ def is_provisional_facture_reference(ref: Optional[str]) -> bool:
     return (ref or "").startswith(PROVISIONAL_FACTURE_PREFIX)
 
 
+#: Numéros sautés à la dernière attribution (pour le message à l'écran) :
+#: {facture_id: ["145"]}.
+NUMEROS_SAUTES: dict = {}
+MAX_SAUTS = 25
+
+
 async def ensure_facture_number(db: AsyncSession, fa) -> bool:
     """Attribue le VRAI numéro séquentiel à une facture qui n'en a pas
     encore (référence vide ou provisoire « BR-… »). Renvoie True si un
-    numéro a été attribué. Flush mais ne committe pas."""
+    numéro a été attribué. Flush mais ne committe pas.
+
+    Garde-fou QuickBooks (incident facture 145, 2026-10-01) : si le
+    numéro est DÉJÀ pris dans QB par une facture qui n'est pas de Kratos
+    (saisie à la main pour un autre projet), on le saute et on prend le
+    suivant — jamais deux factures différentes sous le même numéro."""
     ref = (getattr(fa, "reference", None) or "").strip()
     if ref and not is_provisional_facture_reference(ref):
         return False
-    fa.reference = await next_facture_number(db)
+    sautes: list[str] = []
+    for _ in range(MAX_SAUTS):
+        cand = await next_facture_number(db)
+        try:
+            from app.services.facture_qbo import numero_pris_hors_kratos
+
+            pris = await numero_pris_hors_kratos(db, cand)
+        except Exception:  # noqa: BLE001
+            pris = None
+        if pris is None:
+            break
+        sautes.append(cand)
+        log.warning(
+            "Numéro de facture %s sauté : déjà utilisé dans QuickBooks par une "
+            "facture hors Kratos (%s)", cand,
+            (pris.get("CustomerRef") or {}).get("name"),
+        )
+    fa.reference = cand
+    if sautes:
+        NUMEROS_SAUTES[getattr(fa, "id", None)] = sautes
     await db.flush()
     return True
 

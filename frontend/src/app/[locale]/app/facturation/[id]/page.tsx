@@ -13,7 +13,8 @@ import {
   RefreshCw,
   Save,
   Send,
-  Trash2
+  Trash2,
+  Unlink
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
@@ -729,6 +730,39 @@ export default function FactureDetailPage() {
     }
   }
 
+  async function detachFromQbo() {
+    if (!f) return;
+    const ok = await confirm(
+      `Détacher la facture ${f.reference} de l'Invoice QuickBooks #${f.qbo_doc_number || f.qbo_invoice_id} ? ` +
+        "QuickBooks n'est pas modifié : Kratos oublie seulement le lien (et ceux des paiements). " +
+        "Ensuite, change le numéro avec le crayon si besoin, puis « Envoyer vers QuickBooks » créera une nouvelle Invoice."
+    );
+    if (!ok) return;
+    setQboBusy(true);
+    setQboNotice(null);
+    try {
+      const res = await authedFetch(`/api/v1/factures/${id}/qbo/detacher`, { method: "POST" });
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status} ${t.slice(0, 200)}`);
+      }
+      const r = (await res.json()) as { paiements_detaches: number };
+      setF((cur) =>
+        cur
+          ? { ...cur, qbo_invoice_id: null, qbo_doc_number: null, qbo_sync_token: null, qbo_sync_error: null }
+          : cur
+      );
+      setQboNotice(
+        `Lien QuickBooks oublié${r.paiements_detaches ? ` (${r.paiements_detaches} paiement(s) détaché(s), à vérifier dans QB)` : ""}. ` +
+          "Change le numéro si besoin (crayon), puis « Envoyer vers QuickBooks »."
+      );
+    } catch (e) {
+      setQboNotice(`Détachement échoué : ${(e as Error).message}`);
+    } finally {
+      setQboBusy(false);
+    }
+  }
+
   async function syncToQbo() {
     setQboBusy(true);
     setQboNotice(null);
@@ -1175,6 +1209,23 @@ export default function FactureDetailPage() {
                   </p>
                 </div>
               </button>
+              {isQboSynced ? (
+                <button
+                  type="button"
+                  onClick={() => void detachFromQbo()}
+                  disabled={qboBusy}
+                  className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-amber-500 disabled:opacity-60"
+                  title="Kratos s'est accroché à la mauvaise Invoice QB (même numéro, autre facture) ? Oublie le lien sans toucher à QuickBooks."
+                >
+                  <Unlink className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-400" />
+                  <div>
+                    <p className="text-sm font-semibold text-white">Détacher de QuickBooks</p>
+                    <p className="mt-0.5 text-xs text-white/60">
+                      Oublie le lien (QB intact), puis renumérote et renvoie.
+                    </p>
+                  </div>
+                </button>
+              ) : null}
               {f.project_id ? (
                 <button
                   type="button"
