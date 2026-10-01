@@ -21,6 +21,9 @@ class QboSyncResult(BaseModel):
     # elle, est bien synchronisée. Permet à l'utilisateur de voir POURQUOI
     # un paiement n'est pas passé, au lieu d'un échec silencieux.
     sync_warning: Optional[str] = None
+    #: Information (pas un échec) : ex. facture QB liée à un devis d'un
+    #: autre sous-client → client QB conservé.
+    sync_note: Optional[str] = None
 
 
 @router.post(
@@ -52,4 +55,5 @@ async def sync_facture(
         qbo_invoice_id=str(result.get("qbo_invoice_id") or ""),
         qbo_doc_number=str(result.get("qbo_doc_number") or ""),
         sync_warning=result.get("sync_warning"),
+        sync_note=result.get("sync_note"),
     )
