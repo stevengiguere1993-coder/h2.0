@@ -52,6 +52,9 @@ class ContactRequestUpdate(BaseModel):
     marketing_consent: Optional[bool] = None
     locale: Optional[str] = Field(default=None, max_length=8)
     assigned_to_user_id: Optional[int] = None
+    #: Lier la demande à un client CRM existant (nouveau projet d'un
+    #: client connu). None = inchangé ; 0 = délier.
+    client_id: Optional[int] = None
 
 
 class ContactRequestRead(BaseModel):
@@ -75,6 +78,7 @@ class ContactRequestRead(BaseModel):
     rappel_at: Optional[datetime] = None
     internal_notes: Optional[str]
     assigned_to_user_id: Optional[int] = None
+    client_id: Optional[int] = None
     gdpr_consent: bool
     marketing_consent: bool
     created_at: datetime

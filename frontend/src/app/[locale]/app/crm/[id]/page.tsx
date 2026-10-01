@@ -48,6 +48,7 @@ import { formatPhone } from "@/lib/utils";
 
 type Prospect = {
   id: number;
+  client_id?: number | null;
   name: string;
   email: string;
   phone: string | null;
@@ -618,7 +619,7 @@ export default function ProspectDetailPage() {
                   ) : (
                     <UserCheck className="h-4 w-4" />
                   )}
-                  Convertir en client
+                  {p.client_id ? "Ouvrir la fiche client (client existant)" : "Convertir en client"}
                 </button>
                 <Link
                   // Prefilled with the prospect ID so the form auto-
