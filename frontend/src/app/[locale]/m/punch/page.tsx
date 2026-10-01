@@ -48,6 +48,8 @@ type PunchContextBon = {
   reference: string;
   title: string;
   address: string | null;
+  // Bon client devenu projet : on punch sur le projet.
+  project_id?: number | null;
 };
 
 type Contexts = {
@@ -393,11 +395,13 @@ export default function MobilePunch() {
             emptyLabel="Aucun bon de travail actif."
           >
             {filteredBons.map((b) => (
-              <li key={b.id}>
+              <li key={b.project_id ? `p-${b.project_id}` : `b-${b.id}`}>
                 <button
                   type="button"
                   onClick={() =>
-                    start({ bon_travail_id: b.id, task: null })
+                    b.project_id
+                      ? start({ project_id: b.project_id, task: null })
+                      : start({ bon_travail_id: b.id, task: null })
                   }
                   disabled={busy}
                   className="flex w-full items-center justify-between gap-3 border-b border-brand-800 px-4 py-3 text-left hover:bg-brand-900 disabled:opacity-60"

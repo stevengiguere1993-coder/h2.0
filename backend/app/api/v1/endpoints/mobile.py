@@ -70,6 +70,9 @@ class PunchContextBon(BaseModel):
     reference: str
     title: str
     address: Optional[str] = None
+    #: Bon de travail CLIENT devenu projet (kind « bon_travail ») : le punch
+    #: se fait sur ce projet (project_id), pas sur un BonTravail.
+    project_id: Optional[int] = None
 
 
 class PunchContextsResponse(BaseModel):
@@ -511,6 +514,8 @@ async def punch_contexts(
     _: CurrentUser,
 ) -> PunchContextsResponse:
     # Active projects — planned or in progress. Skip suspended/delivered.
+    # Les projets issus d'un bon de travail (kind « bon_travail ») vont dans
+    # la liste « bons de travail », pas dans « chantiers » (Phil 2026-10-01).
     proj_stmt = (
         select(Project)
         .where(
@@ -520,7 +525,9 @@ async def punch_contexts(
         )
         .order_by(Project.name.asc())
     )
-    projects = (await db.execute(proj_stmt)).scalars().all()
+    tous_projets = (await db.execute(proj_stmt)).scalars().all()
+    projects = [p for p in tous_projets if p.kind != "bon_travail"]
+    projets_bt = [p for p in tous_projets if p.kind == "bon_travail"]
 
     # Open prospects — anything not won/lost/spam so the employee can
     # punch a visit or quote prep.
@@ -543,15 +550,15 @@ async def punch_contexts(
     prospects = (await db.execute(prospect_stmt)).scalars().all()
 
     # Bons de travail internes (entretien de nos immeubles) poinçonnables :
-    # tout bon interne encore ouvert (ni facturé ni annulé). L'employé peut
-    # y pointer ses heures (coût temps & matériel sur le bon).
+    # tout bon interne encore EN COURS (ni terminé, ni facturé, ni annulé).
+    # L'employé peut y pointer ses heures (coût temps & matériel sur le bon).
     from app.models.bon_travail import BonTravail
 
     bon_stmt = (
         select(BonTravail)
         .where(
             BonTravail.kind == "interne",
-            BonTravail.status.notin_(["facture", "cancelled"]),
+            BonTravail.status.notin_(["complete_a_refacturer", "facture", "cancelled", "draft"]),
         )
         .order_by(BonTravail.is_urgent.desc(), BonTravail.id.desc())
         .limit(100)
@@ -582,6 +589,16 @@ async def punch_contexts(
                 address=b.address,
             )
             for b in bons
+        ] + [
+            # Bons de travail client devenus projets : nom « BT-26-005 — … ».
+            PunchContextBon(
+                id=p.id,
+                reference=(p.name.split(" — ", 1)[0] if " — " in p.name else p.name)[:64],
+                title=(p.name.split(" — ", 1)[1] if " — " in p.name else p.name),
+                address=p.address,
+                project_id=p.id,
+            )
+            for p in projets_bt
         ],
     )
 
