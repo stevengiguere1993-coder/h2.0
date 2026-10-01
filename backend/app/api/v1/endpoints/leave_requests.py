@@ -93,10 +93,19 @@ async def _to_read(db, lr: LeaveRequest) -> LeaveRead:
     return data
 
 
+def _peut_gerer(user: User) -> bool:
+    """Qui gère les congés : gestionnaire et plus (owner, admin, manager)
+    ou drapeau is_admin historique. Les administrateurs du volet
+    construction (Olivier) sont « admin » / « manager » sans is_admin et
+    voyaient « Chargement échoué » (Phil 2026-10-01)."""
+    return bool(user.is_admin) or user.has_min_role("manager")
+
+
 async def _notify_admins(
     *, subject: str, html_body: str
 ) -> None:
-    """Email every active admin user. Best effort."""
+    """Email every active leave manager (gestionnaire+ du volet
+    construction, ou is_admin). Best effort."""
     mailer = get_mailer()
     if not mailer.ready:
         return
@@ -104,14 +113,15 @@ async def _notify_admins(
     from app.db.session import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
-        admins = (
+        users = (
             await db.execute(
-                select(User).where(
-                    User.is_admin.is_(True), User.is_active.is_(True)
-                )
+                select(User).where(User.is_active.is_(True))
             )
         ).scalars().all()
-        recipients = [a.email for a in admins if a.email]
+        recipients = [
+            u.email for u in users
+            if u.email and _peut_gerer(u) and "construction" in (u.volets or [])
+        ]
     if not recipients:
         return
     try:
@@ -266,8 +276,8 @@ async def list_leaves(
     employe_id: Optional[int] = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> List[LeaveRead]:
-    if not user.is_admin:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin requis.")
+    if not _peut_gerer(user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Gestionnaire requis.")
     stmt = select(LeaveRequest)
     if status_filter:
         stmt = stmt.where(LeaveRequest.status == status_filter)
@@ -283,7 +293,7 @@ async def list_leaves(
 
 @router.get("/pending-count", response_model=int)
 async def pending_count(db: DBSession, user: CurrentUser) -> int:
-    if not user.is_admin:
+    if not _peut_gerer(user):
         return 0
     n = (
         await db.execute(
@@ -318,8 +328,8 @@ async def admin_log_leave(
     db: DBSession,
     user: CurrentUser,
 ) -> LeaveRead:
-    if not user.is_admin:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin requis.")
+    if not _peut_gerer(user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Gestionnaire requis.")
     if body.end_at <= body.start_at:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "Plage horaire invalide."
@@ -373,7 +383,7 @@ async def approve_leave(
     # Gestionnaire+ : l'approbation des congés fait partie de la gestion
     # d'équipe — exiger admin bloquait Olivier avec « Action échouée »
     # (même retour que la création de clients, Phil 2026-07-20).
-    if user.role not in ("owner", "admin", "manager"):
+    if not _peut_gerer(user):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "Gestionnaire requis."
         )
@@ -445,7 +455,7 @@ async def reject_leave(
     bg: BackgroundTasks,
 ) -> LeaveRead:
     # Gestionnaire+ — même règle que l'approbation.
-    if user.role not in ("owner", "admin", "manager"):
+    if not _peut_gerer(user):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "Gestionnaire requis."
         )
