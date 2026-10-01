@@ -39,6 +39,7 @@ from app.services.prix_magasins.recherche import Candidat, choisir, variantes
 log = logging.getLogger(__name__)
 
 NOTE_AUTO = "Trouvé automatiquement par recherche sur le site — vérifier que c'est le bon article."
+NOTE_IA = "Apparié par IA (nom du catalogue ↔ produit du site) — vérifier que c'est le bon article."
 
 
 @dataclass
@@ -59,6 +60,10 @@ class ResultatRecherche:
     error: Optional[str] = None
     #: Titres des candidats écartés (contrôle visuel).
     candidats: list[str] = field(default_factory=list)
+    #: Comment le produit a été apparié au nom : regle | ia.
+    appariement: str = ""
+    #: Justification de l'IA quand elle a tranché.
+    raison_ia: Optional[str] = None
 
 
 #: Repli par NOM quand le magasin n'a pas de site web renseigné.
@@ -94,19 +99,43 @@ def _meme_site(magasin: Magasin, url: str) -> bool:
     return bool(a) and bool(b) and (a == b or b.endswith("." + a))
 
 
-async def _chercher_candidat(mod, nom: str) -> tuple[Optional[Candidat], list[Candidat]]:
-    """Essaie les variantes de requête ; s'arrête à la première qui donne
-    un candidat acceptable. Renvoie (choisi, derniers candidats vus)."""
-    vus: list[Candidat] = []
-    for q in variantes(nom):
+MAX_REQUETES = 5
+
+
+async def _chercher_candidat(mod, nom: str) -> tuple[Optional[Candidat], list[Candidat], str, Optional[str]]:
+    """Cherche le produit sur le site : requêtes réécrites par l'IA (si
+    configurée) puis variantes du nom ; à chaque requête le notateur par
+    règles tranche. Si aucune règle ne retient un produit, l'IA choisit
+    parmi tout ce qui a été vu (ou rien). Renvoie (choisi, candidats vus,
+    appariement « regle » | « ia » | « », raison IA)."""
+    from app.services.prix_magasins import appariement_ia as ia
+
+    domaine = getattr(mod, "DOMAINS", ("",))[0]
+    requetes: list[str] = []
+    for q in (await ia.requetes_pour(nom)) + variantes(nom):
+        if q.lower() not in {x.lower() for x in requetes}:
+            requetes.append(q)
+    vus: dict[str, Candidat] = {}
+    premier = True
+    for q in requetes[:MAX_REQUETES]:
+        if not premier:
+            await _polite(domaine)
+        premier = False
         cands = await mod.search(q)
         if not cands:
             continue
-        vus = cands
+        for c in cands:
+            vus.setdefault(c.url, c)
         best = choisir(nom, cands)
         if best is not None:
-            return best, cands
-    return None, vus
+            return best, cands, "regle", None
+    tous = list(vus.values())
+    if tous:
+        best, conf, raison = await ia.choisir_parmi(nom, tous)
+        if best is not None:
+            best.score = conf
+            return best, tous, "ia", raison
+    return None, tous, "", None
 
 
 async def chercher_pour_materiau(
@@ -136,11 +165,12 @@ async def chercher_pour_materiau(
             continue
         try:
             await _polite(getattr(mod, "DOMAINS", ("",))[0])
-            best, cands = await _chercher_candidat(mod, materiau.name)
+            best, cands, appariement, raison_ia = await _chercher_candidat(mod, materiau.name)
         except Exception as exc:  # noqa: BLE001
             res.statut, res.error = "erreur", str(exc)[:300]
             continue
         res.candidats = [c.title[:120] for c in cands[:5]]
+        res.appariement, res.raison_ia = appariement, raison_ia
         if best is not None and not _meme_site(mag, best.url):
             best = None  # lien d'un autre site (Réno-Dépôt ↔ Rona…)
         if best is None:
@@ -167,15 +197,20 @@ async def chercher_pour_materiau(
         if url_change or not off.sku:
             off.sku = (str(best.sku)[:64] if best.sku else None)
         note_avant = (avant["note"] or "").strip()
-        off.note = (NOTE_AUTO if (not note_avant or NOTE_AUTO in note_avant) else f"{note_avant} · {NOTE_AUTO}")[:255]
+        note_auto = NOTE_IA if appariement == "ia" else NOTE_AUTO
+        note_avant = note_avant.replace(NOTE_AUTO, "").replace(NOTE_IA, "").strip(" ·")
+        off.note = (note_auto if not note_avant else f"{note_avant} · {note_auto}")[:255]
         off.fetch_error = None
         prix_recherche = round(best.price, 2) if (best.price is not None and best.price > 0) else None
         res.url, res.title, res.score = off.url, off.page_title, best.score
         await db.flush()
-        # 1) relevé de la page produit (source de vérité) ; 2) sinon le
-        # prix donné par la recherche ; historique écrit une seule fois.
+        # 1) relevé de la page produit (source de vérité) quand la
+        # recherche n'a pas donné de prix — sinon on garde celui de la
+        # recherche (le relevé quotidien affinera) : un aller-retour de
+        # moins par article, surtout via le VPS ; 2) historique écrit une
+        # seule fois.
         r = None
-        if relever:
+        if relever and prix_recherche is None:
             try:
                 r = await relever_offre(db, off)
             except Exception as exc:  # noqa: BLE001
@@ -310,7 +345,7 @@ async def chercher_tout(
         d = stats["par_magasin"].setdefault(mag.name, {"trouves": 0, "aucun": 0, "erreurs": 0})
         stats["examines"] += 1
         stats["dernier"] = {
-            "magasin": mag.name, "materiau_id": materiau_id_, "statut": r.statut,
+            "magasin": mag.name, "materiau_id": materiau_id_, "statut": r.statut, "appariement": r.appariement,
             "title": (r.title or "")[:120] or None, "price": r.price, "error": (r.error or "")[:160] or None,
             "a": datetime.now(timezone.utc).isoformat(),
         }

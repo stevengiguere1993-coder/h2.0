@@ -1009,13 +1009,15 @@ function MateriauRow({
       if (!res.ok) throw new Error(await readError(res));
       const j = (await res.json()) as {
         materiau: Materiau;
-        resultats: Array<{ magasin_name: string; ok: boolean; statut: string; title: string | null; price: number | null; error: string | null }>;
+        resultats: Array<{ magasin_name: string; ok: boolean; statut: string; title: string | null; price: number | null; error: string | null; appariement?: string }>;
       };
       onSaved(j.materiau);
       const manques = j.resultats.filter((r) => !r.ok && r.statut !== "deja");
       if (manques.length > 0) {
         onError(
-          `« ${m.name} » — ${j.resultats.filter((r) => r.statut === "trouve").length} prix posé(s). Sans résultat : ${manques
+          `« ${m.name} » — ${j.resultats.filter((r) => r.statut === "trouve").length} prix posé(s)${
+            j.resultats.some((r) => r.statut === "trouve" && r.appariement === "ia") ? " (dont apparié par IA, à vérifier)" : ""
+          }. Sans résultat : ${manques
             .map((r) => `${r.magasin_name} (${r.error || r.statut})`)
             .join(" · ")}`
         );
