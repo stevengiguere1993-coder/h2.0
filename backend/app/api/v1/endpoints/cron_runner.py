@@ -912,6 +912,27 @@ async def trigger_all_daily(
 
 
 @router.api_route(
+    "/run/materiaux-hebdo",
+    methods=["GET", "POST"],
+    response_model=CronResult,
+)
+async def trigger_materiaux_hebdo(
+    x_cron_secret: Optional[str] = Header(default=None),
+    secret: Optional[str] = Query(default=None),
+    wait: bool = Query(default=False),
+) -> CronResult:
+    """Force le job de nuit hebdomadaire du catalogue de matériaux
+    (relevé complet, recherche des prix manquants, alertes, analyse IA).
+    En fond par défaut ; ``wait=true`` attend la fin (long)."""
+    _check_secret(x_cron_secret, secret)
+    from app.services.materiaux_hebdo import DERNIER_HEBDO, job_hebdo, lancer_en_fond
+
+    if wait:
+        return CronResult(ok=True, job="materiaux-hebdo", details=await job_hebdo())
+    return CronResult(ok=True, job="materiaux-hebdo", details={"lance": lancer_en_fond(), **DERNIER_HEBDO})
+
+
+@router.api_route(
     "/run/all-hourly",
     methods=["GET", "POST"],
     response_model=MegaCronResult,
@@ -1132,6 +1153,17 @@ async def trigger_all_hourly(
     await _safe(
         "qbo-facture-autopush", _run_qbo_facture_autopush_hourly, details
     )
+
+    # Catalogue de matériaux : job de NUIT hebdomadaire (relevé complet
+    # des prix et rabais, recherche des prix manquants, alertes, analyse
+    # IA de l'historique). Lancé en tâche de fond la première heure entre
+    # 02:00 et 05:59 (Montréal) où le dernier run date de plus de 6 jours.
+    async def _run_materiaux_hebdo_nuit():
+        from app.services.materiaux_hebdo import lancer_si_nuit_hebdo
+
+        return await lancer_si_nuit_hebdo()
+
+    await _safe("materiaux-hebdo-nuit", _run_materiaux_hebdo_nuit, details)
 
     ok_count = sum(1 for v in details.values() if v.get("ok"))
     fail_count = sum(1 for v in details.values() if not v.get("ok"))

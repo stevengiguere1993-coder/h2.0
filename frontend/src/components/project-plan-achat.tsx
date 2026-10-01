@@ -30,6 +30,16 @@ type PlanLigne = {
   plus_bas_le: string | null;
   ecart_plus_bas: number | null;
   economie_rabais: number;
+  verdict_ia: "bon_moment" | "attendre" | "neutre" | null;
+  avis_ia: string | null;
+  prix_cible_ia: number | null;
+  analyse_ia_at: string | null;
+};
+
+const VERDICT_IA: Record<string, { label: string; cls: string }> = {
+  bon_moment: { label: "IA : bon moment", cls: "border-emerald-500/40 bg-emerald-500/15 text-emerald-300" },
+  attendre: { label: "IA : attendre", cls: "border-amber-500/40 bg-amber-500/15 text-amber-300" },
+  neutre: { label: "IA : neutre", cls: "border-white/20 bg-white/10 text-white/70" }
 };
 
 type PlanPhase = {
@@ -233,6 +243,18 @@ export function ProjectPlanAchat({ projectId, refreshKey }: { projectId: number;
                         ) : null}
                       </div>
                       <div className="text-xs text-white/70">{l.raison}</div>
+                      {l.verdict_ia ? (
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-white/70">
+                          <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${(VERDICT_IA[l.verdict_ia] || VERDICT_IA.neutre).cls}`}>
+                            {(VERDICT_IA[l.verdict_ia] || VERDICT_IA.neutre).label}
+                          </span>
+                          {!l.raison.startsWith("Avis IA") && l.avis_ia ? <span>{l.avis_ia}</span> : null}
+                          {l.prix_cible_ia != null && !l.raison.includes("Prix à viser") ? (
+                            <span>Prix à viser : {money(l.prix_cible_ia)}</span>
+                          ) : null}
+                          {l.analyse_ia_at ? <span className="text-white/45">(analyse du {fmtDate(l.analyse_ia_at)})</span> : null}
+                        </div>
+                      ) : null}
                     </div>
                   </li>
                 ))}
@@ -241,8 +263,10 @@ export function ProjectPlanAchat({ projectId, refreshKey }: { projectId: number;
           ))}
 
           <p className="text-[11px] text-white/50">
-            « Attendre » = prix du jour à plus de 5 % au-dessus du plus bas vu en 6 mois et phase à plus de 14 jours ;
-            l&apos;alerte quotidienne te prévient dès qu&apos;un article passe en rabais. Prix hors taxes.
+            « Attendre » = prix du jour à plus de 5 % au-dessus du plus bas vu en 6 mois et phase à plus de 14 jours,
+            ou avis « attendre » de l&apos;IA (elle relit 6 mois de relevés chaque semaine, la nuit : cycles de rabais,
+            tendance, prix à viser). Rabais en cours ou phase imminente l&apos;emportent. L&apos;alerte quotidienne te
+            prévient dès qu&apos;un article passe en rabais. Prix hors taxes.
           </p>
         </div>
       ) : null}

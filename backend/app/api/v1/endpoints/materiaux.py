@@ -39,6 +39,7 @@ from app.models.materiau import (
     MateriauOffre,
     MateriauPrixHistorique,
 )
+from app.services.materiaux_analyse_ia import analyse_dict
 from app.services.materiaux_import import (
     CATEGORIES_STANDARD,
     canonical_store,
@@ -143,6 +144,11 @@ class MateriauRead(BaseModel):
     best_magasin_name: Optional[str] = None
     #: Vrai si le meilleur prix vient d'un prix d'archive sans date.
     best_is_archive: bool = False
+    #: Analyse IA des derniers prix (job de nuit hebdo) : verdict
+    #: bon_moment | attendre | neutre, tendance, fréquence des rabais,
+    #: prochain rabais probable, prix cible, résumé.
+    analyse_ia: Optional[dict] = None
+    analyse_ia_at: Optional[datetime] = None
 
 
 class MateriauCreate(BaseModel):
@@ -219,6 +225,8 @@ def _materiau_read(m: Materiau, magasins: dict[int, Magasin]) -> MateriauRead:
         best_magasin_id=(best.magasin_id if best else None),
         best_magasin_name=(best.magasin_name if best else None),
         best_is_archive=bool(best and best.source == "import" and best.observed_at is None),
+        analyse_ia=analyse_dict(m),
+        analyse_ia_at=m.analyse_ia_at,
     )
 
 
@@ -449,6 +457,65 @@ async def relever_tout_endpoint(data: ReleveToutRequest, _: RequireManager) -> d
         max_age_hours=data.max_age_hours,
     ))
     return {"lance": True, **DERNIER_RELEVE}
+
+
+class AnalyserRequest(BaseModel):
+    materiau_id: Optional[int] = None
+    limit: int = Field(default=200, ge=1, le=1000)
+    #: 0 = tout réanalyser, même les analyses récentes.
+    max_age_days: float = Field(default=6, ge=0, le=60)
+
+
+@router.get("/materiaux/prix/analyser/etat")
+async def etat_analyse(_: CurrentUser) -> dict:
+    """État de la dernière analyse IA des prix (en cours / terminée +
+    compteurs) et du job de nuit hebdomadaire."""
+    import copy
+
+    from app.services.materiaux_analyse_ia import DERNIERE_ANALYSE
+    from app.services.materiaux_hebdo import DERNIER_HEBDO
+
+    etat = copy.deepcopy(DERNIERE_ANALYSE)
+    etat["hebdo"] = copy.deepcopy(DERNIER_HEBDO)
+    return etat
+
+
+@router.post("/materiaux/prix/analyser")
+async def analyser_tout_endpoint(data: AnalyserRequest, _: RequireManager) -> dict:
+    """Lance en arrière-plan l'analyse IA de l'historique des prix
+    (verdict bon moment / attendre par matériau). Le job de nuit
+    hebdomadaire fait la même chose automatiquement."""
+    import asyncio
+
+    from app.integrations.ai import is_configured
+    from app.services.materiaux_analyse_ia import DERNIERE_ANALYSE, analyser_tout_en_arriere_plan
+
+    if not is_configured():
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "IA non configurée sur le serveur (GEMINI_API_KEY).")
+    if DERNIERE_ANALYSE.get("en_cours"):
+        return {"lance": False, "raison": "Une analyse est déjà en cours.", **DERNIERE_ANALYSE}
+    task = asyncio.create_task(analyser_tout_en_arriere_plan(
+        materiau_id=data.materiau_id, limit=data.limit, max_age_days=(data.max_age_days or None),
+    ))
+    _TACHES_FOND.add(task)
+    task.add_done_callback(_TACHES_FOND.discard)
+    return {"lance": True, **DERNIERE_ANALYSE}
+
+
+@router.post("/materiaux/{materiau_id}/analyser", response_model=MateriauRead)
+async def analyser_materiau_endpoint(materiau_id: int, db: DBSession, _: CurrentUser) -> MateriauRead:
+    """Analyse IA immédiate d'UN matériau (historique 6 mois)."""
+    from app.integrations.ai import is_configured
+    from app.services.materiaux_analyse_ia import analyser_tout
+
+    if not is_configured():
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "IA non configurée sur le serveur (GEMINI_API_KEY).")
+    await _get_materiau(db, materiau_id)
+    st = await analyser_tout(db, materiau_id=materiau_id, max_age_days=None, limit=1)
+    if st.get("erreurs"):
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "L'IA n'a pas répondu (réessaie dans une minute).")
+    m = await _get_materiau(db, materiau_id)
+    return _materiau_read(m, await _magasins_map(db))
 
 
 @router.get("/materiaux/prix/chercher/etat")

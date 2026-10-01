@@ -73,6 +73,12 @@ class Recommandation:
     ecart_plus_bas: Optional[float] = None
     #: Économie du rabais vs prix régulier affiché (× quantité).
     economie_rabais: float = 0.0
+    #: Analyse IA des derniers prix (materiaux.analyse_ia) : verdict
+    #: bon_moment | attendre | neutre, phrase, prix à viser, date.
+    verdict_ia: Optional[str] = None
+    avis_ia: Optional[str] = None
+    prix_cible_ia: Optional[float] = None
+    analyse_ia_at: Optional[datetime] = None
 
 
 @dataclass
@@ -191,6 +197,18 @@ def recommander(
         rec.plus_bas_magasin = _nom(magasins, plus_bas.magasin_id)
         rec.ecart_plus_bas = round((prix - plus_bas.prix) / plus_bas.prix, 3) if plus_bas.prix > 0 else None
 
+    # Avis de l'IA sur l'historique (job de nuit hebdomadaire).
+    ia = None
+    if ligne.materiau is not None and ligne.materiau.analyse_ia:
+        from app.services.materiaux_analyse_ia import analyse_dict
+
+        ia = analyse_dict(ligne.materiau)
+    if ia:
+        rec.verdict_ia = ia.get("verdict")
+        rec.avis_ia = ia.get("resume")
+        rec.prix_cible_ia = ia.get("prix_cible")
+        rec.analyse_ia_at = ligne.materiau.analyse_ia_at
+
     jours = None
     if phase is not None and phase.start_date is not None:
         jours = (phase.start_date - today).days
@@ -220,6 +238,17 @@ def recommander(
         rec.moment = "maintenant"
         ref = "au plus bas connu" if rec.plus_bas is not None else "meilleur prix du jour, sans historique"
         rec.raison = f"{prix:.2f} $ chez {rec.magasin_name} : {ref}."
+    # L'IA a lu 6 mois de relevés (tendance, cycles de rabais) : hors
+    # rabais en cours et hors phase imminente, son verdict tranché
+    # l'emporte sur la règle « ±5 % du plus bas ».
+    if ia and not rec.on_sale and not imminent and rec.verdict_ia in ("attendre", "bon_moment"):
+        cible = f" Prix à viser : {rec.prix_cible_ia:.2f} $." if rec.prix_cible_ia else ""
+        if rec.verdict_ia == "attendre" and rec.moment == "maintenant":
+            rec.moment = "attendre"
+            rec.raison = f"Avis IA (historique 6 mois) : {rec.avis_ia or 'attendre'}{cible} Prix du jour {prix:.2f} $ chez {rec.magasin_name}."
+        elif rec.verdict_ia == "bon_moment" and rec.moment == "attendre":
+            rec.moment = "maintenant"
+            rec.raison = f"Avis IA (historique 6 mois) : {rec.avis_ia or 'bon moment'} Prix du jour {prix:.2f} $ chez {rec.magasin_name}."
     return rec
 
 
