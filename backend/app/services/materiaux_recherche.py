@@ -41,6 +41,7 @@ log = logging.getLogger(__name__)
 
 NOTE_AUTO = "Trouvé automatiquement par recherche sur le site — vérifier que c'est le bon article."
 NOTE_IA = "Apparié par IA (nom du catalogue ↔ produit du site) — vérifier que c'est le bon article."
+NOTE_IA_WEB = "Trouvé par l'IA (recherche web, site bloqué ou sans résultat) — article et prix à vérifier."
 
 
 @dataclass
@@ -216,17 +217,30 @@ async def chercher_pour_materiau(
             res.statut = "non_supporte"
             res.error = "Ce magasin n'a pas de moteur de recherche branché (site web absent ou inconnu)."
             continue
+        best, cands, appariement, raison_ia = None, [], "", None
+        erreur_site: Optional[str] = None
         try:
             await _polite(getattr(mod, "DOMAINS", ("",))[0])
             best, cands, appariement, raison_ia = await _chercher_candidat(mod, materiau.name)
         except Exception as exc:  # noqa: BLE001
-            res.statut, res.error = "erreur", _err(exc)
-            continue
-        res.candidats = [c.title[:120] for c in cands[:5]]
-        res.appariement, res.raison_ia = appariement, raison_ia
+            erreur_site = _err(exc)
         if best is not None and not _meme_site(mag, best.url):
             best = None  # lien d'un autre site (Réno-Dépôt ↔ Rona…)
         if best is None:
+            # Repli : l'IA cherche sur le web (Gemini + Google Search) la
+            # page produit DU site — site bloqué (Cloudflare), sans
+            # résultat ou sans correspondance (Phil 2026-10-01).
+            from app.services.prix_magasins import appariement_ia as ia
+
+            web = await ia.rechercher_web(materiau.name, site_du_magasin(mag), mag.name)
+            if web is not None and _meme_site(mag, web.url):
+                best, appariement, raison_ia = web, "ia_web", (web.extra or {}).get("raison")
+        res.candidats = [c.title[:120] for c in cands[:5]]
+        res.appariement, res.raison_ia = appariement, raison_ia
+        if best is None:
+            if erreur_site:
+                res.statut, res.error = "erreur", erreur_site
+                continue
             res.statut = "aucun"
             res.error = (
                 "Aucun produit du site ne correspond assez au nom du matériau "
@@ -250,7 +264,7 @@ async def chercher_pour_materiau(
         if url_change or not off.sku:
             off.sku = (str(best.sku)[:64] if best.sku else None)
         note_avant = (avant["note"] or "").strip()
-        note_auto = NOTE_IA if appariement == "ia" else NOTE_AUTO
+        note_auto = NOTE_IA_WEB if appariement == "ia_web" else (NOTE_IA if appariement == "ia" else NOTE_AUTO)
         note_avant = note_avant.replace(NOTE_AUTO, "").replace(NOTE_IA, "").strip(" ·")
         off.note = (note_auto if not note_avant else f"{note_avant} · {note_auto}")[:255]
         off.fetch_error = None
@@ -283,9 +297,10 @@ async def chercher_pour_materiau(
                 db.add(MateriauPrixHistorique(
                     materiau_id=materiau.id, magasin_id=mag.id, unit_price=off.unit_price,
                     regular_price=off.regular_price, on_sale=off.on_sale, sale_end=None,
-                    source="auto", observed_at=now, note="Recherche automatique (résultat du site)"[:255],
+                    source="auto", observed_at=now,
+                    note=("Trouvé par l'IA (recherche web)" if appariement == "ia_web" else "Recherche automatique (résultat du site)")[:255],
                 ))
-            res.price, res.regular_price, res.on_sale, res.method = off.unit_price, off.regular_price, off.on_sale, "recherche"
+            res.price, res.regular_price, res.on_sale, res.method = off.unit_price, off.regular_price, off.on_sale, ("ia_web" if appariement == "ia_web" else "recherche")
             if r is not None and not r.ok:
                 res.error = r.error  # information : la page n'a pas pu être relue
         else:

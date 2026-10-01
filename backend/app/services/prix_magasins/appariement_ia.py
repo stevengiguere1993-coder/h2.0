@@ -176,3 +176,149 @@ async def choisir_parmi(nom: str, candidats: list[Candidat]) -> tuple[Optional[C
     if conf < SEUIL_CONFIANCE:
         return None, conf, raison, True
     return cands[int(idx) - 1], conf, raison, True
+
+
+# ───────────── Recherche WEB par l'IA (Gemini + Google Search) ─────────────
+#
+# Quand le site du magasin bloque nos recherches (Rona / BMR derrière
+# Cloudflare, même depuis le VPS) ou ne renvoie rien d'approchant, on
+# demande à Gemini, outillé de la recherche Google, de trouver LA page
+# produit du site qui correspond au matériau et son prix affiché. Les
+# sources citées (groundingChunks) sont des redirections Google : on les
+# résout (en-tête Location, sans charger la page) pour obtenir l'URL
+# réelle et n'accepter qu'une page DU site du magasin.
+
+GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
+MODELE_WEB = "gemini-2.5-flash"
+SEUIL_WEB = 0.6
+
+
+def _cle_gemini() -> str:
+    import os
+
+    try:
+        from app.core.config import settings
+
+        k = (getattr(settings, "gemini_api_key", None) or "").strip()
+    except Exception:  # noqa: BLE001
+        k = ""
+    return k or (os.getenv("GEMINI_API_KEY") or "").strip()
+
+
+def web_disponible() -> bool:
+    return bool(_cle_gemini()) and time.monotonic() >= _panne_jusqua
+
+
+def _domaine(url: str) -> str:
+    from urllib.parse import urlparse
+
+    host = (urlparse(url or "").hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def _meme_domaine(url: str, domaine: str) -> bool:
+    d = _domaine(url)
+    return bool(d) and bool(domaine) and (d == domaine or d.endswith("." + domaine))
+
+
+async def _resoudre_redirect(uri: str) -> Optional[str]:
+    """URL réelle derrière une redirection Google (sans charger la cible)."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=5.0), follow_redirects=False) as c:
+            r = await c.get(uri)
+        if 300 <= r.status_code < 400:
+            return r.headers.get("location")
+        return str(r.url) if r.status_code == 200 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def rechercher_web(nom: str, site: str, magasin_name: str) -> Optional[Candidat]:
+    """Trouve, via Gemini + Google Search, la page produit de ``site`` qui
+    correspond au matériau ``nom``, avec le prix lu dans les résultats.
+    None si rien de sûr. Ne lève jamais."""
+    import httpx
+
+    key = _cle_gemini()
+    domaine = _domaine(site if "://" in (site or "") else f"https://{site}")
+    if not key or not domaine or not web_disponible():
+        return None
+    prompt = (
+        f"Matériau du catalogue d'un entrepreneur (abréviations de facture possibles) : « {nom.strip()} ».\n"
+        f"Cherche avec Google, en te limitant au site {domaine} (requêtes « site:{domaine} … »), LA page produit "
+        f"de {magasin_name} qui est LE MÊME article (même type, mêmes dimensions / diamètre / format, même matière). "
+        "Lis le prix affiché dans les résultats (prix régulier et prix en rabais s'il y a lieu, en $ CAD).\n"
+        "Réponds UNIQUEMENT ce JSON : "
+        '{"url": "<URL complète de la page produit sur le site, ou null>", "title": "<titre du produit>", '
+        '"price": <prix courant ou null>, "regular_price": <prix régulier si en rabais, sinon null>, '
+        '"on_sale": <true|false>, "confiance": <0 à 1>, "raison": "<10 mots max>"}\n'
+        "Si aucun produit du site ne correspond vraiment, url = null et confiance = 0. Ne devine jamais un prix."
+    )
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "systemInstruction": {"parts": [{"text": _SYSTEM}]},
+        "tools": [{"google_search": {}}],
+        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 700},
+    }
+    url = f"{GEMINI_BASE}/models/{MODELE_WEB}:generateContent?key={key}"
+    async with _sem:
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=10.0)) as c:
+                r = await c.post(url, json=payload)
+            if r.status_code != 200:
+                _noter_echec(RuntimeError(f"Gemini web HTTP {r.status_code}: {r.text[:160]}"))
+                return None
+            data = r.json()
+        except Exception as exc:  # noqa: BLE001
+            _noter_echec(exc)
+            return None
+    global _echecs
+    _echecs = 0
+    try:
+        cand0 = (data.get("candidates") or [{}])[0]
+        parts = (cand0.get("content") or {}).get("parts") or []
+        texte = "\n".join(str(p.get("text") or "") for p in parts if isinstance(p, dict))
+        chunks = ((cand0.get("groundingMetadata") or {}).get("groundingChunks") or [])
+    except Exception:  # noqa: BLE001
+        return None
+    d = _json(texte)
+    if not isinstance(d, dict):
+        return None
+    try:
+        conf = max(0.0, min(1.0, float(d.get("confiance") or 0.0)))
+    except (TypeError, ValueError):
+        conf = 0.0
+    if conf < SEUIL_WEB:
+        return None
+    # URL : celle du modèle si elle est bien sur le site, sinon la première
+    # source citée (résolue) qui est sur le site.
+    url_prod = str(d.get("url") or "").strip()
+    if not _meme_domaine(url_prod, domaine):
+        url_prod = ""
+        for ch in chunks[:8]:
+            uri = str(((ch or {}).get("web") or {}).get("uri") or "")
+            if not uri:
+                continue
+            reel = uri if _meme_domaine(uri, domaine) else await _resoudre_redirect(uri)
+            if reel and _meme_domaine(reel, domaine):
+                url_prod = reel
+                break
+    if not url_prod:
+        return None
+
+    def _num(v: Any) -> Optional[float]:
+        try:
+            x = float(v)
+            return round(x, 2) if x > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    price, regular = _num(d.get("price")), _num(d.get("regular_price"))
+    on_sale = bool(d.get("on_sale")) and regular is not None and price is not None and regular > price
+    return Candidat(
+        url=url_prod[:500], title=str(d.get("title") or nom)[:255], sku=None,
+        price=price, regular_price=(regular if on_sale else None), on_sale=on_sale,
+        extra={"ia_web": True, "raison": str(d.get("raison") or "")[:120]}, score=conf,
+    )
