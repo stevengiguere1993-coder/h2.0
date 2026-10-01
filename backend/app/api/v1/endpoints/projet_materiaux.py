@@ -233,6 +233,10 @@ class PlanLigneRead(BaseModel):
     plus_bas_le: Optional[date] = None
     ecart_plus_bas: Optional[float] = None
     economie_rabais: float = 0
+    verdict_ia: Optional[str] = None
+    avis_ia: Optional[str] = None
+    prix_cible_ia: Optional[float] = None
+    analyse_ia_at: Optional[datetime] = None
 
 
 class PlanPhaseRead(BaseModel):

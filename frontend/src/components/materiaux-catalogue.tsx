@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Search,
   Settings2,
+  Sparkles,
   Tag,
   Trash2,
   Upload,
@@ -69,7 +70,45 @@ type Materiau = {
   best_magasin_id: number | null;
   best_magasin_name: string | null;
   best_is_archive: boolean;
+  analyse_ia: AnalyseIa | null;
+  analyse_ia_at: string | null;
 };
+
+type AnalyseIa = {
+  verdict: "bon_moment" | "attendre" | "neutre";
+  tendance: "baisse" | "stable" | "hausse";
+  frequence_rabais: string | null;
+  prochain_rabais: string | null;
+  prix_cible: number | null;
+  resume: string | null;
+};
+
+const VERDICT_IA: Record<AnalyseIa["verdict"], { label: string; cls: string }> = {
+  bon_moment: { label: "IA : bon moment", cls: "border-emerald-500/40 bg-emerald-500/15 text-emerald-300" },
+  attendre: { label: "IA : attendre", cls: "border-amber-500/40 bg-amber-500/15 text-amber-300" },
+  neutre: { label: "IA : neutre", cls: "border-white/20 bg-white/10 text-white/70" }
+};
+
+function AnalyseIaBadge({ a, at }: { a: AnalyseIa | null; at: string | null }) {
+  if (!a) return null;
+  const v = VERDICT_IA[a.verdict] || VERDICT_IA.neutre;
+  const tip = [
+    a.resume,
+    a.frequence_rabais ? `Rabais : ${a.frequence_rabais}` : null,
+    a.prochain_rabais ? `Prochain rabais : ${a.prochain_rabais}` : null,
+    a.prix_cible != null ? `Prix à viser : ${money(a.prix_cible)}` : null,
+    `Tendance : ${a.tendance}`,
+    at ? `Analyse du ${fmtDate(at)}` : null
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return (
+    <span className={`mt-0.5 inline-block rounded border px-1.5 py-0.5 text-[10px] font-semibold ${v.cls}`} title={tip}>
+      {v.label}
+      {a.prix_cible != null ? ` · viser ${money(a.prix_cible)}` : ""}
+    </span>
+  );
+}
 
 type RabaisListe = {
   ligne_id: number;
@@ -149,6 +188,14 @@ type RechercheEtat = {
   scraper?: { en_ligne: boolean | null; detail: string | null; verifie_a: string | null } | null;
 };
 
+type AnalyseEtat = {
+  en_cours: boolean;
+  lance_a: string | null;
+  termine_a: string | null;
+  stats: { total?: number; analyses?: number; lots?: number; erreurs?: number; skipped?: string | null; error?: string } | null;
+  hebdo?: { en_cours: boolean; lance_a: string | null; termine_a: string | null; etapes: Record<string, unknown> | null } | null;
+};
+
 function resumeRecherche(st: RechercheStats | null | undefined): string {
   const x = st || {};
   return `${x.examines ?? 0}${x.total ? ` / ${x.total}` : ""} couples matériau × magasin examinés, ${x.trouves ?? 0} prix posés, ${x.aucun ?? 0} sans correspondance, ${x.erreurs ?? 0} erreurs de site.`;
@@ -185,6 +232,8 @@ export function MateriauxCatalogue() {
   const [searching, setSearching] = useState(false);
   const [rechercheEtat, setRechercheEtat] = useState<RechercheEtat | null>(null);
   const suiviRef = useRef(false);
+  const [analysing, setAnalysing] = useState(false);
+  const [analyseEtat, setAnalyseEtat] = useState<AnalyseEtat | null>(null);
   const [classifying, setClassifying] = useState(false);
   const [storesOpen, setStoresOpen] = useState(false);
   const [releveEtat, setReleveEtat] = useState<{
@@ -216,6 +265,7 @@ export function MateriauxCatalogue() {
       await loadMagasins();
       void loadReleveEtat();
       void loadRechercheEtat();
+      void loadAnalyseEtat();
     } catch (e) {
       setError(`Chargement du catalogue échoué : ${(e as Error).message}`);
     } finally {
@@ -230,6 +280,55 @@ export function MateriauxCatalogue() {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, cat]);
+
+  async function loadAnalyseEtat(): Promise<AnalyseEtat | null> {
+    try {
+      const r = await authedFetch("/api/v1/materiaux/prix/analyser/etat");
+      if (r.ok) {
+        const e = (await r.json()) as AnalyseEtat;
+        setAnalyseEtat(e);
+        return e;
+      }
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+
+  async function analyserIa() {
+    if (analysing) return;
+    setAnalysing(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await authedFetch("/api/v1/materiaux/prix/analyser", {
+        method: "POST",
+        body: JSON.stringify({ limit: 400, max_age_days: 0 })
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      setNotice("Analyse IA lancée : l'IA relit 6 mois de prix relevés par matériau (bon moment / attendre, prix à viser). Quelques minutes.");
+      for (let i = 0; i < 360; i += 1) {
+        await new Promise((r) => setTimeout(r, 5000));
+        const e = await loadAnalyseEtat();
+        if (e && !e.en_cours) {
+          const st = e.stats || {};
+          setNotice(
+            st.error
+              ? `Analyse IA terminée avec une erreur : ${st.error}`
+              : st.skipped
+                ? `Analyse IA : ${st.skipped}`
+                : `Analyse IA terminée : ${st.analyses ?? 0} matériau(x) analysé(s) sur ${st.total ?? 0}${(st.erreurs ?? 0) > 0 ? `, ${st.erreurs} lot(s) en erreur` : ""}.`
+          );
+          await load();
+          break;
+        }
+      }
+    } catch (e) {
+      setError(`Analyse IA non lancée : ${(e as Error).message}`);
+    } finally {
+      setAnalysing(false);
+    }
+  }
 
   async function loadRechercheEtat(): Promise<RechercheEtat | null> {
     try {
@@ -576,6 +675,20 @@ export function MateriauxCatalogue() {
           </button>
           <button
             type="button"
+            onClick={analyserIa}
+            disabled={analysing}
+            className="btn-secondary btn-sm disabled:opacity-60"
+            title="L'IA relit 6 mois de prix relevés par matériau : bon moment / attendre, fréquence des rabais, prix à viser (fait automatiquement chaque semaine, la nuit)"
+          >
+            {analysing ? (
+              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="mr-1 h-3.5 w-3.5" />
+            )}
+            Analyse IA
+          </button>
+          <button
+            type="button"
             onClick={refreshAllPrices}
             disabled={refreshing}
             className="btn-secondary btn-sm disabled:opacity-60"
@@ -630,6 +743,16 @@ export function MateriauxCatalogue() {
           {rechercheEtat.stats?.error
             ? `arrêtée sur une erreur (${rechercheEtat.stats.error})`
             : resumeRecherche(rechercheEtat.stats)}
+        </p>
+      ) : null}
+      {analyseEtat?.hebdo?.en_cours ? (
+        <p className="flex items-center gap-2 text-xs text-accent-500">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Job de nuit hebdomadaire en cours depuis {fmtDateTime(analyseEtat.hebdo.lance_a)} (relevé complet, recherche, alertes, analyse IA).
+        </p>
+      ) : analyseEtat?.hebdo?.termine_a ? (
+        <p className="text-xs text-white/60">
+          Dernier job de nuit hebdomadaire (prix, rabais, analyse IA) : {fmtDateTime(analyseEtat.hebdo.termine_a)}.
         </p>
       ) : null}
       {rechercheEtat?.scraper ? (
@@ -1109,6 +1232,7 @@ function MateriauRow({
           <>
             <p className="font-medium text-white">{m.name}</p>
             {m.unit ? <p className="text-[11px] text-white/45">/ {m.unit}</p> : null}
+            <AnalyseIaBadge a={m.analyse_ia} at={m.analyse_ia_at} />
           </>
         )}
       </td>

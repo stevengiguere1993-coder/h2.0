@@ -91,6 +91,13 @@ class Materiau(Base):
     prix_recherche_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    #: Analyse IA des derniers prix relevés (2026-10-01) : JSON
+    #: {verdict, tendance, frequence_rabais, prochain_rabais, prix_cible,
+    #: resume} — refaite chaque semaine par le job de nuit.
+    analyse_ia: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    analyse_ia_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

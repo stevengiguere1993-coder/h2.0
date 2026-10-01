@@ -69,3 +69,5 @@ gratuits dans le quota.
 ## Catalogue de matériaux
 
 Le mega-cron `all-daily` inclut `materiaux-prix` : relevé quotidien des prix chez les détaillants pour toute offre avec lien produit non vérifiée depuis 20 h (rabais et date de fin compris).
+
+**Job de nuit hebdomadaire** (`materiaux-hebdo-nuit`, 2026-10-01) : lancé par le mega-cron `all-hourly` la première heure entre 02:00 et 05:59 (Montréal) où le dernier run date de plus de 6 jours (verrou `cron_runs`). Enchaîne : relevé COMPLET de toutes les offres avec lien (rabais et dates de fin), recherche des prix de base manquants (jusqu'à 300 couples), alertes de rabais, puis analyse IA de l'historique 6 mois par matériau (verdict bon moment / attendre, tendance, fréquence des rabais, prix cible → `materiaux.analyse_ia`, lu par le catalogue et le plan d'achat des projets). Rien à configurer dans cron-job.org tant que `all-hourly` tourne. Forcer : `POST /api/v1/cron/run/materiaux-hebdo?secret=…` (`&wait=true` pour attendre la fin). État : `GET /api/v1/materiaux/prix/analyser/etat`.
