@@ -53,13 +53,28 @@ _STOP = {
 _SYNONYMES = {
     "gyproc": "gypse", "drywall": "gypse", "placoplatre": "gypse",
     "plywood": "contreplaque", "osb": "osb",
-    "epinette": "epinette", "spruce": "epinette", "spf": "epinette",
+    "epinette": "epinette", "spruce": "epinette", "spf": "epinette", "eps": "epinette",
     "2x4": "2 x 4", "2x6": "2 x 6", "2x3": "2 x 3", "2x8": "2 x 8", "2x10": "2 x 10",
     "4x8": "4 x 8", "1x4": "1 x 4", "1x6": "1 x 6", "1x3": "1 x 3",
     "pouce": "po", "pouces": "po", "pied": "pi", "pieds": "pi", "inch": "po",
     "litre": "l", "litres": "l", "liter": "l",
     "screw": "vis", "screws": "vis", "nail": "clou", "nails": "clou", "clous": "clou",
     "vis": "vis", "paint": "peinture", "primer": "appret",
+    # Abréviations de FACTURE (le catalogue vient des factures de fournisseurs,
+    # retour Phil 2026-10-01) et vocabulaire des sites (FIP / MIP) : les deux
+    # côtés passent par ``normaliser``, donc « ff » ↔ « FIP x FIP ».
+    "adapt": "adaptateur", "adapt.": "adaptateur", "adaptor": "adaptateur", "adapter": "adaptateur",
+    "ff": "femelle femelle", "fm": "femelle male", "mf": "male femelle",
+    "fip": "femelle", "fpt": "femelle", "mip": "male", "mpt": "male", "fem": "femelle",
+    "femelle": "femelle", "male": "male", "mal": "male",
+    "cu": "cuivre", "cuiv": "cuivre", "galv": "galvanise", "galvanize": "galvanise", "galvanized": "galvanise",
+    "gyp": "gypse", "ctp": "contreplaque", "epin": "epinette",
+    "elec": "electrique", "elect": "electrique", "ext": "exterieur", "int": "interieur",
+    "alim": "alimentation", "amenee": "alimentation", "tuy": "tuyau", "rac": "raccord", "racc": "raccord",
+    "coud": "coude", "cde": "coude", "rob": "robinet", "siph": "siphon", "fem.": "femelle",
+    "piv": "pivotant", "ss": "inoxydable", "inox": "inoxydable", "stainless": "inoxydable",
+    "tte": "toilette", "toil": "toilette", "lav": "lavabo", "evier": "evier",
+    "bte": "boite", "sch": "cedule", "sch40": "cedule 40", "sch80": "cedule 80",
 }
 
 #: Expressions composées → jeton unique (après retrait des accents).
@@ -111,9 +126,14 @@ def _fmt(x: float) -> str:
 def normaliser(texte: str) -> str:
     """Minuscules, sans accents, fractions et virgules décimales
     normalisées, « 4x8 » → « 4 x 8 », synonymes appliqués."""
-    s = _sans_accents((texte or "").lower())
+    s = (texte or "").lower().replace("œ", "oe").replace("æ", "ae")
+    s = _sans_accents(s)
     s = s.replace(" ", " ").replace(" ", " ").replace(" ", " ")
-    s = s.replace("''", " po ").replace('"', " po ").replace("\u2019", "'").replace("'", " pi ")
+    # Marques de pouce / pied seulement APRÈS un nombre (« 12" », « 8' »,
+    # « 4'x8' ») ; ailleurs l'apostrophe est une élision (« d'épinette »).
+    s = re.sub(r"(?<=\d)\s*(?:''|\"|\u2033)", " po ", s)
+    s = re.sub(r"(?<=\d)\s*(?:'|\u2019|\u2032)", " pi ", s)
+    s = s.replace("\u2019", " ").replace("'", " ").replace('"', " ")
     # Expressions à plusieurs mots → un jeton (avant tout découpage).
     for expr, rep_ in _EXPRESSIONS:
         s = s.replace(expr, rep_)
@@ -206,7 +226,11 @@ def score(nom_materiau: str, titre: str) -> float:
     racines_t = {_racine(w) for w in w_t}
 
     def present(w: str) -> bool:
-        return w in w_t or _racine(w) in racines_t
+        if w in w_t or _racine(w) in racines_t:
+            return True
+        # Abréviation de facture (« adapt », « galv », « epin ») : le mot
+        # du matériau est le DÉBUT d'un mot du titre (4 lettres au moins).
+        return len(w) >= 4 and any(t.startswith(w) for t in w_t)
 
     premier = _premier_mot(nom_materiau)
     if premier and not present(premier):
@@ -233,6 +257,36 @@ def choisir(nom_materiau: str, candidats: Iterable[Candidat], seuil: float = SEU
         if c.score >= seuil and (best is None or c.score > best.score):
             best = c
     return best
+
+
+def requetes_mots(nom: str) -> list[str]:
+    """Requêtes « par mot », sans les nombres : d'abord tous les mots
+    significatifs (« alimentation toilette »), puis le produit seul avec
+    sa marque (« epinette », « peinture glidden »). Le site renvoie alors
+    toutes les grandeurs, et le notateur retient celle dont les nombres
+    correspondent — « épinette 2x6 » → « epinette » → la 2 x 6."""
+    premier = _premier_mot(nom)
+    if not premier:
+        return []
+    out: list[str] = []
+    mots_ordre: list[str] = []
+    for w in normaliser(nom).split():
+        w = w.strip("./")
+        if w and not re.fullmatch(r"[\d./]+", w) and len(w) >= 3 and w not in _STOP and w not in mots_ordre:
+            mots_ordre.append(w)
+    if len(mots_ordre) > 1:
+        out.append(" ".join(mots_ordre))
+    seul = [premier] + [m for m in sorted(_marques(nom)) if m and m != premier]
+    q = " ".join(seul)
+    if q.lower() not in {x.lower() for x in out}:
+        out.append(q)
+    return out
+
+
+def requete_mot(nom: str) -> Optional[str]:
+    """Le produit seul (dernière requête « par mot »)."""
+    qs = requetes_mots(nom)
+    return qs[-1] if qs else None
 
 
 def variantes(nom: str) -> list[str]:
