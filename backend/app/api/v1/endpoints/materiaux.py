@@ -412,6 +412,9 @@ class RechercheMagasinResult(BaseModel):
     method: str = ""
     error: Optional[str] = None
     candidats: List[str] = []
+    #: regle | ia | "" — comment le produit a été apparié au nom.
+    appariement: str = ""
+    raison_ia: Optional[str] = None
 
 
 class RechercheMateriauResult(BaseModel):
