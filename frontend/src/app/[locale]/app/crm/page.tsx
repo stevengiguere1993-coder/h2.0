@@ -13,6 +13,7 @@ import {
   Phone,
   Plus,
   Trash2,
+  UserPlus,
   X
 } from "lucide-react";
 
@@ -39,6 +40,16 @@ type Prospect = {
   kanban_column: string | null;
   rappel_at: string | null;
   created_at: string;
+  client_id?: number | null;
+};
+
+type CrmClient = {
+  id: number;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+  is_company?: boolean;
 };
 
 /** ISO (UTC) → valeur d'un <input type="datetime-local"> en heure
@@ -185,7 +196,7 @@ export default function CrmKanbanPage() {
   const [collapsedCols, setCollapsedCols] = useState<Set<string>>(
     () => new Set(DEFAULT_COLLAPSED)
   );
-  const [createOpen, setCreateOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState<false | "nouveau" | "client">(false);
   // Horloge rafraîchie chaque minute : permet au badge « à rappeler »
   // d'apparaître au moment du rappel sans recharger la page.
   const [now, setNow] = useState(() => Date.now());
@@ -525,7 +536,15 @@ export default function CrmKanbanPage() {
             </button>
             <button
               type="button"
-              onClick={() => setCreateOpen(true)}
+              onClick={() => setCreateOpen("client")}
+              className="btn-secondary text-sm"
+              title="Un client déjà dans le CRM a une nouvelle demande de soumission : crée le prospect à partir de sa fiche"
+            >
+              <UserPlus className="mr-1.5 h-4 w-4" /> Client existant
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreateOpen("nouveau")}
               className="btn-accent text-sm"
             >
               <Plus className="mr-1.5 h-4 w-4" /> Créer un prospect
@@ -656,6 +675,7 @@ export default function CrmKanbanPage() {
 
       {createOpen ? (
         <CreateProspectModal
+          importClient={createOpen === "client"}
           onClose={() => setCreateOpen(false)}
           onCreated={(p) => {
             setItems((xs) => [p, ...xs]);
@@ -874,12 +894,51 @@ function ProspectCard({
 }
 
 function CreateProspectModal({
+  importClient = false,
   onClose,
   onCreated
 }: {
+  importClient?: boolean;
   onClose: () => void;
   onCreated: (p: Prospect) => void;
 }) {
+  // Import d'un client existant du CRM (nouveau projet d'un client connu,
+  // Phil 2026-10-01) : on cherche sa fiche, on pré-remplit, et la demande
+  // est LIÉE au client (client_id) → « Convertir en client » réutilise la
+  // fiche au lieu d'en créer une en double.
+  const [pickerOpen, setPickerOpen] = useState(importClient);
+  const [clients, setClients] = useState<CrmClient[] | null>(null);
+  const [clientQ, setClientQ] = useState("");
+  const [client, setClient] = useState<CrmClient | null>(null);
+  useEffect(() => {
+    if (!pickerOpen || clients !== null) return;
+    void (async () => {
+      try {
+        const r = await authedFetch("/api/v1/clients?limit=500");
+        setClients(r.ok ? ((await r.json()) as CrmClient[]) : []);
+      } catch {
+        setClients([]);
+      }
+    })();
+  }, [pickerOpen, clients]);
+  const clientsFiltres = useMemo(() => {
+    const q = clientQ.trim().toLowerCase();
+    const all = clients || [];
+    const xs = q
+      ? all.filter((c) =>
+          [c.name, c.email || "", c.phone || "", c.address || ""].some((v) => v.toLowerCase().includes(q))
+        )
+      : all;
+    return xs.slice(0, 25);
+  }, [clients, clientQ]);
+  function choisirClient(c: CrmClient) {
+    setClient(c);
+    setName(c.name);
+    setEmail(c.email && !c.email.includes("horizon.placeholder") ? c.email : "");
+    setPhone(c.phone || "");
+    setAddress("");
+    setPickerOpen(false);
+  }
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -953,7 +1012,18 @@ function CreateProspectModal({
       if (listRes.ok) {
         const rows = (await listRes.json()) as Prospect[];
         if (rows.length > 0) {
-          onCreated(rows[0]);
+          let created = rows[0];
+          if (client) {
+            // Lier la demande au client CRM (route staff).
+            const lr = await authedFetch(`/api/v1/contact/${created.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ client_id: client.id })
+            });
+            if (lr.ok) created = (await lr.json()) as Prospect;
+            else created = { ...created, client_id: client.id };
+          }
+          onCreated(created);
           return;
         }
       }
@@ -974,8 +1044,81 @@ function CreateProspectModal({
         className="w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 p-6"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="text-lg font-bold text-white">Nouveau prospect</h3>
+        <h3 className="text-lg font-bold text-white">
+          {client ? "Nouveau projet d'un client existant" : importClient ? "Client existant du CRM" : "Nouveau prospect"}
+        </h3>
         <div className="mt-5 space-y-3">
+          {client ? (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm">
+              <UserPlus className="h-4 w-4 text-emerald-300" />
+              <span className="text-emerald-200">
+                Client CRM : <strong>{client.name}</strong>
+                {client.email && !client.email.includes("horizon.placeholder") ? ` · ${client.email}` : ""}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setClient(null);
+                  setPickerOpen(true);
+                }}
+                className="ml-auto text-xs text-white/70 underline hover:text-white"
+              >
+                Changer
+              </button>
+            </div>
+          ) : pickerOpen ? (
+            <div className="rounded-lg border border-brand-800 bg-brand-900/60 p-3">
+              <label className="label">Chercher un client du CRM</label>
+              <input
+                value={clientQ}
+                onChange={(e) => setClientQ(e.target.value)}
+                className="input"
+                placeholder="Nom, courriel, téléphone ou adresse…"
+                autoFocus
+              />
+              <ul className="mt-2 max-h-56 divide-y divide-brand-800 overflow-y-auto">
+                {clients === null ? (
+                  <li className="flex items-center gap-2 py-2 text-xs text-white/60">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement des clients…
+                  </li>
+                ) : clientsFiltres.length === 0 ? (
+                  <li className="py-2 text-xs text-white/60">Aucun client ne correspond.</li>
+                ) : (
+                  clientsFiltres.map((c) => (
+                    <li key={c.id}>
+                      <button
+                        type="button"
+                        onClick={() => choisirClient(c)}
+                        className="flex w-full flex-col items-start px-1 py-1.5 text-left hover:bg-brand-800/60"
+                      >
+                        <span className="text-sm font-medium text-white">{c.name}</span>
+                        <span className="text-[11px] text-white/60">
+                          {[c.email && !c.email.includes("horizon.placeholder") ? c.email : null, c.phone ? formatPhone(c.phone) : null, c.address]
+                            .filter(Boolean)
+                            .join(" · ") || "—"}
+                        </span>
+                      </button>
+                    </li>
+                  ))
+                )}
+              </ul>
+              <button
+                type="button"
+                onClick={() => setPickerOpen(false)}
+                className="mt-2 text-xs text-white/70 underline hover:text-white"
+              >
+                Ce n&apos;est pas un client existant — saisir un nouveau prospect
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setPickerOpen(true)}
+              className="text-xs text-accent-500 underline hover:text-accent-400"
+            >
+              Importer un client existant du CRM
+            </button>
+          )}
           <div>
             <label className="label">Nom complet *</label>
             <input

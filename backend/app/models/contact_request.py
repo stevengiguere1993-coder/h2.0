@@ -115,6 +115,12 @@ class ContactRequest(Base, TimestampUpdateMixin):
     # Assignation à un prospecteur/commercial. SET NULL si l'utilisateur
     # est désactivé pour qu'on n'orpheline pas le lead. Index pour les
     # queries « mes leads ».
+    #: Client CRM existant à l'origine de cette demande (nouveau projet
+    #: d'un client connu, importé depuis le pipeline — Phil 2026-10-01).
+    #: La conversion « won » réutilise ce client au lieu d'en créer un.
+    client_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     assigned_to_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,

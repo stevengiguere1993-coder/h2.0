@@ -371,6 +371,13 @@ async def update_contact_request(
     current_user: CurrentUser,
 ) -> ContactRequestRead:
     service = ContactRequestService(db)
+    if data.client_id is not None:
+        from app.models.client import Client as _Client
+
+        if data.client_id == 0:
+            data.client_id = None  # délier (model_dump garde la clé)
+        elif await db.get(_Client, data.client_id) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Client introuvable.")
     record = await service.update(request_id, data)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -801,11 +808,17 @@ async def convert_prospect_to_client(
             status.HTTP_404_NOT_FOUND, "Prospect introuvable."
         )
 
-    existing = (
-        await db.execute(
-            select(Client).where(Client.contact_request_id == contact_id)
-        )
-    ).scalar_one_or_none()
+    existing = None
+    # Demande importée pour un client CRM existant (nouveau projet) :
+    # c'est LUI, jamais un doublon.
+    if getattr(cr, "client_id", None):
+        existing = await db.get(Client, cr.client_id)
+    if existing is None:
+        existing = (
+            await db.execute(
+                select(Client).where(Client.contact_request_id == contact_id)
+            )
+        ).scalar_one_or_none()
     if existing is None and (cr.email or "").strip():
         from sqlalchemy import func as _func
 
@@ -820,6 +833,9 @@ async def convert_prospect_to_client(
             existing.contact_request_id = cr.id
             await db.flush()
     if existing is not None:
+        if getattr(cr, "client_id", None) != existing.id:
+            cr.client_id = existing.id
+            await db.flush()
         return {
             "client_id": existing.id,
             "created": False,
@@ -834,5 +850,7 @@ async def convert_prospect_to_client(
         contact_request_id=cr.id,
     )
     db.add(client)
+    await db.flush()
+    cr.client_id = client.id
     await db.flush()
     return {"client_id": client.id, "created": True, "name": client.name}
