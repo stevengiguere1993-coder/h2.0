@@ -22,6 +22,7 @@ RIEN (pas de prix plutôt qu'un mauvais prix).
 from __future__ import annotations
 
 import asyncio
+import re
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -34,7 +35,7 @@ from sqlalchemy.orm import selectinload
 from app.models.materiau import Magasin, Materiau, MateriauOffre, MateriauPrixHistorique
 from app.services import prix_magasins as pm
 from app.services.materiaux_prix_auto import PARALLELISME, _polite, relever_offre
-from app.services.prix_magasins.recherche import Candidat, choisir, variantes
+from app.services.prix_magasins.recherche import Candidat, choisir, requetes_mots, variantes
 
 log = logging.getLogger(__name__)
 
@@ -99,42 +100,94 @@ def _meme_site(magasin: Magasin, url: str) -> bool:
     return bool(a) and bool(b) and (a == b or b.endswith("." + a))
 
 
-MAX_REQUETES = 5
+MAX_REQUETES = 7
+#: Résultats demandés pour la requête « par mot » (toutes les grandeurs
+#: d'un produit : il en faut plus que 10).
+LIMITE_MOT = 40
+#: Score de règles « sûr » : accepté sans l'avis de l'IA.
+SCORE_SUR = 0.999
+
+
+def _err(exc: BaseException) -> str:
+    """Message d'erreur jamais vide (un ReadTimeout httpx s'imprime « »)."""
+    return (str(exc).strip() or exc.__class__.__name__)[:300]
 
 
 async def _chercher_candidat(mod, nom: str) -> tuple[Optional[Candidat], list[Candidat], str, Optional[str]]:
-    """Cherche le produit sur le site : requêtes réécrites par l'IA (si
-    configurée) puis variantes du nom ; à chaque requête le notateur par
-    règles tranche. Si aucune règle ne retient un produit, l'IA choisit
-    parmi tout ce qui a été vu (ou rien). Renvoie (choisi, candidats vus,
+    """Cherche le produit sur le site, dans l'ordre :
+
+    1. requêtes réécrites par l'IA (si configurée) ;
+    2. variantes du nom tel quel ;
+    3. requête « PAR MOT » (le produit seul, ex. « epinette » pour
+       « épinette 2x6 », avec plus de résultats) : le site renvoie toutes
+       les grandeurs et le notateur retient celle dont les nombres
+       correspondent.
+
+    À chaque requête le notateur par règles tranche. Sans IA, le premier
+    candidat ≥ seuil est retenu. Avec l'IA, on arrête les requêtes dès
+    qu'un candidat ≥ seuil existe et c'est l'IA qui confirme (ou corrige,
+    ou refuse) parmi tout ce qui a été vu : elle lit les titres (« adaptateur
+    de conduit PVC » n'est pas un adaptateur de plomberie) ; si elle ne
+    répond pas, le choix des règles reste. Renvoie (choisi, candidats vus,
     appariement « regle » | « ia » | « », raison IA)."""
     from app.services.prix_magasins import appariement_ia as ia
 
     domaine = getattr(mod, "DOMAINS", ("",))[0]
-    requetes: list[str] = []
-    for q in (await ia.requetes_pour(nom)) + variantes(nom):
-        if q.lower() not in {x.lower() for x in requetes}:
-            requetes.append(q)
+    requetes: list[tuple[str, int]] = []
+
+    def _ajouter(q: Optional[str], limite: int) -> None:
+        q = re.sub(r"\s+", " ", q or "").strip()
+        if q and q.lower() not in {x.lower() for x, _ in requetes}:
+            requetes.append((q, limite))
+
+    for q in await ia.requetes_pour(nom):
+        _ajouter(q, 20)
+    for q in variantes(nom):
+        _ajouter(q, 20)
+    for q in requetes_mots(nom):
+        _ajouter(q, LIMITE_MOT)
+
     vus: dict[str, Candidat] = {}
+    reserve: Optional[Candidat] = None
     premier = True
-    for q in requetes[:MAX_REQUETES]:
+    for q, limite in requetes[:MAX_REQUETES]:
         if not premier:
             await _polite(domaine)
         premier = False
-        cands = await mod.search(q)
+        try:
+            cands = await mod.search(q, limit=limite)
+        except TypeError:
+            cands = await mod.search(q)
         if not cands:
             continue
         for c in cands:
             vus.setdefault(c.url, c)
         best = choisir(nom, cands)
-        if best is not None:
+        if best is None:
+            continue
+        if not ia.disponible():
             return best, cands, "regle", None
+        if reserve is None or best.score > reserve.score:
+            reserve = best
+        if reserve.score >= SCORE_SUR:
+            break  # tout y est : l'IA confirme, inutile de chercher plus
     tous = list(vus.values())
-    if tous:
-        best, conf, raison = await ia.choisir_parmi(nom, tous)
+    if tous and ia.disponible():
+        # Le choix des règles passe en tête de liste (l'IA n'en lit que
+        # les premiers), le reste dans l'ordre de pertinence des sites.
+        ordre = ([reserve] if reserve is not None else []) + [c for c in tous if c is not reserve]
+        best, conf, raison, repondu = await ia.choisir_parmi(nom, ordre)
         if best is not None:
+            if best is reserve:
+                return best, tous, "regle", raison
             best.score = conf
             return best, tous, "ia", raison
+        if repondu:
+            # L'IA a lu les titres et dit « aucun » : pas de prix plutôt
+            # qu'un mauvais prix (le nom reste à préciser).
+            return None, tous, "", raison
+    if reserve is not None:
+        return reserve, tous, "regle", None
     return None, tous, "", None
 
 
@@ -167,7 +220,7 @@ async def chercher_pour_materiau(
             await _polite(getattr(mod, "DOMAINS", ("",))[0])
             best, cands, appariement, raison_ia = await _chercher_candidat(mod, materiau.name)
         except Exception as exc:  # noqa: BLE001
-            res.statut, res.error = "erreur", str(exc)[:300]
+            res.statut, res.error = "erreur", _err(exc)
             continue
         res.candidats = [c.title[:120] for c in cands[:5]]
         res.appariement, res.raison_ia = appariement, raison_ia
@@ -377,7 +430,7 @@ async def chercher_tout(
                         continue
                     except Exception as exc:  # noqa: BLE001
                         await s.rollback()
-                        r = ResultatRecherche(magasin_id=mag.id, magasin_name=mag.name, statut="erreur", error=str(exc)[:300])
+                        r = ResultatRecherche(magasin_id=mag.id, magasin_name=mag.name, statut="erreur", error=_err(exc))
                     if _compter(mag, mid, r):
                         break
 

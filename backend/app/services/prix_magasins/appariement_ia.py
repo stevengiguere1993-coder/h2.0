@@ -138,12 +138,14 @@ async def requetes_pour(nom: str) -> list[str]:
     return out
 
 
-async def choisir_parmi(nom: str, candidats: list[Candidat]) -> tuple[Optional[Candidat], float, str]:
+async def choisir_parmi(nom: str, candidats: list[Candidat]) -> tuple[Optional[Candidat], float, str, bool]:
     """Demande à l'IA lequel des candidats est LE même article que le
-    matériau. Renvoie (candidat ou None, confiance, raison)."""
+    matériau. Renvoie (candidat ou None, confiance, raison, repondu) —
+    ``repondu`` False = pas de réponse exploitable (IA absente, quota,
+    JSON illisible), à distinguer d'un « aucun » explicite."""
     cands = [c for c in candidats if (c.title or "").strip()][:MAX_CANDIDATS]
     if not cands or not disponible():
-        return None, 0.0, ""
+        return None, 0.0, "", False
     lignes = []
     for i, c in enumerate(cands, start=1):
         prix = f" — {c.price:.2f} $" if (c.price is not None and c.price > 0) else ""
@@ -154,12 +156,15 @@ async def choisir_parmi(nom: str, candidats: list[Candidat]) -> tuple[Optional[C
         "Lequel est LE MÊME article (même type de produit, mêmes dimensions / format / "
         "diamètre, même matière, même finition) ? Un produit d'une autre dimension, d'un "
         "autre diamètre ou d'un autre type n'est PAS le même article : réponds alors null. "
-        "Un format d'emballage différent (unité vs paquet) est acceptable si l'article est le même.\n"
+        "Un format d'emballage différent (unité vs paquet) est acceptable si l'article est le même. "
+        "Une caractéristique que le nom du catalogue ne précise pas (longueur d'une pièce de bois, "
+        "couleur, marque, classe) n'est PAS un critère d'exclusion : prends alors le candidat le plus "
+        "courant. Le catalogue vient de factures de fournisseurs : abréviations et fautes sont normales.\n"
         'Format : {"index": <numéro ou null>, "confiance": <0 à 1>, "raison": "<10 mots max>"}'
     )
     data = _json(await _appel(prompt, max_tokens=120))
     if not isinstance(data, dict):
-        return None, 0.0, ""
+        return None, 0.0, "", False
     idx = data.get("index")
     try:
         conf = max(0.0, min(1.0, float(data.get("confiance") or 0.0)))
@@ -167,7 +172,7 @@ async def choisir_parmi(nom: str, candidats: list[Candidat]) -> tuple[Optional[C
         conf = 0.0
     raison = str(data.get("raison") or "")[:120]
     if idx is None or not isinstance(idx, (int, float)) or not (1 <= int(idx) <= len(cands)):
-        return None, conf, raison
+        return None, conf, raison, True
     if conf < SEUIL_CONFIANCE:
-        return None, conf, raison
-    return cands[int(idx) - 1], conf, raison
+        return None, conf, raison, True
+    return cands[int(idx) - 1], conf, raison, True
