@@ -227,7 +227,10 @@ export function MateriauxCatalogue() {
     materiauId: number;
     magasinId: number;
   } | null>(null);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Catégories FERMÉES par défaut (Phil 2026-10-01) ; on retient celles
+  // que l'utilisateur ouvre. Une recherche en cours déplie tout pour
+  // montrer les résultats.
+  const [opened, setOpened] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -583,24 +586,41 @@ export function MateriauxCatalogue() {
   }
 
   function toggleGroup(key: string) {
-    setCollapsed((prev) => {
+    setOpened((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
       return next;
     });
   }
+  const recherche = q.trim() !== "";
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="sticky top-16 lg:top-[152px] z-20 -mx-1 flex flex-wrap items-center gap-2 rounded-lg bg-brand-950/95 px-1 py-2 backdrop-blur">
         <input
           type="search"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Rechercher un matériau…"
+          placeholder="Rechercher un matériau par nom…"
           className="input w-full sm:w-64"
+          aria-label="Rechercher un matériau par nom"
         />
+        {!recherche && groups.length > 0 ? (
+          <span className="flex items-center gap-1 text-xs text-white/60">
+            <button
+              type="button"
+              onClick={() => setOpened(new Set(groups.map(([g]) => g)))}
+              className="underline hover:text-white"
+            >
+              Tout ouvrir
+            </button>
+            ·
+            <button type="button" onClick={() => setOpened(new Set())} className="underline hover:text-white">
+              Tout fermer
+            </button>
+          </span>
+        ) : null}
         <select
           value={cat}
           onChange={(e) => setCat(e.target.value)}
@@ -835,7 +855,7 @@ export function MateriauxCatalogue() {
             </thead>
             <tbody>
               {groups.map(([groupName, list]) => {
-                const isCollapsed = collapsed.has(groupName);
+                const isCollapsed = !recherche && !opened.has(groupName);
                 return (
                   <GroupRows
                     key={groupName}

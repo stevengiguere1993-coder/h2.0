@@ -56,6 +56,7 @@ from app.services.materiaux_alertes import (
     rabais_en_cours,
 )
 from app.services.materiaux_import import categorie_standard, categoriser_par_nom, norm_key
+from app.services.materiaux_comparatif import avis_ia_comparatif, comparatif_hebdo
 from app.services.materiaux_plan_achat import plan_achat
 from app.services.numbering import next_po_number
 
@@ -275,6 +276,59 @@ class PlanRead(BaseModel):
     economie_rabais: float
 
 
+class CelluleSemaineRead(BaseModel):
+    semaine: date
+    meilleur_prix: Optional[float] = None
+    meilleur_magasin_id: Optional[int] = None
+    rabais: bool = False
+    par_magasin: dict[int, float] = {}
+
+
+class LigneComparatifRead(BaseModel):
+    ligne_id: int
+    materiau_id: int
+    materiau_name: str
+    phase_id: Optional[int] = None
+    quantity: float
+    unit: Optional[str] = None
+    semaines: List[CelluleSemaineRead]
+    courant_prix: Optional[float] = None
+    courant_magasin_id: Optional[int] = None
+    plus_bas_prix: Optional[float] = None
+    plus_bas_magasin_id: Optional[int] = None
+    plus_bas_semaine: Optional[date] = None
+    tendance: str = "inconnue"
+    ecart_plus_bas: Optional[float] = None
+    verdict_ia: Optional[str] = None
+    avis_ia: Optional[str] = None
+    prix_cible_ia: Optional[float] = None
+    analyse_ia_at: Optional[datetime] = None
+
+
+class ComparatifRead(BaseModel):
+    semaines: List[date]
+    magasins: List[dict]
+    lignes: List[LigneComparatifRead]
+    totaux_semaine: List[Optional[float]]
+    couverture_semaine: List[int]
+    total_courant: Optional[float] = None
+    meilleure_semaine: Optional[date] = None
+    nb_lignes: int
+
+
+class AvisComparatifRead(BaseModel):
+    disponible: bool
+    raison: Optional[str] = None
+    moment: Optional[str] = None
+    semaine_conseillee: Optional[str] = None
+    resume: Optional[str] = None
+    acheter_maintenant: List[str] = []
+    attendre: List[str] = []
+    economie_estimee: Optional[float] = None
+    genere_le: Optional[str] = None
+    modele: Optional[str] = None
+
+
 # ───────────────────────────── Helpers ─────────────────────────────
 
 async def _projet_visible(db, project_id: int, user) -> Project:
@@ -471,6 +525,38 @@ async def plan_achat_projet(project_id: int, db: DBSession, user: CurrentUser) -
     from dataclasses import asdict
 
     return PlanRead(**asdict(plan))
+
+
+@router.get("/{project_id}/materiaux/comparatif", response_model=ComparatifRead)
+async def comparatif_projet(
+    project_id: int, db: DBSession, user: CurrentUser,
+    semaines: int = Query(default=8, ge=1, le=26),
+) -> ComparatifRead:
+    """Comparatif SEMAINE PAR SEMAINE (principe batirarabais) des lignes
+    encore à acheter : meilleur prix de chaque semaine tous magasins
+    (historique des relevés), plus bas de la période, tendance, prix du
+    jour, avis IA du matériau ; coût de la liste par semaine et meilleure
+    semaine."""
+    p = await _projet_visible(db, project_id, user)
+    from dataclasses import asdict
+
+    cmp = await comparatif_hebdo(db, await _lignes(db, p.id), await _magasins_map(db), semaines=semaines)
+    return ComparatifRead(**asdict(cmp))
+
+
+@router.post("/{project_id}/materiaux/comparatif/avis", response_model=AvisComparatifRead)
+async def avis_comparatif_projet(
+    project_id: int, db: DBSession, user: CurrentUser,
+    semaines: int = Query(default=8, ge=1, le=26),
+    force: bool = Query(default=False),
+) -> AvisComparatifRead:
+    """Avis de l'IA (Gemini) sur le MEILLEUR MOMENT pour acheter la liste,
+    à partir du comparatif hebdomadaire et des dates de phases."""
+    p = await _projet_visible(db, project_id, user)
+    magasins = await _magasins_map(db)
+    phases = await _phases(db, p.id)
+    cmp = await comparatif_hebdo(db, await _lignes(db, p.id), magasins, semaines=semaines)
+    return AvisComparatifRead(**(await avis_ia_comparatif(db, p.id, cmp, magasins, phases, force=force)))
 
 
 @router.post("/{project_id}/materiaux", response_model=ListeRead, status_code=201)

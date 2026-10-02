@@ -25,6 +25,7 @@ import {
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { ProjectPlanAchat } from "@/components/project-plan-achat";
+import { ProjectComparatifHebdo } from "@/components/project-comparatif-hebdo";
 import { Link } from "@/i18n/navigation";
 
 type Magasin = {
@@ -394,7 +395,10 @@ export function ProjectMateriauxTab({ projectId }: { projectId: number }) {
       ) : null}
 
       {data && data.lignes.some((l) => l.statut !== "achete") ? (
-        <ProjectPlanAchat projectId={projectId} refreshKey={data} />
+        <>
+          <ProjectPlanAchat projectId={projectId} refreshKey={data} />
+          <ProjectComparatifHebdo projectId={projectId} refreshKey={data} />
+        </>
       ) : null}
 
       {!data || data.lignes.length === 0 ? (
