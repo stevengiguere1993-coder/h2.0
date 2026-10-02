@@ -48,6 +48,12 @@ class BonTravail(Base, TimestampUpdateMixin):
     client_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    #: Facture dans laquelle le bon a été IMPORTÉ (facturation multi-bons).
+    #: Le bon ne passe « facturé » qu'à l'ENVOI de cette facture au client
+    #: (Phil 2026-10-02) ; une facture brouillon supprimée libère le bon.
+    facture_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("factures.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     amount: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
     status: Mapped[str] = mapped_column(
