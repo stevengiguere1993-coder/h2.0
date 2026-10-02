@@ -37,6 +37,7 @@ type POMini = {
   id: number;
   reference: string;
   fournisseur_id: number | null;
+  is_shop?: boolean;
   project_id: number | null;
   payment_method: string | null;
   description: string | null;
@@ -71,7 +72,7 @@ export default function NewAchatPage() {
   const [projectId, setProjectId] = useState(prefilledProjectId || "");
   // Rattachement du reçu : un PROJET, un BON DE TRAVAIL (son projet lié
   // est garanti à la sélection) ou un CLIENT direct (reçu hors projet).
-  const [targetType, setTargetType] = useState<"projet" | "bon" | "client">(
+  const [targetType, setTargetType] = useState<"projet" | "bon" | "client" | "shop">(
     "projet"
   );
   const [bonId, setBonId] = useState("");
@@ -259,6 +260,8 @@ export default function NewAchatPage() {
         payload.client_id = Number(clientIdSel);
       } else if (targetType === "projet" && projectId) {
         payload.project_id = Number(projectId);
+      } else if (targetType === "shop") {
+        payload.is_shop = true;
       }
       if (fournisseurId) payload.fournisseur_id = Number(fournisseurId);
       payload.kind = kind;
@@ -370,6 +373,8 @@ export default function NewAchatPage() {
                     if (po.project_id) {
                       setProjectId(String(po.project_id));
                       setTargetType("projet");
+                    } else if (po.is_shop) {
+                      setTargetType("shop");
                     }
                     if (po.payment_method)
                       setPaymentMethod(po.payment_method);
@@ -407,7 +412,8 @@ export default function NewAchatPage() {
                   [
                     ["projet", "Projet"],
                     ["bon", "Bon de travail"],
-                    ["client", "Client"]
+                    ["client", "Client"],
+                    ["shop", "Shop"]
                   ] as const
                 ).map(([val, lab]) => (
                   <button
@@ -453,6 +459,11 @@ export default function NewAchatPage() {
                   placeholder="Choisis ou tape pour chercher un bon de travail…"
                   emptyLabel="— Aucun —"
                 />
+              ) : targetType === "shop" ? (
+                <p className="rounded-md border border-brand-800 bg-brand-950 px-3 py-2 text-xs text-white/70">
+                  Achat pour le shop (atelier, camion, outillage), non relié à un projet.
+                  Dans QuickBooks : classe <strong>Construction</strong>, aucun client.
+                </p>
               ) : (
                 <SearchSelect
                   id="client-direct"

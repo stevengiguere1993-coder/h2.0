@@ -94,7 +94,7 @@ async def send_purchase_order(
     if fournisseur and fournisseur.phone:
         fournisseur_line = f"{fournisseur_line} · {fournisseur.phone}"
 
-    project_line = project.name if project else "Non rattaché — frais généraux"
+    project_line = project.name if project else ("SHOP — non relié à un projet" if getattr(po, "is_shop", False) else "Non rattaché — frais généraux")
     if project and project.address:
         project_line = (
             f"{project_line}<br/>"

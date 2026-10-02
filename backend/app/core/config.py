@@ -94,6 +94,8 @@ class Settings(BaseSettings):
     # (erreur 6000 « toutes vos opérations comprennent un taux de TPS/TVH »).
     # Récupère l'Id via « Lister codes de taxe » (ex. TPS/TVQ QC).
     qbo_sales_tax_code: Optional[str] = None
+    #: Classe QB des achats « Shop » (non reliés à un projet).
+    qbo_shop_class_name: str = "Construction"
     # Active l'API Projets QuickBooks (GraphQL) pour CRÉER de vrais projets
     # (onglet Projets) depuis Kratos. Désactivé par défaut : tant que l'app
     # Intuit n'a pas l'accès Premium API + le scope, demander ce scope au

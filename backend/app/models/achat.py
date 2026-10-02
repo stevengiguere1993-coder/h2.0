@@ -102,6 +102,12 @@ class Achat(Base, TimestampUpdateMixin):
         nullable=True,
         index=True,
     )
+    # SHOP (Phil 2026-10-02) : achat NON relié à un projet (atelier,
+    # camion, outillage). Dans QuickBooks, la dépense porte la classe
+    # « Construction » (settings.qbo_shop_class_name) et aucun client.
+    is_shop: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     # Client direct — pour un reçu SANS projet ni bon de travail : la
     # dépense QB est rattachée au client mère (CustomerRef) pour que le
     # coût lui soit attribué quand même. Ignoré si project_id est posé
