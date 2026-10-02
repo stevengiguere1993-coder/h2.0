@@ -16,6 +16,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Merge,
   Search,
   Settings2,
   Sparkles,
@@ -109,6 +110,15 @@ function AnalyseIaBadge({ a, at }: { a: AnalyseIa | null; at: string | null }) {
     </span>
   );
 }
+
+type Suggestion = {
+  id: number;
+  name: string;
+  categorie: string | null;
+  unit: string | null;
+  best_price: number | null;
+  best_magasin_name: string | null;
+};
 
 type RabaisListe = {
   ligne_id: number;
@@ -231,6 +241,49 @@ export function MateriauxCatalogue() {
   // que l'utilisateur ouvre. Une recherche en cours déplie tout pour
   // montrer les résultats.
   const [opened, setOpened] = useState<Set<string>>(new Set());
+  // Propositions pendant la frappe (recherche tolérante : « 2x4x6 »,
+  // « epinette », « adapt 3/4 ») ; un clic filtre la liste sur ce nom et
+  // surligne la ligne.
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [focusId, setFocusId] = useState<number | null>(null);
+  const [doublonsOpen, setDoublonsOpen] = useState(false);
+  useEffect(() => {
+    const term = q.trim();
+    if (!term || focusId != null) {
+      setSuggestions([]);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const r = await authedFetch(`/api/v1/materiaux/recherche/suggestions?q=${encodeURIComponent(term)}&limit=10`);
+        if (r.ok && !cancelled) {
+          setSuggestions((await r.json()) as Suggestion[]);
+          setSuggestOpen(true);
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [q, focusId]);
+  useEffect(() => {
+    if (focusId == null || loading) return;
+    const el = document.getElementById(`materiau-${focusId}`);
+    if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+    const t = setTimeout(() => setFocusId(null), 2500);
+    return () => clearTimeout(t);
+  }, [focusId, loading, items]);
+  function choisirSuggestion(sg: Suggestion) {
+    setSuggestOpen(false);
+    setSuggestions([]);
+    setFocusId(sg.id);
+    setQ(sg.name);
+  }
   const [importing, setImporting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -598,14 +651,47 @@ export function MateriauxCatalogue() {
   return (
     <div className="space-y-4">
       <div className="sticky top-16 lg:top-[152px] z-20 -mx-1 flex flex-wrap items-center gap-2 rounded-lg bg-brand-950/95 px-1 py-2 backdrop-blur">
-        <input
-          type="search"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Rechercher un matériau par nom…"
-          className="input w-full sm:w-64"
-          aria-label="Rechercher un matériau par nom"
-        />
+        <div className="relative w-full sm:w-80">
+          <input
+            type="search"
+            value={q}
+            onChange={(e) => {
+              setFocusId(null);
+              setQ(e.target.value);
+            }}
+            onFocus={() => suggestions.length > 0 && setSuggestOpen(true)}
+            onBlur={() => setTimeout(() => setSuggestOpen(false), 150)}
+            placeholder="Rechercher : 2x4x6, epinette, adapt 3/4…"
+            className="input w-full"
+            aria-label="Rechercher un matériau par nom"
+            autoComplete="off"
+          />
+          {suggestOpen && suggestions.length > 0 ? (
+            <ul className="absolute left-0 right-0 top-full z-30 mt-1 max-h-72 overflow-y-auto rounded-lg border border-brand-700 bg-brand-950 shadow-xl">
+              {suggestions.map((sg) => (
+                <li key={sg.id}>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => choisirSuggestion(sg)}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-brand-800/70"
+                  >
+                    <span className="flex-1 truncate text-white">{sg.name}</span>
+                    {sg.categorie ? <span className="text-[10px] uppercase text-white/50">{sg.categorie}</span> : null}
+                    {sg.best_price != null ? (
+                      <span className="font-mono text-xs text-emerald-300">
+                        {money(sg.best_price)}
+                        {sg.best_magasin_name ? <span className="text-white/50"> {sg.best_magasin_name}</span> : null}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-white/40">sans prix</span>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
         {!recherche && groups.length > 0 ? (
           <span className="flex items-center gap-1 text-xs text-white/60">
             <button
@@ -679,6 +765,14 @@ export function MateriauxCatalogue() {
               <Upload className="mr-1 h-3.5 w-3.5" />
             )}
             Importer Excel
+          </button>
+          <button
+            type="button"
+            onClick={() => setDoublonsOpen(true)}
+            className="btn-secondary btn-sm"
+            title="Repérer les matériaux écrits de plusieurs façons (adapt 3/4 ff 3/4 / Adaptateur 3/4 FF 3/4) et les fusionner"
+          >
+            <Merge className="mr-1 h-3.5 w-3.5" /> Doublons
           </button>
           <button
             type="button"
@@ -828,6 +922,17 @@ export function MateriauxCatalogue() {
         ) : null}
       </p>
 
+      {doublonsOpen ? (
+        <DoublonsPanel
+          onClose={() => setDoublonsOpen(false)}
+          onMerged={(msg) => {
+            setNotice(msg);
+            void load();
+          }}
+          onError={setError}
+        />
+      ) : null}
+
       <RabaisListesPanel refreshKey={items} />
 
       {loading ? (
@@ -864,6 +969,7 @@ export function MateriauxCatalogue() {
                     collapsed={isCollapsed}
                     onToggle={() => toggleGroup(groupName)}
                     colSpan={principaux.length + 3}
+                    focusId={focusId}
                     principaux={principaux}
                     principauxIds={principauxIds}
                     magasins={magasins}
@@ -983,7 +1089,8 @@ function GroupRows({
   priceEdit,
   onPriceEdit,
   onError,
-  categories
+  categories,
+  focusId
 }: {
   name: string;
   list: Materiau[];
@@ -1001,6 +1108,7 @@ function GroupRows({
   onPriceEdit: (v: { materiauId: number; magasinId: number } | null) => void;
   onError: (msg: string) => void;
   categories: string[];
+  focusId?: number | null;
 }) {
   return (
     <>
@@ -1044,6 +1152,7 @@ function GroupRows({
               }
               onError={onError}
               categories={categories}
+              focused={focusId === m.id}
             />
           ))}
     </>
@@ -1137,7 +1246,8 @@ function MateriauRow({
   priceEdit,
   onPriceEdit,
   onError,
-  categories
+  categories,
+  focused = false
 }: {
   m: Materiau;
   principaux: Magasin[];
@@ -1151,6 +1261,7 @@ function MateriauRow({
   onPriceEdit: (magasinId: number | null) => void;
   onError: (msg: string) => void;
   categories: string[];
+  focused?: boolean;
 }) {
   const [name, setName] = useState(m.name);
   const [categorie, setCategorie] = useState(m.categorie || "");
@@ -1215,7 +1326,10 @@ function MateriauRow({
   );
 
   return (
-    <tr className="border-t border-brand-800/60 align-top hover:bg-brand-950/30">
+    <tr
+      id={`materiau-${m.id}`}
+      className={`border-t border-brand-800/60 align-top hover:bg-brand-950/30 ${focused ? "bg-accent-500/15 ring-2 ring-inset ring-accent-500/60" : ""}`}
+    >
       <td className="px-3 py-1.5">
         {editing ? (
           <div className="flex flex-col gap-1">
@@ -1718,5 +1832,111 @@ function OffreEditor({
         </button>
       </div>
     </div>
+  );
+}
+
+
+type DoublonMateriau = { id: number; name: string; categorie: string | null; nb_offres: number; nb_prix: number; nb_lignes_projet: number };
+type DoublonGroupe = { cle: string; materiaux: DoublonMateriau[] };
+
+function DoublonsPanel({
+  onClose,
+  onMerged,
+  onError
+}: {
+  onClose: () => void;
+  onMerged: (msg: string) => void;
+  onError: (msg: string) => void;
+}) {
+  const [groupes, setGroupes] = useState<DoublonGroupe[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const confirm = useConfirm();
+
+  async function load() {
+    try {
+      const r = await authedFetch("/api/v1/materiaux/recherche/doublons");
+      if (!r.ok) throw new Error(await readError(r));
+      setGroupes((await r.json()) as DoublonGroupe[]);
+    } catch (e) {
+      onError(`Doublons : ${(e as Error).message}`);
+      setGroupes([]);
+    }
+  }
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function fusionner(g: DoublonGroupe, cibleId: number) {
+    const cible = g.materiaux.find((m) => m.id === cibleId);
+    const sources = g.materiaux.filter((m) => m.id !== cibleId);
+    if (!cible || sources.length === 0) return;
+    const ok = await confirm(
+      `Fusionner ${sources.map((m) => `« ${m.name} »`).join(", ")} dans « ${cible.name} » ? Les prix, l'historique et les lignes de projets sont rapatriés, puis les doublons sont supprimés.`
+    );
+    if (!ok) return;
+    setBusy(g.cle);
+    try {
+      const r = await authedFetch(`/api/v1/materiaux/${cibleId}/fusionner`, {
+        method: "POST",
+        body: JSON.stringify({ sources: sources.map((m) => m.id) })
+      });
+      if (!r.ok) throw new Error(await readError(r));
+      const j = (await r.json()) as { fusionnes: number; offres_deplacees: number; lignes_projet_deplacees: number };
+      onMerged(`« ${cible.name} » : ${j.fusionnes} doublon(s) fusionné(s), ${j.offres_deplacees} prix et ${j.lignes_projet_deplacees} ligne(s) de projet rapatriés.`);
+      setGroupes((gs) => (gs || []).filter((x) => x.cle !== g.cle));
+    } catch (e) {
+      onError(`Fusion échouée : ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-semibold text-white">Doublons probables</h3>
+        <span className="text-xs text-white/60">
+          même article écrit de plusieurs façons (abréviations de facture) — choisis la ligne à garder.
+        </span>
+        <button type="button" onClick={onClose} className="btn-secondary btn-xs ml-auto">
+          Fermer
+        </button>
+      </div>
+      {groupes === null ? (
+        <p className="mt-2 flex items-center gap-2 text-xs text-white/60">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Analyse du catalogue…
+        </p>
+      ) : groupes.length === 0 ? (
+        <p className="mt-2 text-xs text-emerald-300">Aucun doublon détecté.</p>
+      ) : (
+        <ul className="mt-3 space-y-2">
+          {groupes.map((g) => (
+            <li key={g.cle} className="rounded-lg border border-brand-800 bg-brand-900/60 p-2">
+              <ul className="divide-y divide-brand-800">
+                {g.materiaux.map((m) => (
+                  <li key={m.id} className="flex flex-wrap items-center gap-2 py-1 text-sm">
+                    <span className="text-white">{m.name}</span>
+                    {m.categorie ? <span className="text-[10px] uppercase text-white/50">{m.categorie}</span> : null}
+                    <span className="text-[11px] text-white/60">
+                      {m.nb_prix} prix · {m.nb_lignes_projet} ligne(s) de projet
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void fusionner(g, m.id)}
+                      disabled={busy === g.cle}
+                      className="btn-accent btn-xs ml-auto disabled:opacity-60"
+                      title="Garder cette ligne et y fusionner les autres"
+                    >
+                      {busy === g.cle ? <Loader2 className="h-3 w-3 animate-spin" /> : "Garder celle-ci"}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

@@ -94,7 +94,11 @@ _FRACTION_RE = re.compile(
 )
 _DENOMS = {2, 4, 8, 16, 32, 64}
 _DEC_COMMA_RE = re.compile(r"(\d),(\d)")
-_DIM_RE = re.compile(r"(\d)\s*[x×]\s*(\d)")
+#: « 2x4x8 », « 2 x 4 x 6 » → « 2 x 4 x 8 » (lookarounds : la chaîne
+#: 2x4x6 doit donner trois nombres, pas « 2 » et « 4x6 »).
+_DIM_RE = re.compile(r"(?<=\d)\s*[x×]\s*(?=\d)")
+#: « ff3/4 », « cu1/2 » : lettres collées à une fraction → séparées.
+_LETTRE_FRACTION_RE = re.compile(r"(?<=[a-z])(?=\d+/\d+)")
 
 
 def _sans_accents(s: str) -> str:
@@ -138,8 +142,9 @@ def normaliser(texte: str) -> str:
     for expr, rep_ in _EXPRESSIONS:
         s = s.replace(expr, rep_)
     s = _DEC_COMMA_RE.sub(r"\1.\2", s)
+    s = _LETTRE_FRACTION_RE.sub(" ", s)
     s = _FRACTION_RE.sub(_fraction, s)
-    s = _DIM_RE.sub(r"\1 x \2", s)
+    s = _DIM_RE.sub(" x ", s)
     s = re.sub(r"(?<=[a-z ])x(?=\d)", " x ", s)  # « 4 pi x8 pi »
     s = re.sub(r"(?<=\d)x(?=[a-z ])", " x ", s)
     s = re.sub(r"[^a-z0-9./ ]+", " ", s)
