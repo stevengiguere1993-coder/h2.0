@@ -29,7 +29,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser, DBSession, RequireManager
@@ -40,6 +40,7 @@ from app.models.materiau import (
     MateriauPrixHistorique,
 )
 from app.services.materiaux_analyse_ia import analyse_dict
+from app.services.materiaux_catalogue_recherche import classer, cle_doublon
 from app.services.materiaux_import import (
     CATEGORIES_STANDARD,
     canonical_store,
@@ -638,18 +639,171 @@ async def list_materiaux(
         stmt = stmt.where(Materiau.is_active.is_(True))
     if categorie:
         stmt = stmt.where(Materiau.categorie == categorie)
-    if q:
-        stmt = stmt.where(Materiau.name_key.contains(norm_key(q)))
     if magasin_id:
         stmt = stmt.where(
             Materiau.id.in_(
                 select(MateriauOffre.materiau_id).where(MateriauOffre.magasin_id == magasin_id)
             )
         )
-    stmt = stmt.order_by(Materiau.categorie.asc().nulls_last(), Materiau.name.asc()).limit(limit)
-    rows = (await db.execute(stmt)).scalars().unique().all()
+    stmt = stmt.order_by(Materiau.categorie.asc().nulls_last(), Materiau.name.asc())
+    if q and q.strip():
+        # Recherche TOLÉRANTE par jetons (« 2x4x6 », « epinette », « adapt
+        # 3/4 » — noms de factures) : on classe en Python, du meilleur au
+        # moins bon, puis on garde l'ordre catégorie / nom pour l'affichage.
+        rows = (await db.execute(stmt.limit(5000))).scalars().unique().all()
+        rows = classer(rows, q, limit=limit)
+    else:
+        rows = (await db.execute(stmt.limit(limit))).scalars().unique().all()
     magasins = await _magasins_map(db)
     return [_materiau_read(m, magasins) for m in rows]
+
+
+class SuggestionRead(BaseModel):
+    id: int
+    name: str
+    categorie: Optional[str] = None
+    unit: Optional[str] = None
+    best_price: Optional[float] = None
+    best_magasin_name: Optional[str] = None
+
+
+@router.get("/materiaux/recherche/suggestions", response_model=List[SuggestionRead])
+async def suggestions_materiaux(
+    db: DBSession, _: CurrentUser,
+    q: str = Query(..., min_length=1, max_length=120),
+    limit: int = Query(default=10, ge=1, le=30),
+) -> List[SuggestionRead]:
+    """Propositions pendant la frappe (« 2x4x6 », « epinette », « adapt
+    3/4 ») : les lignes du catalogue qui répondent, du meilleur au moins
+    bon, avec leur meilleur prix."""
+    rows = (await db.execute(
+        select(Materiau).where(Materiau.is_active.is_(True)).options(selectinload(Materiau.offres)).limit(5000)
+    )).scalars().unique().all()
+    magasins = await _magasins_map(db)
+    out = []
+    for m in classer(rows, q, limit=limit):
+        r = _materiau_read(m, magasins)
+        out.append(SuggestionRead(
+            id=r.id, name=r.name, categorie=r.categorie, unit=r.unit,
+            best_price=r.best_price, best_magasin_name=r.best_magasin_name,
+        ))
+    return out
+
+
+class DoublonMateriau(BaseModel):
+    id: int
+    name: str
+    categorie: Optional[str] = None
+    nb_offres: int = 0
+    nb_prix: int = 0
+    nb_lignes_projet: int = 0
+
+
+class DoublonGroupe(BaseModel):
+    cle: str
+    materiaux: List[DoublonMateriau]
+
+
+@router.get("/materiaux/recherche/doublons", response_model=List[DoublonGroupe])
+async def doublons_materiaux(db: DBSession, _: CurrentUser) -> List[DoublonGroupe]:
+    """Groupes de matériaux dont le nom normalisé est le même (« adapt 3/4
+    ff 3/4 » / « Adaptateur 3/4 FF 3/4 » / « adapt. 3/4 ff3/4 ») — à
+    fusionner avec POST /materiaux/{id}/fusionner."""
+    from app.models.projet_materiau import ProjetMateriau
+
+    rows = (await db.execute(
+        select(Materiau).where(Materiau.is_active.is_(True)).options(selectinload(Materiau.offres))
+    )).scalars().unique().all()
+    lignes = dict((await db.execute(
+        select(ProjetMateriau.materiau_id, func.count(ProjetMateriau.id)).group_by(ProjetMateriau.materiau_id)
+    )).all())
+    groupes: dict[str, list[Materiau]] = {}
+    for m in rows:
+        k = cle_doublon(m.name)
+        if k:
+            groupes.setdefault(k, []).append(m)
+    out = []
+    for k, ms in groupes.items():
+        if len(ms) < 2:
+            continue
+        ms.sort(key=lambda m: (-sum(1 for o in m.offres if o.unit_price is not None), -len(m.offres), m.id))
+        out.append(DoublonGroupe(cle=k, materiaux=[
+            DoublonMateriau(
+                id=m.id, name=m.name, categorie=m.categorie, nb_offres=len(m.offres),
+                nb_prix=sum(1 for o in m.offres if o.unit_price is not None),
+                nb_lignes_projet=int(lignes.get(m.id, 0)),
+            ) for m in ms
+        ]))
+    out.sort(key=lambda g: g.materiaux[0].name.lower())
+    return out
+
+
+class FusionBody(BaseModel):
+    sources: List[int] = Field(..., min_length=1, max_length=50)
+
+
+class FusionResult(BaseModel):
+    materiau: MateriauRead
+    fusionnes: int
+    offres_deplacees: int
+    historiques_deplaces: int
+    lignes_projet_deplacees: int
+
+
+@router.post("/materiaux/{materiau_id}/fusionner", response_model=FusionResult)
+async def fusionner_materiaux(
+    materiau_id: int, data: FusionBody, db: DBSession, _: RequireManager,
+) -> FusionResult:
+    """Fusionne des doublons DANS ce matériau : offres (celles des
+    magasins où il n'en a pas, sinon le prix si le sien est vide),
+    historique de prix et lignes de projets sont rapatriés, puis les
+    sources sont supprimées."""
+    from app.models.projet_materiau import ProjetMateriau
+
+    cible = await _get_materiau(db, materiau_id)
+    n_off = n_hist = n_lig = n_fus = 0
+    for sid in data.sources:
+        if sid == cible.id:
+            continue
+        src = (await db.execute(
+            select(Materiau).where(Materiau.id == sid).options(selectinload(Materiau.offres))
+        )).scalar_one_or_none()
+        if src is None:
+            continue
+        existantes = {o.magasin_id: o for o in cible.offres}
+        for o in list(src.offres):
+            cur = existantes.get(o.magasin_id)
+            if cur is None:
+                o.materiau_id = cible.id
+                cible.offres.append(o)
+                existantes[o.magasin_id] = o
+                n_off += 1
+            elif cur.unit_price is None and o.unit_price is not None:
+                for k in ("unit_price", "regular_price", "on_sale", "sale_end", "url", "sku", "page_title", "source", "observed_at", "note"):
+                    setattr(cur, k, getattr(o, k))
+                n_off += 1
+        src.offres = [o for o in src.offres if o.materiau_id == sid]
+        await db.flush()
+        r = await db.execute(
+            update(MateriauPrixHistorique).where(MateriauPrixHistorique.materiau_id == sid).values(materiau_id=cible.id)
+        )
+        n_hist += int(r.rowcount or 0)
+        r = await db.execute(
+            update(ProjetMateriau).where(ProjetMateriau.materiau_id == sid).values(materiau_id=cible.id)
+        )
+        n_lig += int(r.rowcount or 0)
+        if not cible.categorie and src.categorie:
+            cible.categorie = src.categorie
+        if not cible.unit and src.unit:
+            cible.unit = src.unit
+        await db.delete(src)
+        n_fus += 1
+    await db.flush()
+    cible = await _get_materiau(db, materiau_id)
+    return FusionResult(
+        materiau=_materiau_read(cible, await _magasins_map(db)), fusionnes=n_fus,
+        offres_deplacees=n_off, historiques_deplaces=n_hist, lignes_projet_deplacees=n_lig,
+    )
 
 
 @router.post("/materiaux", response_model=MateriauRead, status_code=201)
