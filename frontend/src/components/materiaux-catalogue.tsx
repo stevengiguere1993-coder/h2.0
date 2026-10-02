@@ -615,7 +615,7 @@ export function MateriauxCatalogue() {
     try {
       const res = await authedFetch("/api/v1/materiaux/prix/chercher", {
         method: "POST",
-        body: JSON.stringify({ limit: 150 })
+        body: JSON.stringify({ limit: 500 })
       });
       if (!res.ok) throw new Error(await readError(res));
       const launched = (await res.json()) as { lance: boolean; raison?: string } & Partial<RechercheEtat>;

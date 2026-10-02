@@ -212,6 +212,39 @@ def _racine(w: str) -> str:
     return w
 
 
+_UNITE = r"(?:\s+(?:po|pi|mm|cm|m))?"
+_DIMS_RE = re.compile(
+    r"(\d+(?:\.\d+)?)" + _UNITE + r"(?:\s+x\s+(\d+(?:\.\d+)?)" + _UNITE + r")+"
+)
+_NUM_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def dimensions(texte: str) -> list[list[str]]:
+    """Séquences ORDONNÉES de dimensions du texte normalisé : « 2 po x 10
+    po x 8 pi » → [["2", "10", "8"]]. Un 2 x 10 x 8 n'est pas un
+    2 x 8 x 10 (Canac, 2026-10-02)."""
+    out = []
+    for m in _DIMS_RE.finditer(normaliser(texte)):
+        out.append([_fmt(float(n)) for n in _NUM_RE.findall(m.group(0))])
+    return out
+
+
+def _dims_compatibles(nom_materiau: str, titre: str) -> bool:
+    dm = dimensions(nom_materiau)
+    if not dm:
+        return True
+    dt = dimensions(titre)
+    if not dt:
+        return True  # le titre n'écrit pas « a x b » : les nombres seuls tranchent
+    for d in dm:
+        n = len(d)
+        # « 4 x 8 » doit apparaître dans l'ordre, de façon contiguë, dans
+        # une séquence du titre (« 1/2 po x 4 pi x 8 pi » convient).
+        if not any(t[i : i + n] == d for t in dt for i in range(0, len(t) - n + 1)):
+            return False
+    return True
+
+
 def score(nom_materiau: str, titre: str) -> float:
     """Score (0-1) d'un titre de produit pour un nom de matériau.
 
@@ -227,6 +260,8 @@ def score(nom_materiau: str, titre: str) -> float:
     if not n_m and not w_m:
         return 0.0
     if n_m and not n_m.issubset(n_t):
+        return 0.0
+    if not _dims_compatibles(nom_materiau, titre):
         return 0.0
     racines_t = {_racine(w) for w in w_t}
 

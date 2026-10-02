@@ -404,7 +404,7 @@ class RechercheToutRequest(BaseModel):
     magasin_id: Optional[int] = None
     materiau_id: Optional[int] = None
     #: Nombre maximal de couples matériau × magasin à chercher.
-    limit: int = Field(default=80, ge=1, le=500)
+    limit: int = Field(default=80, ge=1, le=1000)
 
 
 class RechercheMagasinResult(BaseModel):
