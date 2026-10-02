@@ -1012,3 +1012,45 @@ class PlexImportResult(BaseModel):
     totals: dict = Field(default_factory=dict)
     created: Optional[PlexImportCreated] = None
     warnings: List[str] = Field(default_factory=list)
+
+
+# ─── Bascule gestion externe → interne (Phil 2026-10-02) ─────────────
+
+
+class UniteSansBail(BaseModel):
+    """Unité « occupée » sans bail actif — préremplie pour l'assistant."""
+
+    logement_id: int
+    numero: str
+    locataire_externe_nom: Optional[str] = None
+    locataire_externe_depuis: Optional[date] = None
+    loyer_demande: Optional[float] = None
+    location_en_chambres: bool = False
+
+
+class BailLotLigne(BaseModel):
+    """Un bail à créer d'un coup : la fiche du locataire est créée avec."""
+
+    logement_id: int
+    locataire_nom: str = Field(..., min_length=1, max_length=255)
+    locataire_email: Optional[str] = Field(default=None, max_length=320)
+    locataire_phone: Optional[str] = Field(default=None, max_length=50)
+    loyer_mensuel: float = Field(..., ge=0)
+    date_debut: date
+    date_fin: date
+    jour_echeance: int = Field(default=1, ge=1, le=31)
+    au_mois: Optional[bool] = None
+
+
+class PasserInterneIn(BaseModel):
+    baux: List[BailLotLigne] = Field(default_factory=list)
+    #: Unités occupées qu'on ne dote pas d'un bail : elles redeviennent
+    #: vacantes et le nom saisi en externe est effacé.
+    liberer_logement_ids: List[int] = Field(default_factory=list)
+
+
+class PasserInterneOut(BaseModel):
+    immeuble: ImmeubleRead
+    baux_crees: int
+    locataires_crees: int
+    logements_liberes: int

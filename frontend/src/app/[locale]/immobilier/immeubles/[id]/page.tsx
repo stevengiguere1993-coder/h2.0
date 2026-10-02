@@ -339,6 +339,9 @@ export default function ImmeubleDetailPage({
   const [photoVer, setPhotoVer] = useState(0);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [showEdit, setShowEdit] = useState(false);
+  //: Assistant externe → interne (Phil 2026-10-02) : baux en lot.
+  const [showPasserInterne, setShowPasserInterne] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [editBusy, setEditBusy] = useState(false);
   const [editForm, setEditForm] = useState({
     name: "",
@@ -426,7 +429,7 @@ export default function ImmeubleDetailPage({
     return () => {
       cancelled = true;
     };
-  }, [immeubleId]);
+  }, [immeubleId, reloadKey]);
 
   const ownerId = ownerships[0]?.entreprise_id ?? null;
 
@@ -660,8 +663,17 @@ export default function ImmeubleDetailPage({
         `/api/v1/immobilier/immeubles/${immeubleId}`,
         { method: "PATCH", body: JSON.stringify(body) }
       );
-      if (!res.ok)
-        throw new Error((await res.text()).slice(0, 200) || `HTTP ${res.status}`);
+      if (!res.ok) {
+        const t = await res.text();
+        // Externe → interne refusé faute de baux : l'assistant crée les
+        // baux d'un coup, puis bascule (Phil 2026-10-02).
+        if (res.status === 409 && t.includes("Repasser en gestion interne")) {
+          setShowEdit(false);
+          setShowPasserInterne(true);
+          return;
+        }
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+      }
       setImmeuble((await res.json()) as Immeuble);
       // Le propriétaire est une AUTRE ressource (ownerships) : on
       // l'enregistre après les champs de l'immeuble, et seulement s'il a
@@ -1203,6 +1215,18 @@ export default function ImmeubleDetailPage({
             </div>
           </div>
         </div>
+      ) : null}
+
+      {showPasserInterne ? (
+        <PasserInterneModal
+          immeubleId={immeubleId}
+          onClose={() => setShowPasserInterne(false)}
+          onDone={(imm) => {
+            setImmeuble(imm);
+            setShowPasserInterne(false);
+            setReloadKey((k) => k + 1);
+          }}
+        />
       ) : null}
 
       {showEdit ? (
@@ -6800,5 +6824,315 @@ function FacturesExternesSection({
         );
       })()}
     </Section>
+  );
+}
+
+// ─── Assistant « passer en gestion interne » (Phil 2026-10-02) ──────────
+
+type UniteSansBail = {
+  logement_id: number;
+  numero: string;
+  locataire_externe_nom: string | null;
+  locataire_externe_depuis: string | null;
+  loyer_demande: number | null;
+  location_en_chambres: boolean;
+};
+
+type LigneBailLot = {
+  logement_id: number;
+  numero: string;
+  creer: boolean;
+  nom: string;
+  loyer: string;
+  debut: string;
+  fin: string;
+  jour: string;
+  chambres: boolean;
+};
+
+function premierDuMoisCourant(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+/** Bail québécois : 1er juillet → 30 juin. Prochain 30 juin après le
+ *  début, jamais déjà passé. */
+function finDeBailSuggeree(debut: string): string {
+  const d = new Date(`${debut}T00:00:00`);
+  const today = new Date();
+  let annee = Number.isNaN(d.getTime())
+    ? today.getFullYear()
+    : d.getMonth() + 1 >= 7
+    ? d.getFullYear() + 1
+    : d.getFullYear();
+  while (new Date(`${annee}-06-30T00:00:00`) < today) annee += 1;
+  return `${annee}-06-30`;
+}
+
+function PasserInterneModal({
+  immeubleId,
+  onClose,
+  onDone
+}: {
+  immeubleId: string | number;
+  onClose: () => void;
+  onDone: (imm: Immeuble) => void;
+}) {
+  const [lignes, setLignes] = useState<LigneBailLot[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/immobilier/immeubles/${immeubleId}/unites-sans-bail`
+        );
+        if (!r.ok) throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+        const unites = (await r.json()) as UniteSansBail[];
+        setLignes(
+          unites.map((u) => {
+            const debut = u.locataire_externe_depuis || premierDuMoisCourant();
+            return {
+              logement_id: u.logement_id,
+              numero: u.numero,
+              creer: true,
+              nom: u.locataire_externe_nom || "",
+              loyer: u.loyer_demande != null ? String(u.loyer_demande) : "",
+              debut,
+              fin: finDeBailSuggeree(debut),
+              jour: "1",
+              chambres: u.location_en_chambres
+            };
+          })
+        );
+      } catch (e) {
+        setErr((e as Error).message);
+      }
+    })();
+  }, [immeubleId]);
+
+  function maj(i: number, patch: Partial<LigneBailLot>) {
+    setLignes((ls) =>
+      ls ? ls.map((l, j) => (j === i ? { ...l, ...patch } : l)) : ls
+    );
+  }
+
+  const aCreer = (lignes ?? []).filter((l) => l.creer);
+  const invalides = aCreer.filter(
+    (l) => !l.nom.trim() || l.loyer === "" || !l.debut || !l.fin
+  );
+  const liberees = (lignes ?? []).filter((l) => !l.creer);
+
+  async function valider() {
+    if (!lignes || invalides.length > 0) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/immeubles/${immeubleId}/passer-interne`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            baux: aCreer.map((l) => ({
+              logement_id: l.logement_id,
+              locataire_nom: l.nom.trim(),
+              loyer_mensuel: Number(l.loyer),
+              date_debut: l.debut,
+              date_fin: l.fin,
+              jour_echeance: Number(l.jour) || 1,
+              au_mois: l.chambres ? true : null
+            })),
+            liberer_logement_ids: liberees.map((l) => l.logement_id)
+          })
+        }
+      );
+      if (!r.ok) throw new Error((await r.text()).slice(0, 300) || `HTTP ${r.status}`);
+      const d = (await r.json()) as { immeuble: Immeuble };
+      onDone(d.immeuble);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const champ =
+    "w-full rounded-md border border-brand-800 bg-brand-900 px-2 py-1.5 text-sm text-white outline-none focus:border-accent-500";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+      <div className="my-8 w-full max-w-5xl rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
+          <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-accent-500">
+            <KeyRound className="h-4 w-4" /> Passer en gestion interne
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="btn-ghost btn-xs"
+            aria-label="Fermer"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="space-y-3 p-5">
+          <p className="text-sm text-white/70">
+            En gestion interne, Kratos suit les loyers à partir des baux. Ces
+            unités sont occupées mais n&apos;ont pas de bail : les lignes
+            cochées créent le bail et la fiche du locataire d&apos;un coup ;
+            une ligne décochée libère l&apos;unité (vacante, nom effacé).
+            Tu pourras compléter chaque bail ensuite (dépôt, services
+            inclus, document signé).
+          </p>
+          {lignes === null && !err ? (
+            <div className="flex items-center gap-2 text-sm text-white/60">
+              <Loader2 className="h-4 w-4 animate-spin" /> Chargement des unités…
+            </div>
+          ) : null}
+          {lignes && lignes.length === 0 ? (
+            <p className="text-sm text-emerald-300">
+              Aucune unité occupée sans bail : tu peux repasser en gestion
+              interne depuis « Modifier l&apos;immeuble ».
+            </p>
+          ) : null}
+          {lignes && lignes.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-[11px] uppercase tracking-wider text-white/50">
+                  <tr>
+                    <th className="px-2 py-2">Bail</th>
+                    <th className="px-2 py-2">Unité</th>
+                    <th className="px-2 py-2">Locataire</th>
+                    <th className="px-2 py-2">Loyer / mois</th>
+                    <th className="px-2 py-2">Début</th>
+                    <th className="px-2 py-2">Fin</th>
+                    <th className="px-2 py-2">Jour</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-brand-800">
+                  {lignes.map((l, i) => (
+                    <tr key={l.logement_id} className={l.creer ? "" : "opacity-50"}>
+                      <td className="px-2 py-2">
+                        <input
+                          type="checkbox"
+                          checked={l.creer}
+                          onChange={(e) => maj(i, { creer: e.target.checked })}
+                          className="h-4 w-4 accent-accent-500"
+                          title="Décoché = l'unité devient vacante, le nom est effacé"
+                        />
+                      </td>
+                      <td className="px-2 py-2 font-semibold text-white">
+                        {l.numero}
+                        {l.chambres ? (
+                          <span className="block text-[10px] font-normal text-white/40">
+                            chambres · bail au mois
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="px-2 py-2">
+                        <input
+                          value={l.nom}
+                          onChange={(e) => maj(i, { nom: e.target.value })}
+                          disabled={!l.creer}
+                          placeholder="Nom du locataire"
+                          className={champ}
+                        />
+                      </td>
+                      <td className="px-2 py-2">
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={l.loyer}
+                          onChange={(e) => maj(i, { loyer: e.target.value })}
+                          disabled={!l.creer}
+                          placeholder="0"
+                          className={`${champ} w-28`}
+                        />
+                      </td>
+                      <td className="px-2 py-2">
+                        <input
+                          type="date"
+                          value={l.debut}
+                          onChange={(e) =>
+                            maj(i, {
+                              debut: e.target.value,
+                              fin: finDeBailSuggeree(e.target.value)
+                            })
+                          }
+                          disabled={!l.creer}
+                          className={`${champ} w-40`}
+                        />
+                      </td>
+                      <td className="px-2 py-2">
+                        <input
+                          type="date"
+                          value={l.fin}
+                          onChange={(e) => maj(i, { fin: e.target.value })}
+                          disabled={!l.creer}
+                          className={`${champ} w-40`}
+                        />
+                      </td>
+                      <td className="px-2 py-2">
+                        <input
+                          type="number"
+                          min="1"
+                          max="31"
+                          value={l.jour}
+                          onChange={(e) => maj(i, { jour: e.target.value })}
+                          disabled={!l.creer}
+                          className={`${champ} w-16`}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+          {err ? (
+            <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+              {err}
+            </p>
+          ) : null}
+          {invalides.length > 0 ? (
+            <p className="text-xs text-amber-300">
+              {invalides.length} ligne{invalides.length > 1 ? "s" : ""} cochée
+              {invalides.length > 1 ? "s" : ""} sans nom, loyer ou dates :
+              complète-les ou décoche-les.
+            </p>
+          ) : null}
+          <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={busy}
+              className="btn-ghost btn-sm"
+            >
+              Annuler
+            </button>
+            <button
+              type="button"
+              onClick={() => void valider()}
+              disabled={busy || !lignes || lignes.length === 0 || invalides.length > 0}
+              className="btn-primary btn-sm"
+            >
+              {busy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Check className="h-4 w-4" />
+              )}
+              Créer {aCreer.length} bail{aCreer.length > 1 ? "x" : ""}
+              {liberees.length > 0
+                ? `, libérer ${liberees.length} unité${liberees.length > 1 ? "s" : ""}`
+                : ""}{" "}
+              et passer en interne
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
