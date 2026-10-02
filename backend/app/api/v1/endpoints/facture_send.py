@@ -95,6 +95,16 @@ async def send_facture_endpoint(
         )
     except FactureSendError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        # Jamais un « http_500 » muet à l'écran (Phil 2026-10-02) : le motif
+        # réel (rendu PDF, numérotation, base) est journalisé ET renvoyé.
+        log.exception("Envoi de la facture %s échoué", facture_id)
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Envoi échoué ({type(exc).__name__}) : {str(exc)[:300] or 'erreur interne'}",
+        )
 
     # Auto-push vers QBO Invoice après l'envoi (background pour ne
     # pas ralentir la réponse).

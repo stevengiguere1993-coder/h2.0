@@ -220,44 +220,50 @@ async def send_facture(
             BonTravailStatus as _BSti,
         )
 
-        for _bi in (
-            await db.execute(
-                select(_BTi).where(
-                    _BTi.facture_id == fa.id,
-                    _BTi.status == _BSti.COMPLETE_A_REFACTURER.value,
+        # SAVEPOINT : une erreur ici (ex. colonne pas encore ajoutée en
+        # base) ne doit jamais avorter la transaction de l'envoi.
+        async with db.begin_nested():
+            for _bi in (
+                await db.execute(
+                    select(_BTi).where(
+                        _BTi.facture_id == fa.id,
+                        _BTi.status == _BSti.COMPLETE_A_REFACTURER.value,
+                    )
                 )
-            )
-        ).scalars().all():
-            _bi.status = _BSti.FACTURE.value
-        await db.flush()
+            ).scalars().all():
+                _bi.status = _BSti.FACTURE.value
     except Exception:  # noqa: BLE001
         log.warning("Bons importés → facturé : échec pour la facture %s", fa.id, exc_info=True)
 
-    if fa.project_id:
-        from sqlalchemy import select as _sel_bt
+    try:
+      async with db.begin_nested():
+            if fa.project_id:
+                from sqlalchemy import select as _sel_bt
 
-        from app.models.bon_travail import (
-            BonTravail as _BT,
-            BonTravailStatus as _BSt,
-        )
-
-        for _b in (
-            await db.execute(
-                _sel_bt(_BT).where(
-                    _BT.project_id == fa.project_id,
-                    _BT.status.in_(
-                        [
-                            _BSt.DRAFT.value,
-                            _BSt.ACCEPTE_A_PLANIFIER.value,
-                            _BSt.PLANIFIE.value,
-                            _BSt.COMPLETE_A_REFACTURER.value,
-                        ]
-                    ),
+                from app.models.bon_travail import (
+                    BonTravail as _BT,
+                    BonTravailStatus as _BSt,
                 )
-            )
-        ).scalars():
-            _b.status = _BSt.FACTURE.value
-        await db.flush()
+
+                for _b in (
+                    await db.execute(
+                        _sel_bt(_BT).where(
+                            _BT.project_id == fa.project_id,
+                            _BT.status.in_(
+                                [
+                                    _BSt.DRAFT.value,
+                                    _BSt.ACCEPTE_A_PLANIFIER.value,
+                                    _BSt.PLANIFIE.value,
+                                    _BSt.COMPLETE_A_REFACTURER.value,
+                                ]
+                            ),
+                        )
+                    )
+                ).scalars():
+                    _b.status = _BSt.FACTURE.value
+                await db.flush()
+    except Exception:  # noqa: BLE001
+        log.warning("Bons du projet → facturé : échec pour la facture %s", fa.id, exc_info=True)
 
     await db.refresh(fa)
     return fa
