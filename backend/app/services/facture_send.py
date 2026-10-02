@@ -211,6 +211,28 @@ async def send_facture(
     # « facturé » (kanban à jour), quel que soit son stade dans le
     # cycle interne (brouillon, accepté, planifié, à refacturer).
     # Annulé et statuts legacy signés ne bougent pas.
+    # Bons IMPORTÉS dans cette facture (facturation multi-bons) : ils
+    # passent « facturé » maintenant seulement — pas à l'import dans un
+    # brouillon (Phil 2026-10-02).
+    try:
+        from app.models.bon_travail import (
+            BonTravail as _BTi,
+            BonTravailStatus as _BSti,
+        )
+
+        for _bi in (
+            await db.execute(
+                select(_BTi).where(
+                    _BTi.facture_id == fa.id,
+                    _BTi.status == _BSti.COMPLETE_A_REFACTURER.value,
+                )
+            )
+        ).scalars().all():
+            _bi.status = _BSti.FACTURE.value
+        await db.flush()
+    except Exception:  # noqa: BLE001
+        log.warning("Bons importés → facturé : échec pour la facture %s", fa.id, exc_info=True)
+
     if fa.project_id:
         from sqlalchemy import select as _sel_bt
 

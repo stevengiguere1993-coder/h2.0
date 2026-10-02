@@ -482,6 +482,13 @@ class ImportBonResult(BaseModel):
     bon_reference: str
     #: True si la facture a hérité du client du bon (elle n'en avait pas).
     client_set: bool
+    #: Détail (Phil 2026-10-02) : heures importées, achats importés,
+    #: achats laissés de côté (marqués non refacturables à la main) et
+    #: achats déjà facturés ailleurs.
+    heures: float = 0
+    achats_importes: int = 0
+    achats_non_refacturables: int = 0
+    achats_deja_factures: int = 0
 
 
 @router.post(
@@ -519,6 +526,18 @@ async def import_bon_into_facture(
             status.HTTP_409_CONFLICT,
             "Ce bon appartient à un autre client que la facture — "
             "faites-lui sa propre facture.",
+        )
+    # Seuls les bons COMPLÉTÉS — À REFACTURER (ou déjà facturés, pour un
+    # complément) s'importent : un bon encore en cours n'a pas ses heures
+    # et achats définitifs (Phil 2026-10-02).
+    if bon.status not in (
+        BonTravailStatus.COMPLETE_A_REFACTURER.value,
+        BonTravailStatus.FACTURE.value,
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Ce bon n'est pas « complété — à refacturer » : termine-le "
+            "avant de l'importer dans une facture.",
         )
     proj = await ensure_bon_project(db, bon)
 
@@ -585,6 +604,7 @@ async def import_bon_into_facture(
             b_amount += h * rate
         b_hours = round(b_hours, 2)
         b_amount = round(b_amount, 2)
+        heures_importees = b_hours
         if b_hours > 0:
             item = FactureItem(
                 facture_id=facture_id,
@@ -604,17 +624,28 @@ async def import_bon_into_facture(
             pos += 1
             added += 1
 
-    # 2) Achats refacturables du bon (via son projet lié), avec markup /
-    #    contrat sous-traitant — mêmes règles que la facture d'un bon.
-    achats = (
+    # 2) Achats du bon (via son projet lié), avec markup / contrat
+    #    sous-traitant — mêmes règles que la facture d'un bon. Un bon de
+    #    travail est du temps & matériel : TOUS ses achats sont refacturés,
+    #    sauf ceux qu'on a marqués « non refacturable » À LA MAIN
+    #    (Phil 2026-10-02).
+    tous_achats = (
         await db.execute(
             select(Achat)
             .where(Achat.project_id == proj.id)
-            .where(Achat.is_billable.is_(True))
-            .where(Achat.invoiced_at.is_(None))
             .order_by(Achat.id.asc())
         )
     ).scalars().all()
+    achats_deja = [a for a in tous_achats if a.invoiced_at is not None]
+    achats_exclus = [
+        a for a in tous_achats
+        if a.invoiced_at is None and not a.is_billable and bool(getattr(a, "billable_manual", False))
+    ]
+    achats = [
+        a for a in tous_achats
+        if a.invoiced_at is None and (a.is_billable or not bool(getattr(a, "billable_manual", False)))
+    ]
+    achats_importes_n = len(achats)
     sub_ids = {a.sous_traitant_id for a in achats if a.sous_traitant_id}
     contracts_by_st: dict[int, ProjectSubcontractorContract] = {}
     if sub_ids:
@@ -688,8 +719,14 @@ async def import_bon_into_facture(
 
             _asyncio.create_task(flip_qbo_billable_now(int(ac.id), False))
 
-    # Bon « complété à refacturer » → « facturé » (kanban à jour).
-    if bon.status == BonTravailStatus.COMPLETE_A_REFACTURER.value:
+    # Le bon est rattaché à cette facture ; il ne passe « facturé » qu'à
+    # l'ENVOI réel au client (facture_send). Si la facture est déjà
+    # envoyée (complément), on bascule tout de suite.
+    bon.facture_id = fa.id
+    if (
+        bon.status == BonTravailStatus.COMPLETE_A_REFACTURER.value
+        and (fa.status or "") not in ("draft", "void")
+    ):
         bon.status = BonTravailStatus.FACTURE.value
 
     await _recompute_facture_totals(db, facture_id)
@@ -700,5 +737,9 @@ async def import_bon_into_facture(
 
         _asyncio2.create_task(push_facture_now(int(fa.id)))
     return ImportBonResult(
-        added=added, bon_reference=bon.reference, client_set=client_set
+        added=added, bon_reference=bon.reference, client_set=client_set,
+        heures=round(locals().get("heures_importees", 0.0) or 0.0, 2),
+        achats_importes=achats_importes_n,
+        achats_non_refacturables=len(achats_exclus),
+        achats_deja_factures=len(achats_deja),
     )

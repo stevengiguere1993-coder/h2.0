@@ -1779,6 +1779,7 @@ export default function FactureDetailPage() {
       {bonOpen && f ? (
         <BonPickerModal
           factureId={Number(f.id)}
+          clientId={f.client_id ?? null}
           onClose={() => setBonOpen(false)}
           onImported={async () => {
             await reloadItems();
@@ -2538,10 +2539,12 @@ const BON_STATUS_ORDER: Record<string, number> = {
 
 function BonPickerModal({
   factureId,
+  clientId,
   onClose,
   onImported
 }: {
   factureId: number;
+  clientId: number | null;
   onClose: () => void;
   onImported: () => Promise<void>;
 }) {
@@ -2574,7 +2577,16 @@ function BonPickerModal({
               (BON_STATUS_ORDER[b.status] ?? 9) ||
             b.id - a.id
         );
-        setBons(all.filter((x) => x.status !== "cancelled"));
+        // Seuls les bons COMPLÉTÉS — À REFACTURER du CLIENT de la facture
+        // sont importables (Phil 2026-10-02) : un bon d'un autre client ou
+        // encore en cours n'apparaît pas.
+        setBons(
+          all.filter(
+            (x) =>
+              x.status === "complete_a_refacturer" &&
+              (clientId == null || x.client_id === clientId)
+          )
+        );
         setClientNames(new Map(cl.map((c) => [c.id, c.name])));
       } finally {
         if (!cancelled) setLoading(false);
@@ -2614,14 +2626,27 @@ function BonPickerModal({
         );
         return;
       }
+      const r = body as {
+        added: number;
+        heures?: number;
+        achats_importes?: number;
+        achats_non_refacturables?: number;
+        achats_deja_factures?: number;
+      };
+      const parts: string[] = [];
+      if (r.heures) parts.push(`${r.heures} h`);
+      if (r.achats_importes) parts.push(`${r.achats_importes} achat${r.achats_importes > 1 ? "s" : ""}`);
+      const notes: string[] = [];
+      if (r.achats_non_refacturables) notes.push(`${r.achats_non_refacturables} achat(s) marqué(s) non refacturable(s)`);
+      if (r.achats_deja_factures) notes.push(`${r.achats_deja_factures} achat(s) déjà facturé(s)`);
       setDone((prev) => ({
         ...prev,
         [bon.id]:
-          body.added > 0
-            ? `${body.added} ligne${body.added > 1 ? "s" : ""} importée${
-                body.added > 1 ? "s" : ""
-              }`
-            : "rien à importer (déjà facturé ?)"
+          r.added > 0
+            ? `${r.added} ligne${r.added > 1 ? "s" : ""} importée${r.added > 1 ? "s" : ""}${
+                parts.length ? ` (${parts.join(", ")})` : ""
+              }${notes.length ? ` · ${notes.join(", ")}` : ""}`
+            : `rien à importer${notes.length ? ` (${notes.join(", ")})` : " (heures et achats déjà facturés ?)"}`
       }));
       await onImported();
     } finally {
@@ -2663,7 +2688,9 @@ function BonPickerModal({
             </div>
           ) : visibles.length === 0 ? (
             <p className="p-4 text-center text-xs text-white/40">
-              Aucun bon de travail.
+              Aucun bon « complété — à refacturer »
+              {clientId != null ? " pour le client de cette facture" : ""}. Un bon d&apos;un autre client ou
+              encore en cours n&apos;est pas proposé.
             </p>
           ) : (
             <ul>
