@@ -489,6 +489,12 @@ class ImportBonResult(BaseModel):
     achats_importes: int = 0
     achats_non_refacturables: int = 0
     achats_deja_factures: int = 0
+    #: Où sont partis les achats « déjà facturés » (référence de facture),
+    #: pour comprendre un import qui n'amène rien.
+    achats_deja_factures_detail: list[str] = Field(default_factory=list)
+    #: Achats libérés automatiquement : marqués facturés sur une ligne qui
+    #: n'existe plus (brouillon supprimé) → réimportés.
+    achats_liberes: int = 0
 
 
 @router.post(
@@ -636,6 +642,23 @@ async def import_bon_into_facture(
             .order_by(Achat.id.asc())
         )
     ).scalars().all()
+    # Auto-réparation : un achat « facturé » dont la ligne de facture a
+    # disparu (brouillon supprimé, ligne retirée) est libéré et réimporté.
+    liberes = 0
+    deja_detail: list[str] = []
+    for a in tous_achats:
+        if a.invoiced_at is None:
+            continue
+        item = await db.get(FactureItem, a.facture_item_id) if a.facture_item_id else None
+        if item is None:
+            a.invoiced_at = None
+            a.facture_item_id = None
+            liberes += 1
+            continue
+        fx = await db.get(Facture, item.facture_id)
+        deja_detail.append(f"{a.description or ('achat #' + str(a.id))} → facture {fx.reference if fx else item.facture_id}")
+    if liberes:
+        await db.flush()
     achats_deja = [a for a in tous_achats if a.invoiced_at is not None]
     achats_exclus = [
         a for a in tous_achats
@@ -742,4 +765,6 @@ async def import_bon_into_facture(
         achats_importes=achats_importes_n,
         achats_non_refacturables=len(achats_exclus),
         achats_deja_factures=len(achats_deja),
+        achats_deja_factures_detail=deja_detail[:20],
+        achats_liberes=liberes,
     )

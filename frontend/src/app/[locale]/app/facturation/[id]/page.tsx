@@ -2632,13 +2632,21 @@ function BonPickerModal({
         achats_importes?: number;
         achats_non_refacturables?: number;
         achats_deja_factures?: number;
+        achats_deja_factures_detail?: string[];
+        achats_liberes?: number;
       };
       const parts: string[] = [];
       if (r.heures) parts.push(`${r.heures} h`);
       if (r.achats_importes) parts.push(`${r.achats_importes} achat${r.achats_importes > 1 ? "s" : ""}`);
       const notes: string[] = [];
       if (r.achats_non_refacturables) notes.push(`${r.achats_non_refacturables} achat(s) marqué(s) non refacturable(s)`);
-      if (r.achats_deja_factures) notes.push(`${r.achats_deja_factures} achat(s) déjà facturé(s)`);
+      if (r.achats_deja_factures)
+        notes.push(
+          `${r.achats_deja_factures} achat(s) déjà facturé(s)${
+            r.achats_deja_factures_detail?.length ? ` : ${r.achats_deja_factures_detail.join(" ; ")}` : ""
+          }`
+        );
+      if (r.achats_liberes) notes.push(`${r.achats_liberes} achat(s) libéré(s) d'un brouillon supprimé`);
       setDone((prev) => ({
         ...prev,
         [bon.id]:
