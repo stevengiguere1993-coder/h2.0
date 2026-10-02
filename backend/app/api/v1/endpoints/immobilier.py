@@ -92,6 +92,9 @@ from app.models.immobilier import (
 )
 from app.models.montreal_property_unit import MontrealPropertyUnit
 from app.schemas.immobilier import (
+    PasserInterneIn,
+    PasserInterneOut,
+    UniteSansBail,
     BailCreate,
     BailRead,
     BailUpdate,
@@ -931,6 +934,190 @@ async def get_immeuble(
     return _immeuble_to_read(obj)
 
 
+async def _unites_occupees_sans_bail(db, immeuble_id: int) -> list:
+    """Unités « occupées » sans bail ACTIF déjà commencé : celles qu'une
+    bascule externe → interne doit d'abord doter d'un bail (la nuit, le
+    recalage les mettrait vacantes — audit 2026-09-15)."""
+    today_i = _now().date()
+    occupes = (
+        await db.execute(
+            select(Logement).where(
+                Logement.immeuble_id == immeuble_id,
+                Logement.status == LogementStatus.OCCUPE.value,
+            )
+        )
+    ).scalars().all()
+    sans_bail = []
+    for lg_o in occupes:
+        b_o = (
+            await db.execute(
+                select(Bail).where(
+                    Bail.logement_id == lg_o.id,
+                    Bail.status == BailStatus.ACTIF.value,
+                    Bail.date_debut <= today_i,
+                )
+            )
+        ).scalars().first()
+        if b_o is None:
+            sans_bail.append(lg_o)
+    return sans_bail
+
+
+@router.get(
+    "/immeubles/{immeuble_id}/unites-sans-bail",
+    response_model=List[UniteSansBail],
+)
+async def unites_sans_bail(
+    immeuble_id: int, db: DBSession, user: CurrentUser
+) -> List[UniteSansBail]:
+    """Assistant « passer en gestion interne » (Phil 2026-10-02) : les
+    unités occupées sans bail, préremplies (nom saisi en externe, depuis,
+    loyer attendu)."""
+    _require_volet(user)
+    await _require_immeuble_visible(db, user, immeuble_id)
+    await _get_immeuble_or_404(db, immeuble_id)
+    from app.services.locatif_chambres import cle_tri_numero
+
+    lgs = await _unites_occupees_sans_bail(db, immeuble_id)
+    lgs.sort(key=lambda lg: cle_tri_numero(lg.numero or ""))
+    return [
+        UniteSansBail(
+            logement_id=lg.id,
+            numero=lg.numero or "",
+            locataire_externe_nom=lg.locataire_externe_nom,
+            locataire_externe_depuis=lg.locataire_externe_depuis,
+            loyer_demande=(
+                float(lg.loyer_demande) if lg.loyer_demande is not None else None
+            ),
+            location_en_chambres=bool(getattr(lg, "location_en_chambres", False)),
+        )
+        for lg in lgs
+    ]
+
+
+@router.post(
+    "/immeubles/{immeuble_id}/passer-interne", response_model=PasserInterneOut
+)
+async def passer_interne(
+    immeuble_id: int,
+    payload: PasserInterneIn,
+    db: DBSession,
+    user: CurrentUser,
+) -> PasserInterneOut:
+    """Externe → interne en un geste (Phil 2026-10-02 : un immeuble créé
+    par erreur en gestion externe) : crée d'un coup les baux (et les
+    fiches locataires) des unités occupées, libère celles qu'on ne garde
+    pas, puis bascule l'immeuble. Tout ou rien : s'il reste une unité
+    occupée sans bail, rien n'est enregistré."""
+    _require_volet(user)
+    await _require_immeuble_visible(db, user, immeuble_id)
+    obj = await _get_immeuble_or_404(db, immeuble_id)
+    if not getattr(obj, "gestion_externe", False):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cet immeuble est déjà en gestion interne.",
+        )
+    ids_baux = {ligne.logement_id for ligne in payload.baux}
+    ids_lib = set(payload.liberer_logement_ids) - ids_baux
+
+    # 1. L'immeuble devient interne d'abord (la création de bail est
+    #    refusée sur un immeuble externe).
+    obj.gestion_externe = False
+    obj.gestionnaire_externe_nom = None
+    obj.gestionnaire_externe_contact = None
+    obj.maintenance_interne = False
+    obj.updated_at = _now()
+    await db.flush()
+
+    # 2. Unités libérées : vacantes, nom externe effacé.
+    liberes = 0
+    for lg_id in sorted(ids_lib):
+        lg = await db.get(Logement, lg_id)
+        if lg is None or lg.immeuble_id != immeuble_id:
+            continue
+        lg.locataire_externe_nom = None
+        lg.locataire_externe_depuis = None
+        lg.status = LogementStatus.VACANT.value
+        lg.updated_at = _now()
+        liberes += 1
+
+    # 3. Baux (+ fiche locataire) d'un coup.
+    crees = 0
+    locs = 0
+    for ligne in payload.baux:
+        lg = await db.get(Logement, ligne.logement_id)
+        if lg is None or lg.immeuble_id != immeuble_id:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Logement {ligne.logement_id} introuvable dans cet immeuble.",
+            )
+        loc = Locataire(
+            full_name=ligne.locataire_nom.strip(),
+            email=(ligne.locataire_email or None),
+            phone=(ligne.locataire_phone or None),
+        )
+        loc.created_at = _now()
+        loc.updated_at = _now()
+        db.add(loc)
+        await db.flush()
+        locs += 1
+        bail_in = BailCreate(
+            logement_id=lg.id,
+            locataire_id=loc.id,
+            date_debut=ligne.date_debut,
+            date_fin=ligne.date_fin,
+            loyer_mensuel=ligne.loyer_mensuel,
+            jour_echeance=ligne.jour_echeance,
+            au_mois=ligne.au_mois,
+            status=BailStatus.ACTIF.value,
+        )
+        numero_lg = lg.numero
+        try:
+            await _creer_bail(db, bail_in, lg, user)
+        except HTTPException as exc:
+            # Le message est bâti AVANT le rollback (les objets expirent).
+            detail = f"Unité {numero_lg} : {exc.detail}"
+            await db.rollback()
+            raise HTTPException(status_code=exc.status_code, detail=detail) from exc
+        lg.locataire_externe_nom = None
+        lg.locataire_externe_depuis = None
+        crees += 1
+
+    # 4. Tout ou rien.
+    restants = await _unites_occupees_sans_bail(db, immeuble_id)
+    if restants:
+        # Message bâti AVANT le rollback (les objets expirent ensuite).
+        detail = (
+            "Il reste des unités occupées sans bail : "
+            + ", ".join(
+                f"{lg.numero}"
+                + (f" ({lg.locataire_externe_nom})" if lg.locataire_externe_nom else "")
+                for lg in restants[:12]
+            )
+            + (" …" if len(restants) > 12 else "")
+            + ". Donne-leur un bail ou libère-les."
+        )
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+    await log_action(
+        db, user=user, action="immeubles.passer_interne",
+        entity_type="immeubles", entity_id=immeuble_id,
+        details={
+            "baux_crees": crees, "locataires_crees": locs,
+            "logements_liberes": liberes,
+        },
+    )
+    await db.commit()
+    await db.refresh(obj)
+    return PasserInterneOut(
+        immeuble=_immeuble_to_read(obj),
+        baux_crees=crees,
+        locataires_crees=locs,
+        logements_liberes=liberes,
+    )
+
+
 @router.patch("/immeubles/{immeuble_id}", response_model=ImmeubleRead)
 async def update_immeuble(
     immeuble_id: int,
@@ -953,28 +1140,7 @@ async def update_immeuble(
     # (audit 2026-09-15). On refuse tant que les baux n'existent pas,
     # sauf ?force=true (les noms sont alors effacés).
     if etait_externe and devient_externe is False:
-        today_i = _now().date()
-        occupes = (
-            await db.execute(
-                select(Logement).where(
-                    Logement.immeuble_id == immeuble_id,
-                    Logement.status == LogementStatus.OCCUPE.value,
-                )
-            )
-        ).scalars().all()
-        sans_bail = []
-        for lg_o in occupes:
-            b_o = (
-                await db.execute(
-                    select(Bail).where(
-                        Bail.logement_id == lg_o.id,
-                        Bail.status == BailStatus.ACTIF.value,
-                        Bail.date_debut <= today_i,
-                    )
-                )
-            ).scalars().first()
-            if b_o is None:
-                sans_bail.append(lg_o)
+        sans_bail = await _unites_occupees_sans_bail(db, immeuble_id)
         if sans_bail and not force:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -987,8 +1153,9 @@ async def update_immeuble(
                         for lg_o in sans_bail[:12]
                     )
                     + (" …" if len(sans_bail) > 12 else "")
-                    + ". Crée leurs baux d'abord (ou force=true pour "
-                    "repartir de zéro : les noms seront effacés)."
+                    + ". Crée leurs baux d'abord — l'assistant de la fiche "
+                    "les crée tous d'un coup (ou force=true pour repartir "
+                    "de zéro : les noms seront effacés)."
                 ),
             )
         if sans_bail and force:
@@ -4348,26 +4515,11 @@ async def list_baux_for_immeuble(
     return out
 
 
-@router.post(
-    "/baux", response_model=BailRead, status_code=status.HTTP_201_CREATED
-)
-async def create_bail(
-    payload: BailCreate, db: DBSession, user: CurrentUser
-) -> BailRead:
-    _require_volet(user)
-    log_obj = await db.get(Logement, payload.logement_id)
-    if log_obj is None:
-        raise HTTPException(status_code=404, detail="Logement introuvable.")
-    loc_obj = await db.get(Locataire, payload.locataire_id)
-    if loc_obj is None:
-        raise HTTPException(status_code=404, detail="Locataire introuvable.")
-    # Gestion EXTERNE (2026-09-09) : pas de bail dans Kratos — c'est
-    # par cette porte qu'un bail « actif » écrasait le loyer attendu et
-    # le statut saisis à la main sur les unités externes.
-    from app.services.gestion_externe import erreur_externe, immeuble_est_externe
-
-    if await immeuble_est_externe(db, log_obj.immeuble_id):
-        raise erreur_externe("pas de bail dans Kratos.")
+async def _creer_bail(db, payload: BailCreate, log_obj: Logement, user) -> Bail:
+    """Cœur de la création d'un bail (validations, statut du logement,
+    dossier de relocation, PDF orphelin, journal) — partagé par
+    ``POST /baux`` et par l'assistant « passer en gestion interne »
+    (Phil 2026-10-02). Pas de commit ici."""
     if payload.status not in {s.value for s in BailStatus}:
         raise HTTPException(
             status_code=422, detail="Statut de bail invalide."
@@ -4518,6 +4670,30 @@ async def create_bail(
         },
     )
 
+    return obj
+
+
+@router.post(
+    "/baux", response_model=BailRead, status_code=status.HTTP_201_CREATED
+)
+async def create_bail(
+    payload: BailCreate, db: DBSession, user: CurrentUser
+) -> BailRead:
+    _require_volet(user)
+    log_obj = await db.get(Logement, payload.logement_id)
+    if log_obj is None:
+        raise HTTPException(status_code=404, detail="Logement introuvable.")
+    loc_obj = await db.get(Locataire, payload.locataire_id)
+    if loc_obj is None:
+        raise HTTPException(status_code=404, detail="Locataire introuvable.")
+    # Gestion EXTERNE (2026-09-09) : pas de bail dans Kratos — c'est
+    # par cette porte qu'un bail « actif » écrasait le loyer attendu et
+    # le statut saisis à la main sur les unités externes.
+    from app.services.gestion_externe import erreur_externe, immeuble_est_externe
+
+    if await immeuble_est_externe(db, log_obj.immeuble_id):
+        raise erreur_externe("pas de bail dans Kratos.")
+    obj = await _creer_bail(db, payload, log_obj, user)
     await db.commit()
     await db.refresh(obj)
     result = BailRead.model_validate(obj)
