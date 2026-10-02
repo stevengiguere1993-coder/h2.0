@@ -498,6 +498,8 @@ class PurchaseOrderCreate(BaseModel):
     reference: Optional[str] = Field(default=None, max_length=32)
     fournisseur_id: Optional[int] = None
     project_id: Optional[int] = None
+    #: Shop : non relié à un projet → classe Construction dans QB.
+    is_shop: bool = False
     assigned_employe_id: Optional[int] = None
     description: Optional[str] = None
     amount_max: Optional[float] = None
@@ -509,6 +511,7 @@ class PurchaseOrderCreate(BaseModel):
 class PurchaseOrderUpdate(BaseModel):
     fournisseur_id: Optional[int] = None
     project_id: Optional[int] = None
+    is_shop: Optional[bool] = None
     assigned_employe_id: Optional[int] = None
     description: Optional[str] = None
     amount_max: Optional[float] = None
@@ -523,6 +526,7 @@ class PurchaseOrderRead(_Base):
     reference: str
     fournisseur_id: Optional[int]
     project_id: Optional[int]
+    is_shop: bool = False
     assigned_employe_id: Optional[int]
     description: Optional[str]
     amount_max: Optional[float]
@@ -543,6 +547,8 @@ class AchatCreate(BaseModel):
     project_id: Optional[int] = None
     # Reçu sans projet/BT : rattachement direct au CLIENT (CustomerRef QB).
     client_id: Optional[int] = None
+    #: Shop : achat non relié à un projet → classe Construction dans QB.
+    is_shop: bool = False
     description: Optional[str] = None
     amount: Optional[float] = None
     amount_taxes: Optional[float] = None
@@ -575,6 +581,7 @@ class AchatUpdate(BaseModel):
     fournisseur_id: Optional[int] = None
     project_id: Optional[int] = None
     client_id: Optional[int] = None
+    is_shop: Optional[bool] = None
     payment_method: Optional[str] = Field(default=None, max_length=32)
     supplier_invoice_number: Optional[str] = Field(default=None, max_length=64)
     invoice_date: Optional[date] = None
@@ -592,6 +599,7 @@ class AchatRead(_Base):
     fournisseur_id: Optional[int]
     project_id: Optional[int]
     client_id: Optional[int] = None
+    is_shop: bool = False
     description: Optional[str]
     amount: Optional[float]
     amount_taxes: Optional[float] = None

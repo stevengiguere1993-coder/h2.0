@@ -15,6 +15,7 @@ type PurchaseOrder = {
   reference: string;
   fournisseur_id: number | null;
   project_id: number | null;
+  is_shop?: boolean;
   assigned_employe_id: number | null;
   description: string | null;
   amount_max: number | string | null;
@@ -315,6 +316,10 @@ export default function PurchaseOrdersListPage() {
                       <td className="px-3 py-2 text-white/80">
                         {proj ? (
                           projectLabel(proj)
+                        ) : po.is_shop ? (
+                          <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300" title="Non relié à un projet — classe Construction dans QuickBooks">
+                            SHOP
+                          </span>
                         ) : (
                           <span className="text-white/40">
                             (frais généraux)

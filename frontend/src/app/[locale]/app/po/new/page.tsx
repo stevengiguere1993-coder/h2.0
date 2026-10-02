@@ -40,6 +40,8 @@ export default function NewPurchaseOrderPage() {
   const phaseHint = searchParams.get("phase_hint");
 
   const [projectId, setProjectId] = useState(prefilledProjectId || "");
+  // Shop : PO non relié à un projet (classe Construction dans QB).
+  const [isShop, setIsShop] = useState(false);
   const [fournisseurId, setFournisseurId] = useState("");
   const [description, setDescription] = useState(
     phaseHint ? `Phase ${phaseHint} — ` : ""
@@ -86,7 +88,8 @@ export default function NewPurchaseOrderPage() {
     setSubmitting(true);
     try {
       const payload: Record<string, unknown> = {};
-      if (projectId) payload.project_id = Number(projectId);
+      if (projectId && !isShop) payload.project_id = Number(projectId);
+      if (isShop) payload.is_shop = true;
       if (fournisseurId) payload.fournisseur_id = Number(fournisseurId);
       if (description.trim()) payload.description = description.trim();
       if (amountMax) payload.amount_max = Number(amountMax);
@@ -146,9 +149,10 @@ export default function NewPurchaseOrderPage() {
               </label>
               <select
                 id="project"
-                value={projectId}
+                value={isShop ? "" : projectId}
                 onChange={(e) => setProjectId(e.target.value)}
-                className="input"
+                disabled={isShop}
+                className="input disabled:opacity-60"
               >
                 <option value="">— Aucun (frais généraux) —</option>
                 {projects.map((p) => (
@@ -157,6 +161,15 @@ export default function NewPurchaseOrderPage() {
                   </option>
                 ))}
               </select>
+              <label className="mt-2 flex items-center gap-2 text-xs text-white/80">
+                <input
+                  type="checkbox"
+                  checked={isShop}
+                  onChange={(e) => setIsShop(e.target.checked)}
+                  className="h-4 w-4 accent-accent-500"
+                />
+                Shop — non relié à un projet (atelier, camion, outillage) → classe Construction dans QuickBooks
+              </label>
               <p className="mt-1 text-[11px] text-white/50">
                 Vide = matériaux généraux (caulking, vis, outils
                 partagés).

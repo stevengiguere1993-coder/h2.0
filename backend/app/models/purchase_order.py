@@ -15,7 +15,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -45,6 +45,12 @@ class PurchaseOrder(Base, TimestampUpdateMixin):
         ForeignKey("projects.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    )
+    # SHOP (Phil 2026-10-02) : achat NON relié à un projet (atelier,
+    # camion, outillage). Dans QuickBooks, la dépense porte la classe
+    # « Construction » (settings.qbo_shop_class_name) et aucun client.
+    is_shop: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
     )
     assigned_employe_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("employes.id", ondelete="SET NULL"),

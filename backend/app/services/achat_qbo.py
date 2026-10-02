@@ -806,6 +806,17 @@ async def sync_achat_to_qbo(
                     achat.id, exc,
                 )
 
+    # SHOP (achat non relié à un projet) : classe « Construction », aucun
+    # client — la dépense se range dans le volet construction de QB sans
+    # chantier (Phil 2026-10-02).
+    if getattr(achat, "is_shop", False) and not achat.project_id:
+        customer_id = None
+        try:
+            klass = await qbo.ensure_class(name=settings.qbo_shop_class_name)
+            class_id = str(klass.get("Id")) if klass and klass.get("Id") else None
+        except QuickBooksError as exc:
+            log.warning("QBO: classe shop « %s » introuvable (achat %s): %s", settings.qbo_shop_class_name, achat.id, exc)
+
     # PO source (optionnel) — sa référence sert de DocNumber fallback
     # quand le # de facture fournisseur n'est pas fourni.
     po_reference: Optional[str] = None
