@@ -336,7 +336,9 @@ async def _couples_a_chercher(
     """magasin_id → ids de matériaux sans lien chez ce magasin. Les
     matériaux jamais cherchés d'abord, puis les plus anciens ; ceux
     cherchés depuis moins de ``max_age_days`` jours sont sautés (le cron
-    ne re-cherche pas chaque jour les mêmes introuvables)."""
+    ne re-cherche pas chaque jour les mêmes introuvables) — SAUF un
+    matériau qui n'a encore AUCUN prix : lui est retenté à chaque passage
+    (c'est le cas à régler en priorité, Phil 2026-10-02)."""
     stmt = (
         select(Materiau).where(Materiau.is_active.is_(True))
         .options(selectinload(Materiau.offres))
@@ -349,7 +351,8 @@ async def _couples_a_chercher(
     travail: dict[int, list[int]] = {}
     n = 0
     for m in materiaux:
-        if cutoff is not None and m.prix_recherche_at is not None:
+        a_un_prix = any(o.unit_price is not None for o in m.offres)
+        if cutoff is not None and m.prix_recherche_at is not None and a_un_prix:
             pra = m.prix_recherche_at if m.prix_recherche_at.tzinfo else m.prix_recherche_at.replace(tzinfo=timezone.utc)
             if pra > cutoff:
                 continue
