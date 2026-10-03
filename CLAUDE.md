@@ -20,6 +20,17 @@ sombre **comme** en mode clair (`data-portal-theme="light"`).
   normal). Dans le doute, choisir la teinte plus foncée/contrastée.
 - Avant de livrer une UI, je vérifie mentalement le rendu **dans les deux
   thèmes** pour qu'aucun texte ne devienne invisible.
+- **Mode jour = aucun pastel, point** (Phil, 2026-10-03). Le thème clair
+  est un jeu de remaps CSS dans `frontend/src/app/globals.css`
+  (`html[data-portal-theme="light"] .classe { … !important }`). Trois
+  pièges : (1) une classe composant (`.badge-*`, `.btn-*`, `.eyebrow`…)
+  inline ses couleurs via `@apply` → il lui faut SON override ; (2) une
+  variante d'opacité (`text-rose-300/80`) est une classe distincte de
+  `text-rose-300` → à couvrir aussi ; (3) l'accent `text-accent-500`
+  (#d89b3c) ne passe pas sur blanc → remappé en #98651c. Pour trouver
+  les classes texte non couvertes :
+  `grep -rhoE '\btext-[a-z]+-[0-9]{2,3}(/[0-9]+)?' frontend/src | sort -u`
+  vs les sélecteurs `data-portal-theme="light"` de `globals.css`.
 
 ## Workflow Git — merge sans demander la permission
 
