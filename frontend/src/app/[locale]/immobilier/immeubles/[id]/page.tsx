@@ -4824,15 +4824,26 @@ function HypothequeForm({
         </label>
       </div>
 
-      {computedPmt != null ? (
-        <p className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-          Paiement mensuel calculé : {fmtCurrency(computedPmt)}
-          <span className="ml-1 text-emerald-300/60">
-            (composé{" "}
-            {compositionChoisie === "mensuelle"
-              ? "mensuellement"
-              : "semi-annuellement"}
-            {pmtOverride ? " — valeur surchargée manuellement" : ""})
+      {pmtEffective != null || computedPmt != null ? (
+        // Le paiement RETENU (celui qui sera enregistré et qui alimente
+        // le cash flow) : la valeur manuelle si elle est saisie, sinon le
+        // calcul. Encre pleine, pas de pastel (Phil 2026-10-03).
+        <p className="mt-3 rounded-lg border border-brand-700 bg-brand-950 px-3 py-2 text-xs text-white">
+          <span className="font-semibold">
+            Paiement mensuel retenu : {fmtCurrency(pmtEffective ?? computedPmt)}
+          </span>
+          <span className="ml-1 text-white/70">
+            {pmtOverride && f.paiement_mensuel.trim() !== ""
+              ? `(saisi à la main — calcul : ${fmtCurrency(computedPmt)}, composé ${
+                  compositionChoisie === "mensuelle"
+                    ? "mensuellement"
+                    : "semi-annuellement"
+                })`
+              : `(calculé, composé ${
+                  compositionChoisie === "mensuelle"
+                    ? "mensuellement"
+                    : "semi-annuellement"
+                })`}
           </span>
         </p>
       ) : (
