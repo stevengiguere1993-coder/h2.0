@@ -4631,12 +4631,14 @@ function HypothequeForm({
     });
   }
 
+  // Bordure brand-700 (pas 800) : en mode jour, 800 = #e2e8f0 sur fond
+  // blanc, les champs disparaissaient (Phil 2026-10-03 : blanc sur blanc).
   const inputCls =
-    "mt-0.5 block w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500";
+    "mt-0.5 block w-full rounded-md border border-brand-700 bg-brand-950 px-2 py-1.5 text-xs text-white shadow-sm outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/30";
   const labelCls = "text-[11px] font-semibold text-white/60";
 
   return (
-    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+    <div className="rounded-2xl border border-brand-700 border-l-4 border-l-accent-500 bg-brand-900 p-4 shadow-card">
       <p className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
         {initial ? "Modifier l'hypothèque" : "Nouvelle hypothèque"}
       </p>
@@ -5159,8 +5161,10 @@ function EvaluationForm({
     });
   }
 
+  // Bordure brand-700 (pas 800) : en mode jour, 800 = #e2e8f0 sur fond
+  // blanc, les champs disparaissaient (Phil 2026-10-03 : blanc sur blanc).
   const inputCls =
-    "mt-0.5 block w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500";
+    "mt-0.5 block w-full rounded-md border border-brand-700 bg-brand-950 px-2 py-1.5 text-xs text-white shadow-sm outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/30";
   const labelCls = "text-[11px] font-semibold text-white/60";
 
   return (
@@ -5825,8 +5829,10 @@ function CashflowTab({
 
   if (depenses === null) return <Loading />;
 
+  // Bordure brand-700 (pas 800) : en mode jour, 800 = #e2e8f0 sur fond
+  // blanc, les champs disparaissaient (Phil 2026-10-03 : blanc sur blanc).
   const inputCls =
-    "mt-0.5 block w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500";
+    "mt-0.5 block w-full rounded-md border border-brand-700 bg-brand-950 px-2 py-1.5 text-xs text-white shadow-sm outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/30";
   const labelCls = "text-[11px] font-semibold text-white/60";
 
   return (

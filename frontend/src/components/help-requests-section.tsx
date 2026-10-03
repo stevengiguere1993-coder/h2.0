@@ -9,6 +9,7 @@ import {
   HelpCircle,
   Loader2,
   RefreshCw,
+  X,
   XCircle
 } from "lucide-react";
 
@@ -362,10 +363,21 @@ export function HelpRequestsSection() {
 
 /** Charge la capture jointe via authedFetch (l'endpoint exige le Bearer
  * token, donc un <img src=URL> direct renverrait 401 / image cassée) et
- * l'affiche via un object URL. Clic = ouverture pleine taille. */
+ * l'affiche via un object URL. Clic = aperçu plein écran en modale. */
 function ScreenshotThumb({ reportId }: { reportId: number }) {
   const [url, setUrl] = useState<string | null>(null);
   const [err, setErr] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  // Échap ferme l'aperçu.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
 
   useEffect(() => {
     let cancelled = false;
@@ -408,19 +420,50 @@ function ScreenshotThumb({ reportId }: { reportId: number }) {
     );
   }
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="mt-2 inline-block"
-    >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={url}
-        alt="Capture jointe"
-        className="max-h-48 rounded-md border border-brand-800 object-contain"
-      />
-    </a>
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="mt-2 inline-block rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+        title="Agrandir la capture"
+        aria-label="Agrandir la capture"
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={url}
+          alt="Capture jointe"
+          className="max-h-48 cursor-zoom-in rounded-md border border-brand-800 object-contain"
+        />
+      </button>
+      {open ? (
+        // Aperçu en fenêtre modale (Phil 2026-10-03) : pas de nouvelle
+        // page, un X (ou Échap / clic à côté) pour fermer.
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4"
+          onClick={() => setOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Capture d'écran"
+        >
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20"
+            aria-label="Fermer"
+            title="Fermer"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={url}
+            alt="Capture jointe"
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[92vh] max-w-[96vw] rounded-lg object-contain shadow-2xl"
+          />
+        </div>
+      ) : null}
+    </>
   );
 }
 
