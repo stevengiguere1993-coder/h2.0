@@ -437,13 +437,13 @@ function Card({
 }) {
   const touch = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   return (
-    <Link
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      href={`/app/facturation/${fa.id}` as any}
+    // Le TITRE ouvre la facture ; le reste de la carte se glisse dans le
+    // kanban (Phil 2026-10-03, comme projets / soumissions / bons).
+    <div
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className={`relative block rounded-lg border bg-brand-950 py-3 pl-7 pr-3 transition ${
+      className={`relative block cursor-grab rounded-lg border bg-brand-950 py-3 pl-7 pr-3 transition active:cursor-grabbing ${
         dragging
           ? "border-accent-500 opacity-60"
           : "border-brand-800 hover:border-accent-500"
@@ -510,11 +510,20 @@ function Card({
         return (
           <>
             <h3 className="truncate text-sm font-bold text-white">
-              {isBon
-                ? btRef || projectInfo?.name || fa.reference
-                : projectInfo
-                ? projectInfo.address || projectInfo.name
-                : fa.reference}
+              <Link
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={`/app/facturation/${fa.id}` as any}
+                draggable={false}
+                onClick={(e) => e.stopPropagation()}
+                className="hover:text-accent-500 hover:underline"
+                title="Ouvrir la facture"
+              >
+                {isBon
+                  ? btRef || projectInfo?.name || fa.reference
+                  : projectInfo
+                  ? projectInfo.address || projectInfo.name
+                  : fa.reference}
+              </Link>
             </h3>
             {clientName ? (
               <p className="mt-0.5 truncate text-[11px] font-normal text-white/70">
@@ -550,7 +559,7 @@ function Card({
           QBO Invoice #{fa.qbo_doc_number || fa.qbo_invoice_id}
         </p>
       ) : null}
-    </Link>
+    </div>
   );
 }
 
