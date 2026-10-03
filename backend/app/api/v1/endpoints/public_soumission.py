@@ -43,6 +43,8 @@ class PublicItem(BaseModel):
     quantity: float
     unit_price: float
     total: float
+    # "service" | "frais" | "rabais" | "titre" (sous-titre de section).
+    kind: str = "service"
 
 
 class PublicSoumission(BaseModel):

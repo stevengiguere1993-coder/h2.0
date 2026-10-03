@@ -13,6 +13,7 @@ type Item = {
   quantity: number;
   unit_price: number;
   total: number;
+  kind?: "service" | "frais" | "rabais" | "titre";
 };
 
 type PublicSoumission = {
@@ -258,7 +259,17 @@ export default function PublicSoumissionPage() {
                   </td>
                 </tr>
               ) : (
-                data.items.map((it, i) => (
+                data.items.map((it, i) =>
+                  it.kind === "titre" ? (
+                    <tr key={i} className="bg-brand-900/60">
+                      <td
+                        colSpan={4}
+                        className="px-5 pb-1 pt-4 text-sm font-bold uppercase tracking-wide text-white"
+                      >
+                        {it.description}
+                      </td>
+                    </tr>
+                  ) : (
                   <tr key={i}>
                     <td className="px-5 py-2">{it.description}</td>
                     <td className="px-5 py-2 text-right">
@@ -271,7 +282,8 @@ export default function PublicSoumissionPage() {
                       {money(it.total || it.quantity * it.unit_price)}
                     </td>
                   </tr>
-                ))
+                  )
+                )
               )}
             </tbody>
           </table>

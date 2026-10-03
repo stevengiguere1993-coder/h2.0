@@ -46,6 +46,7 @@ type Item = {
   tps_applicable?: boolean;
   tvq_applicable?: boolean;
   total: number;
+  kind?: "service" | "frais" | "rabais" | "titre";
   avenant_id?: number | null;
   retire_par_avenant_id?: number | null;
 };
@@ -550,6 +551,45 @@ export default function AvenantPage() {
                           : modified
                             ? "bg-amber-500/5"
                             : "";
+                      if (it?.kind === "titre") {
+                        // Sous-titre de section : pas de chiffres, on peut
+                        // seulement le renommer ou le retirer.
+                        return (
+                          <tr key={r.key} className={`align-top bg-brand-900/60 ${rowClass}`}>
+                            <td colSpan={7} className="px-5 pb-2 pt-4">
+                              <input
+                                type="text"
+                                value={r.description}
+                                onChange={(e) => update(r.key, { description: e.target.value })}
+                                disabled={r.retire}
+                                className={`${QUIET_INPUT} font-bold uppercase tracking-wide ${r.retire ? "line-through" : ""}`}
+                                aria-label="Sous-titre de section"
+                              />
+                            </td>
+                            <td className="px-3 pb-2 pt-4 text-right whitespace-nowrap">
+                              <span className="inline-flex gap-1">
+                                {modified || r.retire ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => resetRow(r.key)}
+                                    className="btn-secondary btn-xs"
+                                    title="Revenir au devis signé"
+                                  >
+                                    <RotateCcw className="h-3 w-3" />
+                                  </button>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  onClick={() => update(r.key, { retire: !r.retire })}
+                                  className={r.retire ? "btn-secondary btn-xs" : "btn-outline-rose btn-xs"}
+                                >
+                                  {r.retire ? "Garder" : "Retirer"}
+                                </button>
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      }
                       return (
                         <tr key={r.key} className={`align-top ${rowClass}`}>
                           <td className="px-5 py-3">

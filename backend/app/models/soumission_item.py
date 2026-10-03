@@ -52,7 +52,8 @@ class SoumissionItem(Base, TimestampUpdateMixin):
     tvq_applicable: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
-    # "service" (default), "frais" (no-tax fee), "rabais" (negative discount).
+    # "service" (default), "frais" (no-tax fee), "rabais" (negative discount),
+    # "titre" (sous-titre de section — pas de quantité ni de prix).
     kind: Mapped[str] = mapped_column(
         String(16), nullable=False, default="service", server_default="service"
     )

@@ -934,6 +934,8 @@ async def etat_contrat(
     lignes: list[EtatContratLigne] = []
     surfactures: list[str] = []
     for it in items:
+        if getattr(it, "kind", "service") == "titre":
+            continue  # sous-titre de section : pas une ligne du contrat
         au_contrat = (
             0.0
             if it.retire_par_avenant_id is not None
