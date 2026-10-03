@@ -187,6 +187,10 @@ class LogementsLotOut(BaseModel):
 
 
 class LogementUpdate(BaseModel):
+    #: Déplacer le logement vers un AUTRE immeuble (Phil 2026-10-03 :
+    #: corriger un logement créé sous le mauvais immeuble). Ses baux et
+    #: son historique suivent.
+    immeuble_id: Optional[int] = None
     numero: Optional[str] = Field(default=None, min_length=1, max_length=32)
     nb_pieces_decimal: Optional[float] = Field(default=None, ge=0)
     nb_chambres: Optional[int] = Field(default=None, ge=0)

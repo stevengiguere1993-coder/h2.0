@@ -277,6 +277,7 @@ export default function LogementsPage() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState({
+    immeuble_id: "",
     numero: "",
     type: "residentiel",
     pieces: "",
@@ -295,6 +296,7 @@ export default function LogementsPage() {
     setEditingId(l.id);
     setMsg(null);
     setDraft({
+      immeuble_id: String(l.immeuble_id),
       numero: l.numero,
       type: l.type || "residentiel",
       pieces: l.nb_pieces_decimal != null ? String(l.nb_pieces_decimal) : "",
@@ -308,10 +310,23 @@ export default function LogementsPage() {
     body: Record<string, unknown>
   ): Promise<string | null> {
     const res = await patchLogementApi(id, body);
-    if (res.error) return res.error;
+    if (res.error !== null) return res.error;
     const saved = res.saved;
+    // L'immeuble a pu changer : on recolle son nom / son mode de gestion.
+    const imm = immeubles.find((i) => i.id === saved.immeuble_id);
     setRows((prev) =>
-      prev?.map((x) => (x.id === id ? { ...x, ...saved } : x)) ?? prev
+      prev?.map((x) =>
+        x.id === id
+          ? {
+              ...x,
+              ...saved,
+              immeuble_name: imm?.name ?? x.immeuble_name,
+              immeuble_gestion_externe: imm
+                ? !!imm.gestion_externe
+                : x.immeuble_gestion_externe
+            }
+          : x
+      ) ?? prev
     );
     return null;
   }
@@ -337,6 +352,7 @@ export default function LogementsPage() {
     setBusyId(editingId);
     setMsg(null);
     const err = await patchLogement(editingId, {
+      immeuble_id: Number(draft.immeuble_id),
       numero: draft.numero.trim(),
       type: draft.type,
       nb_pieces_decimal: numOuNull(draft.pieces),
@@ -659,7 +675,7 @@ export default function LogementsPage() {
                           ? "bg-accent-500/10"
                           : editing
                             ? "bg-brand-950/60"
-                            : "hover:bg-brand-950/50"
+                            : "hover:bg-brand-800/40"
                       }`}
                     >
                       <td className="py-3 pl-3 align-middle">
@@ -705,6 +721,23 @@ export default function LogementsPage() {
                         </span>
                       </td>
                       <td className="px-3 py-3 text-xs text-white/70">
+                        {editing ? (
+                          <select
+                            value={draft.immeuble_id}
+                            onChange={(e) =>
+                              setDraft((d) => ({ ...d, immeuble_id: e.target.value }))
+                            }
+                            className="input w-56 px-2 py-1 text-xs"
+                            aria-label="Immeuble"
+                            title="Déplacer ce logement vers un autre immeuble"
+                          >
+                            {immeubles.map((im) => (
+                              <option key={im.id} value={im.id} className="bg-brand-950 text-white">
+                                {im.name}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
                         <Link
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           href={`/immobilier/immeubles/${l.immeuble_id}` as any}
@@ -713,6 +746,7 @@ export default function LogementsPage() {
                           <Building2 className="h-3.5 w-3.5 text-white/40" />
                           {l.immeuble_name}
                         </Link>
+                        )}
                         {l.immeuble_gestion_externe ? (
                           <span className="ml-1.5 badge badge-sky">
                             Gestion externe
@@ -961,6 +995,7 @@ export default function LogementsPage() {
           busy={lotBusy}
           onClose={() => setShowLot(false)}
           onApply={(body) => void applyLot(body)}
+          immeubles={immeubles.map((im) => ({ id: im.id, name: im.name }))}
         />
       ) : null}
     </>

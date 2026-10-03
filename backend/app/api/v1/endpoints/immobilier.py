@@ -2932,6 +2932,37 @@ async def update_logement(
         raise HTTPException(status_code=404, detail="Logement introuvable.")
     etait_indefini = bool(getattr(obj, "location_en_chambres", False))
     data = payload.model_dump(exclude_unset=True)
+    # Changement d'immeuble (Phil 2026-10-03) : l'immeuble cible doit
+    # exister et ne pas déjà porter ce numéro (sinon doublon invisible).
+    if "immeuble_id" in data:
+        cible = data["immeuble_id"]
+        if cible is None or int(cible) == int(obj.immeuble_id):
+            data.pop("immeuble_id")
+        else:
+            imm_cible = await db.get(Immeuble, int(cible))
+            if imm_cible is None:
+                raise HTTPException(
+                    status_code=404, detail="Immeuble cible introuvable."
+                )
+            numero_cible = (data.get("numero") or obj.numero or "").strip()
+            doublon = (
+                await db.execute(
+                    select(Logement.id).where(
+                        Logement.immeuble_id == int(cible),
+                        func.lower(Logement.numero) == numero_cible.lower(),
+                        Logement.id != obj.id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if doublon is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"L'immeuble {imm_cible.name} a déjà un logement "
+                        f"« {numero_cible} » — renomme-le avant de le déplacer."
+                    ),
+                )
+            data["immeuble_id"] = int(cible)
     from app.services.gestion_externe import immeuble_est_externe
 
     externe = await immeuble_est_externe(db, obj.immeuble_id)
