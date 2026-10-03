@@ -14,7 +14,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
-import { Link, useRouter } from "@/i18n/navigation";
+import { Link } from "@/i18n/navigation";
 
 type Bon = {
   id: number;
@@ -77,7 +77,6 @@ function money(n: number | string | null): string {
 
 export default function BonsPage() {
   const { onOpenSidebar } = useAppLayout();
-  const router = useRouter();
   const confirmDialog = useConfirm();
   const [items, setItems] = useState<Bon[]>([]);
   const [users, setUsers] = useState<UserLite[]>([]);
