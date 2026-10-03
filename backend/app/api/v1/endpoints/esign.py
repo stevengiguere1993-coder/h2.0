@@ -674,9 +674,36 @@ async def add_signer(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Numéro de téléphone requis pour l'authentification SMS.",
         )
+    # Signataire saisi à la main → enregistré dans la banque de contacts
+    # (table contacts) s'il n'y existe pas déjà au même courriel, pour ne
+    # pas le ressaisir la prochaine fois (Phil 2026-10-03).
+    contact_ref = (data.contact_ref or None)
+    if not contact_ref:
+        from sqlalchemy import func as _func
+
+        from app.models.contact import Contact as _Contact
+
+        em = str(data.email).strip().lower()
+        existant = (
+            await db.execute(
+                select(_Contact).where(_func.lower(_Contact.email) == em).limit(1)
+            )
+        ).scalar_one_or_none()
+        if existant is None:
+            existant = _Contact(
+                full_name=f"{data.first_name.strip()} {data.last_name.strip()}"[:255],
+                email=em[:320],
+                phone=((data.phone or "").strip()[:50] or None),
+                kind="signer",
+                specialty="Signataire (ajouté depuis un document à signer)",
+                active=True,
+            )
+            db.add(existant)
+            await db.flush()
+        contact_ref = f"contact:{existant.id}"
     signer = EsignSigner(
         document_id=doc.id,
-        contact_ref=(data.contact_ref or None),
+        contact_ref=contact_ref,
         order_index=max(0, data.order_index),
         first_name=data.first_name.strip()[:100],
         last_name=data.last_name.strip()[:100],

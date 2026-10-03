@@ -177,26 +177,79 @@ async def list_all_contacts(
             )
         )
 
-    # 5) Employés partenaires (is_partner=true) — pas les internes pour
-    # ne pas polluer (les internes vivent dans la liste employés).
-    q = select(Employe).where(Employe.is_partner.is_(True))
+    # 5) Employés — TOUS (internes et partenaires) : chacun doit pouvoir
+    # être choisi comme signataire (Phil 2026-10-03).
+    q = select(Employe)
     if only_active:
         q = q.where(Employe.active.is_(True))
     rows = (await db.execute(q)).scalars().all()
+    emails_vus: set[str] = set()
     for e in rows:
+        partner = bool(getattr(e, "is_partner", False))
+        if e.email:
+            emails_vus.add(e.email.strip().lower())
         _emit(
             UnifiedContact(
-                id=f"employe_partner:{e.id}",
-                source="employe_partner",
+                id=f"{'employe_partner' if partner else 'employe'}:{e.id}",
+                source=("employe_partner" if partner else "employe"),
                 source_id=e.id,
                 full_name=e.full_name,
                 email=e.email,
                 phone=e.phone,
                 address=getattr(e, "address", None),
-                kind="partner_employee",
+                kind=("partner_employee" if partner else "employee"),
                 specialty=getattr(e, "role", None),
                 active=e.active,
                 detail_url=f"/app/employes/{e.id}",
+            )
+        )
+
+    # 6) Utilisateurs du portail (propriétaire, admin, gestionnaires…) qui
+    # n'ont pas de fiche employé au même courriel.
+    from app.models.user import User
+
+    q = select(User)
+    if only_active:
+        q = q.where(User.is_active.is_(True))
+    for u in (await db.execute(q)).scalars().all():
+        em = (u.email or "").strip().lower()
+        if not em or em in emails_vus:
+            continue
+        emails_vus.add(em)
+        nom = " ".join(p for p in ((u.first_name or "").strip(), (u.last_name or "").strip()) if p) or u.email
+        _emit(
+            UnifiedContact(
+                id=f"user:{u.id}",
+                source="user",
+                source_id=u.id,
+                full_name=nom,
+                email=u.email,
+                phone=getattr(u, "phone_e164", None),
+                kind="staff",
+                specialty=(u.role or None),
+                active=bool(u.is_active),
+                detail_url=None,
+            )
+        )
+
+    # 7) Clients — ce sont eux qui signent le plus souvent.
+    from app.models.client import Client
+
+    for cl in (await db.execute(select(Client))).scalars().all():
+        _emit(
+            UnifiedContact(
+                id=f"client:{cl.id}",
+                source="client",
+                source_id=cl.id,
+                full_name=cl.name,
+                company=(cl.name if getattr(cl, "is_company", False) else None),
+                email=cl.email,
+                phone=cl.phone,
+                address=cl.address,
+                kind="client",
+                specialty=None,
+                active=True,
+                detail_url=f"/app/clients/{cl.id}",
             )
         )
 

@@ -2222,17 +2222,22 @@ function AddSignerModal({
       .finally(() => setContactsLoading(false));
   }, [tab, contacts.length]);
 
+  // Recherche ÉCRITE (pas de liste à dérouler) : employés, propriétaire,
+  // admins, clients, sous-traitants, fournisseurs, contacts enregistrés.
+  // Tous les mots tapés doivent se retrouver (nom, entreprise, courriel,
+  // téléphone, rôle), sans accents.
   const filteredContacts = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    const base = contacts.filter((c) => c.email);
-    if (!needle) return base.slice(0, 30);
-    return base
-      .filter((c) =>
-        `${c.full_name} ${c.company || ""} ${c.email || ""}`
-          .toLowerCase()
-          .includes(needle)
-      )
-      .slice(0, 30);
+    const norm = (v: string) =>
+      v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    const mots = norm(search.trim()).split(/\s+/).filter(Boolean);
+    if (mots.length === 0) return [] as UnifiedContact[];
+    return contacts
+      .filter((c) => c.email)
+      .filter((c) => {
+        const hay = norm(`${c.full_name} ${c.company || ""} ${c.email || ""} ${c.phone || ""} ${c.kind || ""}`);
+        return mots.every((m) => hay.includes(m));
+      })
+      .slice(0, 20);
   }, [contacts, search]);
 
   function pickContact(c: UnifiedContact) {
@@ -2335,19 +2340,31 @@ function AddSignerModal({
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Rechercher un contact…"
+                placeholder="Tape un nom, un courriel, une entreprise…"
                 className="input w-full pl-8 text-xs"
                 autoFocus
               />
             </div>
+            <p className="mb-2 text-[11px] text-white/50">
+              Employés, propriétaire, admins, clients, sous-traitants, fournisseurs et contacts
+              enregistrés. Un signataire saisi à la main est ajouté à la banque pour la prochaine fois.
+            </p>
             <div className="max-h-64 space-y-1 overflow-y-auto">
               {contactsLoading ? (
                 <div className="flex justify-center py-6">
                   <Loader2 className="h-4 w-4 animate-spin text-accent-500" />
                 </div>
+              ) : search.trim() === "" ? (
+                <p className="py-6 text-center text-xs text-white/50">
+                  Commence à taper pour chercher un contact.
+                </p>
               ) : filteredContacts.length === 0 ? (
                 <p className="py-6 text-center text-xs text-white/50">
-                  Aucun contact avec courriel trouvé.
+                  Aucun contact avec courriel ne correspond.{" "}
+                  <button type="button" onClick={() => setTab("manuel")} className="underline hover:text-white">
+                    Le créer
+                  </button>
+                  .
                 </p>
               ) : (
                 filteredContacts.map((c) => (
