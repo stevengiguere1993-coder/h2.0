@@ -2346,7 +2346,7 @@ function AddSignerModal({
               />
             </div>
             <p className="mb-2 text-[11px] text-white/50">
-              Employés, propriétaire, admins, clients, sous-traitants, fournisseurs et contacts
+              Employés, propriétaire, admins, sous-traitants, fournisseurs et contacts
               enregistrés. Un signataire saisi à la main est ajouté à la banque pour la prochaine fois.
             </p>
             <div className="max-h-64 space-y-1 overflow-y-auto">
