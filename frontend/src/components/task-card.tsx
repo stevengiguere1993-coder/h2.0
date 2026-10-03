@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { ArrowRightLeft, Building2, StickyNote, Trash2 } from "lucide-react";
 
 import {
   AssigneePicker,
-  AutoGrowTextarea,
   DatePill,
   PillPicker,
   type TaskUserMini
@@ -84,11 +83,7 @@ export function TaskCard({
   // task.title sous le curseur → le texte « reculait » en tapant. On
   // n'émet donc onPatch({ title }) qu'au commit (blur / Entrée), et on
   // ne resynchronise le brouillon depuis les props que hors édition.
-  const [titleDraft, setTitleDraft] = useState(task.title);
-  const [titleEditing, setTitleEditing] = useState(false);
-  useEffect(() => {
-    if (!titleEditing) setTitleDraft(task.title);
-  }, [task.title, titleEditing]);
+
 
   const tier = scoreToPTier(task.score);
   const hasScore = task.score != null;
@@ -137,21 +132,20 @@ export function TaskCard({
       <div className="relative px-3 py-2.5 pl-[14px]">
         {/* Première ligne : titre + actions inline (compact, hover-révélé) */}
         <div className="flex items-start gap-1.5">
-          <AutoGrowTextarea
-            value={titleDraft}
-            onChange={setTitleDraft}
-            onFocus={() => setTitleEditing(true)}
-            onCommit={(v) => {
-              setTitleEditing(false);
-              const trimmed = v.trim();
-              if (trimmed && trimmed !== task.title) {
-                onPatch({ title: trimmed });
-              } else {
-                setTitleDraft(task.title);
-              }
+          {/* Le TITRE ouvre la fiche (Phil 2026-10-03) ; le reste de la
+              carte sert à glisser-déposer dans le kanban. Le titre se
+              modifie dans la fiche. */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenDetails();
             }}
-            className="min-w-0 flex-1 resize-none rounded border border-transparent bg-transparent px-0.5 py-0 text-[13px] font-semibold leading-tight text-white focus:border-accent-500 focus:outline-none"
-          />
+            className="min-w-0 flex-1 cursor-pointer rounded px-0.5 py-0 text-left text-[13px] font-semibold leading-tight text-white hover:text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+            title="Ouvrir la tâche"
+          >
+            {task.title}
+          </button>
           <div className="flex flex-shrink-0 items-center gap-0 opacity-60 transition group-hover:opacity-100">
             <button
               type="button"
