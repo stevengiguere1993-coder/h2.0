@@ -108,7 +108,20 @@ def is_provisional_facture_reference(ref: Optional[str]) -> bool:
 #: Numéros sautés à la dernière attribution (pour le message à l'écran) :
 #: {facture_id: ["145"]}.
 NUMEROS_SAUTES: dict = {}
-MAX_SAUTS = 25
+#: Nombre maximal de numéros sautés en une attribution. Large : une
+#: plage entière peut être prise dans Kratos (factures importées de
+#: QuickBooks avec leur DocNumber) et la vérification locale est gratuite.
+MAX_SAUTS = 500
+
+
+async def numero_pris_dans_kratos(db: AsyncSession, ref: str, *, sauf_id=None):
+    """La facture Kratos qui porte déjà cette référence (sinon None)."""
+    from app.models.facture import Facture
+
+    stmt = select(Facture.id, Facture.project_id).where(Facture.reference == ref)
+    if sauf_id is not None:
+        stmt = stmt.where(Facture.id != sauf_id)
+    return (await db.execute(stmt)).first()
 
 
 async def ensure_facture_number(db: AsyncSession, fa) -> bool:
@@ -116,16 +129,32 @@ async def ensure_facture_number(db: AsyncSession, fa) -> bool:
     encore (référence vide ou provisoire « BR-… »). Renvoie True si un
     numéro a été attribué. Flush mais ne committe pas.
 
-    Garde-fou QuickBooks (incident facture 145, 2026-10-01) : si le
-    numéro est DÉJÀ pris dans QB par une facture qui n'est pas de Kratos
-    (saisie à la main pour un autre projet), on le saute et on prend le
-    suivant — jamais deux factures différentes sous le même numéro."""
+    Deux garde-fous — jamais deux factures différentes sous le même
+    numéro :
+    - Kratos (incident facture 149, 2026-10-03) : une facture importée
+      de QuickBooks (synchro QB → Kratos) garde son DocNumber comme
+      référence ; le compteur, lui, ne le sait pas. Si le candidat est
+      déjà pris par une facture Kratos, on le saute (sinon l'UPDATE
+      échouait sur la contrainte d'unicité `ix_factures_reference` et
+      l'envoi plantait).
+    - QuickBooks (incident facture 145, 2026-10-01) : si le numéro est
+      DÉJÀ pris dans QB par une facture qui n'est pas de Kratos (saisie
+      à la main pour un autre projet), on le saute aussi."""
     ref = (getattr(fa, "reference", None) or "").strip()
     if ref and not is_provisional_facture_reference(ref):
         return False
     sautes: list[str] = []
+    cand = None
     for _ in range(MAX_SAUTS):
         cand = await next_facture_number(db)
+        local = await numero_pris_dans_kratos(db, cand, sauf_id=getattr(fa, "id", None))
+        if local is not None:
+            sautes.append(cand)
+            log.warning(
+                "Numéro de facture %s sauté : déjà porté par la facture Kratos #%s",
+                cand, local[0],
+            )
+            continue
         try:
             from app.services.facture_qbo import numero_pris_hors_kratos
 
@@ -139,6 +168,12 @@ async def ensure_facture_number(db: AsyncSession, fa) -> bool:
             "Numéro de facture %s sauté : déjà utilisé dans QuickBooks par une "
             "facture hors Kratos (%s)", cand,
             (pris.get("CustomerRef") or {}).get("name"),
+        )
+    else:
+        raise ValueError(
+            f"Impossible d'attribuer un numéro de facture : les {MAX_SAUTS} "
+            f"numéros à partir de {sautes[0] if sautes else cand} sont déjà "
+            "pris (Kratos ou QuickBooks). Vérifier le compteur dans Paramètres."
         )
     fa.reference = cand
     if sautes:
