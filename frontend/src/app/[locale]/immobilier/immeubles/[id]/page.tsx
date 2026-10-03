@@ -50,6 +50,7 @@ import { BandeauBailManquant } from "@/components/immobilier/bandeau-bail-manqua
 import { BandeauDepotARembourser } from "@/components/immobilier/bandeau-depot";
 import {
   fmtPieces,
+  LOGEMENT_TYPES,
   LogementFiche
 } from "@/components/immobilier/logement-fiche";
 import { LocationsBoard } from "@/components/immobilier/locations-board";
@@ -2338,6 +2339,155 @@ function LogementsTab({
   // navigue vers la page dédiée du logement.
   const [showCreate, setShowCreate] = useState(false);
 
+  // Édition en ligne + sélection multiple (Phil 2026-10-03) : corriger
+  // ou supprimer des logements DEPUIS la liste (ex. chambres créées par
+  // erreur par l'ajout en lot), sans ouvrir chaque fiche. Le NUMÉRO
+  // ouvre la fiche ; le reste de la ligne ne navigue plus.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [draft, setDraft] = useState({
+    numero: "",
+    pieces: "",
+    superficie: "",
+    loyer: "",
+    chambres: false
+  });
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [showLot, setShowLot] = useState(false);
+  const [lotBusy, setLotBusy] = useState(false);
+
+  const numeroDe = (id: number) =>
+    list?.find((x) => x.id === id)?.numero ?? `#${id}`;
+
+  function startEdit(l: Logement) {
+    setEditingId(l.id);
+    setMsg(null);
+    setDraft({
+      numero: l.numero,
+      pieces: l.nb_pieces_decimal != null ? String(l.nb_pieces_decimal) : "",
+      superficie: l.superficie_pi2 != null ? String(l.superficie_pi2) : "",
+      loyer: l.loyer_demande != null ? String(l.loyer_demande) : "",
+      chambres: !!l.location_en_chambres
+    });
+  }
+
+  async function detailErreur(r: Response): Promise<string> {
+    if (r.status === 403) return "droit « supprimer / modifier un logement » manquant";
+    try {
+      const d = (await r.json()).detail;
+      if (typeof d === "string") return d;
+    } catch {
+      /* corps vide */
+    }
+    return `HTTP ${r.status}`;
+  }
+
+  async function patchLogement(
+    id: number,
+    body: Record<string, unknown>
+  ): Promise<string | null> {
+    const r = await authedFetch(`/api/v1/immobilier/logements/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) return await detailErreur(r);
+    const saved = (await r.json()) as Logement;
+    setList((prev) =>
+      prev?.map((x) => (x.id === id ? { ...x, ...saved } : x)) ?? prev
+    );
+    return null;
+  }
+
+  async function supprimerLogement(id: number): Promise<string | null> {
+    const r = await authedFetch(`/api/v1/immobilier/logements/${id}`, {
+      method: "DELETE"
+    });
+    if (r.ok || r.status === 204) {
+      setList((prev) => prev?.filter((x) => x.id !== id) ?? prev);
+      setSelected((s) => {
+        const n = new Set(s);
+        n.delete(id);
+        return n;
+      });
+      return null;
+    }
+    return await detailErreur(r);
+  }
+
+  async function saveEdit() {
+    if (editingId == null) return;
+    const num = (v: string) => (v.trim() === "" ? null : Number(v));
+    if (!draft.numero.trim()) {
+      setMsg("Le numéro est requis.");
+      return;
+    }
+    setBusyId(editingId);
+    setMsg(null);
+    const err = await patchLogement(editingId, {
+      numero: draft.numero.trim(),
+      nb_pieces_decimal: num(draft.pieces),
+      superficie_pi2: num(draft.superficie),
+      loyer_demande: num(draft.loyer),
+      location_en_chambres: draft.chambres
+    });
+    setBusyId(null);
+    if (err) setMsg(`${draft.numero} : ${err}`);
+    else setEditingId(null);
+  }
+
+  async function deleteOne(l: Logement) {
+    if (!window.confirm(`Supprimer le logement ${l.numero} ?`)) return;
+    setBusyId(l.id);
+    setMsg(null);
+    const err = await supprimerLogement(l.id);
+    setBusyId(null);
+    if (err) setMsg(`${l.numero} gardé : ${err}`);
+  }
+
+  async function deleteSelected() {
+    const cibles = (list ?? []).filter((l) => selected.has(l.id));
+    if (!cibles.length) return;
+    if (
+      !window.confirm(
+        `Supprimer ${cibles.length} logement(s) : ${cibles
+          .map((l) => l.numero)
+          .join(", ")} ?\nCeux qui ont un bail seront gardés.`
+      )
+    )
+      return;
+    setLotBusy(true);
+    setMsg(null);
+    const gardes: string[] = [];
+    let ok = 0;
+    for (const l of cibles) {
+      const err = await supprimerLogement(l.id);
+      if (err) gardes.push(`${l.numero} gardé : ${err}`);
+      else ok++;
+    }
+    setLotBusy(false);
+    setMsg([`${ok} supprimé(s).`, ...gardes].join(" · "));
+  }
+
+  async function applyLot(body: Record<string, unknown>) {
+    const ids = Array.from(selected);
+    setLotBusy(true);
+    setMsg(null);
+    const errs: string[] = [];
+    let ok = 0;
+    for (const id of ids) {
+      const err = await patchLogement(id, body);
+      if (err) errs.push(`${numeroDe(id)} : ${err}`);
+      else ok++;
+    }
+    setLotBusy(false);
+    setShowLot(false);
+    setMsg([`${ok} modifié(s).`, ...errs].join(" · "));
+  }
+
+  const allSelected =
+    !!list && list.length > 0 && list.every((l) => selected.has(l.id));
+
   // Hiérarchie du loyer effectif (retour client 2026-08-14) : interne
   // occupé → loyer RÉEL du bail actif ; gestion EXTERNE → le loyer
   // SAISI sur le logement est la vérité (un bail résiduel invisible ne
@@ -2408,86 +2558,521 @@ function LogementsTab({
         {modal}
       </div>
     );
+  const CELL_INPUT =
+    "input w-full px-2 py-1 text-xs";
+
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-xs text-white/50">
-          Clique sur un logement pour ouvrir sa fiche.
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-white/60">
+          Clique sur le <strong className="text-white">numéro</strong> pour
+          ouvrir la fiche. Le crayon modifie la ligne sur place ; coche
+          plusieurs logements pour les modifier ou supprimer d&apos;un coup.
         </p>
         {addButton}
       </div>
+
+      {selected.size > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-accent-500/40 bg-accent-500/10 px-3 py-2 text-xs text-white">
+          <span className="font-semibold">
+            {selected.size} sélectionné{selected.size > 1 ? "s" : ""}
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowLot(true)}
+            disabled={lotBusy}
+            className="btn-outline-accent btn-xs"
+          >
+            <Pencil className="h-3 w-3" /> Modifier en lot
+          </button>
+          <button
+            type="button"
+            onClick={() => void deleteSelected()}
+            disabled={lotBusy}
+            className="btn-outline-rose btn-xs"
+          >
+            {lotBusy ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Trash2 className="h-3 w-3" />
+            )}{" "}
+            Supprimer
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelected(new Set())}
+            className="btn-ghost btn-xs"
+          >
+            Tout désélectionner
+          </button>
+        </div>
+      ) : null}
+
+      {msg ? (
+        <p className="rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-xs text-white">
+          {msg}
+        </p>
+      ) : null}
+
       <div className="overflow-x-auto rounded-2xl border border-brand-800 bg-brand-900">
-        <table className="w-full min-w-[720px] text-left text-sm">
+        <table className="w-full min-w-[760px] text-left text-sm">
           <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
             <tr>
-              <th className="px-4 py-2.5">Numéro</th>
-              <th className="px-4 py-2.5">Pièces</th>
-              <th className="px-4 py-2.5 text-right">Superficie</th>
-              <th className="px-4 py-2.5">Statut</th>
-              <th className="px-4 py-2.5 text-right">Loyer</th>
+              <th className="w-8 py-2.5 pl-3">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={(e) =>
+                    setSelected(
+                      e.target.checked
+                        ? new Set(list.map((l) => l.id))
+                        : new Set()
+                    )
+                  }
+                  aria-label="Tout sélectionner"
+                  className="h-3.5 w-3.5 accent-accent-500"
+                />
+              </th>
+              <th className="px-3 py-2.5">Numéro</th>
+              <th className="px-3 py-2.5">Pièces</th>
+              <th className="px-3 py-2.5 text-right">Superficie</th>
+              <th className="px-3 py-2.5">Statut</th>
+              <th className="px-3 py-2.5 text-right">Loyer</th>
+              <th className="w-24 px-3 py-2.5 text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-brand-800">
-            {list.map((l) => (
-              <tr
-                key={l.id}
-                onClick={() =>
-                  // ?from=immeuble : le bouton retour de la page logement
-                  // ramène ici, onglet Logements (retour Phil 2026-07-10).
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  router.push(`/immobilier/logements/${l.id}?from=immeuble` as any)
-                }
-                className="cursor-pointer transition hover:bg-brand-800/40"
-              >
-                <td className="px-4 py-2 font-bold text-white">{l.numero}</td>
-                <td className="px-4 py-2 text-xs text-white/70">
-                  {l.location_en_chambres ? (
-                    <span
-                      title={LOUER_INDEFINIMENT_INFO}
-                      className="cursor-help border-b border-dotted border-white/25"
-                    >
-                      Chambre ∞
-                    </span>
-                  ) : (
-                    fmtPieces(l.nb_pieces_decimal)
-                  )}
-                </td>
-                <td className="px-4 py-2 text-right font-mono text-xs text-white/70">
-                  {l.superficie_pi2 ? `${l.superficie_pi2} pi²` : "—"}
-                </td>
-                <td className="px-4 py-2 text-xs">
-                  <StatusBadge status={l.status} />
-                </td>
-                <td
-                  className="px-4 py-2 text-right font-mono text-xs text-white/70"
-                  title={
-                    gestionExterne
-                      ? "Loyer saisi sur le logement (gestion externe)"
-                      : l.status === "occupe"
-                        ? "Loyer du bail actif"
-                        : "Loyer demandé (prix de la prochaine location)"
-                  }
+            {list.map((l) => {
+              const editing = editingId === l.id;
+              const busy = busyId === l.id;
+              return (
+                <tr
+                  key={l.id}
+                  className={`transition ${
+                    selected.has(l.id)
+                      ? "bg-accent-500/10"
+                      : editing
+                        ? "bg-brand-800/40"
+                        : "hover:bg-brand-800/40"
+                  }`}
                 >
-                  {/* Hiérarchie du loyer effectif (2026-08-14) :
-                      externe → loyer SAISI ; interne occupé → loyer
-                      RÉEL du bail ; vacant → demandé. */}
-                  {fmtCurrency(
-                    l.status === "occupe"
-                      ? (loyerBailParLogement.get(l.id) ?? l.loyer_demande)
-                      : l.loyer_demande
-                  )}
-                  {!gestionExterne &&
-                  l.status !== "occupe" &&
-                  l.loyer_demande != null ? (
-                    <span className="ml-1 text-white/40">demandé</span>
-                  ) : null}
-                </td>
-              </tr>
-            ))}
+                  <td className="py-2 pl-3 align-middle">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(l.id)}
+                      onChange={(e) =>
+                        setSelected((s) => {
+                          const n = new Set(s);
+                          if (e.target.checked) n.add(l.id);
+                          else n.delete(l.id);
+                          return n;
+                        })
+                      }
+                      aria-label={`Sélectionner ${l.numero}`}
+                      className="h-3.5 w-3.5 accent-accent-500"
+                    />
+                  </td>
+                  <td className="px-3 py-2 font-bold text-white">
+                    {editing ? (
+                      <input
+                        value={draft.numero}
+                        onChange={(e) =>
+                          setDraft((d) => ({ ...d, numero: e.target.value }))
+                        }
+                        className={`${CELL_INPUT} w-24 font-bold`}
+                        aria-label="Numéro"
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          // ?from=immeuble : le bouton retour de la page
+                          // logement ramène ici (retour Phil 2026-07-10).
+                          router.push(
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            `/immobilier/logements/${l.id}?from=immeuble` as any
+                          )
+                        }
+                        className="rounded px-0.5 text-left hover:text-accent-500 hover:underline"
+                        title="Ouvrir la fiche du logement"
+                      >
+                        {l.numero}
+                      </button>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-white/70">
+                    {editing ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0"
+                          value={draft.pieces}
+                          disabled={draft.chambres}
+                          onChange={(e) =>
+                            setDraft((d) => ({ ...d, pieces: e.target.value }))
+                          }
+                          className={`${CELL_INPUT} w-16 disabled:opacity-50`}
+                          aria-label="Pièces"
+                        />
+                        <label className="inline-flex cursor-pointer items-center gap-1 whitespace-nowrap text-white">
+                          <input
+                            type="checkbox"
+                            checked={draft.chambres}
+                            onChange={(e) =>
+                              setDraft((d) => ({
+                                ...d,
+                                chambres: e.target.checked
+                              }))
+                            }
+                            className="h-3.5 w-3.5 accent-accent-500"
+                          />
+                          Chambre ∞
+                        </label>
+                      </div>
+                    ) : l.location_en_chambres ? (
+                      <span
+                        title={LOUER_INDEFINIMENT_INFO}
+                        className="cursor-help border-b border-dotted border-white/25"
+                      >
+                        Chambre ∞
+                      </span>
+                    ) : (
+                      fmtPieces(l.nb_pieces_decimal)
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-xs text-white/70">
+                    {editing ? (
+                      <input
+                        type="number"
+                        min="0"
+                        value={draft.superficie}
+                        onChange={(e) =>
+                          setDraft((d) => ({
+                            ...d,
+                            superficie: e.target.value
+                          }))
+                        }
+                        className={`${CELL_INPUT} ml-auto w-20 text-right`}
+                        aria-label="Superficie (pi²)"
+                      />
+                    ) : l.superficie_pi2 ? (
+                      `${l.superficie_pi2} pi²`
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-xs">
+                    <StatusBadge status={l.status} />
+                  </td>
+                  <td
+                    className="px-3 py-2 text-right font-mono text-xs text-white/70"
+                    title={
+                      gestionExterne
+                        ? "Loyer saisi sur le logement (gestion externe)"
+                        : l.status === "occupe"
+                          ? "Loyer du bail actif"
+                          : "Loyer demandé (prix de la prochaine location)"
+                    }
+                  >
+                    {editing ? (
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={draft.loyer}
+                        onChange={(e) =>
+                          setDraft((d) => ({ ...d, loyer: e.target.value }))
+                        }
+                        className={`${CELL_INPUT} ml-auto w-24 text-right`}
+                        aria-label="Loyer demandé"
+                      />
+                    ) : (
+                      <>
+                        {/* Hiérarchie du loyer effectif (2026-08-14) :
+                            externe → loyer SAISI ; interne occupé → loyer
+                            RÉEL du bail ; vacant → demandé. */}
+                        {fmtCurrency(
+                          l.status === "occupe"
+                            ? (loyerBailParLogement.get(l.id) ??
+                              l.loyer_demande)
+                            : l.loyer_demande
+                        )}
+                        {!gestionExterne &&
+                        l.status !== "occupe" &&
+                        l.loyer_demande != null ? (
+                          <span className="ml-1 text-white/40">demandé</span>
+                        ) : null}
+                      </>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {busy ? (
+                      <Loader2 className="ml-auto h-4 w-4 animate-spin text-accent-500" />
+                    ) : editing ? (
+                      <span className="inline-flex gap-1">
+                        <button
+                          type="button"
+                          onClick={() => void saveEdit()}
+                          className="btn-accent btn-xs"
+                          title="Enregistrer"
+                          aria-label="Enregistrer"
+                        >
+                          <Check className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingId(null)}
+                          className="btn-ghost btn-xs"
+                          title="Annuler"
+                          aria-label="Annuler"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="inline-flex gap-1">
+                        <button
+                          type="button"
+                          onClick={() => startEdit(l)}
+                          className="btn-ghost btn-xs"
+                          title="Modifier sur place"
+                          aria-label={`Modifier ${l.numero}`}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void deleteOne(l)}
+                          className="btn-ghost btn-xs hover:bg-rose-500/15 hover:text-rose-400"
+                          title="Supprimer ce logement"
+                          aria-label={`Supprimer ${l.numero}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
       {modal}
+      {showLot ? (
+        <LogementsLotModal
+          count={selected.size}
+          busy={lotBusy}
+          onClose={() => setShowLot(false)}
+          onApply={(body) => void applyLot(body)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** Une ligne de la modale de lot : case « appliquer » + champ. Composant
+ *  de premier niveau (pas recréé à chaque rendu → le focus tient). */
+function LotLigne({
+  checked,
+  onToggle,
+  label,
+  children
+}: {
+  checked: boolean;
+  onToggle: (c: boolean) => void;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="flex items-center gap-3 rounded-lg border border-brand-800 px-3 py-2">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onToggle(e.target.checked)}
+        className="h-4 w-4 accent-accent-500"
+      />
+      <span className="w-36 text-sm text-white">{label}</span>
+      <span className={`flex-1 ${checked ? "" : "opacity-50"}`}>{children}</span>
+    </label>
+  );
+}
+
+/** Modification en lot : seuls les champs COCHÉS sont appliqués à tous
+ *  les logements sélectionnés (les autres restent tels quels). */
+function LogementsLotModal({
+  count,
+  busy,
+  onClose,
+  onApply
+}: {
+  count: number;
+  busy: boolean;
+  onClose: () => void;
+  onApply: (body: Record<string, unknown>) => void;
+}) {
+  const [on, setOn] = useState({
+    type: false,
+    pieces: false,
+    chambres: false,
+    enChambres: false,
+    superficie: false,
+    loyer: false,
+    etage: false
+  });
+  const [v, setV] = useState({
+    type: "residentiel",
+    pieces: "",
+    chambres: "",
+    enChambres: false,
+    superficie: "",
+    loyer: "",
+    etage: ""
+  });
+  const num = (s: string) => (s.trim() === "" ? null : Number(s));
+  const rien = !Object.values(on).some(Boolean);
+
+  function apply() {
+    const body: Record<string, unknown> = {};
+    if (on.type) body.type = v.type;
+    if (on.pieces) body.nb_pieces_decimal = num(v.pieces);
+    if (on.chambres) body.nb_chambres = num(v.chambres);
+    if (on.enChambres) body.location_en_chambres = v.enChambres;
+    if (on.superficie) body.superficie_pi2 = num(v.superficie);
+    if (on.loyer) body.loyer_demande = num(v.loyer);
+    if (on.etage) body.etage = num(v.etage);
+    onApply(body);
+  }
+
+  const lotLigne = (k: keyof typeof on) => ({
+    checked: on[k],
+    onToggle: (c: boolean) => setOn((o) => ({ ...o, [k]: c }))
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-xl">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-base font-bold text-white">
+            Modifier {count} logement{count > 1 ? "s" : ""} en lot
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn-ghost btn-xs"
+            aria-label="Fermer"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <p className="mb-3 text-xs text-white/60">
+          Coche les champs à changer : seuls ceux-là sont appliqués à toute
+          la sélection, le reste de chaque logement ne bouge pas.
+        </p>
+        <div className="space-y-2">
+          <LotLigne {...lotLigne("type")} label="Type">
+            <select
+              value={v.type}
+              onChange={(e) => setV((x) => ({ ...x, type: e.target.value }))}
+              className="input py-1.5 text-sm"
+            >
+              {LOGEMENT_TYPES.map(([val, lab]) => (
+                <option key={val} value={val} className="bg-brand-950 text-white">
+                  {lab}
+                </option>
+              ))}
+            </select>
+          </LotLigne>
+          <LotLigne {...lotLigne("enChambres")} label="Location en chambres">
+            <select
+              value={v.enChambres ? "oui" : "non"}
+              onChange={(e) =>
+                setV((x) => ({ ...x, enChambres: e.target.value === "oui" }))
+              }
+              className="input py-1.5 text-sm"
+            >
+              <option value="non" className="bg-brand-950 text-white">
+                Non — logement normal
+              </option>
+              <option value="oui" className="bg-brand-950 text-white">
+                Oui — Chambre ∞
+              </option>
+            </select>
+          </LotLigne>
+          <LotLigne {...lotLigne("pieces")} label="Pièces">
+            <input
+              type="number"
+              step="0.5"
+              min="0"
+              value={v.pieces}
+              onChange={(e) => setV((x) => ({ ...x, pieces: e.target.value }))}
+              className="input py-1.5 text-sm"
+              placeholder="ex. 4.5"
+            />
+          </LotLigne>
+          <LotLigne {...lotLigne("chambres")} label="Chambres (nb)">
+            <input
+              type="number"
+              min="0"
+              value={v.chambres}
+              onChange={(e) => setV((x) => ({ ...x, chambres: e.target.value }))}
+              className="input py-1.5 text-sm"
+            />
+          </LotLigne>
+          <LotLigne {...lotLigne("superficie")} label="Superficie (pi²)">
+            <input
+              type="number"
+              min="0"
+              value={v.superficie}
+              onChange={(e) =>
+                setV((x) => ({ ...x, superficie: e.target.value }))
+              }
+              className="input py-1.5 text-sm"
+            />
+          </LotLigne>
+          <LotLigne {...lotLigne("loyer")} label="Loyer demandé">
+            <input
+              type="number"
+              min="0"
+              value={v.loyer}
+              onChange={(e) => setV((x) => ({ ...x, loyer: e.target.value }))}
+              className="input py-1.5 text-sm"
+            />
+          </LotLigne>
+          <LotLigne {...lotLigne("etage")} label="Étage">
+            <input
+              type="number"
+              value={v.etage}
+              onChange={(e) => setV((x) => ({ ...x, etage: e.target.value }))}
+              className="input py-1.5 text-sm"
+            />
+          </LotLigne>
+        </div>
+        <div className="mt-4 flex items-center justify-end gap-2 border-t border-brand-800 pt-3">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="btn-secondary btn-sm"
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={apply}
+            disabled={busy || rien}
+            className="btn-accent btn-sm disabled:opacity-50"
+          >
+            {busy ? (
+              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Check className="mr-1 h-3.5 w-3.5" />
+            )}
+            Appliquer à {count}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
