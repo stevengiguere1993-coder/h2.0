@@ -4580,11 +4580,15 @@ function HypothequeForm({
     return addAnneesIso(f.date_debut, annees);
   }, [f.date_debut, f.terme_annees]);
 
-  const pmtDisplay = pmtOverride
-    ? f.paiement_mensuel
-    : computedPmt != null
-      ? computedPmt.toFixed(2)
-      : "";
+  // Le champ n'affiche QUE la valeur saisie à la main. En mode auto il
+  // reste VIDE et le montant calculé apparaît en placeholder : avant, le
+  // calcul se réinjectait dans le champ dès qu'on l'effaçait, et on ne
+  // pouvait jamais le vider pour retaper un montant (Phil 2026-10-03).
+  const pmtDisplay = pmtOverride ? f.paiement_mensuel : "";
+  const pmtPlaceholder =
+    computedPmt != null
+      ? `Auto : ${computedPmt.toFixed(2)} $`
+      : "Auto-calculé (taux + amortissement)";
 
   const pmtEffective =
     pmtOverride && f.paiement_mensuel.trim() !== ""
@@ -4627,12 +4631,14 @@ function HypothequeForm({
     });
   }
 
+  // Bordure brand-700 (pas 800) : en mode jour, 800 = #e2e8f0 sur fond
+  // blanc, les champs disparaissaient (Phil 2026-10-03 : blanc sur blanc).
   const inputCls =
-    "mt-0.5 block w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500";
+    "mt-0.5 block w-full rounded-md border border-brand-700 bg-brand-950 px-2 py-1.5 text-xs text-white shadow-sm outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/30";
   const labelCls = "text-[11px] font-semibold text-white/60";
 
   return (
-    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+    <div className="rounded-2xl border border-brand-700 border-l-4 border-l-accent-500 bg-brand-900 p-4 shadow-card">
       <p className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
         {initial ? "Modifier l'hypothèque" : "Nouvelle hypothèque"}
       </p>
@@ -4752,7 +4758,22 @@ function HypothequeForm({
           />
         </label>
         <label className={labelCls}>
-          Paiement mensuel ($)
+          <span className="flex items-center justify-between gap-2">
+            <span>Paiement mensuel ($)</span>
+            {pmtOverride ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setF((prev) => ({ ...prev, paiement_mensuel: "" }));
+                  setPmtOverride(false);
+                }}
+                className="text-[10px] font-semibold text-accent-500 hover:underline"
+                title="Effacer la valeur manuelle et revenir au calcul automatique"
+              >
+                Revenir au calcul auto
+              </button>
+            ) : null}
+          </span>
           <input
             inputMode="decimal"
             value={pmtDisplay}
@@ -4761,7 +4782,7 @@ function HypothequeForm({
               setF((prev) => ({ ...prev, paiement_mensuel: v }));
               setPmtOverride(v.trim() !== "");
             }}
-            placeholder="Auto-calculé"
+            placeholder={pmtPlaceholder}
             className={inputCls}
           />
         </label>
@@ -4803,15 +4824,26 @@ function HypothequeForm({
         </label>
       </div>
 
-      {computedPmt != null ? (
-        <p className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-          Paiement mensuel calculé : {fmtCurrency(computedPmt)}
-          <span className="ml-1 text-emerald-300/60">
-            (composé{" "}
-            {compositionChoisie === "mensuelle"
-              ? "mensuellement"
-              : "semi-annuellement"}
-            {pmtOverride ? " — valeur surchargée manuellement" : ""})
+      {pmtEffective != null || computedPmt != null ? (
+        // Le paiement RETENU (celui qui sera enregistré et qui alimente
+        // le cash flow) : la valeur manuelle si elle est saisie, sinon le
+        // calcul. Encre pleine, pas de pastel (Phil 2026-10-03).
+        <p className="mt-3 rounded-lg border border-brand-700 bg-brand-950 px-3 py-2 text-xs text-white">
+          <span className="font-semibold">
+            Paiement mensuel retenu : {fmtCurrency(pmtEffective ?? computedPmt)}
+          </span>
+          <span className="ml-1 text-white/70">
+            {pmtOverride && f.paiement_mensuel.trim() !== ""
+              ? `(saisi à la main — calcul : ${fmtCurrency(computedPmt)}, composé ${
+                  compositionChoisie === "mensuelle"
+                    ? "mensuellement"
+                    : "semi-annuellement"
+                })`
+              : `(calculé, composé ${
+                  compositionChoisie === "mensuelle"
+                    ? "mensuellement"
+                    : "semi-annuellement"
+                })`}
           </span>
         </p>
       ) : (
@@ -5140,8 +5172,10 @@ function EvaluationForm({
     });
   }
 
+  // Bordure brand-700 (pas 800) : en mode jour, 800 = #e2e8f0 sur fond
+  // blanc, les champs disparaissaient (Phil 2026-10-03 : blanc sur blanc).
   const inputCls =
-    "mt-0.5 block w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500";
+    "mt-0.5 block w-full rounded-md border border-brand-700 bg-brand-950 px-2 py-1.5 text-xs text-white shadow-sm outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/30";
   const labelCls = "text-[11px] font-semibold text-white/60";
 
   return (
@@ -5806,8 +5840,10 @@ function CashflowTab({
 
   if (depenses === null) return <Loading />;
 
+  // Bordure brand-700 (pas 800) : en mode jour, 800 = #e2e8f0 sur fond
+  // blanc, les champs disparaissaient (Phil 2026-10-03 : blanc sur blanc).
   const inputCls =
-    "mt-0.5 block w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500";
+    "mt-0.5 block w-full rounded-md border border-brand-700 bg-brand-950 px-2 py-1.5 text-xs text-white shadow-sm outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/30";
   const labelCls = "text-[11px] font-semibold text-white/60";
 
   return (
