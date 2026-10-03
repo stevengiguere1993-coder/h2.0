@@ -319,10 +319,10 @@ export default function BonsPage() {
                         const unclassified =
                           et === "" || et === "a_classifier";
                         return (
+                          // Le TITRE ouvre le bon ; le reste de la carte se
+                          // glisse dans le kanban (Phil 2026-10-03).
                           <div
                             key={b.id}
-                            role="button"
-                            tabIndex={0}
                             draggable
                             onDragStart={(e) => {
                               dragIdRef.current = b.id;
@@ -332,20 +332,7 @@ export default function BonsPage() {
                               dragIdRef.current = null;
                               setDragOverCol(null);
                             }}
-                            onClick={() =>
-                              router.push(
-                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                `/app/bons/${b.id}` as any
-                              )
-                            }
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter")
-                                router.push(
-                                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                  `/app/bons/${b.id}` as any
-                                );
-                            }}
-                            className={`group relative block cursor-pointer rounded-lg border p-3 transition ${
+                            className={`group relative block cursor-grab rounded-lg border p-3 transition active:cursor-grabbing ${
                               b.is_urgent
                                 ? "border-rose-500/70 bg-rose-500/10 hover:border-rose-400"
                                 : "border-brand-800 bg-brand-950 hover:border-accent-500"
@@ -369,11 +356,26 @@ export default function BonsPage() {
                               </span>
                             ) : null}
                             <h3 className="truncate pr-6 text-sm font-semibold text-white">
-                              {b.address || "Adresse non renseignée"}
+                              <Link
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                href={`/app/bons/${b.id}` as any}
+                                draggable={false}
+                                onClick={(e) => e.stopPropagation()}
+                                className="hover:text-accent-500 hover:underline"
+                                title="Ouvrir le bon de travail"
+                              >
+                                {b.address || "Adresse non renseignée"}
+                              </Link>
                             </h3>
-                            <p className="mt-0.5 truncate text-xs text-white/70">
+                            <Link
+                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                              href={`/app/bons/${b.id}` as any}
+                              draggable={false}
+                              onClick={(e) => e.stopPropagation()}
+                              className="mt-0.5 block truncate text-xs text-white/70 hover:text-accent-500 hover:underline"
+                            >
                               {b.title}
-                            </p>
+                            </Link>
                             <p className="mt-0.5 truncate text-[11px] text-white/40">
                               {b.reference}
                               {b.created_by_user_id &&
