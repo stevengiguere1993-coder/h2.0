@@ -82,13 +82,14 @@ const STATUTS: [string, string][] = [
   ["hors_location", "Hors location"]
 ];
 
-const TYPES: [string, string][] = [
+export const LOGEMENT_TYPES: [string, string][] = [
   ["residentiel", "Résidentiel"],
   ["commercial", "Commercial"],
   ["stationnement", "Stationnement"],
   ["rangement", "Rangement"],
   ["autre", "Autre"]
 ];
+const TYPES = LOGEMENT_TYPES;
 
 function fmtMoney(n: number | null | undefined): string {
   if (n == null) return "—";
