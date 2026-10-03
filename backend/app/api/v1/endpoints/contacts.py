@@ -232,27 +232,6 @@ async def list_all_contacts(
             )
         )
 
-    # 7) Clients — ce sont eux qui signent le plus souvent.
-    from app.models.client import Client
-
-    for cl in (await db.execute(select(Client))).scalars().all():
-        _emit(
-            UnifiedContact(
-                id=f"client:{cl.id}",
-                source="client",
-                source_id=cl.id,
-                full_name=cl.name,
-                company=(cl.name if getattr(cl, "is_company", False) else None),
-                email=cl.email,
-                phone=cl.phone,
-                address=cl.address,
-                kind="client",
-                specialty=None,
-                active=True,
-                detail_url=f"/app/clients/{cl.id}",
-            )
-        )
-
     # Tri alphabétique par nom — l'UI peut re-trier en local.
     out.sort(key=lambda c: c.full_name.lower())
     return out
