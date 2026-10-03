@@ -369,13 +369,13 @@ function ProjectCard({
 }) {
   const touch = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   return (
-    <Link
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      href={`/app/projets/${p.id}` as any}
+    // Le TITRE ouvre le projet ; le reste de la carte se glisse dans le
+    // kanban (Phil 2026-10-03, comme les tâches d'entreprise).
+    <div
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className={`group relative block rounded-lg border bg-brand-950 py-3 pl-7 pr-3 transition ${
+      className={`group relative block cursor-grab rounded-lg border bg-brand-950 py-3 pl-7 pr-3 transition active:cursor-grabbing ${
         dragging
           ? "border-accent-500 opacity-60"
           : "border-brand-800 hover:border-accent-500"
@@ -439,14 +439,23 @@ function ProjectCard({
       {/* Top : adresse du projet (titre principal) ; fallback au
           nom interne si aucune adresse n'a encore été saisie. */}
       <h3 className="flex items-start gap-1 pr-6 text-sm font-semibold text-white">
-        {p.address ? (
-          <>
-            <MapPin className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-white/60" />
-            <span className="truncate">{p.address}</span>
-          </>
-        ) : (
-          <span className="truncate">{p.name}</span>
-        )}
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={`/app/projets/${p.id}` as any}
+          draggable={false}
+          onClick={(e) => e.stopPropagation()}
+          className="flex min-w-0 items-start gap-1 hover:text-accent-500 hover:underline"
+          title="Ouvrir le projet"
+        >
+          {p.address ? (
+            <>
+              <MapPin className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-white/60" />
+              <span className="truncate">{p.address}</span>
+            </>
+          ) : (
+            <span className="truncate">{p.name}</span>
+          )}
+        </Link>
       </h3>
       {/* Nom du client (sous-titre). */}
       {clientName ? (
@@ -498,7 +507,7 @@ function ProjectCard({
           ) : null}
         </div>
       )}
-    </Link>
+    </div>
   );
 }
 

@@ -569,16 +569,19 @@ function SoumissionCard({
         <Trash2 className="h-3.5 w-3.5" />
       </button>
 
-      <Link
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        href={`/app/soumissions/${s.id}` as any}
-        className="block pr-6"
-      >
-        {/* Adresse du chantier (top) — toujours affichée, même pour
-            un contrat ; fallback à l'adresse du projet puis au titre. */}
-        <p className="line-clamp-2 text-sm font-semibold text-white">
+      {/* Le TITRE ouvre la soumission ; le reste de la carte se glisse
+          dans le kanban (Phil 2026-10-03). */}
+      <div className="block pr-6">
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={`/app/soumissions/${s.id}` as any}
+          draggable={false}
+          onClick={(e) => e.stopPropagation()}
+          className="line-clamp-2 block text-sm font-semibold text-white hover:text-accent-500 hover:underline"
+          title="Ouvrir la soumission"
+        >
           {s.property_address || projectAddress || s.title}
-        </p>
+        </Link>
         {/* Nom du client (sous-titre) — taille bumpée pour
             lecture plus rapide. */}
         {clientName ? (
@@ -614,7 +617,7 @@ function SoumissionCard({
             })}
           </span>
         </div>
-      </Link>
+      </div>
     </div>
   );
 }
