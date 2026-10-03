@@ -4580,11 +4580,15 @@ function HypothequeForm({
     return addAnneesIso(f.date_debut, annees);
   }, [f.date_debut, f.terme_annees]);
 
-  const pmtDisplay = pmtOverride
-    ? f.paiement_mensuel
-    : computedPmt != null
-      ? computedPmt.toFixed(2)
-      : "";
+  // Le champ n'affiche QUE la valeur saisie à la main. En mode auto il
+  // reste VIDE et le montant calculé apparaît en placeholder : avant, le
+  // calcul se réinjectait dans le champ dès qu'on l'effaçait, et on ne
+  // pouvait jamais le vider pour retaper un montant (Phil 2026-10-03).
+  const pmtDisplay = pmtOverride ? f.paiement_mensuel : "";
+  const pmtPlaceholder =
+    computedPmt != null
+      ? `Auto : ${computedPmt.toFixed(2)} $`
+      : "Auto-calculé (taux + amortissement)";
 
   const pmtEffective =
     pmtOverride && f.paiement_mensuel.trim() !== ""
@@ -4752,7 +4756,22 @@ function HypothequeForm({
           />
         </label>
         <label className={labelCls}>
-          Paiement mensuel ($)
+          <span className="flex items-center justify-between gap-2">
+            <span>Paiement mensuel ($)</span>
+            {pmtOverride ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setF((prev) => ({ ...prev, paiement_mensuel: "" }));
+                  setPmtOverride(false);
+                }}
+                className="text-[10px] font-semibold text-accent-500 hover:underline"
+                title="Effacer la valeur manuelle et revenir au calcul automatique"
+              >
+                Revenir au calcul auto
+              </button>
+            ) : null}
+          </span>
           <input
             inputMode="decimal"
             value={pmtDisplay}
@@ -4761,7 +4780,7 @@ function HypothequeForm({
               setF((prev) => ({ ...prev, paiement_mensuel: v }));
               setPmtOverride(v.trim() !== "");
             }}
-            placeholder="Auto-calculé"
+            placeholder={pmtPlaceholder}
             className={inputCls}
           />
         </label>
