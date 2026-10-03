@@ -92,7 +92,7 @@ class SoumissionItemCreate(BaseModel):
     cost_material_per_unit: Optional[float] = Field(default=None)
     tps_applicable: bool = Field(default=True)
     tvq_applicable: bool = Field(default=True)
-    kind: str = Field(default="service", pattern="^(service|frais|rabais)$")
+    kind: str = Field(default="service", pattern="^(service|frais|rabais|titre)$")
 
 
 class SoumissionItemUpdate(BaseModel):
@@ -106,7 +106,7 @@ class SoumissionItemUpdate(BaseModel):
     cost_material_per_unit: Optional[float] = Field(default=None)
     tps_applicable: Optional[bool] = Field(default=None)
     tvq_applicable: Optional[bool] = Field(default=None)
-    kind: Optional[str] = Field(default=None, pattern="^(service|frais|rabais)$")
+    kind: Optional[str] = Field(default=None, pattern="^(service|frais|rabais|titre)$")
 
 
 class SoumissionItemRead(BaseModel):
@@ -213,6 +213,10 @@ async def create_item(
         unit_price = cout_total
     if data.kind == "rabais" and unit_price > 0:
         unit_price = -abs(unit_price)
+    if data.kind == "titre":
+        # Sous-titre de section (« Salle de bain », « Salon »… — Phil
+        # 2026-10-03) : aucune quantité, aucun prix, jamais compté.
+        qty, unit_price, cout_total = 0.0, 0.0, 0.0
     total = round(qty * unit_price, 2)
     item = SoumissionItem(
         soumission_id=soumission_id,
@@ -222,11 +226,11 @@ async def create_item(
         quantity=qty,
         unit_price=unit_price,
         cost_per_unit=cout_total,
-        cost_labor_per_unit=data.cost_labor_per_unit,
-        cost_material_per_unit=data.cost_material_per_unit,
+        cost_labor_per_unit=(None if data.kind == "titre" else data.cost_labor_per_unit),
+        cost_material_per_unit=(None if data.kind == "titre" else data.cost_material_per_unit),
         total=total,
-        tps_applicable=(False if data.kind == "frais" else data.tps_applicable),
-        tvq_applicable=(False if data.kind == "frais" else data.tvq_applicable),
+        tps_applicable=(False if data.kind in ("frais", "titre") else data.tps_applicable),
+        tvq_applicable=(False if data.kind in ("frais", "titre") else data.tvq_applicable),
         kind=data.kind,
     )
     db.add(item)
@@ -291,6 +295,17 @@ async def update_item(
         or "cost_material_per_unit" in update_data
     ):
         item.total = round(float(item.quantity) * float(item.unit_price), 2)
+    if item.kind == "titre":
+        # Un sous-titre n'a ni quantité ni prix, quoi qu'on lui envoie.
+        item.quantity = 0
+        item.unit_price = 0
+        item.cost_per_unit = 0
+        item.cost_labor_per_unit = None
+        item.cost_material_per_unit = None
+        item.total = 0
+        item.tps_applicable = False
+        item.tvq_applicable = False
+        item.unit = None
     await db.flush()
     await _recompute_soumission_totals(db, soumission_id)
     await db.refresh(item)

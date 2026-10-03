@@ -394,7 +394,21 @@ def _render_bytes(
 
     # Line items
     data = [["Description", "Qté", "Unité", "Prix unit.", "Total"]]
+    # Sous-titres de section (« Salle de bain », « Salon »…) : une ligne
+    # fusionnée, en gras, sans quantité ni prix.
+    titre_rows: list[int] = []
     for it in items:
+        if getattr(it, "kind", "service") == "titre":
+            titre_rows.append(len(data))
+            data.append(
+                [
+                    Paragraph(
+                        f"<b>{_multiline_markup(it.description)}</b>", s["body"]
+                    ),
+                    "", "", "", "",
+                ]
+            )
+            continue
         q = float(it.quantity)
         up = float(it.unit_price)
         line_total = (
@@ -455,6 +469,21 @@ def _render_bytes(
             ]
         )
     )
+    if titre_rows:
+        tbl.setStyle(
+            TableStyle(
+                [
+                    cmd
+                    for r in titre_rows
+                    for cmd in (
+                        ("SPAN", (0, r), (-1, r)),
+                        ("BACKGROUND", (0, r), (-1, r), colors.HexColor("#f0ece4")),
+                        ("TOPPADDING", (0, r), (-1, r), 9),
+                        ("LINEABOVE", (0, r), (-1, r), 0.25, LINE),
+                    )
+                ]
+            )
+        )
     story.append(tbl)
     story.append(Spacer(1, 10))
 

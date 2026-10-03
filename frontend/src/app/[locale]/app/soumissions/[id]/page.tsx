@@ -92,7 +92,9 @@ type Item = {
   total: number;
   tps_applicable: boolean;
   tvq_applicable: boolean;
-  kind: "service" | "frais" | "rabais";
+  // "titre" = sous-titre de section (ex. « Salle de bain ») : aucune
+  // quantité ni prix, sert à découper le devis.
+  kind: "service" | "frais" | "rabais" | "titre";
   // Avenants : item ajouté par AV-n / retiré du contrat par AV-n.
   avenant_id?: number | null;
   retire_par_avenant_id?: number | null;
@@ -816,7 +818,9 @@ export default function SoumissionDetailPage() {
     }
   }
 
-  async function addItem(kind: "service" | "frais" | "rabais" = "service") {
+  async function addItem(
+    kind: "service" | "frais" | "rabais" | "titre" = "service"
+  ) {
     setItemBusy("new");
     try {
       const defaults: Record<string, Record<string, unknown>> = {
@@ -846,6 +850,15 @@ export default function SoumissionDetailPage() {
           tps_applicable: true,
           tvq_applicable: true,
           kind: "rabais"
+        },
+        titre: {
+          description: "Sous-titre",
+          unit: null,
+          quantity: 0,
+          unit_price: 0,
+          tps_applicable: false,
+          tvq_applicable: false,
+          kind: "titre"
         }
       };
       const res = await authedFetch(`/api/v1/soumissions/${id}/items`, {
@@ -1288,6 +1301,21 @@ export default function SoumissionDetailPage() {
                                 a.id ===
                                 (it.retire_par_avenant_id || it.avenant_id)
                             );
+                            if (it.kind === "titre") {
+                              return (
+                                <tr
+                                  key={it.id}
+                                  className={`bg-brand-900/60 ${retire ? "opacity-50" : ""}`}
+                                >
+                                  <td
+                                    colSpan={8}
+                                    className={`px-5 pb-2 pt-4 text-sm font-bold uppercase tracking-wide text-white ${retire ? "line-through" : ""}`}
+                                  >
+                                    {it.description}
+                                  </td>
+                                </tr>
+                              );
+                            }
                             return (
                               <tr
                                 key={it.id}
@@ -1536,6 +1564,15 @@ export default function SoumissionDetailPage() {
                   className="btn-outline-rose btn-sm disabled:opacity-60"
                 >
                   <Plus className="mr-1.5 h-3.5 w-3.5" /> Rabais
+                </button>
+                <button
+                  type="button"
+                  onClick={() => addItem("titre")}
+                  disabled={itemBusy === "new"}
+                  className="btn-secondary text-xs"
+                  title="Sous-titre de section (ex. Salle de bain, Salon) — sans quantité ni prix"
+                >
+                  <Plus className="mr-1.5 h-3.5 w-3.5" /> Sous-titre
                 </button>
               </div>
               )}
@@ -2260,6 +2297,40 @@ function ItemRow({
         });
       }
     }
+  }
+
+  if (item.kind === "titre") {
+    // Sous-titre de section : une seule cellule fusionnée, texte en
+    // gras, pas de quantité / prix / coûtant.
+    return (
+      <tr className="bg-brand-900/60 align-top">
+        <td colSpan={7} className="px-5 pb-2 pt-4">
+          <input
+            type="text"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            onBlur={() => commit("description")}
+            placeholder="Sous-titre (ex. Salle de bain)"
+            className="w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm font-bold uppercase tracking-wide text-white placeholder:text-white/30 focus:border-brand-700 focus:outline-none"
+            aria-label="Sous-titre de section"
+          />
+        </td>
+        <td className="px-3 pb-2 pt-4 text-right">
+          {busy ? (
+            <Loader2 className="h-4 w-4 animate-spin text-accent-500" />
+          ) : (
+            <button
+              type="button"
+              onClick={onDelete}
+              aria-label="Supprimer le sous-titre"
+              className="btn-ghost btn-xs hover:bg-rose-500/15 hover:text-rose-400"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
+        </td>
+      </tr>
+    );
   }
 
   return (

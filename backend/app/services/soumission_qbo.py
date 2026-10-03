@@ -80,6 +80,17 @@ async def _build_lines(qbo, items: list[SoumissionItem], fallback_name: str) -> 
     """
     lines: list[Dict[str, Any]] = []
     for it in items:
+        if getattr(it, "kind", "service") == "titre":
+            # Sous-titre de section → ligne « description seulement »
+            # dans QuickBooks (aucun montant, aucun article).
+            lines.append(
+                {
+                    "DetailType": "DescriptionOnly",
+                    "Description": (it.description or "").strip(),
+                    "DescriptionLineDetail": {},
+                }
+            )
+            continue
         amount = round(float(it.quantity) * float(it.unit_price), 2)
         qty = float(it.quantity)
         unit_price = float(it.unit_price)

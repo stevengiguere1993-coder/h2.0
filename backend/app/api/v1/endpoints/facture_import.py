@@ -188,6 +188,8 @@ async def import_into_facture(
                 ratio = pct / 100.0
                 prefix = f"{pct:g}% — " if pct != 100 else ""
                 for it in sm_items:
+                    if getattr(it, "kind", "service") == "titre":
+                        continue  # sous-titre de section : rien à facturer
                     # Prix unitaire de la SOUMISSION conservé ; l'avancement
                     # est porté sur la QUANTITÉ (quantité × prix unitaire =
                     # montant de cette facture). Le client voit le prix de la

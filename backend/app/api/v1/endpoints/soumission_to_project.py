@@ -177,6 +177,8 @@ async def provision_project_for_soumission(
         _seen: set[str] = set()
         _pos = 0
         for _it in _sm_items:
+            if getattr(_it, "kind", "service") == "titre":
+                continue  # sous-titre de section : pas une tâche
             _title = " ".join((_it.description or "").split())[:255].strip()
             if not _title or _title.lower() in _seen:
                 continue

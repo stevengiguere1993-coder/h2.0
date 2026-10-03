@@ -291,6 +291,8 @@ async def import_tasks_from_soumission(
     )
     pos = max_pos + 1
     for it in items:
+        if getattr(it, "kind", "service") == "titre":
+            continue  # sous-titre de section : pas une tâche
         title = " ".join((it.description or "").split())[:255].strip()
         if not title or title.lower() in existing_titles:
             continue
