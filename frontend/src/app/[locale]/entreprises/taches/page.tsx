@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronUp,
   Loader2,
+  Plus,
   Repeat,
   Target,
   X
@@ -58,6 +59,7 @@ type TacheEnt = {
   assignee_user_id: number | null;
   assignee_user_ids: number[];
   immeuble_ids: number[];
+  entreprise_ids?: number[];
   position: number;
 };
 
@@ -200,7 +202,11 @@ export default function MesTachesPage() {
         if (iRes.ok) setImmeubles((await iRes.json()) as ImmeubleMini[]);
         const allTachesEnt = (await tRes.json()) as TacheEnt[];
         setTachesEnt(
-          allTachesEnt.filter((t) => activeEntIds.has(t.entreprise_id))
+          allTachesEnt.filter(
+            (t) =>
+              activeEntIds.has(t.entreprise_id) ||
+              (t.entreprise_ids || []).some((id) => activeEntIds.has(id))
+          )
         );
 
         // Tâches des deals — pas d'endpoint global, on agrège par
@@ -516,6 +522,7 @@ export default function MesTachesPage() {
         score: t.score,
         position: t.score != null ? -Math.round(t.score * 1000) : 0,
         immeuble_ids: t.immeuble_ids || [],
+        entreprise_ids: t.entreprise_ids || [t.entreprise_id],
         immeubleLabels: (t.immeuble_ids || [])
           .map((id) => immeubleNameById.get(id))
           .filter((n): n is string => Boolean(n)),
@@ -647,6 +654,16 @@ export default function MesTachesPage() {
             <p className="mt-3 text-sm text-[var(--qg-text-muted)]">
               Aucune tâche pour ces filtres.
             </p>
+            <button
+              type="button"
+              onClick={() => {
+                createResolverRef.current = () => undefined;
+                setPendingCreate({ status: "a_faire", name: "Nouvelle tâche" });
+              }}
+              className="btn-accent btn-sm mt-4 inline-flex items-center"
+            >
+              <Plus className="mr-1 h-3.5 w-3.5" /> Nouvelle tâche
+            </button>
           </div>
         ) : (
           <TaskBoard
@@ -656,6 +673,7 @@ export default function MesTachesPage() {
             currentUserId={currentUser?.id ?? null}
             immeubles={immeubles}
             onImmeublesChanged={() => void reloadImmeubles()}
+            entreprises={entreprises.map((e) => ({ id: e.id, name: e.name }))}
             showNewTaskButton
             newTaskLabel="+ Nouvelle tâche"
             title="Toutes les tâches"
@@ -691,6 +709,8 @@ export default function MesTachesPage() {
                 }
                 if (patch.immeuble_ids !== undefined)
                   out.immeuble_ids = patch.immeuble_ids;
+                if (patch.entreprise_ids !== undefined)
+                  out.entreprise_ids = patch.entreprise_ids;
                 if (patch.departement !== undefined)
                   out.departement = patch.departement;
                 if (patch.impact !== undefined) out.impact = patch.impact;

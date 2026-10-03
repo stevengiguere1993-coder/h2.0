@@ -86,6 +86,8 @@ export type TaskBoardItem = TaskCardData & {
    *  dans la TaskDetailsModal. `immeubleLabels` reste utilisé pour
    *  l'affichage compact sur la carte. */
   immeuble_ids?: number[];
+  /** Entreprises concernées (la première = principale). */
+  entreprise_ids?: number[];
   /** Champs avancés — alimentent la TaskDetailsModal partagée. */
   departement?: string | null;
   recurrence?: string | null;
@@ -100,6 +102,7 @@ export type TaskBoardItem = TaskCardData & {
 
 export type TaskBoardPatch = TaskCardPatch & {
   notes?: string | null;
+  entreprise_ids?: number[];
   position?: number;
   departement?: string | null;
   recurrence?: string | null;
@@ -129,6 +132,7 @@ export function TaskBoard({
   onMove,
   onCreate,
   onImmeublesChanged,
+  entreprises,
   extraColumn,
   title = "Tâches",
   newTaskLabel = "Nouvelle tâche",
@@ -159,6 +163,8 @@ export function TaskBoard({
   /** Re-fetch du catalogue d'immeubles (après ajout / retrait via le
    *  bouton « Gérer » du picker dans la modal). */
   onImmeublesChanged?: () => void;
+  /** Catalogue des entreprises → choix multi dans la fiche détaillée. */
+  entreprises?: Array<{ id: number; name: string }>;
   /** Colonne optionnelle insérée entre « Tâche » et « Immeuble »
    *  dans la vue Tableau. Utilisé par la vue cross-entreprise pour
    *  afficher l'entreprise (ou le deal) propriétaire de chaque
@@ -323,7 +329,7 @@ export function TaskBoard({
           <h2 className="text-sm font-semibold uppercase tracking-wider text-white/50">
             {title}
           </h2>
-          {showNewTaskButton && effectiveView !== "cartes" ? (
+          {showNewTaskButton ? (
             <button
               type="button"
               onClick={() => void handleNewTask()}
@@ -475,6 +481,7 @@ export function TaskBoard({
             due_date: detailTask.due_date,
             assignee_user_ids: detailTask.assignee_user_ids || [],
             immeuble_ids: detailTask.immeuble_ids || [],
+            entreprise_ids: detailTask.entreprise_ids,
             departement: detailTask.departement ?? null,
             recurrence: detailTask.recurrence ?? null,
             impact: detailTask.impact ?? null,
@@ -485,6 +492,7 @@ export function TaskBoard({
           users={users}
           immeubles={immeubles}
           immeubleScope={immeubleScope}
+          entreprises={entreprises}
           onImmeublesChanged={onImmeublesChanged}
           onClose={() => setDetailTaskId(null)}
           onPatch={(patch: TaskDetailsModalPatch) => {

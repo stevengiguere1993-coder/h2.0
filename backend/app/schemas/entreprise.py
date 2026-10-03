@@ -82,7 +82,9 @@ class EntrepriseRead(EntrepriseBase):
 
 
 class EntrepriseTacheBase(BaseModel):
-    entreprise_id: int
+    # Optionnel si `entreprise_ids` est fourni (la première devient la
+    # principale).
+    entreprise_id: Optional[int] = None
     title: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     departement: Optional[str] = Field(default=None, max_length=32)
@@ -110,6 +112,9 @@ class EntrepriseTacheBase(BaseModel):
     tags_json: Optional[str] = None
     # Immeubles concernés par la tâche (multi-select dans la fiche).
     immeuble_ids: Optional[List[int]] = None
+    # Entreprises concernées : la première est la principale
+    # (entreprise_id), les autres sont secondaires.
+    entreprise_ids: Optional[List[int]] = None
 
 
 class EntrepriseTacheCreate(EntrepriseTacheBase):
@@ -137,6 +142,9 @@ class EntrepriseTacheUpdate(BaseModel):
     # via le bouton « Déplacer » dans la carte.
     entreprise_id: Optional[int] = Field(default=None, gt=0)
     immeuble_ids: Optional[List[int]] = None
+    # Toutes les entreprises concernées ; la première devient la
+    # principale. Liste vide refusée (une tâche a toujours une entreprise).
+    entreprise_ids: Optional[List[int]] = None
     # Ordre manuel (drag & drop dans le tableau).
     position: Optional[int] = None
 
@@ -160,6 +168,8 @@ class EntrepriseTacheRead(BaseModel):
     assignee_user_ids: List[int] = Field(default_factory=list)
     # Immeubles liés à la tâche.
     immeuble_ids: List[int] = Field(default_factory=list)
+    # Entreprises concernées : [principale] + secondaires.
+    entreprise_ids: List[int] = Field(default_factory=list)
     # Position manuelle (drag & drop). 0 = pas réordonné — le frontend
     # retombe sur un classement par score.
     position: int = 0

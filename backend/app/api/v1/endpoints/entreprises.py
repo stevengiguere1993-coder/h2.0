@@ -77,9 +77,13 @@ def _to_tache_read(
     t: EntrepriseTache,
     assignee_user_ids: Optional[List[int]] = None,
     immeuble_ids: Optional[List[int]] = None,
+    entreprise_ids: Optional[List[int]] = None,
 ) -> EntrepriseTacheRead:
     out = EntrepriseTacheRead.model_validate(t)
     out.score = _compute_score(t)
+    out.entreprise_ids = [int(t.entreprise_id)] + [
+        int(e) for e in (entreprise_ids or []) if int(e) != int(t.entreprise_id)
+    ]
     if assignee_user_ids is not None:
         out.assignee_user_ids = assignee_user_ids
     elif t.assignee_user_id is not None:
@@ -173,6 +177,61 @@ async def _load_tache_immeubles(
     for k in out:
         out[k].sort()
     return out
+
+
+async def _load_tache_entreprises(
+    db, tache_ids: List[int]
+) -> dict[int, List[int]]:
+    """{tache_id: [entreprise_id secondaire, ...]}."""
+    if not tache_ids:
+        return {}
+    from app.models.entreprise_tache_entreprise import EntrepriseTacheEntreprise
+
+    rows = (
+        await db.execute(
+            select(EntrepriseTacheEntreprise.tache_id, EntrepriseTacheEntreprise.entreprise_id)
+            .where(EntrepriseTacheEntreprise.tache_id.in_(tache_ids))
+        )
+    ).all()
+    out: dict[int, List[int]] = {tid: [] for tid in tache_ids}
+    for tid, eid in rows:
+        out[int(tid)].append(int(eid))
+    for k in out:
+        out[k].sort()
+    return out
+
+
+async def _appliquer_tache_entreprises(
+    db, tache: EntrepriseTache, entreprise_ids: Optional[List[int]]
+) -> None:
+    """``entreprise_ids`` = toutes les entreprises concernées : la première
+    devient la principale, les autres vont dans la table de jointure.
+    None = on ne touche pas."""
+    if entreprise_ids is None:
+        return
+    ids: List[int] = []
+    for e in entreprise_ids:
+        if e and int(e) not in ids:
+            ids.append(int(e))
+    if not ids:
+        raise HTTPException(422, "Une tâche doit concerner au moins une entreprise.")
+    existantes = {
+        int(i) for i in (
+            await db.execute(select(Entreprise.id).where(Entreprise.id.in_(ids)))
+        ).scalars().all()
+    }
+    manquantes = [i for i in ids if i not in existantes]
+    if manquantes:
+        raise HTTPException(404, f"Entreprise(s) introuvable(s) : {manquantes}")
+    from app.models.entreprise_tache_entreprise import EntrepriseTacheEntreprise
+    from sqlalchemy import delete as _delete
+
+    tache.entreprise_id = ids[0]
+    await db.execute(
+        _delete(EntrepriseTacheEntreprise).where(EntrepriseTacheEntreprise.tache_id == tache.id)
+    )
+    for eid in ids[1:]:
+        db.add(EntrepriseTacheEntreprise(tache_id=tache.id, entreprise_id=eid))
 
 
 async def _replace_tache_immeubles(
@@ -410,7 +469,16 @@ async def list_taches(
     _require_volet(user)
     stmt = select(EntrepriseTache)
     if entreprise_id is not None:
-        stmt = stmt.where(EntrepriseTache.entreprise_id == entreprise_id)
+        # Principale OU secondaire (tâche à plusieurs entreprises).
+        from app.models.entreprise_tache_entreprise import EntrepriseTacheEntreprise as _ETE
+
+        sec_subq = (
+            select(_ETE.tache_id).where(_ETE.entreprise_id == entreprise_id).scalar_subquery()
+        )
+        stmt = stmt.where(
+            (EntrepriseTache.entreprise_id == entreprise_id)
+            | (EntrepriseTache.id.in_(sec_subq))
+        )
     if status_filter:
         stmt = stmt.where(EntrepriseTache.status == status_filter)
     if mine:
@@ -443,9 +511,11 @@ async def list_taches(
     tache_ids = [r.id for r in rows]
     assignees = await _load_tache_assignees(db, tache_ids)
     immeubles = await _load_tache_immeubles(db, tache_ids)
+    secondaires = await _load_tache_entreprises(db, tache_ids)
     return [
         _to_tache_read(
-            t, assignees.get(t.id, []), immeubles.get(t.id, [])
+            t, assignees.get(t.id, []), immeubles.get(t.id, []),
+            secondaires.get(t.id, []),
         )
         for t in rows
     ]
@@ -530,6 +600,11 @@ async def create_tache(
     legacy_uid = payload.pop("assignee_user_id", None)
     list_uids = payload.pop("assignee_user_ids", None)
     immeuble_ids = payload.pop("immeuble_ids", None)
+    entreprise_ids = payload.pop("entreprise_ids", None)
+    if entreprise_ids and not payload.get("entreprise_id"):
+        payload["entreprise_id"] = int(entreprise_ids[0])
+    if not payload.get("entreprise_id"):
+        raise HTTPException(422, "Une tâche doit concerner au moins une entreprise (entreprise_id ou entreprise_ids).")
     uids = _resolve_tache_assignee_ids(legacy_uid, list_uids)
     primary = uids[0] if uids else None
 
@@ -555,9 +630,13 @@ async def create_tache(
 
         asyncio.create_task(autoscore_entreprise_tache(int(t.id)))
     final_a = await _load_tache_assignees(db, [t.id])
+    if entreprise_ids:
+        await _appliquer_tache_entreprises(db, t, entreprise_ids)
+        await db.flush()
+    final_e = await _load_tache_entreprises(db, [t.id])
     final_i = await _load_tache_immeubles(db, [t.id])
     return _to_tache_read(
-        t, final_a.get(t.id, []), final_i.get(t.id, [])
+        t, final_a.get(t.id, []), final_i.get(t.id, []), final_e.get(t.id, [])
     )
 
 
@@ -594,10 +673,19 @@ async def update_tache(
     # Idem pour les immeubles — table de jointure dédiée.
     imm_set = "immeuble_ids" in body.model_fields_set
     payload.pop("immeuble_ids", None)
+    # Entreprises concernées (plusieurs) : la première devient la
+    # principale ; prime sur un entreprise_id envoyé en même temps.
+    ent_set = "entreprise_ids" in body.model_fields_set
+    payload.pop("entreprise_ids", None)
+    if ent_set:
+        payload.pop("entreprise_id", None)
 
     for k, v in payload.items():
         setattr(t, k, v)
     await db.flush()
+    if ent_set:
+        await _appliquer_tache_entreprises(db, t, body.entreprise_ids)
+        await db.flush()
 
     if list_uids_set or legacy_uid_set:
         uids = _resolve_tache_assignee_ids(
@@ -614,8 +702,9 @@ async def update_tache(
     await db.refresh(t)
     final_a = await _load_tache_assignees(db, [t.id])
     final_i = await _load_tache_immeubles(db, [t.id])
+    final_e = await _load_tache_entreprises(db, [t.id])
     return _to_tache_read(
-        t, final_a.get(t.id, []), final_i.get(t.id, [])
+        t, final_a.get(t.id, []), final_i.get(t.id, []), final_e.get(t.id, [])
     )
 
 
