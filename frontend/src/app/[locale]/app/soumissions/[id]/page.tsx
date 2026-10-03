@@ -9,6 +9,7 @@ import {
   Eye,
   EyeOff,
   FileText,
+  GripVertical,
   Image as ImageIcon,
   Users,
   ChevronDown,
@@ -878,6 +879,39 @@ export default function SoumissionDetailPage() {
     }
   }
 
+  // Glisser-déposer des lignes (items ET sous-titres) — ordre libre,
+  // le PDF et la page client suivent exactement cet ordre.
+  const [dragId, setDragId] = useState<number | null>(null);
+  const [overId, setOverId] = useState<number | null>(null);
+
+  async function reorderItems(orderIds: number[]) {
+    const prev = items;
+    const byId = new Map(items.map((x) => [x.id, x]));
+    setItems(orderIds.map((i) => byId.get(i)!).filter(Boolean));
+    try {
+      const res = await authedFetch(`/api/v1/soumissions/${id}/items/reorder`, {
+        method: "POST",
+        body: JSON.stringify({ item_ids: orderIds })
+      });
+      if (!res.ok) throw new Error();
+      setItems((await res.json()) as Item[]);
+    } catch {
+      setItems(prev);
+      setError("Déplacement échoué.");
+    }
+  }
+
+  function dropOn(targetId: number) {
+    if (dragId == null || dragId === targetId) return;
+    const ids = items.map((x) => x.id);
+    const from = ids.indexOf(dragId);
+    const to = ids.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    ids.splice(from, 1);
+    ids.splice(to, 0, dragId);
+    void reorderItems(ids);
+  }
+
   async function patchItem(item_id: number, patch: Partial<Item>) {
     setItemBusy(item_id);
     try {
@@ -1269,6 +1303,7 @@ export default function SoumissionDetailPage() {
                   <table className="w-full text-sm" id="soumission-items-table">
                     <thead className="border-b border-brand-800 text-xs uppercase tracking-wider text-white/50">
                       <tr>
+                        <th className="w-8 py-3 pl-2" aria-label="Déplacer"></th>
                         <th className="px-5 py-3 text-left font-semibold">Description</th>
                         <th className="px-3 py-3 text-right font-semibold">Qté</th>
                         <th className="px-3 py-3 text-left font-semibold">Unité</th>
@@ -1308,7 +1343,7 @@ export default function SoumissionDetailPage() {
                                   className={`bg-brand-900/60 ${retire ? "opacity-50" : ""}`}
                                 >
                                   <td
-                                    colSpan={8}
+                                    colSpan={9}
                                     className={`px-5 pb-2 pt-4 text-sm font-bold uppercase tracking-wide text-white ${retire ? "line-through" : ""}`}
                                   >
                                     {it.description}
@@ -1321,6 +1356,7 @@ export default function SoumissionDetailPage() {
                                 key={it.id}
                                 className={retire ? "opacity-50" : ""}
                               >
+                                <td></td>
                                 <td className="px-5 py-3 text-white">
                                   <span
                                     className={
@@ -1382,6 +1418,19 @@ export default function SoumissionDetailPage() {
                               busy={itemBusy === it.id}
                               onPatch={(patch) => patchItem(it.id, patch)}
                               onDelete={() => deleteItem(it.id)}
+                              dragging={dragId === it.id}
+                              over={overId === it.id && dragId !== it.id}
+                              onDragStart={() => setDragId(it.id)}
+                              onDragOver={() => setOverId(it.id)}
+                              onDrop={() => {
+                                dropOn(it.id);
+                                setDragId(null);
+                                setOverId(null);
+                              }}
+                              onDragEnd={() => {
+                                setDragId(null);
+                                setOverId(null);
+                              }}
                             />
                           ))}
                     </tbody>
@@ -2195,13 +2244,67 @@ function ItemRow({
   item,
   busy,
   onPatch,
-  onDelete
+  onDelete,
+  dragging = false,
+  over = false,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd
 }: {
   item: Item;
   busy: boolean;
   onPatch: (patch: Partial<Item>) => void;
   onDelete: () => void;
+  dragging?: boolean;
+  over?: boolean;
+  onDragStart?: () => void;
+  onDragOver?: () => void;
+  onDrop?: () => void;
+  onDragEnd?: () => void;
 }) {
+  // Glisser-déposer : la POIGNÉE (⋮⋮) est l'élément draggable — pas la
+  // ligne entière, sinon on ne pourrait plus sélectionner du texte dans
+  // les champs. L'image de drag est la ligne complète.
+  const rowRef = useRef<HTMLTableRowElement>(null);
+  const rowDragProps = {
+    ref: rowRef,
+    onDragOver: (e: React.DragEvent) => {
+      if (!onDragOver) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      onDragOver();
+    },
+    onDrop: (e: React.DragEvent) => {
+      if (!onDrop) return;
+      e.preventDefault();
+      onDrop();
+    }
+  };
+  const rowDragClass = `${dragging ? "opacity-40" : ""} ${
+    over ? "border-t-2 border-t-accent-500" : ""
+  }`;
+  const grip = (
+    <td className="w-8 py-3 pl-2 align-middle">
+      <span
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", String(item.id));
+          if (rowRef.current) {
+            e.dataTransfer.setDragImage(rowRef.current, 20, 20);
+          }
+          onDragStart?.();
+        }}
+        onDragEnd={() => onDragEnd?.()}
+        className="inline-flex cursor-grab touch-none items-center rounded p-1 text-white/40 hover:bg-white/5 hover:text-white active:cursor-grabbing"
+        title="Glisser pour déplacer"
+        aria-label="Déplacer la ligne"
+      >
+        <GripVertical className="h-4 w-4" />
+      </span>
+    </td>
+  );
   const [description, setDescription] = useState(item.description);
   const [unit, setUnit] = useState(item.unit || "");
   const [quantity, setQuantity] = useState(String(item.quantity));
@@ -2303,7 +2406,11 @@ function ItemRow({
     // Sous-titre de section : une seule cellule fusionnée, texte en
     // gras, pas de quantité / prix / coûtant.
     return (
-      <tr className="bg-brand-900/60 align-top">
+      <tr
+        {...rowDragProps}
+        className={`bg-brand-900/60 align-top ${rowDragClass}`}
+      >
+        {grip}
         <td colSpan={7} className="px-5 pb-2 pt-4">
           <input
             type="text"
@@ -2335,7 +2442,8 @@ function ItemRow({
 
   return (
     <>
-    <tr className="align-top">
+    <tr {...rowDragProps} className={`align-top ${rowDragClass}`}>
+      {grip}
       <td className="px-5 py-3">
         {/* Multi-lignes : Entrée = nouvelle ligne (listes), la hauteur
             suit le contenu. */}
@@ -2470,7 +2578,7 @@ function ItemRow({
     </tr>
     {expanded ? (
       <tr className="bg-brand-900/40">
-        <td colSpan={8} className="px-4 pb-5 pt-1">
+        <td colSpan={9} className="px-4 pb-5 pt-1">
           {/* Édition pleine largeur — lisible sur mobile. Mêmes états +
               commit que les cellules compactes, donc tout reste synchro. */}
           <div className="grid gap-3 sm:grid-cols-2">

@@ -312,6 +312,48 @@ async def update_item(
     return SoumissionItemRead.model_validate(item)
 
 
+class SoumissionItemsReorder(BaseModel):
+    # Ids des lignes dans l'ordre voulu (liste complète de la soumission).
+    item_ids: List[int] = Field(..., min_length=1)
+
+
+@router.post(
+    "/{soumission_id}/items/reorder",
+    response_model=List[SoumissionItemRead],
+    summary="Réordonne les lignes d'une soumission (positions = ordre fourni)",
+)
+async def reorder_items(
+    soumission_id: int,
+    data: SoumissionItemsReorder,
+    db: DBSession,
+    _: CurrentUser,
+) -> List[SoumissionItemRead]:
+    """Glisser-déposer dans l'éditeur (Phil 2026-10-03) : position =
+    index de chaque id dans la liste fournie, tous types confondus
+    (items et sous-titres). Les ids absents passent à la fin."""
+    sm = await _ensure_soumission(db, soumission_id)
+    _verrou_devis_accepte(sm)
+    rows = (
+        await db.execute(
+            select(SoumissionItem).where(
+                SoumissionItem.soumission_id == soumission_id
+            )
+        )
+    ).scalars().all()
+    order = {iid: idx for idx, iid in enumerate(data.item_ids)}
+    for r in rows:
+        r.position = order.get(int(r.id), len(order) + int(r.id))
+    await db.flush()
+    fresh = (
+        await db.execute(
+            select(SoumissionItem)
+            .where(SoumissionItem.soumission_id == soumission_id)
+            .order_by(SoumissionItem.position.asc(), SoumissionItem.id.asc())
+        )
+    ).scalars().all()
+    return [SoumissionItemRead.model_validate(r) for r in fresh]
+
+
 @router.delete(
     "/{soumission_id}/items/{item_id}",
     status_code=status.HTTP_204_NO_CONTENT,
