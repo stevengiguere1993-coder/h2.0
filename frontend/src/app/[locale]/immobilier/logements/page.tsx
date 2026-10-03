@@ -4,10 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Building2,
+  Check,
   DoorOpen,
   Loader2,
+  Pencil,
   Plus,
   Search,
+  Trash2,
   X
 } from "lucide-react";
 
@@ -18,14 +21,21 @@ import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
 import { LOUER_INDEFINIMENT_INFO } from "@/components/immobilier/fin-bail";
 import {
   fmtPieces,
+  LOGEMENT_TYPES,
   LogementFiche,
   type LogementFicheData
 } from "@/components/immobilier/logement-fiche";
+import {
+  LogementsLotModal,
+  numOuNull,
+  patchLogementApi,
+  supprimerLogementApi
+} from "@/components/immobilier/logements-lot";
 
 /**
  * Logements — vue agrégée de TOUS les logements du portefeuille
  * (entreprise active via le contexte du layout). Filtres client-side :
- * recherche texte, immeuble, statut. Clic sur une ligne → PAGE fiche
+ * recherche texte, immeuble, statut. Clic sur le numéro → PAGE fiche
  * logement (/immobilier/logements/{id}) ; la colonne immeuble reste
  * un lien vers la fiche immeuble.
  */
@@ -255,10 +265,137 @@ export default function LogementsPage() {
   const [addImmId, setAddImmId] = useState("");
   const [showCreate, setShowCreate] = useState(false);
 
-  // Clic sur une ligne → page fiche logement (vraie page 360).
+  // Clic sur le NUMÉRO → page fiche logement (vraie page 360). Le reste
+  // de la ligne ne navigue plus : il sert à éditer / sélectionner.
   function openFiche(row: Row) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     router.push(`/immobilier/logements/${row.id}` as any);
+  }
+
+  // Édition en ligne + sélection multiple (Phil 2026-10-03) : modifier
+  // ou supprimer directement depuis cette page, sans ouvrir chaque fiche.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [draft, setDraft] = useState({
+    numero: "",
+    type: "residentiel",
+    pieces: "",
+    loyer: "",
+    chambres: false
+  });
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [showLot, setShowLot] = useState(false);
+  const [lotBusy, setLotBusy] = useState(false);
+
+  const numeroDe = (id: number) =>
+    rows?.find((x) => x.id === id)?.numero ?? `#${id}`;
+
+  function startEdit(l: Row) {
+    setEditingId(l.id);
+    setMsg(null);
+    setDraft({
+      numero: l.numero,
+      type: l.type || "residentiel",
+      pieces: l.nb_pieces_decimal != null ? String(l.nb_pieces_decimal) : "",
+      loyer: l.loyer_demande != null ? String(l.loyer_demande) : "",
+      chambres: !!l.location_en_chambres
+    });
+  }
+
+  async function patchLogement(
+    id: number,
+    body: Record<string, unknown>
+  ): Promise<string | null> {
+    const res = await patchLogementApi(id, body);
+    if (res.error) return res.error;
+    const saved = res.saved;
+    setRows((prev) =>
+      prev?.map((x) => (x.id === id ? { ...x, ...saved } : x)) ?? prev
+    );
+    return null;
+  }
+
+  async function supprimerLogement(id: number): Promise<string | null> {
+    const err = await supprimerLogementApi(id);
+    if (err) return err;
+    setRows((prev) => prev?.filter((x) => x.id !== id) ?? prev);
+    setSelected((s) => {
+      const n = new Set(s);
+      n.delete(id);
+      return n;
+    });
+    return null;
+  }
+
+  async function saveEdit() {
+    if (editingId == null) return;
+    if (!draft.numero.trim()) {
+      setMsg("Le numéro est requis.");
+      return;
+    }
+    setBusyId(editingId);
+    setMsg(null);
+    const err = await patchLogement(editingId, {
+      numero: draft.numero.trim(),
+      type: draft.type,
+      nb_pieces_decimal: numOuNull(draft.pieces),
+      loyer_demande: numOuNull(draft.loyer),
+      location_en_chambres: draft.chambres
+    });
+    setBusyId(null);
+    if (err) setMsg(`${draft.numero} : ${err}`);
+    else setEditingId(null);
+  }
+
+  async function deleteOne(l: Row) {
+    if (!window.confirm(`Supprimer le logement ${l.numero} (${l.immeuble_name}) ?`))
+      return;
+    setBusyId(l.id);
+    setMsg(null);
+    const err = await supprimerLogement(l.id);
+    setBusyId(null);
+    if (err) setMsg(`${l.numero} gardé : ${err}`);
+  }
+
+  async function deleteSelected() {
+    const cibles = (rows ?? []).filter((l) => selected.has(l.id));
+    if (!cibles.length) return;
+    if (
+      !window.confirm(
+        `Supprimer ${cibles.length} logement(s) : ${cibles
+          .map((l) => l.numero)
+          .join(", ")} ?\nCeux qui ont un bail seront gardés.`
+      )
+    )
+      return;
+    setLotBusy(true);
+    setMsg(null);
+    const gardes: string[] = [];
+    let ok = 0;
+    for (const l of cibles) {
+      const err = await supprimerLogement(l.id);
+      if (err) gardes.push(`${l.numero} gardé : ${err}`);
+      else ok++;
+    }
+    setLotBusy(false);
+    setMsg([`${ok} supprimé(s).`, ...gardes].join(" · "));
+  }
+
+  async function applyLot(body: Record<string, unknown>) {
+    const ids = Array.from(selected);
+    setLotBusy(true);
+    setMsg(null);
+    const errs: string[] = [];
+    let ok = 0;
+    for (const id of ids) {
+      const err = await patchLogement(id, body);
+      if (err) errs.push(`${numeroDe(id)} : ${err}`);
+      else ok++;
+    }
+    setLotBusy(false);
+    setShowLot(false);
+    setMsg([`${ok} modifié(s).`, ...errs].join(" · "));
   }
 
   // Jeton anti-course : seul le chargement le plus récent écrit l'état
@@ -423,6 +560,47 @@ export default function LogementsPage() {
           </p>
         ) : null}
 
+        {selected.size > 0 ? (
+          <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-accent-500/40 bg-accent-500/10 px-3 py-2 text-xs text-white">
+            <span className="font-semibold">
+              {selected.size} sélectionné{selected.size > 1 ? "s" : ""}
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowLot(true)}
+              disabled={lotBusy}
+              className="btn-outline-accent btn-xs"
+            >
+              <Pencil className="h-3 w-3" /> Modifier en lot
+            </button>
+            <button
+              type="button"
+              onClick={() => void deleteSelected()}
+              disabled={lotBusy}
+              className="btn-outline-rose btn-xs"
+            >
+              {lotBusy ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Trash2 className="h-3 w-3" />
+              )}{" "}
+              Supprimer
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelected(new Set())}
+              className="btn-ghost btn-xs"
+            >
+              Tout désélectionner
+            </button>
+          </div>
+        ) : null}
+        {msg ? (
+          <p className="mt-3 rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-xs text-white">
+            {msg}
+          </p>
+        ) : null}
+
         {filtered === null ? (
           <p className="mt-4 text-xs text-white/50">
             <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />{" "}
@@ -439,39 +617,97 @@ export default function LogementsPage() {
         ) : (
           <div className="mt-4 overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] text-left text-sm">
+              <table className="w-full min-w-[820px] text-left text-sm">
                 <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
                   <tr>
-                    <th className="px-4 py-2.5">Logement</th>
-                    <th className="px-4 py-2.5">Immeuble</th>
-                    <th className="px-4 py-2.5">Type</th>
-                    <th className="px-4 py-2.5">Pièces</th>
-                    <th className="px-4 py-2.5 text-right">Loyer</th>
-                    <th className="px-4 py-2.5 text-right">Statut</th>
+                    <th className="w-8 py-2.5 pl-3">
+                      <input
+                        type="checkbox"
+                        checked={
+                          filtered.length > 0 &&
+                          filtered.every((l) => selected.has(l.id))
+                        }
+                        onChange={(e) =>
+                          setSelected(
+                            e.target.checked
+                              ? new Set(filtered.map((l) => l.id))
+                              : new Set()
+                          )
+                        }
+                        aria-label="Tout sélectionner (lignes filtrées)"
+                        className="h-3.5 w-3.5 accent-accent-500"
+                      />
+                    </th>
+                    <th className="px-3 py-2.5">Logement</th>
+                    <th className="px-3 py-2.5">Immeuble</th>
+                    <th className="px-3 py-2.5">Type</th>
+                    <th className="px-3 py-2.5">Pièces</th>
+                    <th className="px-3 py-2.5 text-right">Loyer</th>
+                    <th className="px-3 py-2.5 text-right">Statut</th>
+                    <th className="w-24 px-3 py-2.5 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-brand-800">
-                  {filtered.map((l) => (
+                  {filtered.map((l) => {
+                    const editing = editingId === l.id;
+                    const busy = busyId === l.id;
+                    return (
                     <tr
                       key={l.id}
-                      onClick={() => openFiche(l)}
-                      className="group cursor-pointer hover:bg-brand-950/50"
+                      className={`group transition ${
+                        selected.has(l.id)
+                          ? "bg-accent-500/10"
+                          : editing
+                            ? "bg-brand-950/60"
+                            : "hover:bg-brand-950/50"
+                      }`}
                     >
-                      <td className="px-4 py-3">
+                      <td className="py-3 pl-3 align-middle">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(l.id)}
+                          onChange={(e) =>
+                            setSelected((sel) => {
+                              const n = new Set(sel);
+                              if (e.target.checked) n.add(l.id);
+                              else n.delete(l.id);
+                              return n;
+                            })
+                          }
+                          aria-label={`Sélectionner ${l.numero}`}
+                          className="h-3.5 w-3.5 accent-accent-500"
+                        />
+                      </td>
+                      <td className="px-3 py-3">
                         <span className="flex items-center gap-3">
-                          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-500/15 text-accent-500">
+                          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-accent-500/15 text-accent-500">
                             <DoorOpen className="h-4 w-4" />
                           </span>
-                          <span className="font-bold text-white group-hover:text-accent-500">
-                            {l.numero}
-                          </span>
+                          {editing ? (
+                            <input
+                              value={draft.numero}
+                              onChange={(e) =>
+                                setDraft((d) => ({ ...d, numero: e.target.value }))
+                              }
+                              className="input w-32 px-2 py-1 text-xs font-bold"
+                              aria-label="Numéro"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => openFiche(l)}
+                              className="rounded px-0.5 text-left font-bold text-white hover:text-accent-500 hover:underline"
+                              title="Ouvrir la fiche du logement"
+                            >
+                              {l.numero}
+                            </button>
+                          )}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-xs text-white/70">
+                      <td className="px-3 py-3 text-xs text-white/70">
                         <Link
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           href={`/immobilier/immeubles/${l.immeuble_id}` as any}
-                          onClick={(e) => e.stopPropagation()}
                           className="inline-flex items-center gap-1.5 hover:text-accent-500"
                         >
                           <Building2 className="h-3.5 w-3.5 text-white/40" />
@@ -483,11 +719,57 @@ export default function LogementsPage() {
                           </span>
                         ) : null}
                       </td>
-                      <td className="px-4 py-3 text-xs text-white/60">
-                        {l.type}
+                      <td className="px-3 py-3 text-xs text-white/60">
+                        {editing ? (
+                          <select
+                            value={draft.type}
+                            onChange={(e) =>
+                              setDraft((d) => ({ ...d, type: e.target.value }))
+                            }
+                            className="input w-36 px-2 py-1 text-xs"
+                            aria-label="Type"
+                          >
+                            {LOGEMENT_TYPES.map(([val, lab]) => (
+                              <option key={val} value={val} className="bg-brand-950 text-white">
+                                {lab}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          l.type
+                        )}
                       </td>
-                      <td className="px-4 py-3 font-mono text-xs text-white/70">
-                        {l.location_en_chambres ? (
+                      <td className="px-3 py-3 font-mono text-xs text-white/70">
+                        {editing ? (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              step="0.5"
+                              min="0"
+                              value={draft.pieces}
+                              disabled={draft.chambres}
+                              onChange={(e) =>
+                                setDraft((d) => ({ ...d, pieces: e.target.value }))
+                              }
+                              className="input w-16 px-2 py-1 text-xs disabled:opacity-50"
+                              aria-label="Pièces"
+                            />
+                            <label className="inline-flex cursor-pointer items-center gap-1 whitespace-nowrap font-sans text-white">
+                              <input
+                                type="checkbox"
+                                checked={draft.chambres}
+                                onChange={(e) =>
+                                  setDraft((d) => ({
+                                    ...d,
+                                    chambres: e.target.checked
+                                  }))
+                                }
+                                className="h-3.5 w-3.5 accent-accent-500"
+                              />
+                              Chambre ∞
+                            </label>
+                          </div>
+                        ) : l.location_en_chambres ? (
                           <span
                             title={LOUER_INDEFINIMENT_INFO}
                             className="cursor-help border-b border-dotted border-white/25"
@@ -499,7 +781,7 @@ export default function LogementsPage() {
                         )}
                       </td>
                       <td
-                        className="px-4 py-3 text-right font-mono text-xs text-white/80"
+                        className="px-3 py-3 text-right font-mono text-xs text-white/80"
                         title={
                           l.immeuble_gestion_externe
                             ? "Loyer saisi sur le logement (gestion externe)"
@@ -508,28 +790,92 @@ export default function LogementsPage() {
                               : "Loyer demandé (prix de la prochaine location)"
                         }
                       >
-                        {/* Hiérarchie du loyer effectif (2026-08-14) :
-                            externe → loyer SAISI ; interne occupé →
-                            loyer RÉEL du bail ; vacant → demandé. */}
-                        {fmtMoney(
-                          !l.immeuble_gestion_externe &&
-                            l.status === "occupe"
-                            ? (l.loyer_actuel ?? l.loyer_demande)
-                            : l.loyer_demande
+                        {editing ? (
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={draft.loyer}
+                            onChange={(e) =>
+                              setDraft((d) => ({ ...d, loyer: e.target.value }))
+                            }
+                            className="input ml-auto w-24 px-2 py-1 text-right text-xs"
+                            aria-label="Loyer demandé"
+                          />
+                        ) : (
+                          <>
+                            {/* Hiérarchie du loyer effectif (2026-08-14) :
+                                externe → loyer SAISI ; interne occupé →
+                                loyer RÉEL du bail ; vacant → demandé. */}
+                            {fmtMoney(
+                              !l.immeuble_gestion_externe &&
+                                l.status === "occupe"
+                                ? (l.loyer_actuel ?? l.loyer_demande)
+                                : l.loyer_demande
+                            )}
+                            {!l.immeuble_gestion_externe &&
+                            l.status !== "occupe" &&
+                            l.loyer_demande != null ? (
+                              <span className="ml-1 text-white/40">
+                                demandé
+                              </span>
+                            ) : null}
+                          </>
                         )}
-                        {!l.immeuble_gestion_externe &&
-                        l.status !== "occupe" &&
-                        l.loyer_demande != null ? (
-                          <span className="ml-1 text-white/40">
-                            demandé
-                          </span>
-                        ) : null}
                       </td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="px-3 py-3 text-right">
                         <StatutBadge status={l.status} libreLe={l.libre_le} />
                       </td>
+                      <td className="px-3 py-3 text-right">
+                        {busy ? (
+                          <Loader2 className="ml-auto h-4 w-4 animate-spin text-accent-500" />
+                        ) : editing ? (
+                          <span className="inline-flex gap-1">
+                            <button
+                              type="button"
+                              onClick={() => void saveEdit()}
+                              className="btn-accent btn-xs"
+                              title="Enregistrer"
+                              aria-label="Enregistrer"
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingId(null)}
+                              className="btn-ghost btn-xs"
+                              title="Annuler"
+                              aria-label="Annuler"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </span>
+                        ) : (
+                          <span className="inline-flex gap-1">
+                            <button
+                              type="button"
+                              onClick={() => startEdit(l)}
+                              className="btn-ghost btn-xs"
+                              title="Modifier sur place"
+                              aria-label={`Modifier ${l.numero}`}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void deleteOne(l)}
+                              className="btn-ghost btn-xs hover:bg-rose-500/15 hover:text-rose-400"
+                              title="Supprimer ce logement"
+                              aria-label={`Supprimer ${l.numero}`}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </span>
+                        )}
+                      </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -607,6 +953,14 @@ export default function LogementsPage() {
             setShowCreate(false);
             void load();
           }}
+        />
+      ) : null}
+      {showLot ? (
+        <LogementsLotModal
+          count={selected.size}
+          busy={lotBusy}
+          onClose={() => setShowLot(false)}
+          onApply={(body) => void applyLot(body)}
         />
       ) : null}
     </>

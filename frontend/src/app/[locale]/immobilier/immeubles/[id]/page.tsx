@@ -50,9 +50,13 @@ import { BandeauBailManquant } from "@/components/immobilier/bandeau-bail-manqua
 import { BandeauDepotARembourser } from "@/components/immobilier/bandeau-depot";
 import {
   fmtPieces,
-  LOGEMENT_TYPES,
   LogementFiche
 } from "@/components/immobilier/logement-fiche";
+import {
+  LogementsLotModal,
+  patchLogementApi,
+  supprimerLogementApi
+} from "@/components/immobilier/logements-lot";
 import { LocationsBoard } from "@/components/immobilier/locations-board";
 import { TransfertUniteButton } from "@/components/immobilier/transfert-unite";
 import {
@@ -2372,27 +2376,13 @@ function LogementsTab({
     });
   }
 
-  async function detailErreur(r: Response): Promise<string> {
-    if (r.status === 403) return "droit « supprimer / modifier un logement » manquant";
-    try {
-      const d = (await r.json()).detail;
-      if (typeof d === "string") return d;
-    } catch {
-      /* corps vide */
-    }
-    return `HTTP ${r.status}`;
-  }
-
   async function patchLogement(
     id: number,
     body: Record<string, unknown>
   ): Promise<string | null> {
-    const r = await authedFetch(`/api/v1/immobilier/logements/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify(body)
-    });
-    if (!r.ok) return await detailErreur(r);
-    const saved = (await r.json()) as Logement;
+    const res = await patchLogementApi(id, body);
+    if (res.error) return res.error;
+    const saved = res.saved as unknown as Logement;
     setList((prev) =>
       prev?.map((x) => (x.id === id ? { ...x, ...saved } : x)) ?? prev
     );
@@ -2400,19 +2390,15 @@ function LogementsTab({
   }
 
   async function supprimerLogement(id: number): Promise<string | null> {
-    const r = await authedFetch(`/api/v1/immobilier/logements/${id}`, {
-      method: "DELETE"
+    const err = await supprimerLogementApi(id);
+    if (err) return err;
+    setList((prev) => prev?.filter((x) => x.id !== id) ?? prev);
+    setSelected((s) => {
+      const n = new Set(s);
+      n.delete(id);
+      return n;
     });
-    if (r.ok || r.status === 204) {
-      setList((prev) => prev?.filter((x) => x.id !== id) ?? prev);
-      setSelected((s) => {
-        const n = new Set(s);
-        n.delete(id);
-        return n;
-      });
-      return null;
-    }
-    return await detailErreur(r);
+    return null;
   }
 
   async function saveEdit() {
@@ -2868,211 +2854,6 @@ function LogementsTab({
           onApply={(body) => void applyLot(body)}
         />
       ) : null}
-    </div>
-  );
-}
-
-/** Une ligne de la modale de lot : case « appliquer » + champ. Composant
- *  de premier niveau (pas recréé à chaque rendu → le focus tient). */
-function LotLigne({
-  checked,
-  onToggle,
-  label,
-  children
-}: {
-  checked: boolean;
-  onToggle: (c: boolean) => void;
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="flex items-center gap-3 rounded-lg border border-brand-800 px-3 py-2">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onToggle(e.target.checked)}
-        className="h-4 w-4 accent-accent-500"
-      />
-      <span className="w-36 text-sm text-white">{label}</span>
-      <span className={`flex-1 ${checked ? "" : "opacity-50"}`}>{children}</span>
-    </label>
-  );
-}
-
-/** Modification en lot : seuls les champs COCHÉS sont appliqués à tous
- *  les logements sélectionnés (les autres restent tels quels). */
-function LogementsLotModal({
-  count,
-  busy,
-  onClose,
-  onApply
-}: {
-  count: number;
-  busy: boolean;
-  onClose: () => void;
-  onApply: (body: Record<string, unknown>) => void;
-}) {
-  const [on, setOn] = useState({
-    type: false,
-    pieces: false,
-    chambres: false,
-    enChambres: false,
-    superficie: false,
-    loyer: false,
-    etage: false
-  });
-  const [v, setV] = useState({
-    type: "residentiel",
-    pieces: "",
-    chambres: "",
-    enChambres: false,
-    superficie: "",
-    loyer: "",
-    etage: ""
-  });
-  const num = (s: string) => (s.trim() === "" ? null : Number(s));
-  const rien = !Object.values(on).some(Boolean);
-
-  function apply() {
-    const body: Record<string, unknown> = {};
-    if (on.type) body.type = v.type;
-    if (on.pieces) body.nb_pieces_decimal = num(v.pieces);
-    if (on.chambres) body.nb_chambres = num(v.chambres);
-    if (on.enChambres) body.location_en_chambres = v.enChambres;
-    if (on.superficie) body.superficie_pi2 = num(v.superficie);
-    if (on.loyer) body.loyer_demande = num(v.loyer);
-    if (on.etage) body.etage = num(v.etage);
-    onApply(body);
-  }
-
-  const lotLigne = (k: keyof typeof on) => ({
-    checked: on[k],
-    onToggle: (c: boolean) => setOn((o) => ({ ...o, [k]: c }))
-  });
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-xl">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-base font-bold text-white">
-            Modifier {count} logement{count > 1 ? "s" : ""} en lot
-          </h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn-ghost btn-xs"
-            aria-label="Fermer"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <p className="mb-3 text-xs text-white/60">
-          Coche les champs à changer : seuls ceux-là sont appliqués à toute
-          la sélection, le reste de chaque logement ne bouge pas.
-        </p>
-        <div className="space-y-2">
-          <LotLigne {...lotLigne("type")} label="Type">
-            <select
-              value={v.type}
-              onChange={(e) => setV((x) => ({ ...x, type: e.target.value }))}
-              className="input py-1.5 text-sm"
-            >
-              {LOGEMENT_TYPES.map(([val, lab]) => (
-                <option key={val} value={val} className="bg-brand-950 text-white">
-                  {lab}
-                </option>
-              ))}
-            </select>
-          </LotLigne>
-          <LotLigne {...lotLigne("enChambres")} label="Location en chambres">
-            <select
-              value={v.enChambres ? "oui" : "non"}
-              onChange={(e) =>
-                setV((x) => ({ ...x, enChambres: e.target.value === "oui" }))
-              }
-              className="input py-1.5 text-sm"
-            >
-              <option value="non" className="bg-brand-950 text-white">
-                Non — logement normal
-              </option>
-              <option value="oui" className="bg-brand-950 text-white">
-                Oui — Chambre ∞
-              </option>
-            </select>
-          </LotLigne>
-          <LotLigne {...lotLigne("pieces")} label="Pièces">
-            <input
-              type="number"
-              step="0.5"
-              min="0"
-              value={v.pieces}
-              onChange={(e) => setV((x) => ({ ...x, pieces: e.target.value }))}
-              className="input py-1.5 text-sm"
-              placeholder="ex. 4.5"
-            />
-          </LotLigne>
-          <LotLigne {...lotLigne("chambres")} label="Chambres (nb)">
-            <input
-              type="number"
-              min="0"
-              value={v.chambres}
-              onChange={(e) => setV((x) => ({ ...x, chambres: e.target.value }))}
-              className="input py-1.5 text-sm"
-            />
-          </LotLigne>
-          <LotLigne {...lotLigne("superficie")} label="Superficie (pi²)">
-            <input
-              type="number"
-              min="0"
-              value={v.superficie}
-              onChange={(e) =>
-                setV((x) => ({ ...x, superficie: e.target.value }))
-              }
-              className="input py-1.5 text-sm"
-            />
-          </LotLigne>
-          <LotLigne {...lotLigne("loyer")} label="Loyer demandé">
-            <input
-              type="number"
-              min="0"
-              value={v.loyer}
-              onChange={(e) => setV((x) => ({ ...x, loyer: e.target.value }))}
-              className="input py-1.5 text-sm"
-            />
-          </LotLigne>
-          <LotLigne {...lotLigne("etage")} label="Étage">
-            <input
-              type="number"
-              value={v.etage}
-              onChange={(e) => setV((x) => ({ ...x, etage: e.target.value }))}
-              className="input py-1.5 text-sm"
-            />
-          </LotLigne>
-        </div>
-        <div className="mt-4 flex items-center justify-end gap-2 border-t border-brand-800 pt-3">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="btn-secondary btn-sm"
-          >
-            Annuler
-          </button>
-          <button
-            type="button"
-            onClick={apply}
-            disabled={busy || rien}
-            className="btn-accent btn-sm disabled:opacity-50"
-          >
-            {busy ? (
-              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Check className="mr-1 h-3.5 w-3.5" />
-            )}
-            Appliquer à {count}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
