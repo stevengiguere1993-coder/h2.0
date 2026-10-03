@@ -84,6 +84,7 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "entreprise_links",
     "entreprise_partners",
     "entreprise_tache_assignees",
+    "entreprise_tache_entreprises",
     "entreprise_tache_immeubles",
     "entreprise_tache_templates",
     "entreprise_taches",

@@ -78,6 +78,7 @@ from app.models.entreprise_recurrence import (  # noqa: F401
 from app.models.entreprise_tache import EntrepriseTache, TacheStatus  # noqa: F401
 from app.models.entreprise_tache_assignee import EntrepriseTacheAssignee  # noqa: F401
 from app.models.entreprise_tache_immeuble import EntrepriseTacheImmeuble  # noqa: F401
+from app.models.entreprise_tache_entreprise import EntrepriseTacheEntreprise  # noqa: F401
 from app.models.esign import (  # noqa: F401
     EsignAttachment,
     EsignDocument,

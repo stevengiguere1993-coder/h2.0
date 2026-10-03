@@ -37,6 +37,8 @@ export type TaskDetailsModalData = {
   due_date: string | null;
   assignee_user_ids: number[];
   immeuble_ids: number[];
+  /** Entreprises concernées : la première est la principale. */
+  entreprise_ids?: number[];
   departement: string | null;
   recurrence: string | null;
   impact: number | null;
@@ -54,6 +56,7 @@ export type TaskDetailsModalPatch = {
   due_date?: string | null;
   assignee_user_ids?: number[];
   immeuble_ids?: number[];
+  entreprise_ids?: number[];
   departement?: string | null;
   recurrence?: string | null;
   impact?: number | null;
@@ -61,11 +64,14 @@ export type TaskDetailsModalPatch = {
   effort?: number | null;
 };
 
+export type TaskEntrepriseMini = { id: number; name: string };
+
 export function TaskDetailsModal({
   task,
   users,
   immeubles,
   immeubleScope,
+  entreprises,
   onClose,
   onPatch,
   onImmeublesChanged
@@ -73,6 +79,9 @@ export function TaskDetailsModal({
   task: TaskDetailsModalData;
   users: TaskUserMini[];
   immeubles: ImmeubleMini[];
+  /** Catalogue des entreprises — affiche le choix (multi) des
+   *  entreprises concernées ; la première cochée est la principale. */
+  entreprises?: TaskEntrepriseMini[];
   /** Scope du catalogue d'immeubles : entreprise_id ou deal_id. */
   immeubleScope?: ImmeubleScope;
   onClose: () => void;
@@ -234,6 +243,14 @@ export function TaskDetailsModal({
             />
           </div>
 
+          {entreprises && entreprises.length > 0 ? (
+            <EntreprisesField
+              entreprises={entreprises}
+              values={task.entreprise_ids || []}
+              onChange={(ids) => onPatch({ entreprise_ids: ids })}
+            />
+          ) : null}
+
           <div>
             <label className="label">Département</label>
             <input
@@ -303,6 +320,82 @@ export function TaskDetailsModal({
             Fermer
           </button>
         </footer>
+      </div>
+    </div>
+  );
+}
+
+function EntreprisesField({
+  entreprises,
+  values,
+  onChange
+}: {
+  entreprises: TaskEntrepriseMini[];
+  values: number[];
+  onChange: (ids: number[]) => void;
+}) {
+  const [q, setQ] = useState("");
+  const needle = q.trim().toLowerCase();
+  const visibles = entreprises.filter(
+    (e) => values.includes(e.id) || !needle || e.name.toLowerCase().includes(needle)
+  );
+  const byId = new Map(entreprises.map((e) => [e.id, e.name]));
+  function toggle(id: number) {
+    if (values.includes(id)) {
+      if (values.length === 1) return; // toujours au moins une entreprise
+      onChange(values.filter((v) => v !== id));
+    } else {
+      onChange([...values, id]);
+    }
+  }
+  function principale(id: number) {
+    onChange([id, ...values.filter((v) => v !== id)]);
+  }
+  return (
+    <div>
+      <label className="label">
+        Entreprise(s) concernée(s)
+        {values[0] != null ? (
+          <span className="ml-1 font-normal text-white/50">· principale : {byId.get(values[0]) || values[0]}</span>
+        ) : null}
+      </label>
+      {entreprises.length > 8 ? (
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Filtrer les entreprises…"
+          className="input mb-1 w-full text-xs"
+        />
+      ) : null}
+      <div className="max-h-40 space-y-0.5 overflow-y-auto rounded-lg border border-brand-800 p-1">
+        {visibles.map((e) => {
+          const on = values.includes(e.id);
+          const isMain = values[0] === e.id;
+          return (
+            <div key={e.id} className="flex items-center gap-2 px-2 py-1 text-sm">
+              <input
+                type="checkbox"
+                checked={on}
+                onChange={() => toggle(e.id)}
+                className="h-4 w-4 accent-accent-500"
+                aria-label={e.name}
+              />
+              <span className={on ? "text-white" : "text-white/70"}>{e.name}</span>
+              {on && !isMain ? (
+                <button
+                  type="button"
+                  onClick={() => principale(e.id)}
+                  className="ml-auto text-[10px] text-white/50 underline hover:text-white"
+                  title="En faire l'entreprise principale"
+                >
+                  rendre principale
+                </button>
+              ) : isMain ? (
+                <span className="ml-auto rounded bg-accent-500/20 px-1.5 text-[10px] font-semibold text-accent-500">principale</span>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
