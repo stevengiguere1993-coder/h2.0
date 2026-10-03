@@ -82,18 +82,24 @@ function LotLigne({
 
 /** Modification en lot : seuls les champs COCHÉS sont appliqués à tous
  *  les logements sélectionnés (les autres restent tels quels). */
+export type ImmeubleChoix = { id: number; name: string };
+
 export function LogementsLotModal({
   count,
   busy,
   onClose,
-  onApply
+  onApply,
+  immeubles
 }: {
   count: number;
   busy: boolean;
   onClose: () => void;
   onApply: (body: Record<string, unknown>) => void;
+  /** Immeubles proposés pour « déplacer vers » (absent = pas de champ). */
+  immeubles?: ImmeubleChoix[];
 }) {
   const [on, setOn] = useState({
+    immeuble: false,
     type: false,
     pieces: false,
     chambres: false,
@@ -103,6 +109,7 @@ export function LogementsLotModal({
     etage: false
   });
   const [v, setV] = useState({
+    immeuble: "",
     type: "residentiel",
     pieces: "",
     chambres: "",
@@ -112,10 +119,12 @@ export function LogementsLotModal({
     etage: ""
   });
   const num = (s: string) => (s.trim() === "" ? null : Number(s));
-  const rien = !Object.values(on).some(Boolean);
+  const rien =
+    !Object.values(on).some(Boolean) || (on.immeuble && !v.immeuble);
 
   function apply() {
     const body: Record<string, unknown> = {};
+    if (on.immeuble && v.immeuble) body.immeuble_id = Number(v.immeuble);
     if (on.type) body.type = v.type;
     if (on.pieces) body.nb_pieces_decimal = num(v.pieces);
     if (on.chambres) body.nb_chambres = num(v.chambres);
@@ -152,6 +161,24 @@ export function LogementsLotModal({
           la sélection, le reste de chaque logement ne bouge pas.
         </p>
         <div className="space-y-2">
+          {immeubles && immeubles.length > 0 ? (
+            <LotLigne {...lotLigne("immeuble")} label="Déplacer vers l'immeuble">
+              <select
+                value={v.immeuble}
+                onChange={(e) => setV((x) => ({ ...x, immeuble: e.target.value }))}
+                className="input py-1.5 text-sm"
+              >
+                <option value="" className="bg-brand-950 text-white">
+                  — choisir —
+                </option>
+                {immeubles.map((im) => (
+                  <option key={im.id} value={im.id} className="bg-brand-950 text-white">
+                    {im.name}
+                  </option>
+                ))}
+              </select>
+            </LotLigne>
+          ) : null}
           <LotLigne {...lotLigne("type")} label="Type">
             <select
               value={v.type}

@@ -53,6 +53,7 @@ import {
   LogementFiche
 } from "@/components/immobilier/logement-fiche";
 import {
+  type ImmeubleChoix,
   LogementsLotModal,
   patchLogementApi,
   supprimerLogementApi
@@ -2360,6 +2361,29 @@ function LogementsTab({
   const [msg, setMsg] = useState<string | null>(null);
   const [showLot, setShowLot] = useState(false);
   const [lotBusy, setLotBusy] = useState(false);
+  // Autres immeubles du portefeuille : cible de « Déplacer vers ».
+  const [autresImmeubles, setAutresImmeubles] = useState<ImmeubleChoix[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authedFetch("/api/v1/immobilier/immeubles");
+        if (!r.ok) return;
+        const imms = (await r.json()) as { id: number; name: string }[];
+        if (!cancelled)
+          setAutresImmeubles(
+            imms
+              .filter((im) => im.id !== immeubleId)
+              .map((im) => ({ id: im.id, name: im.name }))
+          );
+      } catch {
+        /* liste facultative */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [immeubleId]);
 
   const numeroDe = (id: number) =>
     list?.find((x) => x.id === id)?.numero ?? `#${id}`;
@@ -2381,8 +2405,18 @@ function LogementsTab({
     body: Record<string, unknown>
   ): Promise<string | null> {
     const res = await patchLogementApi(id, body);
-    if (res.error) return res.error;
+    if (res.error !== null) return res.error;
     const saved = res.saved as unknown as Logement;
+    if (saved.immeuble_id !== immeubleId) {
+      // Déplacé vers un autre immeuble : il quitte cette liste.
+      setList((prev) => prev?.filter((x) => x.id !== id) ?? prev);
+      setSelected((s) => {
+        const n = new Set(s);
+        n.delete(id);
+        return n;
+      });
+      return null;
+    }
     setList((prev) =>
       prev?.map((x) => (x.id === id ? { ...x, ...saved } : x)) ?? prev
     );
@@ -2852,6 +2886,7 @@ function LogementsTab({
           busy={lotBusy}
           onClose={() => setShowLot(false)}
           onApply={(body) => void applyLot(body)}
+          immeubles={autresImmeubles}
         />
       ) : null}
     </div>
