@@ -13,7 +13,9 @@ Garde-fous :
 - chemins sensibles/bruyants exclus (auth par mot de passe, webhooks
   Twilio, cron, MCP — qui journalise déjà ses écritures, public) ;
 - mots de passe / clés / jetons masqués avant stockage ;
-- le corps est rejoué en aval (le endpoint le relit normalement).
+- le corps est capté au passage (jamais lu d'avance ni rejoué) ;
+- l'entrée s'écrit une fois la requête ENTIÈREMENT terminée côté app
+  (réponse envoyée, session DB rendue) — voir ``AuditMiddleware``.
 """
 
 from __future__ import annotations
@@ -23,9 +25,8 @@ import logging
 import re
 from typing import Any, Optional
 
-from starlette.background import BackgroundTask, BackgroundTasks
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +53,9 @@ _CLES_SENSIBLES = re.compile(
 )
 
 _MAX_EXTRAIT = 700
+#: Au-delà de cette taille, le corps n'est plus conservé pour l'extrait
+#: (téléversements de fichiers) : seule sa taille est journalisée.
+_MAX_CORPS = 1024 * 1024
 
 
 def _masquer(obj: Any, profondeur: int = 0) -> Any:
@@ -88,73 +92,103 @@ def _entite_du_chemin(path: str) -> tuple[str, Optional[int]]:
     return entity_type, entity_id
 
 
-async def _executer(tache) -> None:
-    """Exécute une BackgroundTask existante (chaînage best-effort)."""
-    try:
-        await tache()
-    except Exception as exc:  # noqa: BLE001
-        log.debug("background chaîné en échec : %s", exc)
+class AuditMiddleware:
+    """Middleware ASGI « pur » (pas ``BaseHTTPMiddleware``).
 
+    L'entrée s'écrit APRÈS que l'app aval a entièrement terminé la
+    requête : réponse envoyée au client, dépendances FastAPI fermées
+    (la session DB de la requête est commitée et rendue) et
+    BackgroundTasks de l'endpoint exécutées. Zéro latence côté client
+    (la réponse est déjà partie) et aucune course sur la base.
 
-class AuditMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
+    Pourquoi plus ``BaseHTTPMiddleware`` + ``BackgroundTask`` : depuis
+    Starlette 1.4, ce middleware retient l'app aval tant que SA réponse
+    — tâche de fond incluse — n'est pas envoyée. L'écriture d'audit
+    tournait donc PENDANT que la session de la requête tenait encore sa
+    transaction ouverte : sous SQLite (tests) « database is locked »
+    après 5 s d'attente → aucune entrée journalisée et chaque écriture
+    API ralentie de 5 s (CI rouge sur main depuis #1719).
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(
+        self, scope: Scope, receive: Receive, send: Send
+    ) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope)
         path = request.url.path
+        methode = request.method
         if (
-            request.method not in _METHODES
+            methode not in _METHODES
             or not path.startswith("/api/v1")
             or any(path.startswith(p) for p in _EXCLUS)
         ):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
-        # Lit le corps puis le REJOUE pour l'endpoint aval.
-        corps: bytes = b""
-        try:
-            corps = await request.body()
+        # Capte le corps AU PASSAGE : l'endpoint le lit normalement, on
+        # n'en garde une copie que jusqu'à _MAX_CORPS (au-delà, seule la
+        # taille totale est journalisée).
+        morceaux: list[bytes] = []
+        retenu = 0
+        octets = 0
+        statut: Optional[int] = None
 
-            async def _receive():
-                return {
-                    "type": "http.request",
-                    "body": corps,
-                    "more_body": False,
-                }
+        async def _receive() -> Message:
+            nonlocal retenu, octets
+            message = await receive()
+            if message["type"] == "http.request":
+                bloc = message.get("body", b"") or b""
+                octets += len(bloc)
+                if bloc and retenu < _MAX_CORPS:
+                    morceaux.append(bloc)
+                    retenu += len(bloc)
+            return message
 
-            request._receive = _receive  # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001
-            corps = b""
+        async def _send(message: Message) -> None:
+            nonlocal statut
+            if message["type"] == "http.response.start":
+                statut = int(message.get("status", 0))
+            await send(message)
 
-        response = await call_next(request)
+        await self.app(scope, _receive, _send)
 
-        if response.status_code >= 400:
-            return response
-
-        # Écrit APRÈS l'envoi de la réponse (BackgroundTask) : zéro
-        # latence ajoutée, et la session de la requête est déjà rendue
-        # (pas de course sur la base — notamment SQLite en test).
-        methode = request.method
+        if statut is None or statut >= 400:
+            return
         auth = request.headers.get("authorization") or ""
-        statut = response.status_code
-        tache = BackgroundTask(
-            self._journaliser, methode, auth, path, corps, statut
+        await self._journaliser(
+            methode, auth, path, b"".join(morceaux), statut, octets
         )
-        if response.background is None:
-            response.background = tache
-        else:
-            groupe = BackgroundTasks()
-            groupe.add_task(_executer, response.background)
-            groupe.add_task(_executer, tache)
-            response.background = groupe
-        return response
 
     async def _journaliser(
-        self, methode: str, auth: str, path: str, corps: bytes, statut: int
+        self,
+        methode: str,
+        auth: str,
+        path: str,
+        corps: bytes,
+        statut: int,
+        octets: int,
     ) -> None:
         try:
-            await self._journaliser_brut(methode, auth, path, corps, statut)
+            await self._journaliser_brut(
+                methode, auth, path, corps, statut, octets
+            )
         except Exception as exc:  # noqa: BLE001 — jamais bloquant
             log.debug("audit auto raté pour %s: %s", path, exc)
 
     async def _journaliser_brut(
-        self, methode: str, auth: str, path: str, corps: bytes, statut: int
+        self,
+        methode: str,
+        auth: str,
+        path: str,
+        corps: bytes,
+        statut: int,
+        octets: int,
     ) -> None:
         from app.core.security import decode_token
         from app.db.session import AsyncSessionLocal
@@ -171,8 +205,10 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 user_id = int(sub)
 
         extrait: Optional[dict] = None
-        if corps:
+        if octets:
             try:
+                if len(corps) != octets:
+                    raise ValueError("corps tronqué (> _MAX_CORPS)")
                 data = json.loads(corps.decode("utf-8"))
                 masque = _masquer(data)
                 brut = json.dumps(masque, ensure_ascii=False, default=str)
@@ -184,7 +220,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
                         "corps": masque
                     }
             except Exception:  # noqa: BLE001 — multipart/binaire
-                extrait = {"_type": "non-json", "octets": len(corps)}
+                extrait = {"_type": "non-json", "octets": octets}
 
         entity_type, entity_id = _entite_du_chemin(path)
         details = {
