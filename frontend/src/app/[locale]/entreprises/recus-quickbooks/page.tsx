@@ -264,7 +264,9 @@ export default function RecusQuickbooksPage() {
     }
   }, [enCours, chargerJournal, chargerRuns]);
 
-  async function lancer(simulation: boolean) {
+  const [recentsJours, setRecentsJours] = useState("2");
+
+  async function lancer(simulation: boolean, piecesDepuisJours?: number) {
     if (!etat) return;
     const ids = Array.from(selection);
     const cibles = ids.length
@@ -277,9 +279,11 @@ export default function RecusQuickbooksPage() {
     if (
       !simulation &&
       !window.confirm(
-        `Copier les reçus du ${depuis} au ${jusqua} dans le Drive de : ${cibles
-          .map((c) => c.name)
-          .join(", ")} ?`
+        piecesDepuisJours
+          ? `Copier les reçus ajoutés ou modifiés dans QuickBooks depuis ${piecesDepuisJours} jour(s) (quelle que soit leur date) dans le Drive de : ${cibles.map((c) => c.name).join(", ")} ?`
+          : `Copier les reçus du ${depuis} au ${jusqua} dans le Drive de : ${cibles
+              .map((c) => c.name)
+              .join(", ")} ?`
       )
     )
       return;
@@ -292,7 +296,8 @@ export default function RecusQuickbooksPage() {
           entreprise_ids: ids.length ? ids : null,
           depuis,
           jusqua,
-          simulation
+          simulation,
+          pieces_depuis_jours: piecesDepuisJours ?? null
         })
       });
       if (!r.ok) {
@@ -568,6 +573,38 @@ export default function RecusQuickbooksPage() {
                 : "toutes les entreprises prêtes"}
             </span>
           </div>
+          <div className="mt-3 flex flex-wrap items-end gap-3 rounded-xl border border-brand-800 bg-brand-950 px-3 py-2">
+            <span className="text-xs text-white/70">
+              Ou, comme la nuit : seulement ce qui a été ajouté ou modifié dans
+              QuickBooks depuis
+            </span>
+            <input
+              type="number"
+              min="1"
+              max="365"
+              value={recentsJours}
+              onChange={(e) => setRecentsJours(e.target.value)}
+              className="input w-16 px-2 py-1 text-xs"
+              aria-label="Nombre de jours"
+            />
+            <span className="text-xs text-white/70">jour(s), quelle que soit la date du reçu.</span>
+            <button
+              type="button"
+              onClick={() => void lancer(true, Math.max(1, Number(recentsJours) || 2))}
+              disabled={lancement || enCours}
+              className="btn-secondary btn-xs"
+            >
+              <Search className="h-3 w-3" /> Simuler
+            </button>
+            <button
+              type="button"
+              onClick={() => void lancer(false, Math.max(1, Number(recentsJours) || 2))}
+              disabled={lancement || enCours}
+              className="btn-accent btn-xs"
+            >
+              <Play className="h-3 w-3" /> Copier
+            </button>
+          </div>
 
           {enCours && etat?.run ? (
             <div className="mt-4 rounded-xl border border-accent-500/50 bg-accent-500/10 px-3 py-2 text-xs text-white">
@@ -641,11 +678,13 @@ export default function RecusQuickbooksPage() {
             Étape 4 — Chaque nuit
           </h2>
           <p className="mt-1 text-xs text-white/70">
-            Le méga-cron de 6 h copie automatiquement les reçus des trois
-            derniers jours (marge pour les reçus joints en retard) de toutes
-            les entreprises prêtes. Un reçu déjà copié, ou un fichier portant
-            déjà la même date, le même fournisseur et le même montant dans le
-            dossier du mois, n&apos;est jamais mis en double.
+            Le méga-cron de 6 h demande à QuickBooks tout ce qui a été
+            <strong className="text-white"> ajouté ou modifié depuis 2 jours</strong>{" "}
+            (marge si une nuit est ratée), quelle que soit la date du reçu : un
+            reçu de janvier déposé hier est classé dans Janvier. Rien n&apos;est
+            rescanné. Un reçu déjà copié, ou un fichier portant déjà la même
+            date, le même fournisseur et le même montant dans le dossier du
+            mois, n&apos;est jamais mis en double.
           </p>
         </section>
 

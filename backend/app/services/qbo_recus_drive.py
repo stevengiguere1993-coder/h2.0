@@ -72,8 +72,36 @@ _CTYPE_EXT = {v: k for k, v in _EXT_CTYPE.items()}
 _CTYPE_EXT["image/jpeg"] = ".jpg"
 _MAX_OCTETS = 25 * 1024 * 1024
 DEBUT_PAR_DEFAUT = date(2026, 1, 1)
-#: Fenêtre de la nuit : la veille + marge pour les reçus joints en retard.
+#: Nuit : on demande à QuickBooks les pièces jointes AJOUTÉES OU MODIFIÉES
+#: depuis N jours (marge pour un cron raté), quelle que soit la date du
+#: reçu — un reçu de janvier déposé hier est classé dans Janvier (Phil
+#: 2026-10-04 : « pas besoin de rescanner 3 jours ou toute l'année »).
+JOURS_PIECES_NUIT = 2
+#: Ancienne fenêtre par date de transaction (conservée pour le rattrapage).
 JOURS_FENETRE_NUIT = 3
+DATE_MIN = date(2000, 1, 1)
+
+
+def _pieces_modifiees_depuis(atts: List[Dict[str, Any]], depuis: datetime) -> List[Dict[str, Any]]:
+    """Filtre local : pièces jointes dont MetaData.CreateTime ou
+    LastUpdatedTime ≥ ``depuis`` (repli quand QuickBooks refuse le WHERE)."""
+    out = []
+    for a in atts:
+        md = a.get("MetaData") or {}
+        for k in ("LastUpdatedTime", "CreateTime"):
+            v = md.get(k)
+            if not v:
+                continue
+            try:
+                t = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=timezone.utc)
+            if t >= depuis:
+                out.append(a)
+                break
+    return out
 
 #: État du dernier run (lecture par la page) — un seul run à la fois.
 DERNIER_RUN: Dict[str, Any] = {
@@ -517,6 +545,7 @@ async def _traiter_entreprise(
     simulation: bool,
     declencheur: str,
     rapport: Dict[str, Any],
+    pieces_depuis: Optional[datetime] = None,
 ) -> None:
     from app.integrations.quickbooks import QuickBooksClient, QuickBooksError
 
@@ -530,7 +559,18 @@ async def _traiter_entreprise(
     racine = e["drive_folder_id"]
 
     try:
-        atts = await qbo.query_all("SELECT * FROM attachable")
+        if pieces_depuis is not None:
+            # Seulement ce qui a bougé dans QuickBooks depuis la date :
+            # filtre serveur si QB l'accepte, sinon liste complète filtrée ici.
+            borne = pieces_depuis.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+            try:
+                atts = await qbo.query_all(
+                    f"SELECT * FROM attachable WHERE MetaData.LastUpdatedTime >= '{borne}'"
+                )
+            except QuickBooksError:
+                atts = _pieces_modifiees_depuis(await qbo.query_all("SELECT * FROM attachable"), pieces_depuis)
+        else:
+            atts = await qbo.query_all("SELECT * FROM attachable")
     except QuickBooksError as exc:
         rapport["erreurs"] += 1
         rapport["messages"].append(f"QuickBooks : lecture des pièces jointes impossible ({str(exc)[:160]}).")
@@ -742,11 +782,19 @@ async def executer(
     simulation: bool = True,
     declencheur: str = "rattrapage",
     user_id: Optional[int] = None,
+    pieces_depuis_jours: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Copie (ou simule) les reçus de chaque entreprise prête. Renvoie
     le rapport ; il est aussi gardé dans ``DERNIER_RUN``."""
     from app.services.drive_auto_upload_dispatcher import resolve_drive_owner_user_id
 
+    pieces_depuis: Optional[datetime] = None
+    if pieces_depuis_jours is not None:
+        # Mode « ce qui a bougé dans QuickBooks » : aucune limite sur la
+        # date du reçu (un reçu de janvier déposé hier compte).
+        pieces_depuis = datetime.now(timezone.utc) - timedelta(days=max(1, pieces_depuis_jours))
+        depuis = depuis or DATE_MIN
+        jusqua = jusqua or (date.today() + timedelta(days=1))
     depuis = depuis or DEBUT_PAR_DEFAUT
     jusqua = jusqua or date.today()
     if DERNIER_RUN.get("en_cours"):
@@ -770,6 +818,7 @@ async def executer(
         "declencheur": declencheur,
         "depuis": depuis.isoformat(),
         "jusqua": jusqua.isoformat(),
+        "pieces_depuis": pieces_depuis.isoformat() if pieces_depuis else None,
         "entreprises": [],
         "non_pretes": [],
         "dossiers_crees": [],
@@ -799,7 +848,7 @@ async def executer(
             try:
                 await _traiter_entreprise(
                     db, e, drive, depuis=depuis, jusqua=jusqua, simulation=simulation,
-                    declencheur=declencheur, rapport=r,
+                    declencheur=declencheur, rapport=r, pieces_depuis=pieces_depuis,
                 )
             except Exception as exc:  # noqa: BLE001
                 log.exception("Reçus QB → Drive : %s", e["name"])
@@ -924,19 +973,18 @@ def lancer_en_arriere_plan(**kwargs: Any) -> None:
 
 
 async def executer_pour_cron(db: AsyncSession) -> Dict[str, Any]:
-    """Nuit : la veille + marge (reçus joints en retard), toutes les
+    """Nuit : les pièces jointes AJOUTÉES OU MODIFIÉES dans QuickBooks
+    depuis 2 jours (quelle que soit la date du reçu), toutes les
     entreprises prêtes, sans simulation. Idempotent (mémoire + nom)."""
     from app.services.cron_guard import claim_cron_run
 
     if not await claim_cron_run(db, "qbo-recus-drive", 20 * 3600):
         return {"skipped": "run trop récent (< 20 h)"}
-    auj = date.today()
     r = await executer(
         db,
-        depuis=auj - timedelta(days=JOURS_FENETRE_NUIT),
-        jusqua=auj,
         simulation=False,
         declencheur="cron",
+        pieces_depuis_jours=JOURS_PIECES_NUIT,
     )
     return {
         "ok": r.get("ok"),
