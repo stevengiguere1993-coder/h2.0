@@ -25,6 +25,7 @@ import {
   Loader2,
   Menu,
   Plus,
+  Receipt,
   Target,
   UserCog,
   Users,
@@ -294,6 +295,8 @@ export default function EntreprisesLayout({
     // réactiver.
     { href: "/entreprises/contacts", label: "Contacts", icon: ContactIcon },
     { href: "/entreprises/signature", label: "Signature", icon: FileSignature },
+    // Saisie des reçus directement dans QuickBooks (Steven 2026-10-04).
+    { href: "/entreprises/recus", label: "Reçus", icon: Receipt },
     ...(vaultAccess
       ? [
           {
