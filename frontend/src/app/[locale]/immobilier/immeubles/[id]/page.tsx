@@ -702,22 +702,47 @@ export default function ImmeubleDetailPage({
           ? `${editForm.collecte_depuis.slice(0, 7)}-01`
           : null
       };
+      // Externe → interne (Phil 2026-10-02 / bug 2026-10-04) : ce n'est
+      // PAS un simple PATCH — les unités occupées ont besoin d'un bail.
+      // On enregistre les autres champs SANS toucher au mode, puis on
+      // ouvre l'assistant qui crée les baux d'un coup et bascule
+      // lui-même l'immeuble. Plus de 409 brut à l'écran.
+      const basculeVersInterne =
+        !!immeuble?.gestion_externe && !editForm.gestion_externe;
+      if (basculeVersInterne) {
+        delete body.gestion_externe;
+        delete body.gestionnaire_externe_nom;
+        delete body.gestionnaire_externe_contact;
+        delete body.maintenance_interne;
+      }
       const res = await authedFetch(
         `/api/v1/immobilier/immeubles/${immeubleId}`,
         { method: "PATCH", body: JSON.stringify(body) }
       );
       if (!res.ok) {
         const t = await res.text();
-        // Externe → interne refusé faute de baux : l'assistant crée les
-        // baux d'un coup, puis bascule (Phil 2026-10-02).
-        if (res.status === 409 && t.includes("Repasser en gestion interne")) {
+        // Filet : refus faute de baux (ancienne version, autre chemin) →
+        // l'assistant plutôt que l'erreur.
+        if (res.status === 409 && /gestion interne/i.test(t)) {
           setShowEdit(false);
           setShowPasserInterne(true);
           return;
         }
-        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+        let detail = "";
+        try {
+          const j = JSON.parse(t);
+          if (typeof j.detail === "string") detail = j.detail;
+        } catch {
+          /* pas du JSON */
+        }
+        throw new Error((detail || t).slice(0, 300) || `HTTP ${res.status}`);
       }
       setImmeuble((await res.json()) as Immeuble);
+      if (basculeVersInterne) {
+        setShowEdit(false);
+        setShowPasserInterne(true);
+        return;
+      }
       // Le propriétaire est une AUTRE ressource (ownerships) : on
       // l'enregistre après les champs de l'immeuble, et seulement s'il a
       // changé. La fiche d'entreprise et l'organigramme de détention
@@ -1486,6 +1511,14 @@ export default function ImmeubleDetailPage({
                     Immeuble en gestion externe
                   </span>
                 </label>
+                {immeuble?.gestion_externe && !editForm.gestion_externe ? (
+                  <p className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200">
+                    Passage en gestion interne : à l&apos;enregistrement,
+                    l&apos;assistant te fera créer d&apos;un coup le bail de
+                    chaque unité occupée (nom, loyer, dates), puis
+                    l&apos;immeuble bascule.
+                  </p>
+                ) : null}
                 <p className="mt-1 text-[11px] text-sky-200/70">
                   Réservé aux immeubles gérés par une compagnie TIERCE : les
                   paiements, renouvellements, dépôts, relances et
