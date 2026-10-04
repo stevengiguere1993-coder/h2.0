@@ -278,11 +278,6 @@ export default function EntreprisesLayout({
       label: "Projets · Optimisation",
       icon: TrendingUp
     },
-    {
-      href: "/entreprises/recus-quickbooks",
-      label: "Reçus QuickBooks → Drive",
-      icon: Receipt
-    },
     { href: "/entreprises/kratos", label: "Kratos · Cerveau", icon: Brain },
     { href: "/entreprises/rencontres", label: "Rencontres", icon: Calendar },
     { href: "/entreprises/feuille-de-temps", label: "Feuille de temps", icon: Clock },
@@ -306,7 +301,13 @@ export default function EntreprisesLayout({
             icon: CreditCard
           }
         ]
-      : [])
+      : []),
+    // Après Abonnements (retour Phil 2026-10-04).
+    {
+      href: "/entreprises/recus-quickbooks",
+      label: "Reçus QuickBooks → Drive",
+      icon: Receipt
+    }
   ];
 
   function isActive(href: string) {
