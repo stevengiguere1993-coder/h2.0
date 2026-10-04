@@ -170,6 +170,8 @@ class EntrepriseTacheRead(BaseModel):
     immeuble_ids: List[int] = Field(default_factory=list)
     # Entreprises concernées : [principale] + secondaires.
     entreprise_ids: List[int] = Field(default_factory=list)
+    # Créateur (zone employés) — NULL pour les tâches antérieures.
+    created_by_user_id: Optional[int] = None
     # Position manuelle (drag & drop). 0 = pas réordonné — le frontend
     # retombe sur un classement par score.
     position: int = 0
