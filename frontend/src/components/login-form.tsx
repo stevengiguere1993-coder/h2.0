@@ -317,7 +317,7 @@ export function LoginForm() {
               </span>
               <span className="flex-1">
                 <span className="block text-base font-bold text-white">
-                  Portail web
+                  Construction
                 </span>
                 <span className="mt-0.5 block text-xs text-white/60">
                   Bureau / ordinateur — CRM, soumissions, factures, agenda,
