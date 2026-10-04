@@ -84,6 +84,7 @@ type Rapport = {
   non_pretes: { entreprise_id: number; name: string; manque: string[] }[];
   dossiers_crees: string[];
   dossiers_a_creer: string[];
+  dossiers_reconnus?: string[];
   totaux: { copies: number; prevus: number; ignores: number; erreurs: number };
 };
 
@@ -815,6 +816,18 @@ function RapportView({
         </p>
       ) : null}
 
+      {rapport.dossiers_reconnus && rapport.dossiers_reconnus.length ? (
+        <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-white">
+          <p className="font-semibold">
+            Dossiers existants reconnus (réutilisés, rien de créé) :
+          </p>
+          <ul className="mt-1 space-y-0.5 text-white/80">
+            {rapport.dossiers_reconnus.map((d, i) => (
+              <li key={i}>• {d}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {rapport.dossiers_a_creer.length || rapport.dossiers_crees.length ? (
         <p className="text-xs text-white/70">
           {rapport.simulation ? "Dossiers à créer : " : "Dossiers créés : "}

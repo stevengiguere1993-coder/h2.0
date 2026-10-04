@@ -147,17 +147,54 @@ def folder_id_depuis_url(url: Optional[str]) -> Optional[str]:
     return None
 
 
-def normaliser_nom(s: Optional[str]) -> str:
+def normaliser_nom(s: Optional[str], garder_prefixe: bool = False) -> str:
     """Clé de comparaison d'un nom de dossier Drive : sans accent, sans
-    casse, sans préfixe numérique « 2 - », sans ponctuation finale. Les
-    dossiers de Phil sont numérotés (« 1 - MGV Investissements inc »,
+    casse, sans préfixe numérique « 2 - » (sauf ``garder_prefixe``, pour
+    les mots-clés : « 2026 - Reçus » doit garder 2026), sans ponctuation.
+    Les dossiers de Phil sont numérotés (« 1 - MGV Investissements inc »,
     « 2 - Factures ») : on doit les reconnaître sans créer un doublon."""
     t = unicodedata.normalize("NFKD", s or "")
     t = "".join(ch for ch in t if not unicodedata.combining(ch))
     t = t.casefold().strip()
-    t = re.sub(r"^\d+\s*[-–—.:)]\s*", "", t)  # « 2 - Factures » → « factures »
+    if not garder_prefixe:
+        t = re.sub(r"^\d+\s*[-–—.:)]\s*", "", t)  # « 2 - Factures » → « factures »
     t = re.sub(r"[^\w\s]+", " ", t)  # ponctuation → espace (« inc. » → « inc »)
     return " ".join(t.split())
+
+
+#: Mots-clés qui désignent un dossier existant équivalent (comparés sur
+#: le nom normalisé) : « 2 - Factures et reçus » vaut « Factures ».
+MOTS_FACTURES = ("facture", "factures", "recu", "recus", "depense", "depenses", "invoice", "invoices", "receipt", "receipts")
+ABREV_MOIS = {
+    "Janvier": ("janv", "jan"), "Février": ("fev", "feb"), "Mars": ("mar",), "Avril": ("avr", "apr"),
+    "Mai": ("may",), "Juin": ("jun",), "Juillet": ("juil", "jul"), "Août": ("aou", "aug"),
+    "Septembre": ("sept", "sep"), "Octobre": ("oct",), "Novembre": ("nov",), "Décembre": ("dec",),
+}
+
+
+def correspond_dossier(nom_existant: Optional[str], voulu: str) -> int:
+    """Score de correspondance d'un dossier existant avec le dossier voulu
+    (« Factures », « 2026 », « Octobre ») : 2 = même nom normalisé,
+    1 = contient le mot-clé (« 2 - Factures et reçus », « 2026 - Reçus »,
+    « 10 - Octobre 2026 »), 0 = rien. Phil 2026-10-04 : « il faut que le
+    système voie si un dossier peut déjà correspondre »."""
+    n = normaliser_nom(nom_existant)
+    v = normaliser_nom(voulu)
+    if not n or not v:
+        return 0
+    if n == v:
+        return 2
+    # Mots-clés sur le nom COMPLET (préfixe gardé) : « 2026 - Reçus ».
+    mots = set(normaliser_nom(nom_existant, garder_prefixe=True).split())
+    if v == "factures":
+        return 1 if (mots & set(MOTS_FACTURES)) else 0
+    if v.isdigit():  # année
+        return 1 if v in mots else 0
+    if voulu in MOIS_FR:  # mois : nom complet ou abréviation, p. ex. « 10 - Oct 2026 »
+        if v in mots:
+            return 1
+        return 1 if any(m == a or m.startswith(v[:4]) for m in mots for a in ABREV_MOIS.get(voulu, ())) else 0
+    return 0
 
 
 def montant_texte(montant: Optional[float]) -> str:
@@ -438,6 +475,10 @@ class _Drive:
         self._contenu: Dict[str, List[Dict[str, Any]]] = {}
         self.dossiers_crees: List[str] = []
         self.dossiers_a_creer: List[str] = []
+        #: Dossiers EXISTANTS reconnus sous un autre nom (« Factures » →
+        #: « 2 - Factures et reçus ») : affichés dans le rapport pour
+        #: vérification avant la copie.
+        self.dossiers_reconnus: List[str] = []
 
     async def contenu(self, folder_id: str) -> List[Dict[str, Any]]:
         if folder_id in self._contenu:
@@ -466,10 +507,22 @@ class _Drive:
         simulation quand il faudrait le créer."""
         from app.services.drive_api import FOLDER_MIME, create_folder
 
-        voulu = normaliser_nom(nom)
+        meilleur: Optional[Dict[str, Any]] = None
+        meilleur_score = 0
         for f in await self.contenu(parent_id):
-            if f.get("mimeType") == FOLDER_MIME and normaliser_nom(f.get("name")) == voulu:
-                return str(f["id"])
+            if f.get("mimeType") != FOLDER_MIME:
+                continue
+            score = correspond_dossier(f.get("name"), nom)
+            if score > meilleur_score or (
+                score == meilleur_score and score > 0 and (f.get("name") or "") < (meilleur.get("name") or "")
+            ):
+                meilleur, meilleur_score = f, score
+        if meilleur is not None:
+            if normaliser_nom(meilleur.get("name")) != normaliser_nom(nom):
+                rec = f"{chemin} → « {meilleur.get('name')} »"
+                if rec not in self.dossiers_reconnus:
+                    self.dossiers_reconnus.append(rec)
+            return str(meilleur["id"])
         if self.simulation:
             if chemin not in self.dossiers_a_creer:
                 self.dossiers_a_creer.append(chemin)
@@ -823,6 +876,7 @@ async def executer(
         "non_pretes": [],
         "dossiers_crees": [],
         "dossiers_a_creer": [],
+        "dossiers_reconnus": [],
         "totaux": {"copies": 0, "prevus": 0, "ignores": 0, "erreurs": 0},
     }
     try:
@@ -869,6 +923,7 @@ async def executer(
                 break
         rapport["dossiers_crees"] = drive.dossiers_crees
         rapport["dossiers_a_creer"] = drive.dossiers_a_creer
+        rapport["dossiers_reconnus"] = drive.dossiers_reconnus
         return rapport
     finally:
         DERNIER_RUN.update(
