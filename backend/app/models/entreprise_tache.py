@@ -93,6 +93,15 @@ class EntrepriseTache(Base, TimestampUpdateMixin):
         nullable=True, index=True,
     )
 
+    # Créateur de la tâche (Steven 2026-10-04, zone employés) : un employé
+    # peut supprimer les tâches qu'il s'est créées, pas celles qu'un
+    # gestionnaire lui a assignées. NULL = tâche antérieure / import.
+    # Colonne nullable → ajoutée au démarrage par schema_check.
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
+
     # ── Calendrier ────────────────────────────────────────────────────
     due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(

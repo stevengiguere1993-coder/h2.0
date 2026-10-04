@@ -5,6 +5,8 @@ import { usePathname, useRouter as useNextRouter } from "next/navigation";
 import {
   Briefcase,
   Calendar,
+  CheckSquare,
+  Clock,
   Home,
   Menu,
   ShoppingCart
@@ -17,7 +19,9 @@ import { HelpButton } from "@/components/help-button";
 import { KratosLogo } from "@/components/kratos-logo";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { canEnterVolet } from "@/lib/access";
 import { getToken, getMe, type CurrentUser } from "@/lib/auth";
+import { ZoneEmployeProvider, type ZoneVariant } from "./zone-employe-context";
 
 type Tab = {
   href: string;
@@ -36,6 +40,23 @@ const TABS: Tab[] = [
   { href: "/m/achats", label: "Achats", icon: ShoppingCart },
   { href: "/m/plus", label: "Plus", icon: Menu }
 ];
+
+// Variante « autre » (employé sans pôle Construction, ex. vidéo /
+// marketing) : pas de punch ni de chantiers — agenda planifié depuis la
+// section Employés, tâches personnelles et feuille de temps par tâche.
+const TABS_AUTRE: Tab[] = [
+  { href: "/m", label: "Accueil", icon: Home },
+  { href: "/m/agenda", label: "Agenda", icon: Calendar },
+  { href: "/m/taches", label: "Tâches", icon: CheckSquare },
+  { href: "/m/feuille-de-temps", label: "Feuille de temps", icon: Clock },
+  { href: "/m/plus", label: "Plus", icon: Menu }
+];
+
+function isTabActive(tab: Tab, pathname: string): boolean {
+  return tab.href === "/m"
+    ? pathname.endsWith("/m") || pathname.endsWith("/m/")
+    : pathname.includes(tab.href);
+}
 
 export default function MobileLayout({
   children
@@ -81,68 +102,112 @@ export default function MobileLayout({
 
   const initialTheme = (me?.theme_preference as Theme) || "light";
 
+  // Admins / owners ont tous les pôles → Construction (inchangé).
+  const variant: ZoneVariant = canEnterVolet(me, "construction")
+    ? "construction"
+    : "autre";
+
   return (
     <ThemeProvider initialTheme={initialTheme}>
     <ConfirmProvider>
+    <ZoneEmployeProvider me={me} variant={variant}>
+    {variant === "autre" ? (
+      <main className="flex min-h-screen flex-col bg-brand-950 text-white">
+        <Bandeau />
+
+        <div className="flex flex-1">
+          {/* Colonne de navigation sur grand écran : un simple employé qui
+              se connecte sur le SITE voit l'équivalent de l'app, présenté
+              comme un vrai écran de site. */}
+          {inProspection ? null : (
+            <aside className="hidden lg:sticky lg:top-0 lg:flex lg:h-screen lg:w-60 lg:shrink-0 lg:flex-col lg:border-r lg:border-brand-800 lg:bg-brand-950/95">
+              <div className="px-5 pb-4 pt-6">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
+                  Kratos
+                </p>
+                <p className="text-base font-bold text-white">
+                  Zone employés
+                </p>
+              </div>
+              <nav className="flex-1 px-3">
+                <ul className="space-y-1">
+                  {TABS_AUTRE.map((t) => {
+                    const active = isTabActive(t, pathname);
+                    const Icon = t.icon;
+                    return (
+                      <li key={t.href}>
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={t.href as any}
+                          className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
+                            active
+                              ? "bg-brand-900 text-accent-500"
+                              : "text-white/60 hover:bg-brand-900 hover:text-white"
+                          }`}
+                        >
+                          <Icon className="h-4 w-4" />
+                          {t.label}
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </nav>
+              <div className="border-t border-brand-800 px-5 py-4">
+                <p className="truncate text-sm font-semibold text-white">
+                  {me?.display_name || me?.email}
+                </p>
+                {me?.display_name ? (
+                  <p className="truncate text-xs text-white/50">{me.email}</p>
+                ) : null}
+              </div>
+            </aside>
+          )}
+
+          <div
+            className={
+              inProspection
+                ? "min-w-0 flex-1"
+                : "min-w-0 flex-1 pb-20 lg:pb-8"
+            }
+          >
+            <div className="mx-auto w-full max-w-3xl">
+              <AccessGuard>{children}</AccessGuard>
+            </div>
+          </div>
+        </div>
+
+        {inProspection ? null : (
+          <BottomNav
+            tabs={TABS_AUTRE}
+            pathname={pathname}
+            className="fixed bottom-0 left-0 right-0 z-40 border-t border-brand-800 bg-brand-950/95 backdrop-blur lg:hidden"
+          />
+        )}
+
+        <HelpButton
+          triggerClassName="fixed right-4 z-40 inline-flex items-center gap-1.5 rounded-full bg-accent-500 px-3.5 py-2.5 text-xs font-semibold text-brand-950 shadow-lg ring-1 ring-accent-500/40 hover:bg-accent-400"
+          triggerStyle={{
+            bottom: "calc(env(safe-area-inset-bottom) + 4.5rem)"
+          }}
+        />
+
+        <span id="hsi-me" data-email={me?.email || ""} className="hidden" />
+      </main>
+    ) : (
     <main className="flex min-h-screen flex-col bg-brand-950 text-white">
-      {/* Bandeau global mobile : ThemeToggle + Kratos cliquable
-          (retour portail), tous deux groupés à DROITE pour rester
-          alignés au-dessus de l'indicateur « Pas en service » des
-          en-têtes de page (sans le chevaucher car non-sticky).
-          Hauteur auto + padding-top safe-area pour passer sous le
-          notch/Dynamic Island sur iPhone. */}
-      <div
-        className="flex items-center justify-end gap-2 border-b border-brand-800 bg-brand-950/95 px-3 py-2"
-        style={{
-          paddingTop: "calc(env(safe-area-inset-top) + 0.5rem)"
-        }}
-      >
-        <ThemeToggle />
-        <Link
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={"/connexion" as any}
-          aria-label="Accueil du portail"
-          className="flex items-center"
-        >
-          <KratosLogo size={108} floating={false} />
-        </Link>
-      </div>
+      <Bandeau />
 
       <div className={inProspection ? "flex-1" : "flex-1 pb-20"}>
         <AccessGuard>{children}</AccessGuard>
       </div>
 
       {inProspection ? null : (
-      <nav
+      <BottomNav
+        tabs={TABS}
+        pathname={pathname}
         className="fixed bottom-0 left-0 right-0 z-40 border-t border-brand-800 bg-brand-950/95 backdrop-blur"
-        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
-      >
-        <ul className="flex items-center justify-around">
-          {TABS.map((t) => {
-            const active =
-              t.href === "/m"
-                ? pathname.endsWith("/m") || pathname.endsWith("/m/")
-                : pathname.includes(t.href);
-            const Icon = t.icon;
-            return (
-              <li key={t.href} className="flex-1">
-                <Link
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  href={t.href as any}
-                  className={`flex flex-col items-center gap-1 py-2.5 text-[10px] font-medium transition ${
-                    active
-                      ? "text-accent-500"
-                      : "text-white/50 hover:text-white"
-                  }`}
-                >
-                  <Icon className="h-5 w-5" />
-                  {t.label}
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-      </nav>
+      />
       )}
 
       {/* Bouton flottant Aide — placé au-dessus de la nav bottom (≈60px
@@ -157,7 +222,75 @@ export default function MobileLayout({
       {/* Expose current user email in a global for deep pages if needed */}
       <span id="hsi-me" data-email={me?.email || ""} className="hidden" />
     </main>
+    )}
+    </ZoneEmployeProvider>
     </ConfirmProvider>
     </ThemeProvider>
+  );
+}
+
+/** Bandeau global mobile : ThemeToggle + Kratos cliquable (retour
+ *  portail), tous deux groupés à DROITE pour rester alignés au-dessus de
+ *  l'indicateur « Pas en service » des en-têtes de page (sans le
+ *  chevaucher car non-sticky). Hauteur auto + padding-top safe-area pour
+ *  passer sous le notch/Dynamic Island sur iPhone. */
+function Bandeau() {
+  return (
+    <div
+      className="flex items-center justify-end gap-2 border-b border-brand-800 bg-brand-950/95 px-3 py-2"
+      style={{
+        paddingTop: "calc(env(safe-area-inset-top) + 0.5rem)"
+      }}
+    >
+      <ThemeToggle />
+      <Link
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        href={"/connexion" as any}
+        aria-label="Accueil du portail"
+        className="flex items-center"
+      >
+        <KratosLogo size={108} floating={false} />
+      </Link>
+    </div>
+  );
+}
+
+function BottomNav({
+  tabs,
+  pathname,
+  className
+}: {
+  tabs: Tab[];
+  pathname: string;
+  className: string;
+}) {
+  return (
+    <nav
+      className={className}
+      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+    >
+      <ul className="flex items-center justify-around">
+        {tabs.map((t) => {
+          const active = isTabActive(t, pathname);
+          const Icon = t.icon;
+          return (
+            <li key={t.href} className="flex-1">
+              <Link
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={t.href as any}
+                className={`flex flex-col items-center gap-1 py-2.5 text-[10px] font-medium transition ${
+                  active
+                    ? "text-accent-500"
+                    : "text-white/50 hover:text-white"
+                }`}
+              >
+                <Icon className="h-5 w-5" />
+                {t.label}
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
   );
 }

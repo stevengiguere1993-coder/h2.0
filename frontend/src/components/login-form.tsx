@@ -60,9 +60,21 @@ function fileVersInvestisseur(me: {
   );
 }
 
-/** Employé dont le SEUL pôle accessible est construction → app mobile
- *  chantier directe, sans passer par le sélecteur. Dès qu'un autre pôle
- *  lui est ouvert (ex. feuille de temps), il voit le sélecteur. */
+//: Pages du pôle Entreprises qu'un employé « autre » retrouve telles
+//: quelles dans la zone employés (sa feuille de temps).
+const PAGES_ENTREPRISES_DE_LA_ZONE = new Set([
+  "page:entreprises.feuille_de_temps"
+]);
+
+/** Employé qui file directement vers la zone employés (/m), sans
+ *  sélecteur :
+ *  - employé Construction dont c'est le SEUL pôle (app chantier) ;
+ *  - employé « autre » (ex. vidéo / marketing) dont le seul pôle est
+ *    Entreprises et qui n'y voit que sa feuille de temps : sa zone
+ *    employés lui donne agenda, tâches et feuille de temps (Steven,
+ *    2026-10-04).
+ *  Dès qu'il a deux pôles (ex. Construction + Entreprises) ou une autre
+ *  page d'Entreprises accordée, il voit le sélecteur. */
 function fileVersMobile(me: {
   role?: string;
   volets?: unknown;
@@ -75,11 +87,22 @@ function fileVersMobile(me: {
     const v = Array.isArray(me.volets) ? (me.volets as string[]) : [];
     return v.length === 0 || v.includes("construction");
   }
+  if (access["page:construction.mobile"] === false) return false;
   const acc = { access };
+  const autres = (sauf: string) =>
+    AUTRES_POLES.filter((p) => p !== sauf).some((p) => canEnterVolet(acc, p));
+  if (canEnterVolet(acc, "construction")) {
+    return !AUTRES_POLES.some((p) => canEnterVolet(acc, p));
+  }
   return (
-    access["page:construction.mobile"] !== false &&
-    canEnterVolet(acc, "construction") &&
-    !AUTRES_POLES.some((p) => canEnterVolet(acc, p))
+    canEnterVolet(acc, "entreprises") &&
+    !autres("entreprises") &&
+    Object.entries(access).every(
+      ([k, v]) =>
+        !k.startsWith("page:entreprises.") ||
+        v !== true ||
+        PAGES_ENTREPRISES_DE_LA_ZONE.has(k)
+    )
   );
 }
 
@@ -327,7 +350,7 @@ export function LoginForm() {
             </button>
           ) : null}
 
-          {enter("construction") &&
+          {(enter("construction") || enter("entreprises")) &&
           userAccess["page:construction.mobile"] !== false ? (
             <button
               type="button"
@@ -345,8 +368,9 @@ export function LoginForm() {
                   Zone employés
                 </span>
                 <span className="mt-0.5 block text-xs text-white/60">
-                  Employé sur chantier — poinçonner, agenda, intervention
-                  avec photos.
+                  {enter("construction")
+                    ? "Employé sur chantier — poinçonner, agenda, intervention avec photos."
+                    : "Ton agenda, tes tâches et ta feuille de temps."}
                 </span>
               </span>
             </button>

@@ -26,6 +26,7 @@ import {
   Menu,
   Plus,
   Target,
+  UserCog,
   Users,
   X
 } from "lucide-react";
@@ -280,6 +281,7 @@ export default function EntreprisesLayout({
     { href: "/entreprises/kratos", label: "Kratos · Cerveau", icon: Brain },
     { href: "/entreprises/rencontres", label: "Rencontres", icon: Calendar },
     { href: "/entreprises/feuille-de-temps", label: "Feuille de temps", icon: Clock },
+    { href: "/entreprises/employes", label: "Employés", icon: UserCog },
     { href: "/entreprises/organigramme", label: "Organigramme", icon: Users },
     {
       href: "/entreprises/distribution-taches",

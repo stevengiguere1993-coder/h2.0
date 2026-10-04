@@ -29,7 +29,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 
 from app.api.deps import CurrentUser, DBSession
 from app.core.permissions import is_manager_plus
@@ -449,17 +449,21 @@ async def my_agenda_ics(
             await db.execute(select(Employe).where(Employe.email == u.email))
         ).scalar_one_or_none()
 
-    events: list[AgendaEvent] = []
+    # Événements assignés à sa fiche Employé (Construction) OU à son compte
+    # (meetings, tournages… planifiés depuis la section Employés) : un
+    # employé sans fiche Construction retrouve aussi son agenda.
+    cibles = [AgendaEvent.assignee_user_id == u.id]
     if emp is not None:
-        events = list(
-            (
-                await db.execute(
-                    select(AgendaEvent)
-                    .where(AgendaEvent.assignee_id == emp.id)
-                    .order_by(AgendaEvent.start_at.asc())
-                )
-            ).scalars().all()
-        )
+        cibles.append(AgendaEvent.assignee_id == emp.id)
+    events: list[AgendaEvent] = list(
+        (
+            await db.execute(
+                select(AgendaEvent)
+                .where(or_(*cibles))
+                .order_by(AgendaEvent.start_at.asc())
+            )
+        ).scalars().all()
+    )
 
     lines = [
         "BEGIN:VCALENDAR",

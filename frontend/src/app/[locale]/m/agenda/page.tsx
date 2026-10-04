@@ -5,28 +5,12 @@ import { Calendar, ChevronRight, Loader2, MapPin } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
-
-type EventMini = {
-  id: number;
-  title: string;
-  description: string | null;
-  location: string | null;
-  start_at: string;
-  end_at: string | null;
-  all_day: boolean;
-  project_id: number | null;
-  event_type: string;
-};
+import { useZoneEmploye } from "../zone-employe-context";
+import { EVENT_TYPE_LABELS, type EventMini } from "../_autre/shared";
 
 // Types affichés en étiquette sur la carte (événements planifiés par un
-// admin depuis l'agenda du site : meetings, tournages vidéo…).
-const TYPE_LABELS: Record<string, string> = {
-  reunion: "Réunion",
-  tournage: "Tournage",
-  visite: "Visite",
-  livraison: "Livraison",
-  conge: "Congé"
-};
+// admin depuis l'agenda du site ou la section Employés : meetings,
+// tournages vidéo, rendez-vous, formations…) : EVENT_TYPE_LABELS.
 
 function ymd(d: Date): string {
   if (Number.isNaN(d.getTime())) return "0000-00-00";
@@ -39,6 +23,7 @@ function ymd(d: Date): string {
 }
 
 export default function MobileAgenda() {
+  const { variant } = useZoneEmploye();
   const [events, setEvents] = useState<EventMini[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -123,7 +108,15 @@ export default function MobileAgenda() {
                 </p>
                 <ul className="mt-2 space-y-2">
                   {evs.map((e) => (
-                    <EventCard key={e.id} event={e} />
+                    <EventCard
+                      key={e.id}
+                      event={e}
+                      // Employé « autre » : pas d'intervention de chantier
+                      // derrière, la carte montre tout (type, lieu, notes).
+                      // Construction : inchangé (réunion / tournage ouvrent
+                      // la fiche résumé de l'intervention).
+                      plain={variant === "autre"}
+                    />
                   ))}
                 </ul>
               </div>
@@ -135,7 +128,7 @@ export default function MobileAgenda() {
   );
 }
 
-function EventCard({ event: e }: { event: EventMini }) {
+function EventCard({ event: e, plain }: { event: EventMini; plain: boolean }) {
   const startHm = new Date(e.start_at).toLocaleTimeString("fr-CA", {
     hour: "2-digit",
     minute: "2-digit"
@@ -155,8 +148,56 @@ function EventCard({ event: e }: { event: EventMini }) {
       ? "border-violet-500/40 bg-violet-500/10"
       : e.event_type === "tournage"
       ? "border-pink-500/40 bg-pink-500/10"
+      : e.event_type === "rdv"
+      ? "border-sky-500/30 bg-sky-500/10"
+      : e.event_type === "formation"
+      ? "border-emerald-500/40 bg-emerald-500/10"
       : "border-brand-800 bg-brand-900";
-  const typeLabel = TYPE_LABELS[e.event_type];
+  const typeLabel = EVENT_TYPE_LABELS[e.event_type];
+
+  if (plain) {
+    // Carte informative (non cliquable) : heure, type, titre, lieu et
+    // description — tout ce que l'employé a besoin de savoir.
+    return (
+      <li className={`rounded-xl border px-3 py-3 ${tone}`}>
+        <div className="flex items-start gap-3">
+          <div className="min-w-[3rem] text-center">
+            {e.all_day ? (
+              <p className="text-xs font-bold text-white">Journée</p>
+            ) : (
+              <>
+                <p className="text-base font-bold text-white">{startHm}</p>
+                {endHm ? (
+                  <p className="text-[10px] text-white/40">{endHm}</p>
+                ) : null}
+              </>
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            {typeLabel ? (
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-white/60">
+                {typeLabel}
+              </p>
+            ) : null}
+            <p className="break-words text-sm font-semibold text-white">
+              {e.title}
+            </p>
+            {e.location ? (
+              <p className="mt-0.5 flex items-center gap-1 text-xs text-white/50">
+                <MapPin className="h-3 w-3 flex-shrink-0" /> {e.location}
+              </p>
+            ) : null}
+            {e.description ? (
+              <p className="mt-1.5 whitespace-pre-wrap text-xs text-white/70">
+                {e.description}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      </li>
+    );
+  }
+
   return (
     <li
       className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-3 ${tone}`}
