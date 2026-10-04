@@ -92,6 +92,7 @@ const TYPE_LABELS: Record<string, string> = {
   chantier: "Chantier",
   visite: "Visite",
   reunion: "Réunion",
+  tournage: "Tournage",
   livraison: "Livraison",
   conge: "Congé / vacances",
   busy: "Indisponible",
@@ -165,6 +166,7 @@ const TYPE_CLASS: Record<string, string> = {
   conge: "bg-orange-500/20 text-orange-300 border-orange-500/40",
   visite: "bg-blue-500/20 text-blue-300 border-blue-500/40",
   reunion: "bg-violet-500/20 text-violet-300 border-violet-500/40",
+  tournage: "bg-pink-500/20 text-pink-300 border-pink-500/40",
   livraison: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40",
   // Bloc opaque (event Prospection masqué). Gris neutre + curseur
   // par défaut (pas cliquable, géré dans onEventClick).
@@ -1602,6 +1604,29 @@ function EventModal({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Employés des autres pôles (ex. vidéo / marketing en Gestion
+  // d'entreprises) : la liste principale ne contient que le volet
+  // Construction, mais un admin doit pouvoir mettre un meeting ou un
+  // tournage dans l'agenda mobile de n'importe quel employé actif.
+  const [autresEmployes, setAutresEmployes] = useState<Employe[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    authedFetch("/api/v1/employes?limit=500")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: unknown) => {
+        if (cancelled || !Array.isArray(rows)) return;
+        const dejaListes = new Set(employes.map((x) => x.id));
+        setAutresEmployes(
+          (rows as (Employe & { active?: boolean })[]).filter(
+            (x) => x.active !== false && !dejaListes.has(x.id)
+          )
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [employes]);
 
   async function save(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -1790,12 +1815,35 @@ function EventModal({
               className="input"
             >
               <option value="">—</option>
-              {employes.map((e) => (
-                <option key={e.id} value={String(e.id)}>
-                  {e.full_name}
-                </option>
-              ))}
+              {autresEmployes.length > 0 ? (
+                <>
+                  <optgroup label="Construction">
+                    {employes.map((e) => (
+                      <option key={e.id} value={String(e.id)}>
+                        {e.full_name}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Autres pôles">
+                    {autresEmployes.map((e) => (
+                      <option key={e.id} value={String(e.id)}>
+                        {e.full_name}
+                      </option>
+                    ))}
+                  </optgroup>
+                </>
+              ) : (
+                employes.map((e) => (
+                  <option key={e.id} value={String(e.id)}>
+                    {e.full_name}
+                  </option>
+                ))
+              )}
             </select>
+            <p className="mt-1 text-xs text-white/60">
+              L&apos;événement apparaît dans l&apos;agenda de l&apos;app
+              mobile de cet employé.
+            </p>
           </div>
 
           <div>
@@ -1943,6 +1991,8 @@ function eventAccent(type: string): string {
       return "bg-blue-500/80 border-blue-400 text-white";
     case "reunion":
       return "bg-violet-500/80 border-violet-400 text-white";
+    case "tournage":
+      return "bg-pink-500/80 border-pink-400 text-white";
     case "livraison":
       return "bg-emerald-500/80 border-emerald-400 text-white";
     case "conge":
