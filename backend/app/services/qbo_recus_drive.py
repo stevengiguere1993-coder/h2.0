@@ -202,6 +202,12 @@ def correspond_dossier(nom_existant: Optional[str], voulu: str) -> int:
     if v == "factures":
         return 1 if (mots & set(MOTS_FACTURES)) else 0
     if v.isdigit():  # année
+        # Un intervalle d'années (« 2026-2027 », « 2025 à 2026 ») est un
+        # dossier d'exercice financier, pas l'année calendrier : on crée
+        # un vrai « 2026 » à côté (Phil 2026-10-04, Immobilier Meuser 1).
+        annees = {m for m in mots if re.fullmatch(r"(19|20)\d{2}", m)}
+        if len(annees) > 1:
+            return 0
         return 1 if v in mots else 0
     if voulu in MOIS_FR:  # mois : nom complet ou abréviation, p. ex. « 10 - Oct 2026 »
         if v in mots:
