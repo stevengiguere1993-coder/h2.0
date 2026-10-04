@@ -178,7 +178,7 @@ RENDER_CRONS.md, DEPLOYMENT.md, CLAUDE.md, docs/  # Docs opérationnelles
 | `backend/app/integrations/{email_graph, ms_graph_meetings, webpush}.py` | Mailer Graph (info@immohorizon.com), rencontres Teams + transcripts, WebPush VAPID |
 | models `user, api_key, audit_log, automation_setting, cron_run, notification, push_subscription, help_request` | Tables socle |
 | `frontend/src/lib/auth.ts` | **Hub API du portail** : token localStorage `hsi_access_token`, `authedFetch` (Bearer + retry cold-start + auto-logout 401), `hasMinRole` |
-| `frontend/src/app/[locale]/app/parametres/` | Administration : réglages, audit log, clés API/MCP, Drive, migration QBO |
+| `frontend/src/app/[locale]/parametres/` | Administration : réglages, audit log, clés API/MCP, Drive, migration QBO |
 | `frontend/src/app/[locale]/{connexion,profil,installer,dev}/` | Login, profil, guide d'installation PWA, mode dev (whitelist emails) |
 
 ### 4.2 Construction (pôle historique, portail `/app`)

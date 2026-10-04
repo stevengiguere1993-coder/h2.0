@@ -570,7 +570,8 @@ async def get_valid_access_token_ou_partage(
     Renvoie (access_token, user_id réellement utilisé)."""
     try:
         token = await get_valid_access_token(db, user_id=user_id)
-    except DriveAuthError:
+    except Exception as exc:  # noqa: BLE001 — jeton perso cassé : on tente le partagé
+        log.warning("Drive: jeton personnel inutilisable (user %s): %s", user_id, exc)
         token = None
     if token:
         return token, user_id
@@ -579,7 +580,8 @@ async def get_valid_access_token_ou_partage(
         return None, None
     try:
         token = await get_valid_access_token(db, user_id=partage)
-    except DriveAuthError:
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Drive: jeton du compte partagé inutilisable (user %s): %s", partage, exc)
         return None, None
     return (token, partage) if token else (None, None)
 

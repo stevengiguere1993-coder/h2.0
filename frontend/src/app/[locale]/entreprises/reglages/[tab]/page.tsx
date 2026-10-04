@@ -19,5 +19,5 @@ export default async function Redirection({
   }
   const q = qs.toString();
   void tab;
-  redirect(`${prefix}/parametres/audit${q ? `?${q}` : ""}`);
+  redirect(`${prefix}/parametres/reglages/${tab || "entreprises"}${q ? `?${q}` : ""}`);
 }

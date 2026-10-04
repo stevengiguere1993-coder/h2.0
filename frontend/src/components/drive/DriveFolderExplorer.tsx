@@ -1707,7 +1707,7 @@ function ErrorState({
           // Route hors de l'union typée de next-intl (pathnames curés) :
           // cast `as any` conforme à la convention déjà employée pour ce
           // lien dans app/parametres/page.tsx et EntityDriveSection.tsx.
-          href={"/app/parametres/drive" as any}
+          href={"/parametres/drive" as any}
           className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600"
         >
           Aller à Paramètres → Drive

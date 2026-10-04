@@ -51,7 +51,7 @@ partager).
   - `GET  /callback` — endpoint public appelé par Google.
   - `GET  /status` — `{connected, google_email, expires_at}`.
   - `POST /disconnect` — révocation + suppression.
-- Page `/app/parametres/drive` avec la section « Connexion Google Drive »
+- Page `/parametres/drive` avec la section « Connexion Google Drive »
   active, et 4 sections roadmap grisées.
 
 Phil peut connecter son compte Google et voir son email associé. C'est
@@ -155,7 +155,7 @@ Sur le service `h2-0` (backend Render), ajouter :
 ### 4. Premier connect
 
 1. Redéployer le backend après ajout des env vars.
-2. Aller sur `https://kratos.immohorizon.com/fr/app/parametres/drive`.
+2. Aller sur `https://kratos.immohorizon.com/fr/parametres/drive`.
 3. Cliquer sur « Connecter mon compte Google ».
 4. Choisir le compte Google sur l'écran de consentement.
 5. Accepter les permissions (lecture/écriture des fichiers créés ou

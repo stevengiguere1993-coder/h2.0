@@ -103,9 +103,9 @@ async def auth_callback(
     frontend = settings.frontend_url.rstrip("/")
 
     def _redirect(reason: str) -> RedirectResponse:
-        # Frontend cible : /app/parametres/drive?drive=<reason>
+        # Frontend cible : /parametres/drive?drive=<reason>
         return RedirectResponse(
-            f"{frontend}/app/parametres/drive?drive={reason}",
+            f"{frontend}/parametres/drive?drive={reason}",
             status_code=status.HTTP_302_FOUND,
         )
 
@@ -138,11 +138,17 @@ async def auth_status(
     row = await drive_oauth.get_token_row(db, user_id=user.id)
 
     async def _partage() -> Optional[str]:
-        token, uid = await drive_oauth.get_valid_access_token_ou_partage(
-            db, user_id=user.id
-        )
-        if token and uid is not None and uid != user.id:
-            return await drive_oauth.get_user_email(db, user_id=uid)
+        # Jamais d'erreur 500 ici : un jeton partagé cassé (révoqué, clé
+        # de chiffrement changée, Google injoignable) affiche simplement
+        # « Non connecté » (page Drive en erreur http_500, Phil 2026-10-04).
+        try:
+            token, uid = await drive_oauth.get_valid_access_token_ou_partage(
+                db, user_id=user.id
+            )
+            if token and uid is not None and uid != user.id:
+                return await drive_oauth.get_user_email(db, user_id=uid)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Drive status: repli compte partagé impossible: %s", exc)
         return None
 
     if row is None:

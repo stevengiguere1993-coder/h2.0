@@ -77,7 +77,7 @@ async def push_client_to_qbo(
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "QuickBooks n'est pas connecté. Connecte une compagnie "
-            "depuis /app/parametres.",
+            "depuis /parametres.",
         )
 
     # Si déjà synchronisé, court-circuit : on retourne l'id courant

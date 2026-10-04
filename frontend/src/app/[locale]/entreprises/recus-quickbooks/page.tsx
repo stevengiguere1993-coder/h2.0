@@ -9,9 +9,11 @@ import {
   Loader2,
   Play,
   RefreshCw,
-  Search
+  Search,
+  X
 } from "lucide-react";
 
+import { DriveFolderExplorer } from "@/components/drive/DriveFolderExplorer";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { QGTopbar } from "../layout";
@@ -126,6 +128,16 @@ type Etat = {
   debut_par_defaut: string;
 };
 
+type DossierFactures = {
+  entreprise_id: number;
+  name: string;
+  racine_id: string | null;
+  racine_nom: string | null;
+  factures_id: string | null;
+  factures_nom: string | null;
+  folder_id: string | null;
+};
+
 type Journal = {
   id: number;
   entreprise_id: number | null;
@@ -198,6 +210,30 @@ export default function RecusQuickbooksPage() {
   const [lancement, setLancement] = useState(false);
   const [journal, setJournal] = useState<Journal[] | null>(null);
   const [connecting, setConnecting] = useState<number | null>(null);
+  /** Explorateur Drive ouvert sur le « Factures » d'une entreprise (clic
+   *  sur son nom — Phil 2026-10-04). */
+  const [explorer, setExplorer] = useState<DossierFactures | null>(null);
+  const [explorerLoading, setExplorerLoading] = useState<number | null>(null);
+
+  async function ouvrirDrive(e: EntrepriseEtat) {
+    setExplorerLoading(e.entreprise_id);
+    try {
+      const r = await authedFetch(
+        `/api/v1/qbo-recus-drive/entreprises/${e.entreprise_id}/dossier-factures`
+      );
+      if (!r.ok) throw new Error(`http_${r.status}`);
+      const d = (await r.json()) as DossierFactures;
+      if (!d.folder_id) {
+        setErr(`${e.name} : aucun dossier Drive lié (fiche → Documents Drive).`);
+        return;
+      }
+      setExplorer(d);
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : "Erreur");
+    } finally {
+      setExplorerLoading(null);
+    }
+  }
   const [runs, setRuns] = useState<RunRecent[]>([]);
   const [annulation, setAnnulation] = useState<string | null>(null);
 
@@ -502,13 +538,32 @@ export default function RecusQuickbooksPage() {
                         />
                       </td>
                       <td className="px-3 py-2 font-semibold text-white">
-                        <Link
-                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                          href={`/entreprises/${e.entreprise_id}` as any}
-                          className="hover:text-accent-500 hover:underline"
-                        >
-                          {e.name}
-                        </Link>
+                        <span className="inline-flex items-center gap-1.5">
+                          {e.drive_folder_id ? (
+                            <button
+                              type="button"
+                              onClick={() => void ouvrirDrive(e)}
+                              disabled={explorerLoading === e.entreprise_id}
+                              className="text-left hover:text-accent-500 hover:underline"
+                              title="Ouvrir le Drive de cette entreprise à partir de Factures"
+                            >
+                              {explorerLoading === e.entreprise_id ? (
+                                <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />
+                              ) : null}
+                              {e.name}
+                            </button>
+                          ) : (
+                            <span>{e.name}</span>
+                          )}
+                          <Link
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            href={`/entreprises/${e.entreprise_id}` as any}
+                            className="text-white/60 hover:text-accent-500"
+                            title="Ouvrir la fiche de l'entreprise"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                          </Link>
+                        </span>
                       </td>
                       <td className="px-3 py-2 text-xs">
                         {e.qbo_connectee ? (
@@ -592,6 +647,46 @@ export default function RecusQuickbooksPage() {
             </div>
           )}
         </section>
+
+        {explorer && explorer.folder_id ? (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3"
+            onClick={() => setExplorer(null)}
+          >
+            <div
+              className="flex max-h-[92vh] w-full max-w-5xl flex-col rounded-2xl border border-brand-800 bg-brand-950 shadow-xl"
+              onClick={(ev) => ev.stopPropagation()}
+            >
+              <div className="flex items-center justify-between gap-2 border-b border-brand-800 px-4 py-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-white">
+                    <FolderOpen className="mr-1.5 inline h-4 w-4 text-emerald-600" />
+                    {explorer.name}
+                    {explorer.factures_nom ? (
+                      <span className="text-white/70"> / {explorer.factures_nom}</span>
+                    ) : null}
+                  </p>
+                  {!explorer.factures_id ? (
+                    <p className="text-xs text-amber-200">
+                      Aucun dossier « Factures » encore : ouverture à la racine de l&apos;entreprise.
+                    </p>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setExplorer(null)}
+                  className="rounded-md p-1.5 text-white/70 hover:bg-brand-900 hover:text-white"
+                  aria-label="Fermer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                <DriveFolderExplorer folderId={explorer.folder_id} />
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {/* Étape 2 / 3 : simulation puis rattrapage */}
         <section className="mt-4 rounded-2xl border border-brand-800 bg-brand-900 p-5">

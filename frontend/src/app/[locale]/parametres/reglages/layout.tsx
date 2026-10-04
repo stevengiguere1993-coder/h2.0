@@ -3,8 +3,9 @@
 import { usePathname } from "next/navigation";
 import { Building2, Calendar, Users } from "lucide-react";
 
+import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
-import { EntreprisesTopbar } from "../layout";
+import { useAppLayout } from "../layout";
 
 type Tab = {
   href: string;
@@ -13,9 +14,9 @@ type Tab = {
 };
 
 const TABS: Tab[] = [
-  { href: "/entreprises/reglages/entreprises", label: "Entreprises", icon: Building2 },
-  { href: "/entreprises/reglages/calendriers", label: "Calendriers", icon: Calendar },
-  { href: "/entreprises/reglages/equipe", label: "Équipe", icon: Users }
+  { href: "/parametres/reglages/entreprises", label: "Entreprises", icon: Building2 },
+  { href: "/parametres/reglages/calendriers", label: "Calendriers", icon: Calendar },
+  { href: "/parametres/reglages/equipe", label: "Équipe", icon: Users }
 ];
 
 export default function ReglagesLayout({
@@ -24,6 +25,7 @@ export default function ReglagesLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname() || "";
+  const { onOpenSidebar } = useAppLayout();
 
   function isActive(href: string) {
     return pathname.includes(href);
@@ -31,13 +33,13 @@ export default function ReglagesLayout({
 
   return (
     <>
-      <EntreprisesTopbar
+      <AppTopbar
         breadcrumbs={[
-          { label: "Gestion d'entreprises", href: "/entreprises" },
-          { label: "Réglages" }
+          { label: "Paramètres", href: "/parametres" },
+          { label: "Gestion d'entreprises" }
         ]}
+        onOpenSidebar={onOpenSidebar}
       />
-      {/* Tabs horizontaux */}
       <nav
         className="flex items-center gap-1 overflow-x-auto px-4 lg:px-6"
         style={{
@@ -55,7 +57,7 @@ export default function ReglagesLayout({
               href={t.href as any}
               className="relative inline-flex items-center gap-2 px-4 py-3 text-sm font-medium transition"
               style={{
-                color: active ? "var(--qg-accent)" : "rgba(245,245,247,0.6)",
+                color: active ? "var(--qg-accent)" : "var(--qg-text-muted)",
                 borderBottom: active
                   ? "2px solid var(--qg-accent)"
                   : "2px solid transparent",
