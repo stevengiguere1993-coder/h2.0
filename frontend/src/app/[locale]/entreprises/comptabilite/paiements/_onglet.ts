@@ -8,5 +8,5 @@
 export const ONGLET_PAIEMENTS: { href: string; label: string; aVenir: boolean } = {
   href: "/entreprises/comptabilite/paiements",
   label: "Paiements",
-  aVenir: true
+  aVenir: false
 };

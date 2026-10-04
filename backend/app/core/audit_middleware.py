@@ -49,7 +49,11 @@ _EXCLUS = (
 )
 
 _CLES_SENSIBLES = re.compile(
-    r"password|passe|api_key|apikey|token|secret|cle|key$", re.I
+    r"password|passe|api_key|apikey|token|secret|cle|key$"
+    # Paiements fournisseurs : numéro de compte bancaire, code de double
+    # authentification.
+    r"|numero_compte|code_2fa",
+    re.I,
 )
 
 _MAX_EXTRAIT = 700

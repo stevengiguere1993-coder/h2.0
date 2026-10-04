@@ -287,6 +287,24 @@ CAPABILITIES: list[Capability] = [
         category="Entreprises",
         default_min_role="admin",
     ),
+    # ─── Paiements fournisseurs (Comptabilité → Paiements, Steven
+    # 2026-10-04) : approuver un lot ou des coordonnées bancaires de
+    # fournisseur, modifier les réglages du dépôt direct, créer le fichier
+    # à transmettre à Desjardins. Défaut owner (section en développement) ;
+    # la double authentification est exigée EN PLUS, et la personne qui a
+    # préparé ne peut jamais approuver.
+    Capability(
+        id="paiements.approuver",
+        label="Approuver les paiements fournisseurs",
+        description=(
+            "Approuver les lots de paiement et les coordonnées bancaires des "
+            "fournisseurs, modifier les réglages du dépôt direct et créer le "
+            "fichier à transmettre à Desjardins (double authentification "
+            "exigée)."
+        ),
+        category="Comptabilité",
+        default_min_role="owner",
+    ),
     # ─── Accès à des pôles/pages sensibles (remplace les listes d'emails
     # codées en dur côté client — P-05d). Défaut « admin » = comportement
     # actuel (l'accès était owner/admin + quelques emails). Exposé au front
