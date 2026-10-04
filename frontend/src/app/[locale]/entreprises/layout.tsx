@@ -10,7 +10,6 @@ import { usePathname } from "next/navigation";
 import {
   ArrowDownAZ,
   Brain,
-  Receipt,
   Briefcase,
   TrendingUp,
   Calendar,
@@ -304,12 +303,8 @@ export default function EntreprisesLayout({
           }
         ]
       : []),
-    // Après Abonnements (retour Phil 2026-10-04).
-    {
-      href: "/entreprises/recus-quickbooks",
-      label: "Reçus QuickBooks → Drive",
-      icon: Receipt
-    }
+    // « Reçus QuickBooks → Drive » vit sous Paramètres → Gestion documentaire
+    // Drive (Steven 2026-10-04) ; l'ancienne adresse redirige.
   ];
 
   function isActive(href: string) {
@@ -578,7 +573,7 @@ function NoAccess() {
     <div className="mx-auto mt-20 max-w-md rounded-2xl border border-rose-500/40 bg-rose-500/5 p-6 text-center">
       <h2 className="text-lg font-bold text-white">Accès refusé</h2>
       <p className="mt-2 text-sm text-white/60">
-        Ton compte n&apos;a pas accès au volet « Gestion d&apos;entreprises ».
+        Ton compte n&apos;a pas accès au volet « Entreprises ».
       </p>
     </div>
   );

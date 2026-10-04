@@ -537,7 +537,7 @@ export default function LogementDetailPage({
     <>
       <ImmobilierTopbar
         breadcrumbs={[
-          { label: "Gestion immobilière", href: "/immobilier" },
+          { label: "Immobilier", href: "/immobilier" },
           { label: "Logements", href: "/immobilier/logements" },
           { label: lg ? `Logement ${lg.numero}` : "Logement" }
         ]}

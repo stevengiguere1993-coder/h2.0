@@ -23,6 +23,7 @@ import {
   Map as MapIcon,
   Phone,
   Plug,
+  Receipt,
   RefreshCw,
   Repeat,
   ScrollText,
@@ -156,8 +157,8 @@ export const SECTIONS: Section[] = [
   },
   {
     key: "entreprise",
-    label: "Gestion d'entreprise",
-    title: "Gestion d'entreprise & comptabilité",
+    label: "Entreprises",
+    title: "Entreprises & comptabilité",
     icon: Building2,
     volet: "entreprises",
     cards: [
@@ -188,13 +189,19 @@ export const SECTIONS: Section[] = [
         href: "/parametres/qbo-migration",
         icon: RefreshCw,
         minRole: "admin"
+      },
+      {
+        title: "Reçus QuickBooks → Drive",
+        desc: "Copie des reçus de dépense de chaque entreprise dans son Drive (Factures / année / mois), et son Drive à partir de Factures.",
+        href: "/parametres/drive/recus-quickbooks",
+        icon: Receipt
       }
     ]
   },
   {
     key: "immobilier",
-    label: "Gestion immobilière",
-    title: "Gestion immobilière",
+    label: "Immobilier",
+    title: "Immobilier",
     icon: Home,
     volet: "immobilier",
     cards: [

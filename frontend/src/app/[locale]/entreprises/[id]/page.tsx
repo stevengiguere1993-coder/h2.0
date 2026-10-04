@@ -388,7 +388,7 @@ export default function EntrepriseDetailPage() {
       <>
         <EntreprisesTopbar
           breadcrumbs={[
-            { label: "Gestion d'entreprises", href: "/entreprises" },
+            { label: "Entreprises", href: "/entreprises" },
             { label: idStr }
           ]}
         />
@@ -409,7 +409,7 @@ export default function EntrepriseDetailPage() {
     <>
       <EntreprisesTopbar
         breadcrumbs={[
-          { label: "Gestion d'entreprises", href: "/entreprises" },
+          { label: "Entreprises", href: "/entreprises" },
           { label: ent.name }
         ]}
       />

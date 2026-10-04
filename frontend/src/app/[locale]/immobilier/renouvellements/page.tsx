@@ -1169,7 +1169,7 @@ Nouvelle date de fin :`,
     <>
       <ImmobilierTopbar
         breadcrumbs={[
-          { label: "Gestion immobilière", href: "/immobilier" },
+          { label: "Immobilier", href: "/immobilier" },
           { label: "Suivis annuels" }
         ]}
       />

@@ -1604,29 +1604,6 @@ function EventModal({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Employés des autres pôles (ex. vidéo / marketing en Gestion
-  // d'entreprises) : la liste principale ne contient que le volet
-  // Construction, mais un admin doit pouvoir mettre un meeting ou un
-  // tournage dans l'agenda mobile de n'importe quel employé actif.
-  const [autresEmployes, setAutresEmployes] = useState<Employe[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    authedFetch("/api/v1/employes?limit=500")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((rows: unknown) => {
-        if (cancelled || !Array.isArray(rows)) return;
-        const dejaListes = new Set(employes.map((x) => x.id));
-        setAutresEmployes(
-          (rows as (Employe & { active?: boolean })[]).filter(
-            (x) => x.active !== false && !dejaListes.has(x.id)
-          )
-        );
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [employes]);
 
   async function save(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -1815,35 +1792,12 @@ function EventModal({
               className="input"
             >
               <option value="">—</option>
-              {autresEmployes.length > 0 ? (
-                <>
-                  <optgroup label="Construction">
-                    {employes.map((e) => (
-                      <option key={e.id} value={String(e.id)}>
-                        {e.full_name}
-                      </option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Autres pôles">
-                    {autresEmployes.map((e) => (
-                      <option key={e.id} value={String(e.id)}>
-                        {e.full_name}
-                      </option>
-                    ))}
-                  </optgroup>
-                </>
-              ) : (
-                employes.map((e) => (
-                  <option key={e.id} value={String(e.id)}>
-                    {e.full_name}
-                  </option>
-                ))
-              )}
+              {employes.map((e) => (
+                <option key={e.id} value={String(e.id)}>
+                  {e.full_name}
+                </option>
+              ))}
             </select>
-            <p className="mt-1 text-xs text-white/60">
-              L&apos;événement apparaît dans l&apos;agenda de l&apos;app
-              mobile de cet employé.
-            </p>
           </div>
 
           <div>

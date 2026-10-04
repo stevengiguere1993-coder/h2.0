@@ -126,3 +126,105 @@ def test_feuille_par_tache(client, auth_headers, employee_headers, employee_id, 
         headers=auth_headers,
         json={"user_id": employee_id, "company_ids": []},
     )
+
+
+def test_garde_fous_lignes_et_grille(client, auth_headers, employee_headers, employee_id, run):
+    """Retours de relecture : la grille obéit aux compagnies assignées, une
+    tâche référencée doit exister et être assignée à l'employé, et des
+    titres blancs ne vident pas une feuille saisie par la grille."""
+    async def _seed():
+        async with TestSessionLocal() as s:
+            e = Entreprise(name="Horizon Garde-fous Test")
+            s.add(e)
+            await s.flush()
+            autre = EntrepriseTache(entreprise_id=e.id, title="Tâche d'un collègue")
+            s.add(autre)
+            await s.commit()
+            return autre.id
+
+    tache_collegue = run(_seed())
+
+    # Feuille d'une AUTRE période (vierge), saisie par la grille.
+    r = client.get(
+        "/api/v1/timesheets/resolve?period_start=2026-03-02", headers=employee_headers
+    )
+    assert r.status_code == 200, r.text
+    ts = r.json()
+    tsid = ts["id"]
+    cie, autre_cie = ts["lignes"][0]["company_id"], ts["lignes"][1]["company_id"]
+
+    r = client.put(
+        f"/api/v1/timesheets/{tsid}/entries",
+        headers=employee_headers,
+        json={"entries": [{"company_id": cie, "day_index": 0, "hours": 8}]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["total_heures"] == 8
+
+    # Des lignes au titre blanc n'effacent pas la grille.
+    r = client.put(
+        f"/api/v1/timesheets/{tsid}/taches",
+        headers=employee_headers,
+        json={"lignes": [{"day_index": 0, "company_id": cie, "title": "   ", "hours": 3}]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["total_heures"] == 8
+    assert r.json()["mode_taches"] is False
+
+    # Tâche inexistante ou non assignée à l'employé : la ligne est gardée
+    # comme tâche manuelle (pas de 500, pas de lien vers la tâche d'autrui).
+    for tid in (999_999_999, tache_collegue):
+        r = client.put(
+            f"/api/v1/timesheets/{tsid}/taches",
+            headers=employee_headers,
+            json={"lignes": [{"day_index": 0, "company_id": cie,
+                              "entreprise_tache_id": tid, "title": "x", "hours": 1}]},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["taches"][0]["entreprise_tache_id"] is None
+        assert r.json()["total_heures"] == 1
+    # Le gestionnaire peut référencer une tâche existante de quelqu'un d'autre.
+    r = client.put(
+        f"/api/v1/timesheets/{tsid}/taches",
+        headers=auth_headers,
+        json={"lignes": [{"day_index": 0, "company_id": cie,
+                          "entreprise_tache_id": tache_collegue, "title": "x", "hours": 1}]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["taches"][0]["entreprise_tache_id"] == tache_collegue
+    r = client.put(
+        f"/api/v1/timesheets/{tsid}/taches", headers=auth_headers, json={"lignes": []}
+    )
+    assert r.status_code == 200 and r.json()["total_heures"] == 0
+
+    # Compagnies assignées : la grille refuse aussi les autres compagnies.
+    r = client.put(
+        "/api/v1/timesheets/user-companies",
+        headers=auth_headers,
+        json={"user_id": employee_id, "company_ids": [cie]},
+    )
+    assert r.status_code == 200, r.text
+    r = client.put(
+        f"/api/v1/timesheets/{tsid}/entries",
+        headers=employee_headers,
+        json={"entries": [{"company_id": autre_cie, "day_index": 1, "hours": 2}]},
+    )
+    assert r.status_code == 400, r.text
+    r = client.put(
+        f"/api/v1/timesheets/{tsid}/entries",
+        headers=employee_headers,
+        json={"entries": [{"company_id": cie, "day_index": 1, "hours": 2}]},
+    )
+    assert r.status_code == 200, r.text
+    # Compagnie inexistante → 404 pour le gestionnaire.
+    r = client.put(
+        f"/api/v1/timesheets/{tsid}/entries",
+        headers=auth_headers,
+        json={"entries": [{"company_id": 999_999, "day_index": 1, "hours": 2}]},
+    )
+    assert r.status_code == 404, r.text
+    client.put(
+        "/api/v1/timesheets/user-companies",
+        headers=auth_headers,
+        json={"user_id": employee_id, "company_ids": []},
+    )

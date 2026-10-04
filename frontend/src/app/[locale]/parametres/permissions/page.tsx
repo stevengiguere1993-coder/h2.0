@@ -89,8 +89,8 @@ const ROLE_LABELS: Record<string, string> = {
 //: Volets éditables par utilisateur (mêmes clés que le backend).
 const EDITABLE_VOLETS: { key: string; label: string }[] = [
   { key: "construction", label: "Construction" },
-  { key: "entreprises", label: "Gestion d'entreprise" },
-  { key: "immobilier", label: "Gestion immobilière" },
+  { key: "entreprises", label: "Entreprises" },
+  { key: "immobilier", label: "Immobilier" },
   { key: "prospection", label: "Prospection" },
   { key: "investisseur", label: "Investisseurs" },
   { key: "developpement_logiciel", label: "Dév. logiciel" },

@@ -1703,9 +1703,9 @@ async def facturer_solde_qbo(
         raise HTTPException(
             status_code=503,
             detail=(
-                "Le QuickBooks de Gestion d'entreprise n'est pas connecté. "
+                "Le QuickBooks du pôle Entreprises n'est pas connecté. "
                 "Va dans Paramètres → Comptabilité → « QuickBooks — autres "
-                "pôles » et connecte la carte Gestion d'entreprise."
+                "pôles » et connecte la carte Entreprises."
             ),
         )
 
@@ -1884,6 +1884,12 @@ async def replace_entries(
             ts.notes_json = json.dumps(payload.notes, ensure_ascii=False)
         await db.commit()
         return await _build_detail(db, ts, user)
+    # Même règle que les lignes par tâche : un employé n'impute qu'aux
+    # compagnies de SA feuille (compagnies assignées comprises) ; un
+    # gestionnaire peut viser n'importe quelle compagnie existante.
+    await _verifier_compagnies(
+        db, ts, user, {e.company_id for e in payload.entries}
+    )
     # Remplacement complet de la grille.
     await db.execute(
         delete(TimesheetEntry).where(
@@ -2019,6 +2025,59 @@ async def reopen_timesheet(
 # ── Feuille par tâche (Steven 2026-10-04) ──────────────────────────────
 
 
+async def _verifier_compagnies(db, ts: Timesheet, user: User, ids: set) -> None:
+    """Un employé n'impute qu'aux compagnies visibles dans SA feuille
+    (400 sinon) ; un gestionnaire à toute compagnie existante (404)."""
+    allowed = {c.id for c in await _load_companies_for(db, ts)}
+    hors = set(ids) - allowed
+    if not hors:
+        return
+    if not _is_manager(user):
+        raise HTTPException(
+            status_code=400,
+            detail="Compagnie non disponible dans cette feuille",
+        )
+    found = set(
+        (
+            await db.execute(
+                select(TimesheetCompany.id).where(
+                    TimesheetCompany.id.in_(list(hors))
+                )
+            )
+        ).scalars().all()
+    )
+    if found != hors:
+        raise HTTPException(status_code=404, detail="Compagnie introuvable")
+
+
+async def _taches_referencables(
+    db, ts: Timesheet, user: User, lignes: List["TacheLigneIn"]
+) -> set:
+    """Ids de tâches que les lignes peuvent référencer : la tâche doit
+    exister (sinon IntegrityError → 500 sur PostgreSQL) et, pour un
+    employé, lui être assignée — la même règle que l'import. Une ligne
+    dont la tâche a disparu ou n'est pas la sienne est gardée comme tâche
+    saisie à la main (même esprit que le ``ondelete=SET NULL``)."""
+    from app.models.entreprise_tache import EntrepriseTache
+    from app.models.entreprise_tache_assignee import EntrepriseTacheAssignee
+
+    ids = {ln.entreprise_tache_id for ln in lignes if ln.entreprise_tache_id}
+    if not ids:
+        return set()
+    q = select(EntrepriseTache.id).where(EntrepriseTache.id.in_(list(ids)))
+    if not _is_manager(user):
+        via_join = select(EntrepriseTacheAssignee.tache_id).where(
+            EntrepriseTacheAssignee.user_id == ts.user_id
+        )
+        q = q.where(
+            or_(
+                EntrepriseTache.assignee_user_id == ts.user_id,
+                EntrepriseTache.id.in_(via_join),
+            )
+        )
+    return set((await db.execute(q)).scalars().all())
+
+
 @router.put("/{timesheet_id}/taches", response_model=TimesheetDetail)
 async def replace_task_lines(
     timesheet_id: int,
@@ -2033,46 +2092,32 @@ async def replace_task_lines(
     if not ts:
         raise HTTPException(status_code=404, detail="Feuille introuvable")
     _assert_editable(ts, user)
-    allowed = {c.id for c in await _load_companies_for(db, ts)}
-    if not _is_manager(user):
-        bad = {ln.company_id for ln in payload.lignes} - allowed
-        if bad:
-            raise HTTPException(
-                status_code=400,
-                detail="Compagnie non disponible dans cette feuille",
-            )
-    else:
-        ids = {ln.company_id for ln in payload.lignes} - allowed
-        if ids:
-            found = set(
-                (
-                    await db.execute(
-                        select(TimesheetCompany.id).where(
-                            TimesheetCompany.id.in_(ids)
-                        )
-                    )
-                ).scalars().all()
-            )
-            if found != ids:
-                raise HTTPException(
-                    status_code=404, detail="Compagnie introuvable"
-                )
+    await _verifier_compagnies(
+        db, ts, user, {ln.company_id for ln in payload.lignes}
+    )
+    referencables = await _taches_referencables(db, ts, user, payload.lignes)
     had_lines = bool(await _load_task_lines(db, ts.id))
     await db.execute(
         delete(TimesheetTaskLine).where(
             TimesheetTaskLine.timesheet_id == ts.id
         )
     )
+    inserted = 0
     for i, ln in enumerate(payload.lignes):
         title = ln.title.strip()
         if not title:
             continue
+        inserted += 1
         db.add(
             TimesheetTaskLine(
                 timesheet_id=ts.id,
                 day_index=ln.day_index,
                 company_id=ln.company_id,
-                entreprise_tache_id=ln.entreprise_tache_id,
+                entreprise_tache_id=(
+                    ln.entreprise_tache_id
+                    if ln.entreprise_tache_id in referencables
+                    else None
+                ),
                 title=title[:255],
                 hours=round(float(ln.hours), 2),
                 position=i,
@@ -2080,8 +2125,9 @@ async def replace_task_lines(
         )
     await db.flush()
     # Grille dérivée — sauf feuille « grille » qui n'a jamais eu de
-    # lignes et qu'on ne touche pas pour une liste vide.
-    if payload.lignes or had_lines:
+    # lignes et qu'on ne touche pas quand rien n'est inséré (liste vide
+    # ou titres blancs) : ses heures saisies à la main restent.
+    if inserted or had_lines:
         await _rebuild_entries_from_lines(db, ts)
     if payload.notes is not None:
         ts.notes_json = json.dumps(payload.notes, ensure_ascii=False)

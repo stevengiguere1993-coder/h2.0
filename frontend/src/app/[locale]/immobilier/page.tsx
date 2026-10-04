@@ -200,7 +200,7 @@ export default function ImmobilierDashboard() {
   return (
     <>
       <ImmobilierTopbar
-        breadcrumbs={[{ label: "Gestion immobilière" }]}
+        breadcrumbs={[{ label: "Immobilier" }]}
         rightSlot={
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -219,7 +219,7 @@ export default function ImmobilierDashboard() {
           </span>
           <div>
             <h1 className="text-2xl font-bold text-white">
-              Gestion immobilière
+              Immobilier
             </h1>
             <p className="mt-1 max-w-2xl text-sm text-white/60">
               Vue d&apos;ensemble du portefeuille : occupation, revenus

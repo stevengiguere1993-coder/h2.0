@@ -650,7 +650,7 @@ export default function LocataireDetailPage({
     <>
       <ImmobilierTopbar
         breadcrumbs={[
-          { label: "Gestion immobilière", href: "/immobilier" },
+          { label: "Immobilier", href: "/immobilier" },
           { label: "Locataires", href: "/immobilier/locataires" },
           { label: loc?.full_name || "Locataire" }
         ]}

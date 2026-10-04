@@ -79,7 +79,7 @@ def _require_volet(user: CurrentUser) -> None:
     if volets is None or "entreprises" not in volets:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Volet « Gestion d'entreprises » non autorisé.",
+            detail="Volet « Entreprises » non autorisé.",
         )
 
 

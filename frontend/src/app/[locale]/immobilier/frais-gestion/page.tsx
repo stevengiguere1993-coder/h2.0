@@ -478,7 +478,7 @@ export default function FacturationImmoPage() {
     <>
       <ImmobilierTopbar
         breadcrumbs={[
-          { label: "Gestion immobilière", href: "/immobilier" },
+          { label: "Immobilier", href: "/immobilier" },
           { label: "Facturation" }
         ]}
       />

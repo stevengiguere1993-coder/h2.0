@@ -661,13 +661,13 @@ function QboAccountMapSection() {
 const OTHER_QBO_SCOPES: { scope: string; label: string; hint: string }[] = [
   {
     scope: "entreprise",
-    label: "Gestion d'entreprise",
-    hint: "Compagnie QuickBooks du pôle Gestion d'entreprise."
+    label: "Entreprises",
+    hint: "Compagnie QuickBooks du pôle Entreprises."
   },
   {
     scope: "immobilier",
     label: "Gestion locative",
-    hint: "Compagnie QuickBooks du pôle Gestion immobilière (locatif)."
+    hint: "Compagnie QuickBooks du pôle Immobilier (locatif)."
   }
 ];
 

@@ -154,13 +154,18 @@ export function TachesEditor({
   const total = Math.round(perDay.reduce((a, b) => a + b, 0) * 100) / 100;
 
   const dayLines = lignes.filter((l) => l.day_index === day);
+  // Aucune compagnie visible (toutes retirées / désactivées) : on ne crée
+  // pas de ligne orpheline (company_id 0 serait refusé à l'enregistrement).
+  const sansCompagnie = companies.length === 0;
   const defaultCompany = companies[0]?.id ?? 0;
 
   const update = (key: string, patch: Partial<TacheLigne>) =>
     onChange(lignes.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   const remove = (key: string) => onChange(lignes.filter((l) => l.key !== key));
   const addManual = () =>
-    onChange([
+    sansCompagnie
+      ? undefined
+      : onChange([
       ...lignes,
       {
         key: newKey(),
@@ -172,6 +177,10 @@ export function TachesEditor({
       }
     ]);
   const addImported = (taches: TacheImportable[]) => {
+    if (sansCompagnie) {
+      setImporting(false);
+      return;
+    }
     const known = new Set(companies.map((c) => c.id));
     onChange([
       ...lignes,
@@ -255,16 +264,29 @@ export function TachesEditor({
                 type="button"
                 className={BTN_GHOST}
                 onClick={() => setImporting(true)}
-                title="Reprendre les tâches Gestion d'entreprises qui te sont assignées"
+                disabled={sansCompagnie}
+                title="Reprendre les tâches du pôle Entreprises qui te sont assignées"
               >
                 <Download className="h-4 w-4" /> Importer mes tâches
               </button>
-              <button type="button" className={BTN_PRIMARY} onClick={addManual}>
+              <button
+                type="button"
+                className={BTN_PRIMARY}
+                onClick={addManual}
+                disabled={sansCompagnie}
+              >
                 <Plus className="h-4 w-4" /> Ajouter une tâche
               </button>
             </div>
           )}
         </div>
+
+        {sansCompagnie && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
+            Aucune entreprise n&apos;est disponible dans cette feuille. Demande à
+            un gestionnaire d&apos;en assigner (bouton « Compagnies de … »).
+          </div>
+        )}
 
         {dayLines.length > 0 && (
           <div className="space-y-2">
@@ -289,7 +311,7 @@ export function TachesEditor({
                   />
                   {l.entreprise_tache_id ? (
                     <div className="mt-0.5 px-1 text-[11px] text-[var(--qg-text-faint)]">
-                      Importée des tâches Gestion d&apos;entreprises
+                      Importée des tâches du pôle Entreprises
                     </div>
                   ) : null}
                 </div>
@@ -435,7 +457,7 @@ function ImportModal({
           <div>
             <div className="text-base font-semibold">Importer mes tâches</div>
             <div className="text-xs text-[var(--qg-text-muted)]">
-              Tâches Gestion d&apos;entreprises qui te sont assignées — en cours ou
+              Tâches du pôle Entreprises qui te sont assignées — en cours ou
               terminées pendant la période.
             </div>
           </div>
@@ -476,7 +498,7 @@ function ImportModal({
                     className="flex w-full items-start gap-3 px-1 py-2.5 text-left hover:bg-[var(--qg-bg)]/40 disabled:cursor-default disabled:opacity-50"
                   >
                     {on ? (
-                      <CheckSquare className="mt-0.5 h-4 w-4 shrink-0 text-[var(--qg-accent)]" />
+                      <CheckSquare className="mt-0.5 h-4 w-4 shrink-0 text-accent-500" />
                     ) : (
                       <Square className="mt-0.5 h-4 w-4 shrink-0 text-[var(--qg-text-faint)]" />
                     )}
@@ -621,7 +643,7 @@ export function UserCompaniesModal({
                     className="flex w-full items-center gap-3 px-1 py-2.5 text-left text-sm hover:bg-[var(--qg-bg)]/40"
                   >
                     {on ? (
-                      <CheckSquare className="h-4 w-4 shrink-0 text-[var(--qg-accent)]" />
+                      <CheckSquare className="h-4 w-4 shrink-0 text-accent-500" />
                     ) : (
                       <Square className="h-4 w-4 shrink-0 text-[var(--qg-text-faint)]" />
                     )}

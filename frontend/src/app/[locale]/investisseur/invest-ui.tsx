@@ -1178,7 +1178,7 @@ export function QboReelsPanel({ fetchPath }: { fetchPath: string }) {
       </div>
       <p className="mb-3 text-[11px] text-white/35">
         Importations QuickBooks du projet lié dans la section
-        optimisation (gestion d&apos;entreprise)
+        optimisation (volet Entreprises)
         {reels?.statut === "connecte" && reels.projet_nom
           ? ` — ${reels.projet_nom}`
           : ""}
@@ -1201,7 +1201,7 @@ export function QboReelsPanel({ fetchPath }: { fetchPath: string }) {
         naBox(
           "Non applicable — pas encore rentré",
           "Cette compagnie n'a aucun projet dans la section optimisation " +
-            "de gestion d'entreprise. Créez-y le projet et connectez " +
+            "du volet Entreprises. Créez-y le projet et connectez " +
             "QuickBooks pour voir les chiffres réels ici."
         )
       ) : reels.statut === "sans_qbo" ? (
@@ -1448,7 +1448,7 @@ export function BudgetOptimisationPanel({
         naBox(
           "Non applicable — pas encore rentré",
           "Cette compagnie n'a aucun projet dans la section " +
-            "optimisation de gestion d'entreprise."
+            "optimisation du volet Entreprises."
         )
       ) : data.statut === "sans_qbo" ? (
         naBox(

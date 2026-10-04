@@ -105,7 +105,7 @@ export default function ImmeublesListPage() {
     <>
       <ImmobilierTopbar
         breadcrumbs={[
-          { label: "Gestion immobilière", href: "/immobilier" },
+          { label: "Immobilier", href: "/immobilier" },
           { label: "Immeubles" }
         ]}
         rightSlot={

@@ -442,7 +442,7 @@ export default function BonsTravailPage() {
     <>
       <ImmobilierTopbar
         breadcrumbs={[
-          { label: "Gestion immobilière", href: "/immobilier" },
+          { label: "Immobilier", href: "/immobilier" },
           { label: "Bons de travail" }
         ]}
       />

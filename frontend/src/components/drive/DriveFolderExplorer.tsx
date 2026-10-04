@@ -125,6 +125,9 @@ type SortDir = "asc" | "desc";
 export type DriveFolderExplorerProps = {
   /** ID du dossier Drive racine à afficher. */
   folderId: string;
+  /** Dossier où ouvrir l'explorateur (un sous-dossier de `folderId`, ex.
+   *  « Factures ») ; défaut : `folderId`. Le fil d'Ariane remonte au-dessus. */
+  initialFolderId?: string | null;
   /** Callback déclenché quand l'utilisateur clique sur un fichier (non dossier). */
   onFileSelected?: (file: DriveFile) => void;
   /** Actions autorisées. Défaut : tout activé. */
@@ -375,6 +378,7 @@ async function readErrorDetail(res: Response): Promise<string> {
 
 export function DriveFolderExplorer({
   folderId,
+  initialFolderId,
   onFileSelected,
   allowedActions,
   className = ""
@@ -384,12 +388,14 @@ export function DriveFolderExplorer({
   const { toasts, push: toast, dismiss } = useToasts();
 
   // Navigation : pile de breadcrumbs locale au composant. Le sommet de pile est
-  // le dossier visible. On démarre toujours par le `folderId` racine fourni
-  // en prop.
-  const [currentFolderId, setCurrentFolderId] = useState<string>(folderId);
+  // le dossier visible. On démarre par `initialFolderId` s'il est fourni,
+  // sinon par le `folderId` racine.
+  const [currentFolderId, setCurrentFolderId] = useState<string>(
+    initialFolderId || folderId
+  );
   useEffect(() => {
-    setCurrentFolderId(folderId);
-  }, [folderId]);
+    setCurrentFolderId(initialFolderId || folderId);
+  }, [folderId, initialFolderId]);
 
   const [breadcrumbs, setBreadcrumbs] = useState<DriveFolderPathSegment[]>([]);
   const [files, setFiles] = useState<DriveFile[]>([]);

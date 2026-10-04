@@ -33,8 +33,8 @@ GENERAL = "general"
 VOLET_LABELS: dict[str, str] = {
     "general": "Général",
     "construction": "Construction",
-    "entreprises": "Gestion d'entreprise",
-    "immobilier": "Gestion immobilière",
+    "entreprises": "Entreprises",
+    "immobilier": "Immobilier",
     "prospection": "Prospection",
     "investisseur": "Investisseurs",
     "developpement_logiciel": "Développement logiciel",
