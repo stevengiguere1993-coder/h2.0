@@ -7,7 +7,6 @@ import {
   useRef,
   useState
 } from "react";
-import { usePathname } from "next/navigation";
 import {
   Building2,
   Calendar,
@@ -60,7 +59,9 @@ import type {
  *     fiche).
  *   - La **vue Kanban** : 5 colonnes (todo / a_faire / in_progress /
  *     waiting / done) issues de /lib/task-config, drag-drop, création inline
- *     « + Tâche » par colonne, bouton « Déplacer » optionnel.
+ *     « + Tâche » par colonne, bouton « Déplacer » optionnel. La zone
+ *     « Terminé » est fermée à l'arrivée ; un clic sur son en-tête
+ *     l'ouvre ou la ferme.
  *   - **La fiche détaillée** (TaskDetailsModal) — strictement
  *     identique pour tous les volets, pas de slot extras.
  *
@@ -205,10 +206,17 @@ export function TaskBoard({
   const [criteria, setCriteria] = useState<
     Record<CriterionKey, CriterionState>
   >(DEFAULT_FILTERS);
+  // Zone « Terminé » du Kanban : fermée à chaque arrivée sur la page,
+  // ouverte au besoin d'un clic sur son en-tête.
+  const [doneOpen, setDoneOpen] = useState(false);
 
   // Si l'utilisateur passe un critère sur « Trier », s'assure qu'aucun
   // autre n'est déjà sur « Trier » (un seul tri actif à la fois).
   function setCriterion(key: CriterionKey, s: CriterionState) {
+    // Filtrer sur « Terminé » ouvre la zone, sinon le Kanban paraît vide.
+    if (key === "status" && s.kind === "filter" && s.value === "done") {
+      setDoneOpen(true);
+    }
     setCriteria((prev) => {
       const next = { ...prev, [key]: s };
       if (s.kind === "sort" || s.kind === "sort_asc") {
@@ -459,6 +467,8 @@ export function TaskBoard({
           onMove={onMove}
           onCreate={(s, n) => void handleColumnCreate(s, n)}
           sorted={sortActive}
+          doneOpen={doneOpen}
+          onDoneOpenChange={setDoneOpen}
         />
       ) : (
         <TaskListView
@@ -784,7 +794,9 @@ function KanbanView({
   onOpenDetails,
   onMove,
   onCreate,
-  sorted
+  sorted,
+  doneOpen,
+  onDoneOpenChange
 }: {
   tasks: TaskBoardItem[];
   users: TaskUserMini[];
@@ -796,38 +808,28 @@ function KanbanView({
   /** Si vrai, l'ordre du tableau a déjà été imposé par le parent
    *  (tri utilisateur) — on n'écrase pas avec un tri par position. */
   sorted: boolean;
+  /** Zone « Terminé » ouverte (cartes visibles) ou fermée (en-tête et
+   *  compteur seulement). */
+  doneOpen: boolean;
+  onDoneOpenChange: (open: boolean) => void;
 }) {
   const [dragId, setDragId] = useState<number | null>(null);
   const [hoverCol, setHoverCol] = useState<string | null>(null);
   const [adding, setAdding] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
 
-  // ── Repli de la colonne « Terminé » ───────────────────────────────
-  // Les complétées s'accumulent : par défaut on montre les 5 plus
-  // récentes ; UN SEUL geste (chevron d'en-tête ou pastille) déplie
-  // TOUTES les terminées, et re-clic ramène à 5. État mémorisé par
-  // kanban (clé = chemin de la page).
-  const RECENT_DONE = 5;
-  const pathname = usePathname();
-  const doneKey = `kratos.taskBoard.doneCollapse.${pathname}`;
-  const [doneShowAll, setDoneShowAll] = useState(false);
+  // ── Zone « Terminé » ──────────────────────────────────────────────
+  // Les complétées s'accumulent : la zone est fermée par défaut et un
+  // clic sur son en-tête (titre, compteur ou flèche) l'ouvre ou la
+  // ferme. Le bouton « Fermer la zone » du bas ramène l'en-tête à
+  // l'écran, la zone rétrécissant d'un coup après une longue liste.
+  const doneHeaderRef = useRef<HTMLHeadingElement | null>(null);
 
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(doneKey);
-      const s = raw ? JSON.parse(raw) : {};
-      setDoneShowAll(!!s.showAll);
-    } catch {
-      /* localStorage indisponible → défauts */
-    }
-  }, [doneKey]);
-
-  function persistDone(showAll: boolean) {
-    try {
-      window.localStorage.setItem(doneKey, JSON.stringify({ showAll }));
-    } catch {
-      /* ignore */
-    }
+  function closeDoneFromBottom() {
+    onDoneOpenChange(false);
+    window.requestAnimationFrame(() => {
+      doneHeaderRef.current?.scrollIntoView({ block: "center" });
+    });
   }
 
   // Touch-drag support pour mobile : HTML5 dnd ne fonctionne pas avec
@@ -999,13 +1001,21 @@ function KanbanView({
         // écrasait « Plus récente en haut » (bug Phil 2026-07-20).
         const isDone = col.value === "done";
         const ordered = isDone && !sorted ? [...list].reverse() : list;
-        const foldable = isDone && ordered.length > RECENT_DONE;
-        const visible =
-          foldable && !doneShowAll
-            ? ordered.slice(0, RECENT_DONE)
-            : ordered;
-        const hiddenCount =
-          foldable && !doneShowAll ? ordered.length - RECENT_DONE : 0;
+        // Zone « Terminé » repliable dès qu'elle contient une carte ;
+        // fermée, elle ne montre que son en-tête et son compteur, sans
+        // s'étirer à la hauteur des autres colonnes — sauf pendant un
+        // glisser, pour rester une grande cible de dépôt.
+        const foldable = isDone && list.length > 0;
+        const closed = foldable && !doneOpen;
+        const shrunk = closed && dragId === null;
+        const dot = (
+          <span className={`h-1.5 w-1.5 rounded-full ${col.dot}`} />
+        );
+        const count = (
+          <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
+            {list.length}
+          </span>
+        );
         return (
           <div
             key={col.value}
@@ -1023,87 +1033,77 @@ function KanbanView({
             }}
             className={`flex w-72 flex-shrink-0 flex-col rounded-xl border bg-brand-900 ${
               isHover ? "border-accent-500" : "border-brand-800"
-            }`}
+            } ${shrunk ? "self-start" : ""}`}
           >
-            <div className="border-b border-brand-800 px-3 py-2">
-              <div className="flex items-center justify-between">
-                <h3 className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white">
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${col.dot}`}
-                  />
-                  {col.label}
-                </h3>
-                <span className="flex items-center gap-1.5">
-                  <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
-                    {list.length}
+            {foldable ? (
+              <h3 ref={doneHeaderRef} className="border-b border-brand-800">
+                <button
+                  type="button"
+                  onClick={() => onDoneOpenChange(!doneOpen)}
+                  aria-expanded={doneOpen}
+                  title={
+                    doneOpen
+                      ? "Fermer la zone Terminé"
+                      : "Ouvrir la zone Terminé"
+                  }
+                  className="flex w-full items-center justify-between rounded-t-xl px-3 py-2 transition hover:bg-accent-500/10"
+                >
+                  <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white">
+                    {dot}
+                    {col.label}
                   </span>
-                  {isDone && list.length > RECENT_DONE ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const n = !doneShowAll;
-                        setDoneShowAll(n);
-                        persistDone(n);
-                      }}
-                      title={
-                        doneShowAll
-                          ? "Réduire aux 5 récentes"
-                          : "Voir toutes les terminées"
-                      }
-                      aria-label={
-                        doneShowAll
-                          ? "Réduire la colonne Terminé"
-                          : "Voir toutes les terminées"
-                      }
-                      className="rounded p-0.5 text-white/40 hover:bg-white/10 hover:text-white"
-                    >
-                      {doneShowAll ? (
-                        <ChevronUp className="h-3.5 w-3.5" />
-                      ) : (
-                        <ChevronDown className="h-3.5 w-3.5" />
-                      )}
-                    </button>
-                  ) : null}
-                </span>
+                  <span className="flex items-center gap-1.5">
+                    {count}
+                    {doneOpen ? (
+                      <ChevronUp className="h-3.5 w-3.5 text-white/60" />
+                    ) : (
+                      <ChevronDown className="h-3.5 w-3.5 text-white/60" />
+                    )}
+                  </span>
+                </button>
+              </h3>
+            ) : (
+              <div className="border-b border-brand-800 px-3 py-2">
+                <div className="flex items-center justify-between">
+                  <h3 className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white">
+                    {dot}
+                    {col.label}
+                  </h3>
+                  {count}
+                </div>
               </div>
-            </div>
+            )}
 
             <div className="flex-1 space-y-2 p-3">
-              <>
+              {closed ? (
+                <button
+                  type="button"
+                  onClick={() => onDoneOpenChange(true)}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-md bg-brand-950 px-3 py-1.5 text-xs font-semibold text-white/70 transition hover:text-white"
+                >
+                  <ChevronDown className="h-3.5 w-3.5" />
+                  {list.length > 1
+                    ? `Afficher les ${list.length} tâches`
+                    : "Afficher la tâche"}
+                </button>
+              ) : (
+                <>
                   {list.length === 0 && adding !== col.value ? (
                     <p className="py-8 text-center text-xs text-white/40">
                       Aucune tâche
                     </p>
                   ) : null}
 
-                  {visible.map((t) => renderCard(t))}
+                  {ordered.map((t) => renderCard(t))}
 
-                  {hiddenCount > 0 ? (
+                  {foldable ? (
                     <button
                       type="button"
-                      onClick={() => {
-                        setDoneShowAll(true);
-                        persistDone(true);
-                      }}
-                      className="flex w-full items-center justify-center gap-1.5 rounded-md bg-brand-950 px-3 py-1.5 text-xs font-semibold text-white/70 transition hover:text-white"
-                    >
-                      <ChevronDown className="h-3.5 w-3.5" />
-                      Voir les {hiddenCount} plus ancienne
-                      {hiddenCount > 1 ? "s" : ""}
-                    </button>
-                  ) : null}
-
-                  {foldable && doneShowAll ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDoneShowAll(false);
-                        persistDone(false);
-                      }}
+                      onClick={closeDoneFromBottom}
                       className="flex w-full items-center justify-center gap-1.5 rounded-md bg-brand-950 px-3 py-1.5 text-xs font-semibold text-white/70 transition hover:text-white"
                     >
                       <ChevronUp className="h-3.5 w-3.5" />
-                      Réduire aux {RECENT_DONE} récentes
+                      Fermer la zone
                     </button>
                   ) : null}
 
@@ -1136,7 +1136,8 @@ function KanbanView({
                       <Plus className="h-3 w-3" /> Tâche
                     </button>
                   )}
-              </>
+                </>
+              )}
             </div>
           </div>
         );
