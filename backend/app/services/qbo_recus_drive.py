@@ -164,7 +164,14 @@ def normaliser_nom(s: Optional[str], garder_prefixe: bool = False) -> str:
 
 #: Mots-clés qui désignent un dossier existant équivalent (comparés sur
 #: le nom normalisé) : « 2 - Factures et reçus » vaut « Factures ».
-MOTS_FACTURES = ("facture", "factures", "recu", "recus", "depense", "depenses", "invoice", "invoices", "receipt", "receipts")
+MOTS_FACTURES = ("facture", "factures", "facturation", "recu", "recus", "depense", "depenses", "invoice", "invoices", "receipt", "receipts")
+#: Mots qui signalent un dossier de RENVOI ou d'archives, pas un dossier
+#: de classement (« 2026 & avant : Voir Impôts ») — jamais reconnu par
+#: mot-clé (Phil 2026-10-04, simulation Immobilier Meuser 1).
+MOTS_EXCLUS = ("voir", "avant", "ancien", "anciens", "anciennes", "archive", "archives", "old", "backup", "sauvegarde")
+#: Au-delà de ce nombre de mots, un nom n'est plus un simple dossier de
+#: classement (« 1 - Factures 2026 » = 2 mots ; « 2026 & avant : Voir Impôts » = 4).
+MAX_MOTS_MOTCLE = 3
 ABREV_MOIS = {
     "Janvier": ("janv", "jan"), "Février": ("fev", "feb"), "Mars": ("mar",), "Avril": ("avr", "apr"),
     "Mai": ("may",), "Juin": ("jun",), "Juillet": ("juil", "jul"), "Août": ("aou", "aug"),
@@ -185,7 +192,10 @@ def correspond_dossier(nom_existant: Optional[str], voulu: str) -> int:
     if n == v:
         return 2
     # Mots-clés sur le nom COMPLET (préfixe gardé) : « 2026 - Reçus ».
-    mots = set(normaliser_nom(nom_existant, garder_prefixe=True).split())
+    liste = normaliser_nom(nom_existant, garder_prefixe=True).split()
+    mots = set(liste)
+    if len(liste) > MAX_MOTS_MOTCLE or (mots & set(MOTS_EXCLUS)):
+        return 0
     if v == "factures":
         return 1 if (mots & set(MOTS_FACTURES)) else 0
     if v.isdigit():  # année
