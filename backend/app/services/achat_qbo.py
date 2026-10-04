@@ -9,7 +9,7 @@ dépend du mode de paiement :
   (charge la dépense + crédite le compte de paiement directement)
 
 Le mapping nom_de_compte ← mode_de_paiement vient de la table
-qbo_account_maps configurée dans /app/parametres. Le service
+qbo_account_maps configurée dans /parametres. Le service
 résout le nom → Account.Id via une query QBO au moment du push.
 
 Le numéro PO interne est mis dans DocNumber + PrivateNote du
@@ -878,7 +878,7 @@ async def sync_achat_to_qbo(
         if not expense_account_id:
             raise AchatSyncError(
                 "Aucun compte de dépense disponible côté QBO. "
-                "Configure un compte par défaut dans /app/parametres "
+                "Configure un compte par défaut dans /parametres "
                 "→ Comptes QuickBooks ou crée au moins un compte "
                 "type 'Cost of Goods Sold' / 'Expense' dans QB."
             )
@@ -1199,7 +1199,7 @@ async def sync_achat_to_qbo(
             if not payment_account_id:
                 raise AchatSyncError(
                     f"Le mode de paiement « {method} » n'a pas de "
-                    f"compte QBO configuré. Va dans /app/parametres "
+                    f"compte QBO configuré. Va dans /parametres "
                     f"→ Comptes QuickBooks et entre le nom exact du "
                     f"compte (ex. « Carte Visa Steven »)."
                 )

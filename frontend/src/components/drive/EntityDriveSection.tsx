@@ -472,7 +472,7 @@ export function EntityDriveSection({
           </p>
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/app/parametres/drive" as any}
+            href={"/parametres/drive" as any}
             className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-100 hover:bg-amber-500/20"
           >
             <Settings2 className="h-3.5 w-3.5" /> Ouvrir les paramètres Drive

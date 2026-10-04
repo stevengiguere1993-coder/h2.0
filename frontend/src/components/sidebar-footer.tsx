@@ -23,6 +23,7 @@ import { AccountBadge } from "@/components/account-badge";
 import { InstallAppButton } from "@/components/install-app-button";
 import { PushNotificationsSidebarItem } from "@/components/push-notifications-toggle";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { memoriserOrigineParametres } from "@/lib/parametres-origine";
 
 export function SidebarFooter({ onNavigate }: { onNavigate?: () => void }) {
   const { signOut } = useCurrentUser();
@@ -45,7 +46,10 @@ export function SidebarFooter({ onNavigate }: { onNavigate?: () => void }) {
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={"/parametres" as any}
-          onClick={onNavigate}
+          onClick={() => {
+            memoriserOrigineParametres(window.location.pathname);
+            onNavigate?.();
+          }}
           className={itemCls}
         >
           <Settings className="h-4 w-4 flex-shrink-0" /> Paramètres

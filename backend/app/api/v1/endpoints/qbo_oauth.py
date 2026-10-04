@@ -203,7 +203,7 @@ async def qbo_callback(
         path = (
             "/entreprises/projets-optimisation"
             if scope and scope.startswith("inc:")
-            else "/app/parametres/comptabilite"
+            else "/parametres/comptabilite"
         )
         return RedirectResponse(
             f"{frontend}{path}?qbo={reason}",

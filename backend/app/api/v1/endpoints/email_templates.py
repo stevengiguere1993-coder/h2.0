@@ -255,7 +255,7 @@ async def send_template(
         raise HTTPException(
             502,
             "Envoi du courriel échoué. Vérifie la connexion Microsoft "
-            "Graph dans /app/parametres.",
+            "Graph dans /parametres.",
         ) from exc
 
     return {"sent": True, "subject": subject, "to": [str(e) for e in data.to]}

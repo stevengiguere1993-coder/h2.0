@@ -536,6 +536,56 @@ async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
     return out
 
 
+async def compte_drive(db: AsyncSession, user_id: Optional[int] = None) -> Dict[str, Any]:
+    """Compte Google avec lequel les reçus sont copiés (celui de
+    l'utilisateur s'il a connecté Drive, sinon le compte partagé)."""
+    from app.services import drive_oauth
+    from app.services.drive_auto_upload_dispatcher import resolve_drive_owner_user_id
+
+    owner = await resolve_drive_owner_user_id(db, user_id)
+    if owner is None:
+        return {"user_id": None, "google_email": None, "partage": False}
+    email = await drive_oauth.get_user_email(db, user_id=owner)
+    return {"user_id": owner, "google_email": email, "partage": owner != user_id}
+
+
+async def dossier_factures(db: AsyncSession, entreprise_id: int, user_id: Optional[int] = None) -> Dict[str, Any]:
+    """Dossier Drive où s'ouvre l'explorateur pour une entreprise : son
+    « Factures » (nom réel, p. ex. « 2 - Factures ») s'il existe, sinon la
+    racine de l'entreprise (Phil 2026-10-04 : « cliquer sur une inc et se
+    retrouver dans le Drive à partir de Factures »)."""
+    from app.services.drive_auto_upload_dispatcher import resolve_drive_owner_user_id
+
+    etat = next((x for x in await entreprises_etat(db) if x["entreprise_id"] == entreprise_id), None)
+    if etat is None:
+        raise ValueError("Entreprise introuvable.")
+    racine = etat.get("drive_folder_id")
+    out: Dict[str, Any] = {
+        "entreprise_id": entreprise_id,
+        "name": etat["name"],
+        "racine_id": racine,
+        "racine_nom": etat.get("drive_folder_name"),
+        "factures_id": None,
+        "factures_nom": None,
+        "folder_id": racine,
+    }
+    if not racine:
+        return out
+    owner = await resolve_drive_owner_user_id(db, user_id)
+    if owner is None:
+        return out
+    try:
+        f = await _Drive(owner, db, True).trouver(racine, DOSSIER_FACTURES)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("dossier_factures(%s): %s", entreprise_id, exc)
+        f = None
+    if f is not None:
+        out["factures_id"] = str(f["id"])
+        out["factures_nom"] = f.get("name")
+        out["folder_id"] = str(f["id"])
+    return out
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Drive : arborescence Factures / année / mois (avec cache par run)
 # ──────────────────────────────────────────────────────────────────────

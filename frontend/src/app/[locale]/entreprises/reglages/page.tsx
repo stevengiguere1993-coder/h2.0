@@ -1,16 +1,23 @@
 import { redirect } from "next/navigation";
 
-export default async function ReglagesIndex({
-  params
+/** Ancienne adresse : les réglages vivent maintenant sous `/parametres`
+ *  (habillage commun, aucun changement de pôle — Phil 2026-10-04). */
+export default async function Redirection({
+  params,
+  searchParams
 }: {
-  params: Promise<{ locale: string }>;
+  params: Promise<{ locale: string; tab?: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  // Tab par défaut : Entreprises (modèles, flag « entreprise mère »,
-  // etc.). Locale-aware path. L'ancienne route `/integration`
-  // n'existait pas → 404.
-  // Next 15 : `params` est une Promise — il FAUT l'await, sinon `locale`
-  // est undefined et le préfixe de langue saute.
-  const { locale } = await params;
+  const { locale, tab } = await params;
+  const sp = await searchParams;
   const prefix = locale && locale !== "fr" ? `/${locale}` : "";
-  redirect(`${prefix}/entreprises/reglages/entreprises`);
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(sp)) {
+    if (Array.isArray(v)) v.forEach((x) => qs.append(k, x));
+    else if (v != null) qs.set(k, v);
+  }
+  const q = qs.toString();
+  void tab;
+  redirect(`${prefix}/parametres/reglages/entreprises${q ? `?${q}` : ""}`);
 }

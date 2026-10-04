@@ -746,7 +746,7 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
 
       {/* Le modèle par défaut (global) se règle dans Paramètres. */}
       <Link
-        href={"/app/parametres/contrat-gestion" as never}
+        href={"/parametres/contrat-gestion" as never}
         className="flex items-center gap-2 rounded-lg border border-brand-800 px-4 py-3 text-sm text-white/70 hover:text-white"
       >
         <ExternalLink className="h-4 w-4" />
