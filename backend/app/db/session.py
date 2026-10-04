@@ -490,6 +490,8 @@ async def ensure_critical_columns() -> None:
         ("entreprises", "siege_social", "VARCHAR(500)"),
         ("entreprises", "date_constitution", "DATE"),
         ("entreprises", "notes_legales", "TEXT"),
+        # Reçus QuickBooks → Drive (2026-10-04) : connexion QB à utiliser.
+        ("entreprises", "qbo_scope", "VARCHAR(32)"),
         ("entreprise_partners", "partner_adresse", "VARCHAR(500)"),
         ("entreprise_partners", "partner_naissance", "DATE"),
         ("entreprise_partners", "partner_telephone", "VARCHAR(32)"),
