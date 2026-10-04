@@ -448,7 +448,7 @@ function ScreenshotThumb({ reportId }: { reportId: number }) {
           <button
             type="button"
             onClick={() => setOpen(false)}
-            className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20"
+            className="absolute right-4 top-4 rounded-full bg-white/90 p-2 text-slate-900 hover:bg-white"
             aria-label="Fermer"
             title="Fermer"
           >

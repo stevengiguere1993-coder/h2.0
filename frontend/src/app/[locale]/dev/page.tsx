@@ -7,6 +7,7 @@ import { Home, ShieldAlert } from "lucide-react";
 
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { HelpRequestsSection } from "@/components/help-requests-section";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 /** Page « Mode dev » — accès restreint : rôle owner/admin, ou capacité
  *  `devlog.access` accordée dans Paramètres → Permissions (P-05d).
@@ -72,6 +73,7 @@ export default function DevPage() {
           >
             <Home className="mr-1 h-3.5 w-3.5" /> Accueil du portail
           </Link>
+          <ThemeToggle className="ml-auto" />
         </div>
 
         <header className="mt-3">
