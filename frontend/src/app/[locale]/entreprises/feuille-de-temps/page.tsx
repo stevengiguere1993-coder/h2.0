@@ -541,6 +541,15 @@ export default function FeuilleDeTempsPage() {
   const updateTaches = (next: TacheLigne[]) => {
     setTaches(next);
     if (!detail) return;
+    // Brouillon de tâches abandonné sur une feuille saisie par la grille
+    // (aucune ligne enregistrée) : on remet la grille du serveur, sinon la
+    // sauvegarde suivante (/entries) enverrait des cases vides et
+    // effacerait les heures (retour de relecture 2026-10-04).
+    if (next.length === 0 && !detail.mode_taches) {
+      hydrateCellsFrom(detail);
+      setDirty(true);
+      return;
+    }
     const nr = new Set(
       detail.lignes.filter((l) => l.nr_autorise).map((l) => l.company_id)
     );
