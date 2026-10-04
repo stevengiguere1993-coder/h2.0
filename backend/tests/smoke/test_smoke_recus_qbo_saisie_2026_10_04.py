@@ -1,10 +1,12 @@
 """Smoke — saisie des reçus « en miroir » de QuickBooks (Steven, 2026-10-04).
 
-Formulaire « Reçus » du pôle Entreprises : on choisit l'inc, on remplit
-les champs de l'écran Dépense / Facture fournisseur de QB, et Kratos crée
-la transaction dans le QuickBooks de l'inc, photo jointe. Le reçu n'est
-pas gardé dans Kratos (la copie de nuit le range dans le Drive) ; seule
-une trace minimale reste (qui, quand, numéro QB, clé d'envoi).
+Onglet « Nouveau reçu » de la section Comptabilité (pôle Entreprises,
+réservée aux propriétaires tant qu'elle est en développement) : on choisit
+l'inc, on remplit les champs de l'écran Dépense / Facture fournisseur de
+QB, et Kratos crée la transaction dans le QuickBooks de l'inc, photo
+jointe. Le reçu n'est pas gardé dans Kratos (la copie de nuit le range
+dans le Drive) ; seule une trace minimale reste (qui, quand, numéro QB,
+clé d'envoi).
 
 Client QuickBooks factice : aucun appel réseau.
 """
@@ -17,12 +19,14 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
+from app.core.access_registry import PAGES_BY_KEY
 from app.core.security import create_access_token, get_password_hash
 from app.integrations.quickbooks import QuickBooksError
 from app.models.entreprise import Entreprise
 from app.models.qbo_connection import QboConnection
 from app.models.recu_qbo_saisi import RecuQboSaisi
 from app.models.user import User
+from app.models.user_access_override import UserAccessOverride
 from app.services.recu_qbo_saisie import RecuIn, SaisieErreur, taxes_du_recu, ventiler
 
 from .conftest import TestSessionLocal
@@ -185,6 +189,35 @@ class _FakeQbo:
         return {"AttachableResponse": [{"Attachable": {"Id": "att-1"}}]}
 
 
+def _compte(run, role: str, volets: Optional[List[str]] = None) -> int:
+    async def _seed() -> int:
+        async with TestSessionLocal() as s:
+            u = User(
+                email=f"smoke-recus-{role}-{uuid.uuid4().hex[:8]}@example.com",
+                hashed_password=get_password_hash("smoke-recus-x"),
+                is_active=True,
+                is_admin=role in ("owner", "admin"),
+                role=role,
+                volets_json=json.dumps(volets) if volets else None,
+            )
+            s.add(u)
+            await s.commit()
+            return u.id
+
+    return run(_seed())
+
+
+def _entetes(user_id: int) -> Dict[str, str]:
+    return {"Authorization": f"Bearer {create_access_token(subject=str(user_id))}"}
+
+
+@pytest.fixture(scope="module")
+def owner_headers(client, run) -> Dict[str, str]:
+    """La section Comptabilité (où vit la saisie) est réservée aux
+    propriétaires tant qu'elle est en développement."""
+    return _entetes(_compte(run, "owner"))
+
+
 @pytest.fixture()
 def fake_qbo(monkeypatch) -> _FakeQbo:
     fake = _FakeQbo()
@@ -280,8 +313,8 @@ def test_facture_a_payer_exige_un_fournisseur():
 # ── API ─────────────────────────────────────────────────────────────
 
 
-def test_liste_des_entreprises_et_connexion(client, auth_headers, inc):
-    r = client.get("/api/v1/recus-qbo/entreprises", headers=auth_headers)
+def test_liste_des_entreprises_et_connexion(client, owner_headers, inc):
+    r = client.get("/api/v1/recus-qbo/entreprises", headers=owner_headers)
     assert r.status_code == 200, r.text
     ligne = next(x for x in r.json() if x["entreprise_id"] == inc["id"])
     assert ligne["qbo_connectee"] is True
@@ -289,8 +322,8 @@ def test_liste_des_entreprises_et_connexion(client, auth_headers, inc):
     assert ligne["qbo_company_name"] == "Inc Smoke"
 
 
-def test_choix_lus_dans_quickbooks(client, auth_headers, inc, fake_qbo):
-    r = client.get(f"/api/v1/recus-qbo/entreprises/{inc['id']}/choix", headers=auth_headers)
+def test_choix_lus_dans_quickbooks(client, owner_headers, inc, fake_qbo):
+    r = client.get(f"/api/v1/recus-qbo/entreprises/{inc['id']}/choix", headers=owner_headers)
     assert r.status_code == 200, r.text
     c = r.json()
     # Fournisseurs triés sans tenir compte des accents.
@@ -318,9 +351,9 @@ def test_choix_lus_dans_quickbooks(client, auth_headers, inc, fake_qbo):
     assert c["modalites"] == [{"id": "3", "nom": "Net 30", "jours": 30}]
 
 
-def test_depense_payee_creee_avec_taxes_exactes_et_photo(client, auth_headers, inc, fake_qbo, run):
+def test_depense_payee_creee_avec_taxes_exactes_et_photo(client, owner_headers, inc, fake_qbo, run):
     recu = _recu(reference="F-1234", memo="Vis et colle")
-    r = _envoyer(client, auth_headers, inc["id"], recu)
+    r = _envoyer(client, owner_headers, inc["id"], recu)
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["statut"] == "envoye" and out["photo_jointe"] is True
@@ -370,41 +403,41 @@ def test_depense_payee_creee_avec_taxes_exactes_et_photo(client, auth_headers, i
 
     # Même clé (double-clic) : le premier résultat, aucune 2e dépense.
     n = len(fake_qbo.creations)
-    r2 = _envoyer(client, auth_headers, inc["id"], recu)
+    r2 = _envoyer(client, owner_headers, inc["id"], recu)
     assert r2.status_code == 200, r2.text
     assert r2.json()["deja_envoye"] is True and r2.json()["txn_id"] == out["txn_id"]
     assert len(fake_qbo.creations) == n
 
 
-def test_doublon_dans_quickbooks_demande_confirmation(client, auth_headers, inc, fake_qbo):
+def test_doublon_dans_quickbooks_demande_confirmation(client, owner_headers, inc, fake_qbo):
     fake_qbo.purchases.append(
         {"Id": "301", "TxnDate": JOUR, "TotalAmt": 114.98, "EntityRef": {"value": "56", "name": "Rona"}}
     )
     recu = _recu()
-    r = _envoyer(client, auth_headers, inc["id"], recu)
+    r = _envoyer(client, owner_headers, inc["id"], recu)
     assert r.status_code == 409, r.text
     assert r.json()["doublon"]["txn_id"] == "301"
     assert r.json()["doublon"]["fournisseur"] == "Rona"
     assert r.json()["doublon"]["lien_qbo"].endswith("/app/expense?txnId=301&deeplinkcompanyid=9130")
     assert fake_qbo.creations == []
     # « Envoyer quand même » avec la MÊME clé : la clé a été libérée.
-    r2 = _envoyer(client, auth_headers, inc["id"], {**recu, "forcer_doublon": True})
+    r2 = _envoyer(client, owner_headers, inc["id"], {**recu, "forcer_doublon": True})
     assert r2.status_code == 200, r2.text
     assert len(fake_qbo.creations) == 1
 
 
-def test_autre_fournisseur_meme_montant_n_est_pas_un_doublon(client, auth_headers, inc, fake_qbo):
+def test_autre_fournisseur_meme_montant_n_est_pas_un_doublon(client, owner_headers, inc, fake_qbo):
     fake_qbo.purchases.append(
         {"Id": "302", "TxnDate": JOUR, "TotalAmt": 114.98, "EntityRef": {"value": "58", "name": "Bureau en Gros"}}
     )
-    r = _envoyer(client, auth_headers, inc["id"], _recu())
+    r = _envoyer(client, owner_headers, inc["id"], _recu())
     assert r.status_code == 200, r.text
 
 
-def test_fournisseur_inconnu_part_sans_beneficiaire_nom_nd(client, auth_headers, inc, fake_qbo):
+def test_fournisseur_inconnu_part_sans_beneficiaire_nom_nd(client, owner_headers, inc, fake_qbo):
     r = _envoyer(
         client,
-        auth_headers,
+        owner_headers,
         inc["id"],
         _recu(fournisseur_id=None, compte_paiement_id="35", mode_paiement_id=None, total=20.0, taxes=None),
     )
@@ -417,7 +450,7 @@ def test_fournisseur_inconnu_part_sans_beneficiaire_nom_nd(client, auth_headers,
     assert fake_qbo.pieces[-1]["file_name"] == "2026-10-03 ND 20,00$.pdf"
 
 
-def test_facture_a_payer_nouveau_fournisseur(client, auth_headers, inc, fake_qbo):
+def test_facture_a_payer_nouveau_fournisseur(client, owner_headers, inc, fake_qbo):
     recu = _recu(
         type="a_payer",
         fournisseur_id=None,
@@ -430,7 +463,7 @@ def test_facture_a_payer_nouveau_fournisseur(client, auth_headers, inc, fake_qbo
         taxes=[{"taux_id": "12", "montant": 0}],
         total=450.0,
     )
-    r = _envoyer(client, auth_headers, inc["id"], recu)
+    r = _envoyer(client, owner_headers, inc["id"], recu)
     assert r.status_code == 200, r.text
     assert r.json()["txn_type"] == "Bill"
     assert r.json()["lien_qbo"].startswith("https://app.sandbox.qbo.intuit.com/app/bill?txnId=")
@@ -446,33 +479,33 @@ def test_facture_a_payer_nouveau_fournisseur(client, auth_headers, inc, fake_qbo
     assert fake_qbo.pieces[-1]["file_name"] == "2026-10-03 Plomberie Roy 450,00$.pdf"
 
 
-def test_facture_a_payer_sans_fournisseur_refusee(client, auth_headers, inc, fake_qbo):
+def test_facture_a_payer_sans_fournisseur_refusee(client, owner_headers, inc, fake_qbo):
     r = _envoyer(
-        client, auth_headers, inc["id"], _recu(type="a_payer", fournisseur_id=None, compte_paiement_id=None)
+        client, owner_headers, inc["id"], _recu(type="a_payer", fournisseur_id=None, compte_paiement_id=None)
     )
     assert r.status_code == 422, r.text
     assert "fournisseur" in r.json()["detail"]
     assert fake_qbo.creations == []
 
 
-def test_compte_de_paiement_doit_etre_banque_ou_carte(client, auth_headers, inc, fake_qbo):
-    r = _envoyer(client, auth_headers, inc["id"], _recu(compte_paiement_id="60"))
+def test_compte_de_paiement_doit_etre_banque_ou_carte(client, owner_headers, inc, fake_qbo):
+    r = _envoyer(client, owner_headers, inc["id"], _recu(compte_paiement_id="60"))
     assert r.status_code == 422, r.text
     assert fake_qbo.creations == []
 
 
-def test_taxes_exactes_refusees_repli_calcul_qbo(client, auth_headers, inc, fake_qbo):
+def test_taxes_exactes_refusees_repli_calcul_qbo(client, owner_headers, inc, fake_qbo):
     fake_qbo.refuser_taxes_exactes = True
-    r = _envoyer(client, auth_headers, inc["id"], _recu())
+    r = _envoyer(client, owner_headers, inc["id"], _recu())
     assert r.status_code == 200, r.text
     _, payload = fake_qbo.creations[-1]
     assert "TxnTaxDetail" not in payload
     assert payload["Line"][0]["Amount"] == 100.0
 
 
-def test_photo_refusee_puis_reprise_seule(client, auth_headers, inc, fake_qbo):
+def test_photo_refusee_puis_reprise_seule(client, owner_headers, inc, fake_qbo):
     fake_qbo.refuser_piece = True
-    r = _envoyer(client, auth_headers, inc["id"], _recu())
+    r = _envoyer(client, owner_headers, inc["id"], _recu())
     assert r.status_code == 200, r.text
     out = r.json()
     # La dépense est créée ; la photo est à reprendre.
@@ -482,7 +515,7 @@ def test_photo_refusee_puis_reprise_seule(client, auth_headers, inc, fake_qbo):
     fake_qbo.refuser_piece = False
     r2 = client.post(
         f"/api/v1/recus-qbo/saisies/{out['saisie_id']}/photo",
-        headers=auth_headers,
+        headers=owner_headers,
         files={"fichier": ("scan.pdf", PDF, "application/pdf")},
     )
     assert r2.status_code == 200, r2.text
@@ -491,7 +524,7 @@ def test_photo_refusee_puis_reprise_seule(client, auth_headers, inc, fake_qbo):
     assert len(fake_qbo.creations) == 1  # aucune deuxième dépense
 
     journal = client.get(
-        f"/api/v1/recus-qbo/journal?entreprise_id={inc['id']}", headers=auth_headers
+        f"/api/v1/recus-qbo/journal?entreprise_id={inc['id']}", headers=owner_headers
     ).json()
     assert journal[0]["saisie_id"] == out["saisie_id"]
     assert journal[0]["statut"] == "envoye"
@@ -500,10 +533,10 @@ def test_photo_refusee_puis_reprise_seule(client, auth_headers, inc, fake_qbo):
     assert journal[0]["lien_qbo"]
 
 
-def test_format_de_fichier_refuse(client, auth_headers, inc, fake_qbo):
+def test_format_de_fichier_refuse(client, owner_headers, inc, fake_qbo):
     r = client.post(
         f"/api/v1/recus-qbo/entreprises/{inc['id']}/envoyer",
-        headers=auth_headers,
+        headers=owner_headers,
         data={"donnees": json.dumps(_recu())},
         files={"fichier": ("page.html", b"<html>", "text/html")},
     )
@@ -511,7 +544,7 @@ def test_format_de_fichier_refuse(client, auth_headers, inc, fake_qbo):
     assert fake_qbo.creations == []
 
 
-def test_inc_sans_quickbooks(client, auth_headers, fake_qbo, run):
+def test_inc_sans_quickbooks(client, owner_headers, fake_qbo, run):
     async def _seed() -> int:
         async with TestSessionLocal() as s:
             e = Entreprise(name=f"Sans QB {uuid.uuid4().hex[:4]}")
@@ -520,35 +553,56 @@ def test_inc_sans_quickbooks(client, auth_headers, fake_qbo, run):
             return e.id
 
     ent_id = run(_seed())
-    r = client.get(f"/api/v1/recus-qbo/entreprises/{ent_id}/choix", headers=auth_headers)
+    r = client.get(f"/api/v1/recus-qbo/entreprises/{ent_id}/choix", headers=owner_headers)
     assert r.status_code == 409, r.text
     assert "QuickBooks" in r.json()["detail"]
 
 
-def test_page_reservee_a_la_direction_par_defaut(client, run, inc, fake_qbo):
-    """Un employé qui a le pôle Entreprises mais pas la page « Reçus »
-    (seuil admin par défaut) ne peut ni lire les listes ni envoyer."""
+def test_comptabilite_reservee_aux_proprietaires(client, run, inc, fake_qbo, owner_headers):
+    """Section « Comptabilité » en développement (Steven 2026-10-04 :
+    « visible seulement par le dev pour le moment ») : propriétaires
+    seulement par défaut, y compris pour la saisie des reçus ; l'ancienne
+    adresse /entreprises/recus relève de la même page."""
+    page = PAGES_BY_KEY["entreprises.comptabilite"]
+    assert page.default_min_role == "owner" and page.volet == "entreprises"
+    assert set(page.routes) == {"/entreprises/comptabilite", "/entreprises/recus"}
+    assert "entreprises.recus" not in PAGES_BY_KEY
 
-    async def _seed() -> int:
-        async with TestSessionLocal() as s:
-            u = User(
-                email=f"smoke-recus-{uuid.uuid4().hex[:8]}@example.com",
-                hashed_password=get_password_hash("smoke-recus-x"),
-                is_active=True,
-                is_admin=False,
-                role="employee",
-                volets_json=json.dumps(["entreprises"]),
-            )
-            s.add(u)
-            await s.commit()
-            return u.id
+    def acces(headers: Dict[str, str]) -> Optional[bool]:
+        me = client.get("/api/v1/auth/me", headers=headers)
+        assert me.status_code == 200, me.text
+        return me.json()["access"].get("page:entreprises.comptabilite")
 
-    headers = {"Authorization": f"Bearer {create_access_token(subject=str(run(_seed())))}"}
-    r = client.get(f"/api/v1/recus-qbo/entreprises/{inc['id']}/choix", headers=headers)
-    # Refus de la PAGE (le pôle, lui, est accordé).
-    assert r.status_code == 403 and r.json()["detail"] != "Accès au pôle non autorisé.", r.text
-    assert _envoyer(client, headers, inc["id"], _recu()).status_code == 403
+    assert acces(owner_headers) is True
+
+    # Un employé du pôle et même un admin : ni la page, ni les listes, ni
+    # l'envoi (refus de la PAGE, le pôle lui est accordé).
+    employe = _entetes(_compte(run, "employee", ["entreprises"]))
+    admin = _entetes(_compte(run, "admin"))
+    for headers in (employe, admin):
+        assert acces(headers) is False
+        r = client.get(f"/api/v1/recus-qbo/entreprises/{inc['id']}/choix", headers=headers)
+        assert r.status_code == 403 and r.json()["detail"] != "Accès au pôle non autorisé.", r.text
+        assert _envoyer(client, headers, inc["id"], _recu()).status_code == 403
     assert fake_qbo.creations == []
+
+    # Exception individuelle (Paramètres → Permissions) : la section s'ouvre.
+    admin_invite = _compte(run, "admin")
+
+    async def _accorder() -> None:
+        async with TestSessionLocal() as s:
+            s.add(
+                UserAccessOverride(
+                    user_id=admin_invite, key="page:entreprises.comptabilite", allow=True
+                )
+            )
+            await s.commit()
+
+    run(_accorder())
+    invite = _entetes(admin_invite)
+    assert acces(invite) is True
+    r = client.get("/api/v1/recus-qbo/entreprises", headers=invite)
+    assert r.status_code == 200, r.text
 
 
 def test_trace_sans_montant_ni_fournisseur():

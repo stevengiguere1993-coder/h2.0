@@ -8,8 +8,10 @@
 
 Le reçu n'est pas gardé dans Kratos : il vit dans QuickBooks et la copie de
 nuit (``qbo_recus_drive``) le range dans le Drive. Toutes les routes exigent
-la page « Reçus » du pôle (``page:entreprises.recus``) en plus de l'accès
-au pôle : c'est une écriture comptable.
+la page « Comptabilité » du pôle (``page:entreprises.comptabilite``, onglet
+« Nouveau reçu ») en plus de l'accès au pôle : c'est une écriture comptable,
+et la section est réservée aux propriétaires tant qu'elle est en
+développement.
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ from app.services.permissions_service import require_capability
 router = APIRouter(
     prefix="/recus-qbo",
     tags=["recus-qbo"],
-    dependencies=[Depends(require_capability("page:entreprises.recus"))],
+    dependencies=[Depends(require_capability("page:entreprises.comptabilite"))],
 )
 
 

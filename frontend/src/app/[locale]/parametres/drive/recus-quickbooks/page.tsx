@@ -1,26 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Check,
   ChevronLeft,
-  Cloud,
   ExternalLink,
   FolderInput,
-  FolderOpen,
   Loader2,
-  Maximize2,
-  Minimize2,
   Play,
   Receipt,
   RefreshCw,
-  Search,
-  X
+  Search
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
-import { DriveFolderExplorer } from "@/components/drive/DriveFolderExplorer";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { useAppLayout } from "../../layout";
@@ -31,9 +25,10 @@ import { useAppLayout } from "../../layout";
  * Vit sous Paramètres → Gestion documentaire Drive (Steven 2026-10-04 :
  * « la connexion des reçus QB au Drive devrait se retrouver dans la
  * gestion documentaire Drive ») ; l'ancienne adresse
- * /entreprises/recus-quickbooks redirige ici. Le bouton « Ouvrir le
- * Drive » d'une entreprise affiche son Drive sur cette même page, à
- * partir de son dossier Factures, comme « Documents Drive » sur sa fiche.
+ * /entreprises/recus-quickbooks redirige ici. Le Drive de chaque
+ * entreprise, ouvert sur son dossier Factures, se consulte dans
+ * Entreprises → Comptabilité → « Banque de reçus » (Steven 2026-10-04 :
+ * « cette partie-là je la veux dans comptabilité »).
  *
  * Pour chaque entreprise : connexion QuickBooks (compagnie inc:{id}) +
  * dossier Drive de la fiche. Les reçus des dépenses sont copiés dans
@@ -170,16 +165,6 @@ type Etat = {
   debut_par_defaut: string;
 };
 
-type DossierFactures = {
-  entreprise_id: number;
-  name: string;
-  racine_id: string | null;
-  racine_nom: string | null;
-  factures_id: string | null;
-  factures_nom: string | null;
-  folder_id: string | null;
-};
-
 type Journal = {
   id: number;
   entreprise_id: number | null;
@@ -253,51 +238,6 @@ export default function RecusQuickbooksPage() {
   const [journal, setJournal] = useState<Journal[] | null>(null);
   const [connecting, setConnecting] = useState<number | null>(null);
   const { onOpenSidebar } = useAppLayout();
-  /** Explorateur Drive affiché sur cette page, ouvert sur le « Factures »
-   *  d'une entreprise (bouton « Ouvrir le Drive » ou clic sur son nom —
-   *  Phil / Steven 2026-10-04). */
-  const [explorer, setExplorer] = useState<DossierFactures | null>(null);
-  const [explorerLoading, setExplorerLoading] = useState<number | null>(null);
-  const [fullscreen, setFullscreen] = useState(false);
-  const explorerRef = useRef<HTMLElement | null>(null);
-
-  async function ouvrirDrive(e: EntrepriseEtat) {
-    setExplorerLoading(e.entreprise_id);
-    try {
-      const r = await authedFetch(
-        `/api/v1/qbo-recus-drive/entreprises/${e.entreprise_id}/dossier-factures`
-      );
-      if (!r.ok) throw new Error(`http_${r.status}`);
-      const d = (await r.json()) as DossierFactures;
-      if (!d.folder_id) {
-        setErr(`${e.name} : aucun dossier Drive lié (fiche → Documents Drive).`);
-        return;
-      }
-      setErr(null);
-      setExplorer(d);
-    } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : "Erreur");
-    } finally {
-      setExplorerLoading(null);
-    }
-  }
-
-  // L'explorateur s'affiche sous le tableau : on y amène l'écran.
-  useEffect(() => {
-    if (explorer) {
-      explorerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  }, [explorer]);
-
-  // Échap quitte le plein écran.
-  useEffect(() => {
-    if (!fullscreen) return;
-    function onKey(ev: KeyboardEvent) {
-      if (ev.key === "Escape") setFullscreen(false);
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [fullscreen]);
   const [runs, setRuns] = useState<RunRecent[]>([]);
   const [annulation, setAnnulation] = useState<string | null>(null);
 
@@ -636,8 +576,7 @@ export default function RecusQuickbooksPage() {
             dossier partagé des entreprises (même nom). Coche des entreprises
             pour limiter un run ; sans coche, toutes les entreprises prêtes sont
             traitées. « Reclasser » traite toute entreprise qui a un dossier
-            Drive, connectée à QuickBooks ou non. « Ouvrir le Drive » affiche ici même le Drive de
-            l&apos;entreprise, à partir de son dossier Factures.
+            Drive, connectée à QuickBooks ou non.
           </p>
           {etat === null ? (
             <p className="mt-3 text-xs text-white/60">
@@ -660,9 +599,7 @@ export default function RecusQuickbooksPage() {
                   {etat.entreprises.map((e) => (
                     <tr
                       key={e.entreprise_id}
-                      className={`${e.prete ? "" : "opacity-80"} ${
-                        explorer?.entreprise_id === e.entreprise_id ? "bg-accent-500/10" : ""
-                      }`}
+                      className={e.prete ? "" : "opacity-80"}
                     >
                       <td className="py-2 pl-2">
                         <input
@@ -683,22 +620,7 @@ export default function RecusQuickbooksPage() {
                       </td>
                       <td className="px-3 py-2 font-semibold text-white">
                         <span className="inline-flex items-center gap-1.5">
-                          {e.drive_folder_id ? (
-                            <button
-                              type="button"
-                              onClick={() => void ouvrirDrive(e)}
-                              disabled={explorerLoading === e.entreprise_id}
-                              className="text-left hover:text-accent-500 hover:underline"
-                              title="Ouvrir le Drive de cette entreprise ici, à partir de Factures"
-                            >
-                              {explorerLoading === e.entreprise_id ? (
-                                <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />
-                              ) : null}
-                              {e.name}
-                            </button>
-                          ) : (
-                            <span>{e.name}</span>
-                          )}
+                          <span>{e.name}</span>
                           <Link
                             // eslint-disable-next-line @typescript-eslint/no-explicit-any
                             href={`/entreprises/${e.entreprise_id}` as any}
@@ -756,20 +678,6 @@ export default function RecusQuickbooksPage() {
                       <td className="px-3 py-2 text-xs">
                         {e.drive_folder_id ? (
                           <span className="inline-flex flex-wrap items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => void ouvrirDrive(e)}
-                              disabled={explorerLoading === e.entreprise_id}
-                              className="btn-outline-accent btn-xs inline-flex items-center gap-1"
-                              title="Afficher le Drive de cette entreprise ici, à partir de Factures"
-                            >
-                              {explorerLoading === e.entreprise_id ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : (
-                                <FolderOpen className="h-3 w-3" />
-                              )}
-                              Ouvrir le Drive
-                            </button>
                             <span className="text-white/70">
                               {e.drive_folder_name
                                 ? `« ${e.drive_folder_name} »`
@@ -810,62 +718,6 @@ export default function RecusQuickbooksPage() {
             </div>
           )}
         </section>
-
-        {/* Drive de l'entreprise choisie, sur cette page (comme « Documents
-            Drive » sur sa fiche), ouvert sur Factures ; plein écran possible. */}
-        {explorer && explorer.folder_id ? (
-          <section
-            ref={explorerRef}
-            className="mt-4 scroll-mt-24 rounded-2xl border border-accent-500/40 bg-brand-900 p-5"
-          >
-            <ExplorerEntete
-              explorer={explorer}
-              fullscreen={false}
-              onFullscreen={() => setFullscreen(true)}
-              onClose={() => {
-                setExplorer(null);
-                setFullscreen(false);
-              }}
-            />
-            <div className="mt-3">
-              <DriveFolderExplorer
-                folderId={explorer.racine_id || explorer.folder_id}
-                initialFolderId={explorer.factures_id}
-              />
-            </div>
-          </section>
-        ) : null}
-
-        {fullscreen && explorer && explorer.folder_id ? (
-          <div
-            className="fixed inset-0 z-[1300] flex flex-col bg-black/80 p-4 md:p-6"
-            role="dialog"
-            aria-modal="true"
-            aria-label={`Drive de ${explorer.name} — plein écran`}
-            onClick={() => setFullscreen(false)}
-          >
-            <div
-              className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-2xl"
-              onClick={(ev) => ev.stopPropagation()}
-            >
-              <ExplorerEntete
-                explorer={explorer}
-                fullscreen
-                onFullscreen={() => setFullscreen(false)}
-                onClose={() => {
-                  setExplorer(null);
-                  setFullscreen(false);
-                }}
-              />
-              <div className="mt-3 min-h-0 flex-1 overflow-auto">
-                <DriveFolderExplorer
-                  folderId={explorer.racine_id || explorer.folder_id}
-                  initialFolderId={explorer.factures_id}
-                />
-              </div>
-            </div>
-          </div>
-        ) : null}
 
         {/* Étape 2 / 3 : simulation puis rattrapage */}
         <section className="mt-4 rounded-2xl border border-brand-800 bg-brand-900 p-5">
@@ -1133,18 +985,7 @@ export default function RecusQuickbooksPage() {
                                         (e) => e.entreprise_id === j.entreprise_id
                                       )
                                     : undefined;
-                                if (!ent) return "—";
-                                if (!ent.drive_folder_id) return ent.name;
-                                return (
-                                  <button
-                                    type="button"
-                                    onClick={() => void ouvrirDrive(ent)}
-                                    className="text-left hover:text-accent-500 hover:underline"
-                                    title="Afficher le Drive de cette entreprise ici, à partir de Factures"
-                                  >
-                                    {ent.name}
-                                  </button>
-                                );
+                                return ent ? ent.name : "—";
                               })()}
                             </td>
                             <td className="px-3 py-1.5 text-white">{j.nom_fichier}</td>
@@ -1197,81 +1038,6 @@ export default function RecusQuickbooksPage() {
         </section>
       </div>
     </>
-  );
-}
-
-/** En-tête de l'explorateur Drive de la page (section et plein écran). */
-function ExplorerEntete({
-  explorer,
-  fullscreen,
-  onFullscreen,
-  onClose
-}: {
-  explorer: DossierFactures;
-  fullscreen: boolean;
-  onFullscreen: () => void;
-  onClose: () => void;
-}) {
-  const lien = `https://drive.google.com/drive/folders/${explorer.folder_id}`;
-  return (
-    <header className="flex flex-wrap items-start justify-between gap-3">
-      <div className="flex min-w-0 items-center gap-2">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
-          <Cloud className="h-4 w-4" />
-        </span>
-        <div className="min-w-0">
-          <h2 className="truncate text-base font-bold text-white">
-            Documents Drive — {explorer.name}
-          </h2>
-          {explorer.factures_id ? (
-            <p className="text-xs text-white/70">
-              Ouvert sur « {explorer.factures_nom} ». Le fil d&apos;Ariane remonte au
-              dossier de l&apos;entreprise.
-            </p>
-          ) : (
-            <p className="text-xs text-amber-200">
-              Aucun dossier « Factures » encore (créé à la première copie) :
-              ouvert à la racine de l&apos;entreprise.
-            </p>
-          )}
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <a
-          href={lien}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="btn-ghost btn-xs inline-flex items-center gap-1"
-          title="Ouvrir ce dossier dans Google Drive (nouvel onglet)"
-        >
-          <ExternalLink className="h-3.5 w-3.5" /> Google Drive
-        </a>
-        <button
-          type="button"
-          onClick={onFullscreen}
-          className="btn-ghost btn-xs inline-flex items-center gap-1"
-          title={fullscreen ? "Réduire (quitter le plein écran)" : "Afficher en plein écran"}
-        >
-          {fullscreen ? (
-            <>
-              <Minimize2 className="h-3.5 w-3.5" /> Réduire
-            </>
-          ) : (
-            <>
-              <Maximize2 className="h-3.5 w-3.5" /> Plein écran
-            </>
-          )}
-        </button>
-        <button
-          type="button"
-          onClick={onClose}
-          className="btn-ghost btn-xs inline-flex items-center gap-1"
-          title="Fermer le Drive"
-        >
-          <X className="h-3.5 w-3.5" /> Fermer
-        </button>
-      </div>
-    </header>
   );
 }
 

@@ -11,6 +11,7 @@ import {
   ArrowDownAZ,
   Brain,
   Briefcase,
+  Calculator,
   TrendingUp,
   Calendar,
   ChevronDown,
@@ -25,7 +26,6 @@ import {
   Loader2,
   Menu,
   Plus,
-  Receipt,
   Target,
   UserCog,
   Users,
@@ -55,6 +55,11 @@ type NavItem = {
   badge?: string | number;
   // Décalage visuel en sous-item (« Tâches récurrentes » sous « Tâches »).
   indent?: boolean;
+  // Section EN DÉVELOPPEMENT (Comptabilité, Steven 2026-10-04) : clé de sa
+  // page. Libellé en rouge pour qu'on s'en souvienne, et lien affiché
+  // seulement si le backend accorde EXPLICITEMENT cette page (fail-closed,
+  // contrairement au filtre d'accès habituel qui laisse passer dans le doute).
+  enDeveloppement?: string;
 };
 
 type EntrepriseLite = {
@@ -295,8 +300,15 @@ export default function EntreprisesLayout({
     // réactiver.
     { href: "/entreprises/contacts", label: "Contacts", icon: ContactIcon },
     { href: "/entreprises/signature", label: "Signature", icon: FileSignature },
-    // Saisie des reçus directement dans QuickBooks (Steven 2026-10-04).
-    { href: "/entreprises/recus", label: "Reçus", icon: Receipt },
+    // Comptabilité (Steven 2026-10-04) : Nouveau reçu (saisie directe dans
+    // QuickBooks), Paiements (à venir), Banque de reçus (Drive). En
+    // développement → propriétaires seulement, titre en rouge.
+    {
+      href: "/entreprises/comptabilite",
+      label: "Comptabilité",
+      icon: Calculator,
+      enDeveloppement: "entreprises.comptabilite"
+    },
     ...(vaultAccess
       ? [
           {
@@ -367,7 +379,12 @@ export default function EntreprisesLayout({
 
           <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5">
             <SidebarSection title="Navigation">
-              {NAVIGATION.filter((item) => canSeeHref(item.href)).map((item) => (
+              {NAVIGATION.filter(
+                (item) =>
+                  canSeeHref(item.href) &&
+                  (!item.enDeveloppement ||
+                    user.access?.[`page:${item.enDeveloppement}`] === true)
+              ).map((item) => (
                 <SidebarLink
                   key={item.href}
                   item={item}
@@ -554,10 +571,23 @@ function SidebarLink({
       >
         <item.icon
           className={`h-4 w-4 flex-shrink-0 ${
-            active ? "text-[var(--qg-accent)]" : ""
+            item.enDeveloppement
+              ? "text-red-400"
+              : active
+                ? "text-[var(--qg-accent)]"
+                : ""
           }`}
         />
-        <span className="flex-1">{item.label}</span>
+        <span
+          className={`flex-1 ${item.enDeveloppement ? "text-red-400" : ""}`}
+          title={
+            item.enDeveloppement
+              ? "Section en développement : visible seulement par les propriétaires pour le moment"
+              : undefined
+          }
+        >
+          {item.label}
+        </span>
         {item.badge ? (
           <span
             className="rounded-full px-1.5 py-0.5 text-[9px] font-bold text-[var(--qg-accent-ink)]"
