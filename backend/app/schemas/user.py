@@ -97,6 +97,11 @@ class UserRead(UserBase):
     # partie locale du courriel. La propriété est calculée côté ORM
     # (User.display_name) et lue automatiquement via from_attributes.
     display_name: str = ""
+    # Id de l'admin/owner qui regarde Kratos « comme » cet utilisateur
+    # (mode aperçu lecture seule, jeton émis par POST /users/{id}/apercu).
+    # ``None`` hors aperçu. Posé uniquement par /auth/me, à partir de la
+    # revendication ``apercu_par`` du jeton (jamais stocké en DB).
+    apercu_par: Optional[int] = None
 
 
 class UserUpdate(BaseModel):
