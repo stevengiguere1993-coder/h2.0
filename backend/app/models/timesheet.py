@@ -241,3 +241,71 @@ class TimesheetEntry(Base, TimestampUpdateMixin):
         Boolean, nullable=False, default=True, server_default="true"
     )
     hours: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+
+class TimesheetTaskLine(Base, TimestampUpdateMixin):
+    """Ligne « par tâche » d'une feuille de temps (Steven 2026-10-04).
+
+    L'employé décrit sa journée tâche par tâche : jour, compagnie, tâche
+    (importée des tâches Gestion d'entreprises ou saisie à la main) et
+    heures. Dès qu'une feuille a au moins une ligne, la grille
+    compagnie × jour (``TimesheetEntry``) est DÉRIVÉE de ces lignes —
+    paie, refacturation, tableau de bord et QuickBooks continuent donc de
+    lire la grille sans changement. Un gestionnaire peut changer la
+    compagnie d'une ligne après coup : la refacturation suit.
+    """
+
+    __tablename__ = "timesheet_task_lines"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    timesheet_id: Mapped[int] = mapped_column(
+        ForeignKey("timesheets.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    day_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    company_id: Mapped[int] = mapped_column(
+        ForeignKey("timesheet_companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Tâche Gestion d'entreprises d'origine (NULL = saisie à la main).
+    entreprise_tache_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("entreprise_taches.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    hours: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    position: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
+
+class TimesheetUserCompany(Base, TimestampUpdateMixin):
+    """Compagnies ASSIGNÉES à un employé (Steven 2026-10-04).
+
+    Un employé qui ne travaille que pour une ou deux compagnies (ex. le
+    vidéaste marketing d'Horizon) ne voit qu'elles dans sa feuille. Aucune
+    ligne pour l'employé = toutes les compagnies actives (comportement
+    historique).
+    """
+
+    __tablename__ = "timesheet_user_companies"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "company_id", name="uq_timesheet_user_company"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    company_id: Mapped[int] = mapped_column(
+        ForeignKey("timesheet_companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
