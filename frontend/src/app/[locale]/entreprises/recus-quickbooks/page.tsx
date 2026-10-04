@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -152,6 +152,38 @@ function fmtDateTime(iso: string | null): string {
   });
 }
 
+function fmtHeure(iso: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleTimeString("fr-CA", { hour: "2-digit", minute: "2-digit" });
+}
+
+/** Clé AAAA-MM-JJ locale d'une date ISO (regroupement du journal par jour). */
+function jourLocal(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function fmtJour(cle: string): string {
+  const [y, m, d] = cle.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("fr-CA", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  });
+}
+
+type JourJournal = {
+  cle: string;
+  lignes: Journal[];
+  copies: number;
+  doublons: number;
+  erreurs: number;
+  entreprises: string[];
+};
+
 export default function RecusQuickbooksPage() {
   const [etat, setEtat] = useState<Etat | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -237,9 +269,33 @@ export default function RecusQuickbooksPage() {
     }
   }, []);
 
+  /** Journal regroupé par jour (Phil 2026-10-04 : « une seule date qu'on
+   *  peut ouvrir » ; les jours sans import n'existent tout simplement pas). */
+  const journalParJour = useMemo<JourJournal[]>(() => {
+    if (!journal) return [];
+    const noms = new Map<number, string>();
+    for (const e of etat?.entreprises ?? []) noms.set(e.entreprise_id, e.name);
+    const jours = new Map<string, JourJournal>();
+    for (const j of journal) {
+      const cle = jourLocal(j.created_at);
+      let g = jours.get(cle);
+      if (!g) {
+        g = { cle, lignes: [], copies: 0, doublons: 0, erreurs: 0, entreprises: [] };
+        jours.set(cle, g);
+      }
+      g.lignes.push(j);
+      if (j.statut === "copie") g.copies += 1;
+      else if (j.statut === "erreur") g.erreurs += 1;
+      else g.doublons += 1;
+      const nom = j.entreprise_id != null ? noms.get(j.entreprise_id) : undefined;
+      if (nom && !g.entreprises.includes(nom)) g.entreprises.push(nom);
+    }
+    return [...jours.values()].sort((a, b) => (a.cle < b.cle ? 1 : -1));
+  }, [journal, etat]);
+
   const chargerJournal = useCallback(async () => {
     try {
-      const r = await authedFetch("/api/v1/qbo-recus-drive/journal?limit=150");
+      const r = await authedFetch("/api/v1/qbo-recus-drive/journal?limit=500");
       if (r.ok) setJournal((await r.json()) as Journal[]);
     } catch {
       /* journal facultatif */
@@ -710,62 +766,87 @@ export default function RecusQuickbooksPage() {
           ) : journal.length === 0 ? (
             <p className="mt-2 text-xs text-white/60">Aucune copie encore.</p>
           ) : (
-            <div className="mt-3 overflow-x-auto">
-              <table className="w-full min-w-[760px] text-left text-xs">
-                <thead className="border-b border-brand-800 text-[10px] uppercase tracking-wider text-white/60">
-                  <tr>
-                    <th className="px-3 py-2">Quand</th>
-                    <th className="px-3 py-2">Fichier</th>
-                    <th className="px-3 py-2">Source</th>
-                    <th className="px-3 py-2">Statut</th>
-                    <th className="px-3 py-2"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-brand-800">
-                  {journal.map((j) => (
-                    <tr key={j.id}>
-                      <td className="px-3 py-1.5 font-mono text-white/70">
-                        {fmtDateTime(j.created_at)}
-                      </td>
-                      <td className="px-3 py-1.5 text-white">{j.nom_fichier}</td>
-                      <td className="px-3 py-1.5 text-white/70">
-                        {j.txn_type || "À classer"} · {j.declencheur || "—"}
-                      </td>
-                      <td className="px-3 py-1.5">
-                        <span
-                          className={`badge ${
-                            j.statut === "copie"
-                              ? "badge-emerald"
-                              : j.statut === "erreur"
-                                ? "badge-rose"
-                                : "badge-neutral"
-                          }`}
-                          title={j.detail || undefined}
-                        >
-                          {j.statut === "copie"
-                            ? "copié"
-                            : j.statut === "ignore_doublon"
-                              ? "déjà dans le Drive"
-                              : j.statut}
-                        </span>
-                      </td>
-                      <td className="px-3 py-1.5 text-right">
-                        {j.drive_url ? (
-                          <a
-                            href={j.drive_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="btn-ghost btn-xs"
-                            title="Ouvrir dans Drive"
-                          >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                          </a>
-                        ) : null}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="mt-3 space-y-2">
+              {journalParJour.map((g) => (
+                <details
+                  key={g.cle}
+                  className="rounded-xl border border-brand-800 bg-brand-950 p-3"
+                >
+                  <summary className="cursor-pointer text-sm font-semibold text-white">
+                    <span className="capitalize">{fmtJour(g.cle)}</span>
+                    <span className="ml-2 text-xs font-normal text-white/70">
+                      {g.copies} copié(s)
+                      {g.doublons ? ` · ${g.doublons} déjà dans le Drive` : ""}
+                      {g.erreurs ? ` · ${g.erreurs} erreur(s)` : ""}
+                      {g.entreprises.length ? ` · ${g.entreprises.join(", ")}` : ""}
+                    </span>
+                  </summary>
+                  <div className="mt-2 overflow-x-auto">
+                    <table className="w-full min-w-[720px] text-left text-xs">
+                      <thead className="border-b border-brand-800 text-[10px] uppercase tracking-wider text-white/60">
+                        <tr>
+                          <th className="px-3 py-2">Heure</th>
+                          <th className="px-3 py-2">Entreprise</th>
+                          <th className="px-3 py-2">Fichier</th>
+                          <th className="px-3 py-2">Source</th>
+                          <th className="px-3 py-2">Statut</th>
+                          <th className="px-3 py-2"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-brand-800">
+                        {g.lignes.map((j) => (
+                          <tr key={j.id}>
+                            <td className="px-3 py-1.5 font-mono text-white/70">
+                              {fmtHeure(j.created_at)}
+                            </td>
+                            <td className="px-3 py-1.5 text-white/70">
+                              {(j.entreprise_id != null &&
+                                etat?.entreprises.find((e) => e.entreprise_id === j.entreprise_id)
+                                  ?.name) ||
+                                "—"}
+                            </td>
+                            <td className="px-3 py-1.5 text-white">{j.nom_fichier}</td>
+                            <td className="px-3 py-1.5 text-white/70">
+                              {j.txn_type || "À classer"} · {j.declencheur || "—"}
+                            </td>
+                            <td className="px-3 py-1.5">
+                              <span
+                                className={`badge ${
+                                  j.statut === "copie"
+                                    ? "badge-emerald"
+                                    : j.statut === "erreur"
+                                      ? "badge-rose"
+                                      : "badge-neutral"
+                                }`}
+                                title={j.detail || undefined}
+                              >
+                                {j.statut === "copie"
+                                  ? "copié"
+                                  : j.statut === "ignore_doublon"
+                                    ? "déjà dans le Drive"
+                                    : j.statut}
+                              </span>
+                            </td>
+                            <td className="px-3 py-1.5 text-right">
+                              {j.drive_url ? (
+                                <a
+                                  href={j.drive_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="btn-ghost btn-xs"
+                                  title="Ouvrir dans Drive"
+                                >
+                                  <ExternalLink className="h-3.5 w-3.5" />
+                                </a>
+                              ) : null}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              ))}
             </div>
           )}
         </section>
