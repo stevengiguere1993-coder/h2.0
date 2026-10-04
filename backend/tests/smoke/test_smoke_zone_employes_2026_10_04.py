@@ -387,3 +387,109 @@ def test_suivi_du_temps_punch_jour_local(client, auth_headers, run):
     )
     ligne = next(l for l in r.json()["lignes"] if l["user_id"] == uid)
     assert ligne["heures_punch"] == 0.0
+
+
+# ── Aperçu « voir comme » (lecture seule) ───────────────────────────────
+
+
+def _apercu(client, auth_headers, user_id: int) -> dict:
+    """Jeton d'aperçu admin → ``user_id``, en en-tête Bearer."""
+    r = client.post(f"/api/v1/users/{user_id}/apercu", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+def test_apercu_zone_employes_autre(client, auth_headers, admin_id, video):
+    """Un admin qui regarde Kratos comme l'employé vidéo voit sa zone
+    employés (mêmes accès, mêmes lectures) sans pouvoir rien y modifier."""
+    h = _apercu(client, auth_headers, video["id"])
+    me = client.get("/api/v1/auth/me", headers=h).json()
+    assert me["id"] == video["id"]
+    assert me["apercu_par"] == admin_id
+    assert me["volets"] == ["entreprises"]
+    assert me["access"]["page:construction.mobile"] is True
+    assert me["access"].get("page:entreprises.employes") is not True
+
+    for url in (
+        "/api/v1/mobile/agenda?days=14",
+        "/api/v1/entreprises/mes-taches",
+        "/api/v1/entreprises/mes-taches/entreprises",
+        "/api/v1/timesheets/resolve",
+    ):
+        r = client.get(url, headers=h)
+        assert r.status_code == 200, (url, r.text)
+    # La section admin reste fermée, comme pour l'employé lui-même.
+    assert client.get("/api/v1/entreprises/employes", headers=h).status_code == 403
+
+    # Lecture seule : se créer une tâche est refusé, rien n'est créé.
+    avant = client.get("/api/v1/entreprises/mes-taches", headers=h).json()
+    r = client.post(
+        "/api/v1/entreprises/mes-taches",
+        headers=h,
+        json={"title": "Pendant l'aperçu", "entreprise_id": video["entreprise_id"]},
+    )
+    assert r.status_code == 403, r.text
+    assert "aperçu" in r.json()["detail"].lower()
+    apres = client.get("/api/v1/entreprises/mes-taches", headers=h).json()
+    assert len(apres) == len(avant)
+
+
+def test_apercu_section_employes(client, auth_headers, run, video):
+    """Vu comme un autre admin : la section Entreprises → Employés se
+    charge (équipe, suivi du temps, agenda, tâches, feuilles) mais
+    planifier dans l'agenda d'un employé est refusé."""
+
+    async def _seed() -> int:
+        async with TestSessionLocal() as s:
+            u = User(
+                email="admin.apercu.zone@example.com",
+                hashed_password=get_password_hash("x" * 12),
+                is_active=True,
+                is_admin=True,
+                role="admin",
+                first_name="Alex",
+                last_name="Aperçu",
+            )
+            s.add(u)
+            await s.commit()
+            return u.id
+
+    autre_admin = run(_seed())
+    h = _apercu(client, auth_headers, autre_admin)
+    me = client.get("/api/v1/auth/me", headers=h).json()
+    assert me["id"] == autre_admin
+    assert me["access"]["page:entreprises.employes"] is True
+
+    for url in (
+        "/api/v1/entreprises/employes",
+        "/api/v1/entreprises/employes?inclure_admins=true",
+        "/api/v1/entreprises/employes/suivi-temps",
+        f"/api/v1/entreprises/employes/{video['id']}/agenda",
+        "/api/v1/entreprises/taches",
+        "/api/v1/timesheets/team",
+        "/api/v1/users",
+    ):
+        r = client.get(url, headers=h)
+        assert r.status_code == 200, (url, r.text)
+    equipe = client.get("/api/v1/entreprises/employes", headers=h).json()
+    assert video["id"] in {e["id"] for e in equipe}
+
+    debut = datetime.now(timezone.utc) + timedelta(days=3)
+    r = client.post(
+        f"/api/v1/entreprises/employes/{video['id']}/agenda",
+        headers=h,
+        json={
+            "title": "Tournage pendant l'aperçu",
+            "start_at": debut.isoformat(),
+            "end_at": (debut + timedelta(hours=2)).isoformat(),
+            "event_type": "tournage",
+        },
+    )
+    assert r.status_code == 403, r.text
+    titres = {
+        e["title"]
+        for e in client.get(
+            f"/api/v1/entreprises/employes/{video['id']}/agenda", headers=h
+        ).json()
+    }
+    assert "Tournage pendant l'aperçu" not in titres
