@@ -440,7 +440,19 @@ export default function FeuilleDeTempsPage() {
       for (const [cid, txt] of Object.entries(notes)) {
         if (txt && txt.trim()) notesPayload[cid] = txt.trim();
       }
-      if (sheetMode === "taches") {
+      // Le point d'entrée suit les DONNÉES, pas l'onglet affiché : une
+      // feuille qui a (ou avait) des lignes par tâche se sauvegarde par
+      // /taches, sinon par la grille (retour de relecture 2026-10-04).
+      const parTache = taches.length > 0 || !!detail.mode_taches;
+      if (parTache) {
+        const sansTitre = taches.find(
+          (l) => !l.title.trim() && parseHours(l.hours) > 0
+        );
+        if (sansTitre) {
+          throw new Error(
+            "Chaque tâche avec des heures doit avoir une description."
+          );
+        }
         const lignes = taches
           .filter((l) => l.title.trim())
           .map((l) => ({
@@ -510,7 +522,7 @@ export default function FeuilleDeTempsPage() {
     } finally {
       setSaving(false);
     }
-  }, [detail, cells, cellsNr, notes, sheetMode, taches]);
+  }, [detail, cells, cellsNr, notes, taches]);
 
   // Grille locale ← réponse serveur (après une sauvegarde par tâche).
   function hydrateCellsFrom(d: Detail) {
@@ -643,6 +655,18 @@ export default function FeuilleDeTempsPage() {
         if (!ok) return;
       }
       setView(v);
+    },
+    [dirty, detail, save]
+  );
+
+  // Changer de mode de saisie sauvegarde d'abord (mêmes raisons).
+  const switchSheetMode = useCallback(
+    async (v: "taches" | "grille") => {
+      if (dirty && detail?.can_edit) {
+        const ok = await save();
+        if (!ok) return;
+      }
+      setSheetMode(v);
     },
     [dirty, detail, save]
   );
@@ -815,14 +839,14 @@ export default function FeuilleDeTempsPage() {
               <div className="flex items-center gap-1 rounded-xl border border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-1">
                 <TabBtn
                   active={sheetMode === "taches"}
-                  onClick={() => setSheetMode("taches")}
+                  onClick={() => void switchSheetMode("taches")}
                   icon={ListChecks}
                 >
                   Par tâche
                 </TabBtn>
                 <TabBtn
                   active={sheetMode === "grille"}
-                  onClick={() => setSheetMode("grille")}
+                  onClick={() => void switchSheetMode("grille")}
                   icon={Table2}
                 >
                   Par compagnie
@@ -929,7 +953,7 @@ export default function FeuilleDeTempsPage() {
                 />
                 <button
                   type="button"
-                  className="text-xs font-medium text-[var(--qg-accent)] hover:underline"
+                  className="text-xs font-medium text-accent-500 hover:underline"
                   onClick={() => setShowDerivedGrid((v) => !v)}
                 >
                   {showDerivedGrid
@@ -948,6 +972,7 @@ export default function FeuilleDeTempsPage() {
                     perDayNr={computed.perDayNr}
                     totalHeures={computed.totalHeures}
                     canEdit={false}
+                    notesEditable={canEdit}
                     onCell={setCell}
                     onNote={setNote}
                   />
@@ -972,6 +997,7 @@ export default function FeuilleDeTempsPage() {
                   perDayNr={computed.perDayNr}
                   totalHeures={computed.totalHeures}
                   canEdit={gridEditable}
+                  notesEditable={canEdit}
                   onCell={setCell}
                   onNote={setNote}
                 />
@@ -1294,6 +1320,7 @@ function Grille({
   perDayNr,
   totalHeures,
   canEdit,
+  notesEditable,
   onCell,
   onNote
 }: {
@@ -1307,6 +1334,9 @@ function Grille({
   perDayNr: number[];
   totalHeures: number;
   canEdit: boolean;
+  //: Notes modifiables même quand les cases sont en lecture seule
+  //: (grille dérivée des lignes par tâche). Défaut : suit canEdit.
+  notesEditable?: boolean;
   onCell: (
     companyId: number,
     dayIdx: number,
@@ -1315,6 +1345,7 @@ function Grille({
   ) => void;
   onNote: (companyId: number, value: string) => void;
 }) {
+  const notesOk = notesEditable ?? canEdit;
   const dates = detail.jours_dates.map(parseISO);
   const isWeekend = (i: number) => {
     const dow = dates[i].getDay();
@@ -1424,7 +1455,7 @@ function Grille({
                   {tot ? tot.toLocaleString("fr-CA") : ""}
                 </td>
                 <td className="px-2 py-1">
-                  {canEdit ? (
+                  {notesOk ? (
                     <input
                       value={notes[l.company_id] || ""}
                       onChange={(e) => onNote(l.company_id, e.target.value)}
@@ -1503,7 +1534,7 @@ function Grille({
                           retour Phil : les employés pouvaient saisir des
                           heures mais pas de note comme sur les autres lignes. */}
                       <td className="px-2 py-1">
-                        {canEdit ? (
+                        {notesOk ? (
                           <input
                             value={notes[l.company_id] || ""}
                             onChange={(e) => onNote(l.company_id, e.target.value)}

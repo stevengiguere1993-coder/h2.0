@@ -171,7 +171,8 @@ def test_garde_fous_lignes_et_grille(client, auth_headers, employee_headers, emp
     assert r.json()["total_heures"] == 8
     assert r.json()["mode_taches"] is False
 
-    # Tâche inexistante ou non assignée à l'employé → refus (pas de 500).
+    # Tâche inexistante ou non assignée à l'employé : la ligne est gardée
+    # comme tâche manuelle (pas de 500, pas de lien vers la tâche d'autrui).
     for tid in (999_999_999, tache_collegue):
         r = client.put(
             f"/api/v1/timesheets/{tsid}/taches",
@@ -179,7 +180,9 @@ def test_garde_fous_lignes_et_grille(client, auth_headers, employee_headers, emp
             json={"lignes": [{"day_index": 0, "company_id": cie,
                               "entreprise_tache_id": tid, "title": "x", "hours": 1}]},
         )
-        assert r.status_code == 400, r.text
+        assert r.status_code == 200, r.text
+        assert r.json()["taches"][0]["entreprise_tache_id"] is None
+        assert r.json()["total_heures"] == 1
     # Le gestionnaire peut référencer une tâche existante de quelqu'un d'autre.
     r = client.put(
         f"/api/v1/timesheets/{tsid}/taches",
@@ -188,6 +191,7 @@ def test_garde_fous_lignes_et_grille(client, auth_headers, employee_headers, emp
                           "entreprise_tache_id": tache_collegue, "title": "x", "hours": 1}]},
     )
     assert r.status_code == 200, r.text
+    assert r.json()["taches"][0]["entreprise_tache_id"] == tache_collegue
     r = client.put(
         f"/api/v1/timesheets/{tsid}/taches", headers=auth_headers, json={"lignes": []}
     )

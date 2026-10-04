@@ -2050,18 +2050,20 @@ async def _verifier_compagnies(db, ts: Timesheet, user: User, ids: set) -> None:
         raise HTTPException(status_code=404, detail="Compagnie introuvable")
 
 
-async def _verifier_taches_referencees(
+async def _taches_referencables(
     db, ts: Timesheet, user: User, lignes: List["TacheLigneIn"]
-) -> None:
-    """Les ``entreprise_tache_id`` doivent exister (sinon IntegrityError →
-    500 sur PostgreSQL) et, pour un employé, être assignés à l'employé
-    de la feuille — la même règle que l'import."""
+) -> set:
+    """Ids de tâches que les lignes peuvent référencer : la tâche doit
+    exister (sinon IntegrityError → 500 sur PostgreSQL) et, pour un
+    employé, lui être assignée — la même règle que l'import. Une ligne
+    dont la tâche a disparu ou n'est pas la sienne est gardée comme tâche
+    saisie à la main (même esprit que le ``ondelete=SET NULL``)."""
     from app.models.entreprise_tache import EntrepriseTache
     from app.models.entreprise_tache_assignee import EntrepriseTacheAssignee
 
     ids = {ln.entreprise_tache_id for ln in lignes if ln.entreprise_tache_id}
     if not ids:
-        return
+        return set()
     q = select(EntrepriseTache.id).where(EntrepriseTache.id.in_(list(ids)))
     if not _is_manager(user):
         via_join = select(EntrepriseTacheAssignee.tache_id).where(
@@ -2073,12 +2075,7 @@ async def _verifier_taches_referencees(
                 EntrepriseTache.id.in_(via_join),
             )
         )
-    found = set((await db.execute(q)).scalars().all())
-    if found != ids:
-        raise HTTPException(
-            status_code=400,
-            detail="Tâche introuvable ou non assignée à cet employé",
-        )
+    return set((await db.execute(q)).scalars().all())
 
 
 @router.put("/{timesheet_id}/taches", response_model=TimesheetDetail)
@@ -2098,7 +2095,7 @@ async def replace_task_lines(
     await _verifier_compagnies(
         db, ts, user, {ln.company_id for ln in payload.lignes}
     )
-    await _verifier_taches_referencees(db, ts, user, payload.lignes)
+    referencables = await _taches_referencables(db, ts, user, payload.lignes)
     had_lines = bool(await _load_task_lines(db, ts.id))
     await db.execute(
         delete(TimesheetTaskLine).where(
@@ -2116,7 +2113,11 @@ async def replace_task_lines(
                 timesheet_id=ts.id,
                 day_index=ln.day_index,
                 company_id=ln.company_id,
-                entreprise_tache_id=ln.entreprise_tache_id,
+                entreprise_tache_id=(
+                    ln.entreprise_tache_id
+                    if ln.entreprise_tache_id in referencables
+                    else None
+                ),
                 title=title[:255],
                 hours=round(float(ln.hours), 2),
                 position=i,
