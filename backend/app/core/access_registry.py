@@ -258,6 +258,10 @@ PAGES: list[PageEntry] = [
        "/entreprises/signature"),
     _p("entreprises.abonnements", "Abonnements", "entreprises", "admin",
        "/entreprises/abonnements"),
+    # Saisie des reçus vers QuickBooks (Steven 2026-10-04) : crée des
+    # dépenses dans le QuickBooks des inc → direction par défaut.
+    _p("entreprises.recus", "Reçus (saisie vers QuickBooks)", "entreprises",
+       "admin", "/entreprises/recus"),
     # ── Investisseurs ──
     _p("investisseur.portefeuille", "Mon portefeuille", "investisseur",
        "employee", "/investisseur"),

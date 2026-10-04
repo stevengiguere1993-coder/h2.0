@@ -167,6 +167,7 @@ from app.api.v1.endpoints import (
     qbo_recus_drive,
     qbo_token,
     qbo_webhook,
+    recus_qbo,
     search,
     contract_sign,
     soumission_avenants,
@@ -486,6 +487,8 @@ api_router.include_router(org_seed_canonical.router)
 # être avalé par /rencontres/{id}.
 api_router.include_router(optimisation.router, dependencies=DEP_ENTREPRISES)
 api_router.include_router(qbo_recus_drive.router, dependencies=DEP_ENTREPRISES)
+# Saisie des reçus vers QuickBooks (formulaire « Reçus » du pôle, 2026-10-04).
+api_router.include_router(recus_qbo.router, dependencies=DEP_ENTREPRISES)
 api_router.include_router(rencontres_teams.router)
 api_router.include_router(rencontres.router)
 api_router.include_router(timesheets.router)

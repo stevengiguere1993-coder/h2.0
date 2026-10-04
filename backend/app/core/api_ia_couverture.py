@@ -24,6 +24,10 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "construction_bon_defaults",
     "qbo_connections",
     "qbo_recus_drive",
+    #: Reçus saisis dans Kratos et envoyés à QuickBooks (pôle Entreprises,
+    #: 2026-10-04) — trace minimale lue par GET /recus-qbo/journal
+    #: (catalogue API) ; le reçu lui-même vit dans QuickBooks.
+    "recus_qbo_saisis",
     "user_access_overrides",
     "achats",
     "agenda_events",
