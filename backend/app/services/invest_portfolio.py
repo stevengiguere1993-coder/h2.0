@@ -230,7 +230,7 @@ async def valeur_immeuble(
 async def hypotheques_actives(
     db: AsyncSession, immeuble_id: int
 ) -> list[Hypotheque]:
-    return list(
+    hyps = list(
         (
             await db.execute(
                 select(Hypotheque).where(
@@ -240,6 +240,11 @@ async def hypotheques_actives(
             )
         ).scalars()
     )
+    # Capital = déboursé à ce jour pour les prêts versés par tranches.
+    from app.services.hypotheque_calc import charger_debourses
+
+    await charger_debourses(db, hyps)
+    return hyps
 
 
 # ─────────────────────────────────────────────────────────────────────

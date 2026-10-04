@@ -355,6 +355,9 @@ async def ensure_critical_columns() -> None:
         # Tables préexistantes → create_all ne pose pas les colonnes ;
         # sans elles, tout SELECT sur ces tables plante → 500.
         ("imm_hypotheques", "composition_interets", "VARCHAR(16)"),
+        # Type de prêt + mode de remboursement (Phil 2026-10-04).
+        ("imm_hypotheques", "type_pret", "VARCHAR(16)"),
+        ("imm_hypotheques", "mode_remboursement", "VARCHAR(24)"),
         ("imm_evaluations", "is_reference", "BOOLEAN NOT NULL DEFAULT FALSE"),
         ("immeuble_depenses", "is_pourcentage",
          "BOOLEAN NOT NULL DEFAULT FALSE"),
@@ -1994,6 +1997,8 @@ async def init_db() -> None:
             # de référence pour le calcul d'équité, dépenses en % des
             # loyers mensuels + taxables (TPS/TVQ ×1.14975).
             ("imm_hypotheques", "composition_interets", "VARCHAR(16)"),
+            ("imm_hypotheques", "type_pret", "VARCHAR(16)"),
+            ("imm_hypotheques", "mode_remboursement", "VARCHAR(24)"),
             ("imm_evaluations", "is_reference",
              "BOOLEAN NOT NULL DEFAULT FALSE"),
             ("immeuble_depenses", "is_pourcentage",

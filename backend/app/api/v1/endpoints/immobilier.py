@@ -103,6 +103,8 @@ from app.schemas.immobilier import (
     EvaluationUpdate,
     HypothequeCreate,
     HypothequeRead,
+    HypothequeTrancheCreate,
+    HypothequeTrancheRead,
     HypothequeUpdate,
     ImmeubleCreate,
     ImmeubleFinancials,
@@ -7308,12 +7310,33 @@ async def finances_previsionnel(
 # ── Hypothèques ────────────────────────────────────────────────────────
 
 
-def _hyp_read(obj: Hypotheque) -> HypothequeRead:
-    """HypothequeRead + balance THÉORIQUE du jour (amortissement)."""
-    from app.services.hypotheque_calc import balance_calculee_de
+async def _hyp_read(db, obj: Hypotheque) -> HypothequeRead:
+    """HypothequeRead + balance THÉORIQUE du jour (amortissement) +
+    tranches de déboursé (capital = déboursé à ce jour)."""
+    from app.models.immobilier import HypothequeTranche
+    from app.services.hypotheque_calc import (
+        ATTR_DEBOURSE,
+        balance_calculee_de,
+        charger_debourses,
+    )
 
+    await charger_debourses(db, [obj])
     r = HypothequeRead.model_validate(obj)
     r.balance_calculee = balance_calculee_de(obj)
+    r.montant_debourse = getattr(obj, ATTR_DEBOURSE, None)
+    r.tranches = [
+        HypothequeTrancheRead.model_validate(t)
+        for t in (
+            await db.execute(
+                select(HypothequeTranche)
+                .where(HypothequeTranche.hypotheque_id == obj.id)
+                .order_by(
+                    HypothequeTranche.date_debourse.asc(),
+                    HypothequeTranche.id.asc(),
+                )
+            )
+        ).scalars().all()
+    ]
     return r
 
 
@@ -7332,7 +7355,7 @@ async def list_hypotheques(
             .order_by(Hypotheque.rang.asc())
         )
     ).scalars().all()
-    return [_hyp_read(r) for r in rows]
+    return [await _hyp_read(db, r) for r in rows]
 
 
 def _pmt_hypotheque(obj: Hypotheque) -> float | None:
@@ -7343,22 +7366,22 @@ def _pmt_hypotheque(obj: Hypotheque) -> float | None:
     variable), selon ``composition_interets``. Retourne None si les
     intrants manquent.
     """
-    taux = float(obj.taux_pct) if obj.taux_pct is not None else None
-    n = int(obj.amortissement_mois or 0)
+    from app.services.hypotheque_calc import paiement_mensuel_calcule
+
+    from app.services.hypotheque_calc import capital_de
+
     principal = float(
         obj.balance_actuelle
         if obj.balance_actuelle is not None
-        else (obj.montant_initial or 0)
+        else (capital_de(obj) or 0)
     )
-    if taux is None or n <= 0 or principal <= 0:
-        return None
-    if (obj.composition_interets or "semi") == "mensuelle":
-        i = taux / 100.0 / 12.0
-    else:
-        i = (1.0 + taux / 100.0 / 2.0) ** (2.0 / 12.0) - 1.0
-    if i <= 0:
-        return round(principal / n, 2)
-    return round(principal * i / (1.0 - (1.0 + i) ** (-n)), 2)
+    return paiement_mensuel_calcule(
+        taux_pct=float(obj.taux_pct) if obj.taux_pct is not None else None,
+        amortissement_mois=obj.amortissement_mois,
+        principal=principal,
+        composition=obj.composition_interets,
+        mode_remboursement=getattr(obj, "mode_remboursement", None),
+    )
 
 
 def _maybe_recompute_pmt(obj: Hypotheque) -> None:
@@ -7388,7 +7411,7 @@ async def create_hypotheque(
     db.add(obj)
     await db.commit()
     await db.refresh(obj)
-    return _hyp_read(obj)
+    return await _hyp_read(db, obj)
 
 
 @router.patch("/hypotheques/{hyp_id}", response_model=HypothequeRead)
@@ -7405,11 +7428,15 @@ async def update_hypotheque(
     data = payload.model_dump(exclude_unset=True)
     for k, v in data.items():
         setattr(obj, k, v)
+    # Capital = déboursé à ce jour si l'hypothèque est versée par tranches.
+    from app.services.hypotheque_calc import charger_debourses as _cd
+
+    await _cd(db, [obj])
     # Un intrant du calcul change sans paiement explicite → on recalcule
     # pour que la liste/cashflow/financials reflètent la modification.
     calc_keys = {
         "taux_pct", "amortissement_mois", "composition_interets",
-        "balance_actuelle", "montant_initial",
+        "balance_actuelle", "montant_initial", "mode_remboursement",
     }
     if calc_keys & data.keys() and "paiement_mensuel" not in data:
         pmt = _pmt_hypotheque(obj)
@@ -7420,7 +7447,120 @@ async def update_hypotheque(
     obj.updated_at = _now()
     await db.commit()
     await db.refresh(obj)
-    return _hyp_read(obj)
+    return await _hyp_read(db, obj)
+
+
+# ── Tranches de déboursé (Phil 2026-10-04) ──────────────────────────────
+
+
+async def _hyp_tranche_apres_mutation(db, obj: Hypotheque) -> HypothequeRead:
+    """Après ajout / retrait d'une tranche : le capital déboursé change,
+    donc le paiement mensuel est recalculé (intérêts seulement : balance
+    × taux ; amorti : sur le déboursé)."""
+    from app.services.hypotheque_calc import charger_debourses
+
+    await charger_debourses(db, [obj])
+    pmt = _pmt_hypotheque(obj)
+    if pmt is not None:
+        obj.paiement_mensuel = pmt
+    obj.updated_at = _now()
+    await db.commit()
+    await db.refresh(obj)
+    return await _hyp_read(db, obj)
+
+
+@router.get(
+    "/hypotheques/{hyp_id}/tranches",
+    response_model=List[HypothequeTrancheRead],
+)
+async def list_tranches_hypotheque(
+    hyp_id: int, db: DBSession, user: CurrentUser
+) -> List[HypothequeTrancheRead]:
+    _require_volet(user)
+    from app.models.immobilier import HypothequeTranche
+
+    if await db.get(Hypotheque, hyp_id) is None:
+        raise HTTPException(status_code=404, detail="Hypothèque introuvable.")
+    rows = (
+        await db.execute(
+            select(HypothequeTranche)
+            .where(HypothequeTranche.hypotheque_id == hyp_id)
+            .order_by(HypothequeTranche.date_debourse.asc(), HypothequeTranche.id.asc())
+        )
+    ).scalars().all()
+    return [HypothequeTrancheRead.model_validate(t) for t in rows]
+
+
+@router.post(
+    "/hypotheques/{hyp_id}/tranches",
+    response_model=HypothequeRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Ajoute une tranche de déboursé (renvoie l'hypothèque à jour)",
+)
+async def create_tranche_hypotheque(
+    hyp_id: int,
+    payload: HypothequeTrancheCreate,
+    db: DBSession,
+    user: CurrentUser,
+) -> HypothequeRead:
+    _require_volet(user)
+    from app.models.immobilier import HypothequeTranche
+
+    obj = await db.get(Hypotheque, hyp_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Hypothèque introuvable.")
+    deja = float(
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(HypothequeTranche.montant), 0)).where(
+                    HypothequeTranche.hypotheque_id == hyp_id
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    autorise = float(obj.montant_initial or 0)
+    if autorise > 0 and deja + float(payload.montant) > autorise + 0.005:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Les tranches dépasseraient le montant autorisé "
+                f"({deja + float(payload.montant):,.2f} $ > {autorise:,.2f} $). "
+                "Augmente le montant initial de l'hypothèque d'abord."
+            ).replace(",", " "),
+        )
+    db.add(
+        HypothequeTranche(
+            hypotheque_id=hyp_id,
+            date_debourse=payload.date_debourse,
+            montant=payload.montant,
+            note=(payload.note or "").strip() or None,
+        )
+    )
+    await db.flush()
+    return await _hyp_tranche_apres_mutation(db, obj)
+
+
+@router.delete(
+    "/hypotheques/{hyp_id}/tranches/{tranche_id}",
+    response_model=HypothequeRead,
+    summary="Retire une tranche de déboursé (renvoie l'hypothèque à jour)",
+)
+async def delete_tranche_hypotheque(
+    hyp_id: int, tranche_id: int, db: DBSession, user: CurrentUser
+) -> HypothequeRead:
+    _require_volet(user)
+    from app.models.immobilier import HypothequeTranche
+
+    obj = await db.get(Hypotheque, hyp_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Hypothèque introuvable.")
+    t = await db.get(HypothequeTranche, tranche_id)
+    if t is None or t.hypotheque_id != hyp_id:
+        raise HTTPException(status_code=404, detail="Tranche introuvable.")
+    await db.delete(t)
+    await db.flush()
+    return await _hyp_tranche_apres_mutation(db, obj)
 
 
 @router.delete(
@@ -7890,6 +8030,9 @@ async def get_financials(
             )
         )
     ).scalars().all()
+    from app.services.hypotheque_calc import charger_debourses as _charger_deb
+
+    await _charger_deb(db, hyps_actives)
     paiement_hyp = sum(float(h.paiement_mensuel or 0) for h in hyps_actives)
     balance_hyp = round(sum(balance_effective(h) for h in hyps_actives), 2)
 
