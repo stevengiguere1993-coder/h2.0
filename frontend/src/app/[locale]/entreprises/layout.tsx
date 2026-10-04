@@ -10,6 +10,7 @@ import { usePathname } from "next/navigation";
 import {
   ArrowDownAZ,
   Brain,
+  Receipt,
   Briefcase,
   TrendingUp,
   Calendar,
@@ -276,6 +277,11 @@ export default function EntreprisesLayout({
       href: "/entreprises/projets-optimisation",
       label: "Projets · Optimisation",
       icon: TrendingUp
+    },
+    {
+      href: "/entreprises/recus-quickbooks",
+      label: "Reçus QuickBooks → Drive",
+      icon: Receipt
     },
     { href: "/entreprises/kratos", label: "Kratos · Cerveau", icon: Brain },
     { href: "/entreprises/rencontres", label: "Rencontres", icon: Calendar },
