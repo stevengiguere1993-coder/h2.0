@@ -548,6 +548,42 @@ async def revoke_token(db: AsyncSession, *, user_id: int) -> None:
     )
 
 
+async def utilisateur_partage(db: AsyncSession) -> Optional[int]:
+    """Compte Drive PARTAGÉ : le premier utilisateur qui a connecté
+    Google Drive dans Kratos (le compte Horizon). Sert de repli pour
+    tout utilisateur qui n'a pas connecté le sien — le Drive est commun,
+    inutile que chacun refasse l'OAuth (retour Phil 2026-10-04 : la
+    section « Documents Drive » exigeait une connexion personnelle alors
+    que le dossier est bien là)."""
+    row = (
+        await db.execute(
+            select(DriveUserToken.user_id).order_by(DriveUserToken.id.asc())
+        )
+    ).first()
+    return int(row[0]) if row else None
+
+
+async def get_valid_access_token_ou_partage(
+    db: AsyncSession, *, user_id: int
+) -> tuple[Optional[str], Optional[int]]:
+    """Jeton de l'utilisateur, sinon celui du compte partagé.
+    Renvoie (access_token, user_id réellement utilisé)."""
+    try:
+        token = await get_valid_access_token(db, user_id=user_id)
+    except DriveAuthError:
+        token = None
+    if token:
+        return token, user_id
+    partage = await utilisateur_partage(db)
+    if partage is None or partage == user_id:
+        return None, None
+    try:
+        token = await get_valid_access_token(db, user_id=partage)
+    except DriveAuthError:
+        return None, None
+    return (token, partage) if token else (None, None)
+
+
 async def get_user_email(
     db: AsyncSession, *, user_id: int
 ) -> Optional[str]:

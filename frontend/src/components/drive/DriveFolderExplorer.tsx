@@ -1684,7 +1684,7 @@ function ErrorState({
             : "Erreur Drive";
   const help =
     kind === "auth"
-      ? "Tu dois te connecter à Google Drive dans Paramètres."
+      ? "Aucun compte Google Drive n'est connecté dans Kratos (ni le tien, ni le compte partagé Horizon). Connecte-le dans Paramètres → Drive."
       : kind === "permission"
         ? "Tu n'as pas les permissions pour ce dossier sur Drive. Demande à son propriétaire de te le partager."
         : kind === "notfound"

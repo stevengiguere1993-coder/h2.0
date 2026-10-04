@@ -56,6 +56,9 @@ class StatusResponse(BaseModel):
     # est RÉELLEMENT morte (refresh refusé par Google) : l'UI doit dire
     # « expiré — reconnecte-toi » au lieu d'un faux « Connecté ».
     expired: bool = False
+    # Courriel du compte Drive PARTAGÉ utilisé à la place quand cet
+    # utilisateur n'a pas (ou plus) de connexion personnelle valide.
+    partage_via: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -133,9 +136,20 @@ async def auth_status(
         settings.google_client_id and settings.google_client_secret
     )
     row = await drive_oauth.get_token_row(db, user_id=user.id)
+
+    async def _partage() -> Optional[str]:
+        token, uid = await drive_oauth.get_valid_access_token_ou_partage(
+            db, user_id=user.id
+        )
+        if token and uid is not None and uid != user.id:
+            return await drive_oauth.get_user_email(db, user_id=uid)
+        return None
+
     if row is None:
         return StatusResponse(
-            connected=False, server_configured=server_configured
+            connected=False,
+            server_configured=server_configured,
+            partage_via=await _partage(),
         )
     # Vérification RÉELLE : avant, on affichait « Connecté » dès qu'une
     # ligne de tokens existait — même si Google avait révoqué la session.
@@ -152,6 +166,7 @@ async def auth_status(
             updated_at=row.updated_at,
             server_configured=server_configured,
             expired=True,
+            partage_via=await _partage(),
         )
     except Exception:  # noqa: BLE001 — réseau/Google down : ne pas mentir
         pass  # on garde l'affichage « connecté » (erreur transitoire)
