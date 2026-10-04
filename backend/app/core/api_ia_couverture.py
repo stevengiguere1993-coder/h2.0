@@ -118,6 +118,7 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "imm_factures_gestion",
     "imm_frais_locatifs",
     "imm_frais_manuels_gestion",
+    "imm_hypotheque_tranches",
     "imm_hypotheques",
     "imm_immeuble_ownerships",
     "imm_immeubles",

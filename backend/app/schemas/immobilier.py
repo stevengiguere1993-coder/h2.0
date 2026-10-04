@@ -557,6 +557,15 @@ class HypothequeBase(BaseModel):
     paiement_mensuel: Optional[float] = Field(default=None, ge=0)
     # 'semi' (composition semi-annuelle, standard CA) | 'mensuelle'.
     composition_interets: Optional[str] = Field(default=None, max_length=16)
+    #: 'conventionnel' | 'schl' | 'preteur_b' | 'prive'
+    type_pret: Optional[str] = Field(
+        default=None, pattern="^(conventionnel|schl|preteur_b|prive)$"
+    )
+    #: 'capital_interet' (défaut) | 'capital_seulement' | 'interet_seulement'
+    mode_remboursement: Optional[str] = Field(
+        default=None,
+        pattern="^(capital_interet|capital_seulement|interet_seulement)$",
+    )
     date_debut: Optional[date] = None
     date_fin_terme: Optional[date] = None
     status: str = Field(default="active", max_length=16)
@@ -577,10 +586,32 @@ class HypothequeUpdate(BaseModel):
     amortissement_mois: Optional[int] = Field(default=None, ge=1)
     paiement_mensuel: Optional[float] = Field(default=None, ge=0)
     composition_interets: Optional[str] = Field(default=None, max_length=16)
+    type_pret: Optional[str] = Field(
+        default=None, pattern="^(conventionnel|schl|preteur_b|prive)$"
+    )
+    mode_remboursement: Optional[str] = Field(
+        default=None,
+        pattern="^(capital_interet|capital_seulement|interet_seulement)$",
+    )
     date_debut: Optional[date] = None
     date_fin_terme: Optional[date] = None
     status: Optional[str] = Field(default=None, max_length=16)
     notes: Optional[str] = None
+
+
+class HypothequeTrancheCreate(BaseModel):
+    """Tranche de déboursé (projet en cours, versements progressifs)."""
+
+    date_debourse: date
+    montant: float = Field(..., gt=0)
+    note: Optional[str] = Field(default=None, max_length=255)
+
+
+class HypothequeTrancheRead(HypothequeTrancheCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    hypotheque_id: int
+    created_at: datetime
 
 
 class HypothequeRead(HypothequeBase):
@@ -589,6 +620,11 @@ class HypothequeRead(HypothequeBase):
     # Balance THÉORIQUE au jour J (tableau d'amortissement) — calculée
     # à la volée, jamais stockée. La balance saisie prime toujours.
     balance_calculee: Optional[float] = None
+    #: Tranches de déboursé (vide = prêt versé d'un coup : le montant
+    #: initial est le capital).
+    tranches: list[HypothequeTrancheRead] = []
+    #: Somme des tranches déboursées À CE JOUR (None sans tranche).
+    montant_debourse: Optional[float] = None
     created_at: datetime
     updated_at: datetime
 

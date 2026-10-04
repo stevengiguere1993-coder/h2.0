@@ -173,11 +173,47 @@ type Hypotheque = {
   paiement_mensuel?: number | null;
   // 'semi' (composition semi-annuelle, standard CA) | 'mensuelle'.
   composition_interets?: string | null;
+  // 'conventionnel' | 'schl' | 'preteur_b' | 'prive' (Phil 2026-10-04).
+  type_pret?: string | null;
+  // 'capital_interet' | 'capital_seulement' | 'interet_seulement'.
+  mode_remboursement?: string | null;
   date_debut?: string | null;
   date_fin_terme?: string | null;
   status: string;
   notes?: string | null;
+  // Tranches de déboursé (projet en cours) : capital = déboursé à ce jour.
+  tranches?: HypothequeTranche[];
+  montant_debourse?: number | null;
 };
+
+type HypothequeTranche = {
+  id: number;
+  hypotheque_id: number;
+  date_debourse: string;
+  montant: number;
+  note?: string | null;
+};
+
+const TYPE_PRET_LABEL: Record<string, string> = {
+  conventionnel: "Conventionnel",
+  schl: "SCHL",
+  preteur_b: "Prêteur B",
+  prive: "Prêteur privé"
+};
+const MODE_REMB_LABEL: Record<string, string> = {
+  capital_interet: "Capital et intérêts",
+  capital_seulement: "Capital seulement",
+  interet_seulement: "Intérêts seulement"
+};
+type ModeRemboursement =
+  | "capital_interet"
+  | "capital_seulement"
+  | "interet_seulement";
+function modeRemb(v: string | null | undefined): ModeRemboursement {
+  return v === "capital_seulement" || v === "interet_seulement"
+    ? v
+    : "capital_interet";
+}
 
 type Evaluation = {
   id: number;
@@ -4273,15 +4309,24 @@ function computePaiementMensuel(
   tauxPct: number,
   amortissementMois: number,
   balance: number,
-  composition: CompositionInterets = "semi"
+  composition: CompositionInterets = "semi",
+  mode: ModeRemboursement = "capital_interet"
 ): number | null {
-  if (!(balance > 0) || !(amortissementMois > 0) || Number.isNaN(tauxPct))
-    return null;
-  if (tauxPct <= 0) return balance / amortissementMois;
+  if (!(balance > 0)) return null;
   const iMensuel =
     composition === "mensuelle"
       ? tauxPct / 100 / 12
       : Math.pow(1 + tauxPct / 100 / 2, 2 / 12) - 1;
+  // Intérêts seulement (prêt privé) : balance × taux mensuel, pas
+  // d'amortissement. Capital seulement : balance / nb de mois.
+  if (mode === "interet_seulement") {
+    if (Number.isNaN(tauxPct)) return null;
+    return balance * iMensuel;
+  }
+  if (!(amortissementMois > 0)) return null;
+  if (mode === "capital_seulement") return balance / amortissementMois;
+  if (Number.isNaN(tauxPct)) return null;
+  if (tauxPct <= 0) return balance / amortissementMois;
   const pmt =
     (balance * iMensuel) / (1 - Math.pow(1 + iMensuel, -amortissementMois));
   return Number.isFinite(pmt) ? pmt : null;
@@ -4297,9 +4342,13 @@ function computeBalanceCalculee(
   tauxPct: number,
   amortissementMois: number,
   composition: CompositionInterets,
-  dateDebutIso: string
+  dateDebutIso: string,
+  mode: ModeRemboursement = "capital_interet"
 ): number | null {
-  if (!(montantInitial > 0) || !(amortissementMois > 0)) return null;
+  if (!(montantInitial > 0)) return null;
+  // Intérêts seulement : le capital reste dû en entier.
+  if (mode === "interet_seulement") return montantInitial;
+  if (!(amortissementMois > 0)) return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateDebutIso);
   if (!m || Number.isNaN(tauxPct)) return null;
   const debut = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
@@ -4314,10 +4363,12 @@ function computeBalanceCalculee(
     tauxPct,
     amortissementMois,
     montantInitial,
-    composition
+    composition,
+    mode
   );
   if (pmt == null) return null;
-  if (tauxPct <= 0) return Math.max(0, montantInitial - pmt * k);
+  if (tauxPct <= 0 || mode === "capital_seulement")
+    return Math.max(0, montantInitial - pmt * k);
   const iMensuel =
     composition === "mensuelle"
       ? tauxPct / 100 / 12
@@ -4409,6 +4460,8 @@ type HypoFormState = {
   // Persistée backend (composition_interets 'semi'|'mensuelle') — le
   // paiement_mensuel calculé est aussi enregistré.
   composition: string;
+  type_pret: string;
+  mode_remboursement: string;
   amortissement_annees: string;
   paiement_mensuel: string;
   date_debut: string;
@@ -4427,6 +4480,8 @@ const HYPO_FORM_EMPTY: HypoFormState = {
   taux_pct: "",
   type_taux: "fixe",
   composition: "semi",
+  type_pret: "conventionnel",
+  mode_remboursement: "capital_interet",
   amortissement_annees: "25",
   paiement_mensuel: "",
   date_debut: "",
@@ -4465,6 +4520,8 @@ function HypothequeForm({
             initial.composition_interets === "mensuelle"
               ? "mensuelle"
               : "semi",
+          type_pret: initial.type_pret || "conventionnel",
+          mode_remboursement: modeRemb(initial.mode_remboursement),
           amortissement_annees:
             initial.amortissement_mois != null
               ? String(Math.round((initial.amortissement_mois / 12) * 10) / 10)
@@ -4505,7 +4562,8 @@ function HypothequeForm({
       Number(initial.taux_pct),
       Number(initial.amortissement_mois || 0),
       Number(principal),
-      initial.composition_interets === "mensuelle" ? "mensuelle" : "semi"
+      initial.composition_interets === "mensuelle" ? "mensuelle" : "semi",
+      modeRemb(initial.mode_remboursement)
     );
     if (calc == null) return true;
     return Math.abs(Number(initial.paiement_mensuel) - calc) > 0.05;
@@ -4518,8 +4576,10 @@ function HypothequeForm({
     "amortissement_annees",
     "composition",
     "balance_actuelle",
-    "montant_initial"
+    "montant_initial",
+    "mode_remboursement"
   ];
+  const modeChoisi = modeRemb(f.mode_remboursement);
 
   const set = (k: keyof HypoFormState) => (v: string) => {
     setF((prev) => ({ ...prev, [k]: v }));
@@ -4539,14 +4599,16 @@ function HypothequeForm({
     f.composition === "mensuelle" ? "mensuelle" : "semi";
 
   const computedPmt = useMemo(() => {
-    if (f.taux_pct.trim() === "") return null;
+    if (f.taux_pct.trim() === "" && modeChoisi !== "capital_seulement")
+      return null;
     return computePaiementMensuel(
       parseNombre(f.taux_pct),
       amortissementMois,
       balanceRef,
-      compositionChoisie
+      compositionChoisie,
+      modeChoisi
     );
-  }, [f.taux_pct, amortissementMois, balanceRef, compositionChoisie]);
+  }, [f.taux_pct, amortissementMois, balanceRef, compositionChoisie, modeChoisi]);
 
   // Aperçu de la balance auto (miroir du calcul backend) — affiché
   // sous l'input Balance tant qu'aucune valeur n'est saisie à la main.
@@ -4563,7 +4625,8 @@ function HypothequeForm({
       parseNombre(f.taux_pct),
       amortissementMois,
       compositionChoisie,
-      f.date_debut
+      f.date_debut,
+      modeChoisi
     );
   }, [
     f.montant_initial,
@@ -4615,6 +4678,8 @@ function HypothequeForm({
       taux_pct: f.taux_pct.trim() ? parseNombre(f.taux_pct) : null,
       type_taux: f.type_taux || null,
       composition_interets: compositionChoisie,
+      type_pret: f.type_pret || null,
+      mode_remboursement: modeChoisi,
       amortissement_mois: amortissementMois > 0 ? amortissementMois : null,
       paiement_mensuel:
         pmtEffective != null && !Number.isNaN(pmtEffective) && pmtEffective >= 0
@@ -4717,6 +4782,56 @@ function HypothequeForm({
             placeholder="ex. 4.89"
             className={inputCls}
           />
+        </label>
+        <label className={labelCls}>
+          Type de prêt
+          <select
+            value={f.type_pret}
+            onChange={(e) => {
+              const v = e.target.value;
+              // Conventionnel / SCHL / prêteur B : capital et intérêts par
+              // défaut (modifiable ensuite). Prêteur privé : on laisse le
+              // choix tel quel (souvent intérêts seulement).
+              setF((prev) => ({
+                ...prev,
+                type_pret: v,
+                mode_remboursement:
+                  v === "prive" ? prev.mode_remboursement : "capital_interet"
+              }));
+              if (v !== "prive") setPmtOverride(false);
+            }}
+            className={inputCls}
+          >
+            {Object.entries(TYPE_PRET_LABEL).map(([v, l]) => (
+              <option key={v} value={v} className="bg-brand-950 text-white">
+                {l}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className={labelCls}>
+          Remboursement
+          <select
+            value={f.mode_remboursement}
+            onChange={(e) => set("mode_remboursement")(e.target.value)}
+            className={inputCls}
+          >
+            {Object.entries(MODE_REMB_LABEL).map(([v, l]) => (
+              <option key={v} value={v} className="bg-brand-950 text-white">
+                {l}
+              </option>
+            ))}
+          </select>
+          {modeChoisi === "interet_seulement" ? (
+            <span className="mt-1 block text-[10px] font-normal text-white/60">
+              Les paiements ne couvrent que l&apos;intérêt : la balance ne
+              baisse pas, l&apos;amortissement est sans objet.
+            </span>
+          ) : modeChoisi === "capital_seulement" ? (
+            <span className="mt-1 block text-[10px] font-normal text-white/60">
+              Capital ÷ nombre de mois d&apos;amortissement, sans intérêt.
+            </span>
+          ) : null}
         </label>
         <label className={labelCls}>
           Type de taux
@@ -4900,9 +5015,87 @@ function HypothequesTab({
   const [editingId, setEditingId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Tranches de déboursé (Phil 2026-10-04) : panneau ouvert sous la carte.
+  const [tranchesOpenId, setTranchesOpenId] = useState<number | null>(null);
+  const [trancheDraft, setTrancheDraft] = useState({
+    date: new Date().toISOString().slice(0, 10),
+    montant: "",
+    note: ""
+  });
+  const [trancheBusy, setTrancheBusy] = useState(false);
 
   function sortHypos(arr: Hypotheque[]): Hypotheque[] {
     return [...arr].sort((a, b) => a.rang - b.rang || a.id - b.id);
+  }
+
+  async function addTranche(h: Hypotheque) {
+    const montant = parseNombre(trancheDraft.montant);
+    if (!trancheDraft.date || !(montant > 0)) {
+      setErr("Tranche : date et montant (> 0) requis.");
+      return;
+    }
+    setTrancheBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/hypotheques/${h.id}/tranches`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            date_debourse: trancheDraft.date,
+            montant,
+            note: trancheDraft.note.trim() || null
+          })
+        }
+      );
+      if (!res.ok) {
+        let d = `HTTP ${res.status}`;
+        try {
+          const j = await res.json();
+          if (typeof j.detail === "string") d = j.detail;
+        } catch {
+          /* corps vide */
+        }
+        throw new Error(d);
+      }
+      const updated = (await res.json()) as Hypotheque;
+      setList((prev) =>
+        sortHypos((prev || []).map((x) => (x.id === h.id ? updated : x)))
+      );
+      setTrancheDraft((d) => ({ ...d, montant: "", note: "" }));
+      onMutated();
+    } catch (e) {
+      setErr(`Tranche non ajoutée : ${(e as Error).message}`);
+    } finally {
+      setTrancheBusy(false);
+    }
+  }
+
+  async function removeTranche(h: Hypotheque, t: HypothequeTranche) {
+    if (
+      !window.confirm(
+        `Retirer la tranche du ${t.date_debourse} (${fmtCurrency(t.montant)}) ?`
+      )
+    )
+      return;
+    setTrancheBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/hypotheques/${h.id}/tranches/${t.id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const updated = (await res.json()) as Hypotheque;
+      setList((prev) =>
+        sortHypos((prev || []).map((x) => (x.id === h.id ? updated : x)))
+      );
+      onMutated();
+    } catch (e) {
+      setErr(`Tranche non retirée : ${(e as Error).message}`);
+    } finally {
+      setTrancheBusy(false);
+    }
   }
 
   async function create(payload: Record<string, unknown>) {
@@ -5042,6 +5235,24 @@ function HypothequesTab({
                       >
                         {HYPO_STATUS_LABEL[h.status] || h.status}
                       </span>
+                      {h.type_pret ? (
+                        <span className="badge badge-neutral">
+                          {TYPE_PRET_LABEL[h.type_pret] || h.type_pret}
+                        </span>
+                      ) : null}
+                      {h.mode_remboursement &&
+                      h.mode_remboursement !== "capital_interet" ? (
+                        <span
+                          className="badge badge-amber"
+                          title={
+                            h.mode_remboursement === "interet_seulement"
+                              ? "Les paiements ne couvrent que l'intérêt : la balance ne baisse pas."
+                              : "Capital seulement, sans intérêt."
+                          }
+                        >
+                          {MODE_REMB_LABEL[h.mode_remboursement]}
+                        </span>
+                      ) : null}
                     </p>
                     <p className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-white/50">
                       <span>
@@ -5079,6 +5290,31 @@ function HypothequesTab({
                       <div className="text-[11px] text-white/50">
                         Paiement {fmtCurrency(h.paiement_mensuel)}/m
                       </div>
+                      {h.montant_debourse != null ? (
+                        <div
+                          className="text-[11px] text-white/60"
+                          title="Somme des tranches déboursées à ce jour / montant autorisé"
+                        >
+                          Déboursé {fmtCurrency(h.montant_debourse)} /{" "}
+                          {fmtCurrency(h.montant_initial)}
+                        </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setTranchesOpenId((cur) => (cur === h.id ? null : h.id))
+                        }
+                        className="mt-1 text-[11px] font-semibold text-accent-500 hover:underline"
+                        title="Déboursés progressifs (projet en cours) : le capital dû = somme des tranches versées"
+                      >
+                        {tranchesOpenId === h.id
+                          ? "Fermer les tranches"
+                          : `Tranches de déboursé${
+                              h.tranches && h.tranches.length
+                                ? ` (${h.tranches.length})`
+                                : ""
+                            }`}
+                      </button>
                     </div>
                     <div className="flex flex-col gap-1">
                       <button
@@ -5103,6 +5339,119 @@ function HypothequesTab({
                     </div>
                   </div>
                 </div>
+                {tranchesOpenId === h.id ? (
+                  <div className="mt-3 rounded-xl border border-brand-700 bg-brand-950 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-white/70">
+                      Tranches de déboursé
+                    </p>
+                    <p className="mt-1 text-[11px] text-white/60">
+                      Pour un projet en cours versé progressivement : le
+                      capital dû (et l&apos;intérêt) se calcule sur la somme
+                      des tranches déjà déboursées, pas sur le montant
+                      autorisé. Une tranche à date future n&apos;est pas
+                      comptée avant sa date.
+                    </p>
+                    {h.tranches && h.tranches.length ? (
+                      <table className="mt-2 w-full text-xs">
+                        <thead className="text-[10px] uppercase tracking-wider text-white/50">
+                          <tr>
+                            <th className="py-1 text-left">Date</th>
+                            <th className="py-1 text-right">Montant</th>
+                            <th className="py-1 text-left pl-3">Note</th>
+                            <th className="py-1"></th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-brand-800">
+                          {h.tranches.map((t) => {
+                            const future =
+                              t.date_debourse >
+                              new Date().toISOString().slice(0, 10);
+                            return (
+                              <tr key={t.id} className={future ? "text-white/50" : "text-white"}>
+                                <td className="py-1.5 font-mono">
+                                  {t.date_debourse}
+                                  {future ? (
+                                    <span className="ml-1 badge badge-neutral">à venir</span>
+                                  ) : null}
+                                </td>
+                                <td className="py-1.5 text-right font-mono">
+                                  {fmtCurrency(t.montant)}
+                                </td>
+                                <td className="py-1.5 pl-3">{t.note || ""}</td>
+                                <td className="py-1.5 text-right">
+                                  <button
+                                    type="button"
+                                    onClick={() => void removeTranche(h, t)}
+                                    disabled={trancheBusy}
+                                    className="btn-ghost btn-xs hover:bg-rose-500/15 hover:text-rose-400"
+                                    title="Retirer cette tranche"
+                                    aria-label="Retirer cette tranche"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    ) : (
+                      <p className="mt-2 text-xs text-white/60">
+                        Aucune tranche : le montant initial est considéré
+                        versé d&apos;un coup.
+                      </p>
+                    )}
+                    <div className="mt-2 flex flex-wrap items-end gap-2">
+                      <label className="text-[11px] font-semibold text-white/60">
+                        Date
+                        <input
+                          type="date"
+                          value={trancheDraft.date}
+                          onChange={(e) =>
+                            setTrancheDraft((d) => ({ ...d, date: e.target.value }))
+                          }
+                          className="input mt-0.5 w-40 px-2 py-1 text-xs"
+                        />
+                      </label>
+                      <label className="text-[11px] font-semibold text-white/60">
+                        Montant ($)
+                        <input
+                          inputMode="decimal"
+                          value={trancheDraft.montant}
+                          onChange={(e) =>
+                            setTrancheDraft((d) => ({ ...d, montant: e.target.value }))
+                          }
+                          placeholder="ex. 150 000"
+                          className="input mt-0.5 w-32 px-2 py-1 text-right text-xs"
+                        />
+                      </label>
+                      <label className="min-w-[160px] flex-1 text-[11px] font-semibold text-white/60">
+                        Note
+                        <input
+                          value={trancheDraft.note}
+                          onChange={(e) =>
+                            setTrancheDraft((d) => ({ ...d, note: e.target.value }))
+                          }
+                          placeholder="ex. Fondations, charpente…"
+                          className="input mt-0.5 w-full px-2 py-1 text-xs"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => void addTranche(h)}
+                        disabled={trancheBusy}
+                        className="btn-accent btn-xs"
+                      >
+                        {trancheBusy ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Plus className="h-3 w-3" />
+                        )}{" "}
+                        Ajouter la tranche
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             )
           )}

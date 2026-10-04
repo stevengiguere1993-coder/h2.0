@@ -991,6 +991,17 @@ class Hypotheque(Base, TimestampUpdateMixin):
         String(16), nullable=True
     )
 
+    # Type de prêt (Phil 2026-10-04) : 'conventionnel' | 'schl' |
+    # 'preteur_b' | 'prive'. Un prêt privé est souvent « intérêts
+    # seulement ». Colonne additive (db/session.py).
+    type_pret: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    # Mode de remboursement : 'capital_interet' (défaut, amorti) |
+    # 'capital_seulement' (capital / mois, sans intérêt) |
+    # 'interet_seulement' (le capital ne baisse PAS avec les paiements).
+    mode_remboursement: Mapped[Optional[str]] = mapped_column(
+        String(24), nullable=True
+    )
+
     date_debut: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     date_fin_terme: Mapped[Optional[date]] = mapped_column(
         Date, nullable=True, index=True
@@ -1003,6 +1014,28 @@ class Hypotheque(Base, TimestampUpdateMixin):
     )
 
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class HypothequeTranche(Base):
+    """Déboursé progressif d'une hypothèque (Phil 2026-10-04) : un prêt
+    de construction / projet en cours est versé par TRANCHES. Le capital
+    réellement dû = somme des tranches déboursées à ce jour (et non le
+    montant initial autorisé) ; l'intérêt se calcule dessus."""
+
+    __tablename__ = "imm_hypotheque_tranches"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    hypotheque_id: Mapped[int] = mapped_column(
+        ForeignKey("imm_hypotheques.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    date_debourse: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    montant: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    note: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 # ─── ÉVALUATION ─────────────────────────────────────────────────────────

@@ -11,6 +11,12 @@ théorique au jour J selon le tableau d'amortissement canadien :
 
 Une balance SAISIE À LA MAIN a toujours priorité (elle reflète des
 remboursements anticipés que le calcul ne connaît pas).
+
+Mode de remboursement (Phil 2026-10-04) :
+- ``capital_interet`` (défaut) : tableau d'amortissement ci-dessus ;
+- ``capital_seulement`` : capital / mois, sans intérêt → baisse linéaire ;
+- ``interet_seulement`` (prêts privés) : les paiements ne couvrent que
+  l'intérêt → le capital NE BAISSE PAS, la balance reste le montant initial.
 """
 
 from __future__ import annotations
@@ -45,12 +51,16 @@ def balance_calculee(
     date_debut: Optional[date],
     paiement_mensuel: Optional[float] = None,
     aujourd_hui: Optional[date] = None,
+    mode_remboursement: Optional[str] = None,
 ) -> Optional[float]:
     """Balance théorique au jour J, ou None si les intrants manquent."""
+    if montant_initial is None or montant_initial <= 0:
+        return None
+    if (mode_remboursement or "capital_interet") == "interet_seulement":
+        # Intérêts seulement : le capital reste dû en entier.
+        return round(float(montant_initial), 2)
     if (
-        montant_initial is None
-        or montant_initial <= 0
-        or taux_pct is None
+        taux_pct is None
         or not amortissement_mois
         or amortissement_mois <= 0
         or date_debut is None
@@ -62,7 +72,7 @@ def balance_calculee(
         return round(float(montant_initial), 2)
 
     p = float(montant_initial)
-    if taux_pct <= 0:
+    if taux_pct <= 0 or mode_remboursement == "capital_seulement":
         pmt = paiement_mensuel or (p / amortissement_mois)
         return round(max(0.0, p - pmt * k), 2)
 
@@ -77,14 +87,71 @@ def balance_calculee(
     return round(max(0.0, balance), 2)
 
 
+#: Attribut posé sur l'objet Hypotheque par ``charger_debourses`` :
+#: somme des tranches déboursées à ce jour (None = pas de tranche).
+ATTR_DEBOURSE = "montant_debourse_cache"
+
+
+def capital_de(hyp) -> Optional[float]:
+    """Capital réellement prêté : le déboursé à ce jour si l'hypothèque
+    est versée par tranches, sinon le montant initial."""
+    deb = getattr(hyp, ATTR_DEBOURSE, None)
+    if deb is not None:
+        return float(deb)
+    return float(hyp.montant_initial) if hyp.montant_initial is not None else None
+
+
+async def charger_debourses(db, hyps, aujourd_hui: Optional[date] = None) -> None:
+    """Pose ``montant_debourse_cache`` sur chaque hypothèque qui a des
+    tranches (somme des tranches dont la date est passée). À appeler
+    partout où l'on lit des hypothèques pour l'équité / le paiement."""
+    from sqlalchemy import func, select
+
+    from app.models.immobilier import HypothequeTranche
+
+    hyps = list(hyps)
+    if not hyps:
+        return
+    aujourd_hui = aujourd_hui or date.today()
+    rows = (
+        await db.execute(
+            select(
+                HypothequeTranche.hypotheque_id,
+                func.sum(HypothequeTranche.montant),
+            )
+            .where(
+                HypothequeTranche.hypotheque_id.in_([h.id for h in hyps]),
+                HypothequeTranche.date_debourse <= aujourd_hui,
+            )
+            .group_by(HypothequeTranche.hypotheque_id)
+        )
+    ).all()
+    sommes = {int(hid): float(total or 0) for hid, total in rows}
+    # Une hypothèque avec des tranches toutes FUTURES = 0 déboursé.
+    avec_tranches = set(
+        int(x)
+        for x in (
+            await db.execute(
+                select(HypothequeTranche.hypotheque_id)
+                .where(HypothequeTranche.hypotheque_id.in_([h.id for h in hyps]))
+                .distinct()
+            )
+        ).scalars().all()
+    )
+    for h in hyps:
+        if h.id in avec_tranches:
+            setattr(h, ATTR_DEBOURSE, round(sommes.get(h.id, 0.0), 2))
+        else:
+            setattr(h, ATTR_DEBOURSE, None)
+
+
 def balance_calculee_de(hyp, aujourd_hui: Optional[date] = None) -> Optional[float]:
     """Balance théorique d'un objet Hypotheque (colonnes SQLAlchemy)."""
+    capital = capital_de(hyp)
+    if capital is not None and capital <= 0:
+        return 0.0
     return balance_calculee(
-        montant_initial=(
-            float(hyp.montant_initial)
-            if hyp.montant_initial is not None
-            else None
-        ),
+        montant_initial=capital,
         taux_pct=float(hyp.taux_pct) if hyp.taux_pct is not None else None,
         amortissement_mois=hyp.amortissement_mois,
         composition=hyp.composition_interets,
@@ -95,7 +162,39 @@ def balance_calculee_de(hyp, aujourd_hui: Optional[date] = None) -> Optional[flo
             else None
         ),
         aujourd_hui=aujourd_hui,
+        mode_remboursement=getattr(hyp, "mode_remboursement", None),
     )
+
+
+def paiement_mensuel_calcule(
+    *,
+    taux_pct: Optional[float],
+    amortissement_mois: Optional[int],
+    principal: Optional[float],
+    composition: Optional[str],
+    mode_remboursement: Optional[str] = None,
+) -> Optional[float]:
+    """Paiement mensuel selon le mode : amorti (capital + intérêts),
+    capital seulement (principal / n) ou intérêts seulement (principal × i).
+    Même math que le formulaire de la fiche immeuble."""
+    if principal is None or principal <= 0:
+        return None
+    mode = mode_remboursement or "capital_interet"
+    n = int(amortissement_mois or 0)
+    if mode == "interet_seulement":
+        if taux_pct is None:
+            return None
+        return round(float(principal) * taux_mensuel(float(taux_pct), composition), 2)
+    if n <= 0:
+        return None
+    if mode == "capital_seulement" or taux_pct is None or taux_pct <= 0:
+        if taux_pct is None and mode != "capital_seulement":
+            return None
+        return round(float(principal) / n, 2)
+    i = taux_mensuel(float(taux_pct), composition)
+    if i <= 0:
+        return round(float(principal) / n, 2)
+    return round(float(principal) * i / (1.0 - (1.0 + i) ** (-n)), 2)
 
 
 def balance_effective(hyp, aujourd_hui: Optional[date] = None) -> float:
@@ -106,4 +205,4 @@ def balance_effective(hyp, aujourd_hui: Optional[date] = None) -> float:
     calc = balance_calculee_de(hyp, aujourd_hui)
     if calc is not None:
         return calc
-    return float(hyp.montant_initial or 0)
+    return float(capital_de(hyp) or 0)
