@@ -138,11 +138,19 @@ async def auth_status(
     row = await drive_oauth.get_token_row(db, user_id=user.id)
 
     async def _partage() -> Optional[str]:
-        token, uid = await drive_oauth.get_valid_access_token_ou_partage(
-            db, user_id=user.id
-        )
-        if token and uid is not None and uid != user.id:
-            return await drive_oauth.get_user_email(db, user_id=uid)
+        # Le repli sur le compte partagé est purement informatif : un
+        # échec du jeton partagé (Google injoignable → DriveAPIError, clé
+        # de chiffrement changée → ValueError…) ne doit JAMAIS faire
+        # planter /status en 500 — la page Drive afficherait
+        # « Chargement échoué : http_500 » au lieu du bouton Connecter.
+        try:
+            token, uid = await drive_oauth.get_valid_access_token_ou_partage(
+                db, user_id=user.id
+            )
+            if token and uid is not None and uid != user.id:
+                return await drive_oauth.get_user_email(db, user_id=uid)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Drive status: repli compte partagé échoué : %s", exc)
         return None
 
     if row is None:
