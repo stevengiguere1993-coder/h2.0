@@ -255,7 +255,7 @@ export function TachesEditor({
                 type="button"
                 className={BTN_GHOST}
                 onClick={() => setImporting(true)}
-                title="Reprendre les tâches Gestion d'entreprises qui te sont assignées"
+                title="Reprendre les tâches du pôle Entreprises qui te sont assignées"
               >
                 <Download className="h-4 w-4" /> Importer mes tâches
               </button>
@@ -289,7 +289,7 @@ export function TachesEditor({
                   />
                   {l.entreprise_tache_id ? (
                     <div className="mt-0.5 px-1 text-[11px] text-[var(--qg-text-faint)]">
-                      Importée des tâches Gestion d&apos;entreprises
+                      Importée des tâches du pôle Entreprises
                     </div>
                   ) : null}
                 </div>
@@ -435,7 +435,7 @@ function ImportModal({
           <div>
             <div className="text-base font-semibold">Importer mes tâches</div>
             <div className="text-xs text-[var(--qg-text-muted)]">
-              Tâches Gestion d&apos;entreprises qui te sont assignées — en cours ou
+              Tâches du pôle Entreprises qui te sont assignées — en cours ou
               terminées pendant la période.
             </div>
           </div>
