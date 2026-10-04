@@ -363,8 +363,14 @@ export default function RecusQuickbooksPage() {
   return (
     <>
       <QGTopbar
-        greeting={<>Reçus QuickBooks → Drive</>}
-        subtitle="Chaque reçu de dépense QuickBooks copié dans le Drive de l'entreprise : Factures / année / mois, nommé « date fournisseur montant »."
+        greeting={<>Reçus QuickBooks</>}
+        // Bandeau compact (Phil 2026-10-04 : « trop gros » sur mobile) :
+        // la description détaillée est dans les étapes plus bas.
+        subtitle={
+          <span className="hidden sm:inline">
+            Copiés dans le Drive de chaque entreprise : Factures / année / mois.
+          </span>
+        }
         rightSlot={
           <button
             type="button"
