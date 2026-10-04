@@ -253,6 +253,11 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "timesheet_companies",
     "timesheet_entries",
     "timesheet_reglements",
+    #: Lignes par tâche (Steven 2026-10-04) — lues dans le détail de la
+    #: feuille (GET /timesheets/{id}, champ « taches »).
+    "timesheet_task_lines",
+    #: Compagnies assignées à un employé — GET /timesheets/user-companies.
+    "timesheet_user_companies",
     "timesheet_user_rates",
     "timesheets",
     "user_ai_briefs",

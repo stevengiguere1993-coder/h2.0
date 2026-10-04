@@ -281,6 +281,8 @@ from app.models.timesheet import (  # noqa: F401
     Timesheet,
     TimesheetCompany,
     TimesheetEntry,
+    TimesheetTaskLine,
+    TimesheetUserCompany,
 )
 from app.models.user import User
 from app.models.user_ai import UserAiBrief, UserAiConfig  # noqa: F401

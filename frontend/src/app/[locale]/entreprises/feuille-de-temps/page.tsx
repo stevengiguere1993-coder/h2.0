@@ -30,11 +30,22 @@ import {
   CalendarDays,
   Wallet,
   FileText,
-  ChevronDown
+  ChevronDown,
+  ListChecks,
+  Table2,
+  UserCog
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
 import { QGTopbar } from "../layout";
+import {
+  TachesEditor,
+  UserCompaniesModal,
+  fromApi as tachesFromApi,
+  parseHours,
+  type TacheLigne,
+  type TacheLigneOut
+} from "./taches";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -78,6 +89,9 @@ type Detail = {
   total_heures: number;
   montant_paie: number;
   total_refacturation: number;
+  //: Feuille « par tâche » : grille dérivée des lignes `taches`.
+  mode_taches?: boolean;
+  taches?: TacheLigneOut[];
 };
 
 type Employee = { id: number; name: string; email?: string | null; role: string };
@@ -258,6 +272,13 @@ export default function FeuilleDeTempsPage() {
   >("feuille");
   const [showAllRates, setShowAllRates] = useState(false);
   const [manageCompanies, setManageCompanies] = useState(false);
+  const [manageUserCompanies, setManageUserCompanies] = useState(false);
+  // Saisie « par tâche » (jour + tâche + entreprise + heures) ou grille
+  // compagnie × jour. Dès qu'une feuille a des lignes de tâches, la
+  // grille devient une lecture dérivée (Steven 2026-10-04).
+  const [sheetMode, setSheetMode] = useState<"taches" | "grille">("grille");
+  const [taches, setTaches] = useState<TacheLigne[]>([]);
+  const [showDerivedGrid, setShowDerivedGrid] = useState(false);
   // Gestionnaire+ : atterrir sur la vue ÉQUIPE (sa propre feuille est
   // souvent vide) ; employé : directement sur SA feuille (retour Phil
   // 2026-07-22). Appliqué une seule fois au chargement du profil.
@@ -313,6 +334,14 @@ export default function FeuilleDeTempsPage() {
         setCells(c);
         setCellsNr(cn);
         setNotes(n);
+        setTaches(tachesFromApi(d.taches || []));
+        // Feuille avec des lignes → par tâche ; feuille vide d'un employé
+        // → par tâche (c'est sa façon de saisir) ; sinon grille.
+        setSheetMode(
+          d.mode_taches || (!d.is_manager && d.total_heures === 0)
+            ? "taches"
+            : "grille"
+        );
         setDirty(false);
       } catch (e: any) {
         setError(e?.message || "Chargement impossible");
@@ -401,12 +430,39 @@ export default function FeuilleDeTempsPage() {
     };
   }, [cells, cellsNr, detail]);
 
-  // — Sauvegarde de la grille —
+  // — Sauvegarde (lignes par tâche OU grille) —
   const save = useCallback(async (): Promise<boolean> => {
     if (!detail) return false;
     setSaving(true);
     setError(null);
     try {
+      const notesPayload: Record<string, string> = {};
+      for (const [cid, txt] of Object.entries(notes)) {
+        if (txt && txt.trim()) notesPayload[cid] = txt.trim();
+      }
+      if (sheetMode === "taches") {
+        const lignes = taches
+          .filter((l) => l.title.trim())
+          .map((l) => ({
+            day_index: l.day_index,
+            company_id: l.company_id,
+            entreprise_tache_id: l.entreprise_tache_id,
+            title: l.title.trim(),
+            hours: parseHours(l.hours)
+          }));
+        const r = await authedFetch(`/api/v1/timesheets/${detail.id}/taches`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lignes, notes: notesPayload })
+        });
+        if (!r.ok) throw new Error((await r.text()) || `Erreur ${r.status}`);
+        const d: Detail = await r.json();
+        setDetail(d);
+        setTaches(tachesFromApi(d.taches || []));
+        hydrateCellsFrom(d);
+        setDirty(false);
+        return true;
+      }
       const entries: {
         company_id: number;
         day_index: number;
@@ -435,10 +491,6 @@ export default function FeuilleDeTempsPage() {
             });
         }
       }
-      const notesPayload: Record<string, string> = {};
-      for (const [cid, txt] of Object.entries(notes)) {
-        if (txt && txt.trim()) notesPayload[cid] = txt.trim();
-      }
       const r = await authedFetch(
         `/api/v1/timesheets/${detail.id}/entries`,
         {
@@ -458,7 +510,52 @@ export default function FeuilleDeTempsPage() {
     } finally {
       setSaving(false);
     }
-  }, [detail, cells, cellsNr, notes]);
+  }, [detail, cells, cellsNr, notes, sheetMode, taches]);
+
+  // Grille locale ← réponse serveur (après une sauvegarde par tâche).
+  function hydrateCellsFrom(d: Detail) {
+    const c: Record<number, string[]> = {};
+    const cn: Record<number, string[]> = {};
+    for (const l of d.lignes) {
+      c[l.company_id] = l.jours.map((h) => (h ? String(h) : ""));
+      cn[l.company_id] = (l.jours_nr || []).map((h) => (h ? String(h) : ""));
+    }
+    setCells(c);
+    setCellsNr(cn);
+  }
+
+  // Lignes par tâche modifiées → la grille locale (et donc les totaux,
+  // la paie et la refacturation affichés) suit immédiatement.
+  const updateTaches = (next: TacheLigne[]) => {
+    setTaches(next);
+    if (!detail) return;
+    const nr = new Set(
+      detail.lignes.filter((l) => l.nr_autorise).map((l) => l.company_id)
+    );
+    const c: Record<number, number[]> = {};
+    const cn: Record<number, number[]> = {};
+    for (const l of detail.lignes) {
+      c[l.company_id] = new Array(DAYS).fill(0);
+      cn[l.company_id] = new Array(DAYS).fill(0);
+    }
+    for (const l of next) {
+      const h = parseHours(l.hours);
+      if (h <= 0) continue;
+      const tgt = nr.has(l.company_id) ? cn : c;
+      if (!tgt[l.company_id]) tgt[l.company_id] = new Array(DAYS).fill(0);
+      tgt[l.company_id][l.day_index] += h;
+    }
+    const toStr = (m: Record<number, number[]>) =>
+      Object.fromEntries(
+        Object.entries(m).map(([k, arr]) => [
+          k,
+          arr.map((h) => (h ? String(Math.round(h * 100) / 100) : ""))
+        ])
+      ) as Record<number, string[]>;
+    setCells(toStr(c));
+    setCellsNr(toStr(cn));
+    setDirty(true);
+  };
 
   // — Navigation période / employé (sauvegarde d'abord si modifié) —
   const navigate = useCallback(
@@ -532,6 +629,9 @@ export default function FeuilleDeTempsPage() {
   };
 
   const canEdit = detail?.can_edit ?? false;
+  // La grille ne s'édite à la main que si la feuille n'a pas de lignes
+  // par tâche (sinon elle est dérivée des lignes).
+  const gridEditable = canEdit && taches.length === 0 && sheetMode === "grille";
   const statusMeta = STATUS_META[detail?.status || "brouillon"] || STATUS_META.brouillon;
 
   // Changer d'onglet SAUVEGARDE d'abord la grille — sinon Équipe et
@@ -697,6 +797,38 @@ export default function FeuilleDeTempsPage() {
                 <Building2 className="h-4 w-4" /> Compagnies
               </button>
             )}
+
+            {/* Compagnies pour lesquelles CET employé travaille (sa feuille
+                ne montre que celles-là) */}
+            {isManager && view === "feuille" && detail && (
+              <button
+                className={BTN_GHOST}
+                onClick={() => setManageUserCompanies(true)}
+                title={`Limiter les compagnies visibles dans la feuille de ${detail.employee_name}`}
+              >
+                <UserCog className="h-4 w-4" /> Compagnies de {detail.employee_name.split(" ")[0]}
+              </button>
+            )}
+
+            {/* Mode de saisie : par tâche / par compagnie */}
+            {view === "feuille" && detail && (
+              <div className="flex items-center gap-1 rounded-xl border border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-1">
+                <TabBtn
+                  active={sheetMode === "taches"}
+                  onClick={() => setSheetMode("taches")}
+                  icon={ListChecks}
+                >
+                  Par tâche
+                </TabBtn>
+                <TabBtn
+                  active={sheetMode === "grille"}
+                  onClick={() => setSheetMode("grille")}
+                  icon={Table2}
+                >
+                  Par compagnie
+                </TabBtn>
+              </div>
+            )}
           </div>
 
           {/* Navigation période */}
@@ -774,21 +906,77 @@ export default function FeuilleDeTempsPage() {
               )}
             </div>
 
-            {/* Grille */}
-            <Grille
-              detail={detail}
-              cells={cells}
-              cellsNr={cellsNr}
-              notes={notes}
-              perCompanyR={computed.perCompanyR}
-              perCompanyN={computed.perCompanyN}
-              perDay={computed.perDay}
-              perDayNr={computed.perDayNr}
-              totalHeures={computed.totalHeures}
-              canEdit={canEdit}
-              onCell={setCell}
-              onNote={setNote}
-            />
+            {sheetMode === "taches" ? (
+              <>
+                {taches.length === 0 && detail.total_heures > 0 && (
+                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
+                    Cette feuille a des heures saisies par compagnie. Les tâches
+                    que tu ajoutes ici remplaceront la grille à l&apos;enregistrement.
+                  </div>
+                )}
+                <TachesEditor
+                  timesheetId={detail.id}
+                  joursDates={detail.jours_dates}
+                  companies={detail.lignes.map((l) => ({
+                    id: l.company_id,
+                    label: l.label,
+                    nr_autorise: !!l.nr_autorise
+                  }))}
+                  lignes={taches}
+                  canEdit={canEdit}
+                  isManager={isManager}
+                  onChange={updateTaches}
+                />
+                <button
+                  type="button"
+                  className="text-xs font-medium text-[var(--qg-accent)] hover:underline"
+                  onClick={() => setShowDerivedGrid((v) => !v)}
+                >
+                  {showDerivedGrid
+                    ? "Masquer la grille par compagnie"
+                    : "Voir la grille par compagnie (calculée à partir des tâches)"}
+                </button>
+                {showDerivedGrid && (
+                  <Grille
+                    detail={detail}
+                    cells={cells}
+                    cellsNr={cellsNr}
+                    notes={notes}
+                    perCompanyR={computed.perCompanyR}
+                    perCompanyN={computed.perCompanyN}
+                    perDay={computed.perDay}
+                    perDayNr={computed.perDayNr}
+                    totalHeures={computed.totalHeures}
+                    canEdit={false}
+                    onCell={setCell}
+                    onNote={setNote}
+                  />
+                )}
+              </>
+            ) : (
+              <>
+                {taches.length > 0 && (
+                  <div className="rounded-xl border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-4 py-2.5 text-sm text-[var(--qg-text-muted)]">
+                    Grille calculée à partir des tâches saisies — modifie les
+                    heures dans l&apos;onglet « Par tâche ».
+                  </div>
+                )}
+                <Grille
+                  detail={detail}
+                  cells={cells}
+                  cellsNr={cellsNr}
+                  notes={notes}
+                  perCompanyR={computed.perCompanyR}
+                  perCompanyN={computed.perCompanyN}
+                  perDay={computed.perDay}
+                  perDayNr={computed.perDayNr}
+                  totalHeures={computed.totalHeures}
+                  canEdit={gridEditable}
+                  onCell={setCell}
+                  onNote={setNote}
+                />
+              </>
+            )}
 
             {/* Tuiles paie + refacturation (la refacturation = ce que
                 Phil facture aux compagnies → gestionnaires seulement) */}
@@ -858,6 +1046,18 @@ export default function FeuilleDeTempsPage() {
             </div>
           </>
         ) : null}
+
+        {manageUserCompanies && detail && (
+          <UserCompaniesModal
+            userId={detail.user_id}
+            employeeName={detail.employee_name}
+            onClose={() => setManageUserCompanies(false)}
+            onSaved={() => {
+              setManageUserCompanies(false);
+              void loadSheet();
+            }}
+          />
+        )}
 
         {manageCompanies && (
           <div
