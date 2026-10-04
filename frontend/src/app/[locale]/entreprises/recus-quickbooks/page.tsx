@@ -34,6 +34,9 @@ type EntrepriseEtat = {
   qbo_company_name: string | null;
   drive_folder_url: string | null;
   drive_folder_id: string | null;
+  // "fiche" (URL collée) | "lien" (Documents Drive de la fiche) |
+  // "convention" (retrouvé dans le dossier parent des entreprises).
+  drive_source: "fiche" | "lien" | "convention" | null;
   prete: boolean;
   copies: number;
   derniere_copie: string | null;
@@ -279,9 +282,11 @@ export default function RecusQuickbooksPage() {
           </h2>
           <p className="mt-1 text-xs text-white/70">
             Il faut, par entreprise, sa compagnie QuickBooks connectée (depuis ton
-            login comptable) et l&apos;URL de son dossier Drive sur sa fiche. Coche
-            des entreprises pour limiter un run ; sans coche, toutes les
-            entreprises prêtes sont traitées.
+            login comptable) et son dossier Drive : celui de la section
+            « Documents Drive » de sa fiche, ou retrouvé automatiquement dans le
+            dossier partagé des entreprises (même nom). Coche des entreprises
+            pour limiter un run ; sans coche, toutes les entreprises prêtes sont
+            traitées.
           </p>
           {etat === null ? (
             <p className="mt-3 text-xs text-white/60">
@@ -358,13 +363,17 @@ export default function RecusQuickbooksPage() {
                             className="inline-flex items-center gap-1 text-white hover:text-accent-500 hover:underline"
                           >
                             <FolderOpen className="h-3.5 w-3.5 text-emerald-600" />
-                            Dossier lié
+                            {e.drive_source === "convention"
+                              ? "Dossier retrouvé dans le Drive"
+                              : e.drive_source === "lien"
+                                ? "Dossier de la fiche"
+                                : "Dossier lié"}
                             <ExternalLink className="h-3 w-3" />
                           </a>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-amber-200">
                             <AlertTriangle className="h-3.5 w-3.5" />
-                            URL Drive manquante (bouton Drive de la fiche)
+                            Aucun dossier : fiche → Documents Drive → « Lier un dossier »
                           </span>
                         )}
                       </td>

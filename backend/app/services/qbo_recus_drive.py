@@ -36,6 +36,8 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.drive_convention import DriveConvention
+from app.models.drive_entity_link import DriveEntityLink
 from app.models.entreprise import Entreprise
 from app.models.qbo_connection import QboConnection
 from app.models.qbo_recu_drive import QboRecuDrive
@@ -161,10 +163,113 @@ def infos_transaction(txn_type: str, txn: Dict[str, Any]) -> Dict[str, Any]:
 # Entreprises prêtes (connexion QuickBooks + dossier Drive)
 # ──────────────────────────────────────────────────────────────────────
 
+#: Type d'entité des liens Drive de la fiche entreprise (<EntityDriveSection>).
+ENTITY_TYPE_ENTREPRISE = "Entreprise"
+#: Cache de la découverte automatique (entreprise_id → (folder_id|None, ts)).
+_DECOUVERTE: Dict[int, tuple] = {}
+_DECOUVERTE_TTL = 600.0
+
+
+def url_dossier(folder_id: str) -> str:
+    return f"https://drive.google.com/drive/folders/{folder_id}"
+
+
+async def _dossier_entreprise(
+    db: AsyncSession,
+    e: Entreprise,
+    liens: Dict[int, DriveEntityLink],
+    convention: Optional[DriveConvention],
+    drive_user_id: Optional[int],
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """(folder_id, url, source) du dossier Drive de l'entreprise, dans
+    l'ordre : URL collée sur la fiche → lien « Documents Drive » de la
+    fiche → découverte dans le dossier parent de la convention Entreprise
+    (un sous-dossier qui porte le nom de l'entreprise ; le lien est alors
+    enregistré pour de bon). Phil 2026-10-04 : « on devrait avoir l'URL
+    du dossier partagé pour chacune des entreprises »."""
+    fid = folder_id_depuis_url(getattr(e, "drive_folder_url", None))
+    if fid:
+        return fid, getattr(e, "drive_folder_url", None), "fiche"
+    lien = liens.get(e.id)
+    if lien is not None and lien.drive_folder_id:
+        return lien.drive_folder_id, url_dossier(lien.drive_folder_id), "lien"
+    parent = getattr(convention, "parent_folder_drive_id", None) if convention else None
+    if not parent or drive_user_id is None:
+        return None, None, None
+    import time as _time
+
+    cache = _DECOUVERTE.get(e.id)
+    if cache and _time.monotonic() - cache[1] < _DECOUVERTE_TTL:
+        fid = cache[0]
+        return (fid, url_dossier(fid), "convention") if fid else (None, None, None)
+    try:
+        from app.services.drive_api import FOLDER_MIME, list_folder_contents
+
+        voulu = (e.name or "").strip().casefold()
+        trouve: Optional[Dict[str, Any]] = None
+        token: Optional[str] = None
+        for _ in range(20):
+            page = await list_folder_contents(drive_user_id, db, parent, page_size=200, page_token=token)
+            for f in page.get("files") or []:
+                if f.get("mimeType") == FOLDER_MIME and (f.get("name") or "").strip().casefold() == voulu:
+                    trouve = f
+                    break
+            token = page.get("next_page_token")
+            if trouve or not token:
+                break
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Découverte du dossier Drive de %s impossible : %s", e.name, exc)
+        _DECOUVERTE[e.id] = (None, _time.monotonic())
+        return None, None, None
+    if trouve is None:
+        _DECOUVERTE[e.id] = (None, _time.monotonic())
+        return None, None, None
+    fid = str(trouve["id"])
+    # On enregistre le lien : la section « Documents Drive » de la fiche
+    # et la copie des reçus pointent désormais le même dossier.
+    try:
+        db.add(
+            DriveEntityLink(
+                entity_type=ENTITY_TYPE_ENTREPRISE,
+                entity_id=e.id,
+                drive_folder_id=fid,
+                drive_folder_name=trouve.get("name"),
+                convention_id=convention.id if convention else None,
+            )
+        )
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        await db.rollback()
+        log.warning("Lien Drive de %s non enregistré : %s", e.name, exc)
+    _DECOUVERTE[e.id] = (fid, _time.monotonic())
+    return fid, url_dossier(fid), "convention"
+
 
 async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
     """Toutes les entreprises actives avec leur état de préparation :
     connexion QuickBooks (scope inc:{id}), dossier Drive, compteurs."""
+    from app.services.drive_auto_upload_dispatcher import resolve_drive_owner_user_id
+
+    liens = {
+        int(l.entity_id): l
+        for l in (
+            await db.execute(
+                select(DriveEntityLink).where(DriveEntityLink.entity_type == ENTITY_TYPE_ENTREPRISE)
+            )
+        ).scalars().all()
+    }
+    convention = (
+        await db.execute(
+            select(DriveConvention)
+            .where(
+                DriveConvention.entity_type == ENTITY_TYPE_ENTREPRISE,
+                DriveConvention.active.is_(True),
+                DriveConvention.parent_folder_drive_id.is_not(None),
+            )
+            .order_by(DriveConvention.priority.desc(), DriveConvention.id.asc())
+        )
+    ).scalars().first()
+    drive_user_id = await resolve_drive_owner_user_id(db) if convention else None
     ents = (
         await db.execute(
             select(Entreprise)
@@ -199,7 +304,7 @@ async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
     for e in ents:
         scope = f"inc:{e.id}"
         c = conns.get(scope)
-        folder = folder_id_depuis_url(getattr(e, "drive_folder_url", None))
+        folder, url, source = await _dossier_entreprise(db, e, liens, convention, drive_user_id)
         n, last = stats.get(e.id, (0, None))
         out.append(
             {
@@ -209,8 +314,9 @@ async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
                 "qbo_connectee": bool(c and c.realm_id and c.refresh_token),
                 "qbo_company_name": c.company_name if c else None,
                 "qbo_realm_id": c.realm_id if c else None,
-                "drive_folder_url": getattr(e, "drive_folder_url", None),
+                "drive_folder_url": url,
                 "drive_folder_id": folder,
+                "drive_source": source,
                 "prete": bool(c and c.realm_id and c.refresh_token and folder),
                 "copies": n,
                 "derniere_copie": last.isoformat() if last else None,
