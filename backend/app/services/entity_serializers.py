@@ -943,6 +943,33 @@ def serialize_projet_materiau(obj: Any, level: str = "summary") -> dict:
     return data
 
 
+def serialize_lot_paiement(obj: Any, level: str = "summary") -> dict:
+    """Lot de paiements fournisseurs (Comptabilité → Paiements). Jamais de
+    coordonnées bancaires ni de contenu de fichier : le connecteur lit
+    l'état des paiements, pas les comptes."""
+    data = {
+        "entity_type": "lot_paiement",
+        "id": _get(obj, "id"),
+        "entreprise_id": _get(obj, "entreprise_id"),
+        "statut": _str(_get(obj, "statut")),
+        "date_paiement": _iso(_get(obj, "date_paiement")),
+        "total": _num((_get(obj, "total_cents") or 0) / 100),
+        "nb_lignes": _get(obj, "nb_lignes"),
+        "approbations_requises": _get(obj, "approbations_requises"),
+        "fichier_numero": _get(obj, "fichier_numero"),
+        "soumis_le": _iso(_get(obj, "soumis_le")),
+        "approuve_le": _iso(_get(obj, "approuve_le")),
+        "transmis_le": _iso(_get(obj, "transmis_le")),
+        "paye_le": _iso(_get(obj, "paye_le")),
+        "created_at": _iso(_get(obj, "created_at")),
+        "updated_at": _iso(_get(obj, "updated_at")),
+    }
+    if level == "full":
+        data["note"] = _str(_get(obj, "note"))
+        data["motif_annulation"] = _str(_get(obj, "motif_annulation"))
+    return _drop_none(data)
+
+
 SERIALIZERS: dict[str, Callable[..., dict]] = {
     "devlog_soumission": serialize_devlog_soumission,
     "devlog_project_task": serialize_devlog_project_task,
@@ -959,6 +986,7 @@ SERIALIZERS: dict[str, Callable[..., dict]] = {
     "entreprise": serialize_entreprise,
     "imm_tal_dossier": serialize_imm_tal_dossier,
     "imm_locataire_contact": serialize_imm_locataire_contact,
+    "lot_paiement": serialize_lot_paiement,
 }
 
 

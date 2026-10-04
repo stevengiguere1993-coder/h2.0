@@ -28,6 +28,20 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     #: 2026-10-04) — trace minimale lue par GET /recus-qbo/journal
     #: (catalogue API) ; le reçu lui-même vit dans QuickBooks.
     "recus_qbo_saisis",
+    #: Paiements fournisseurs par dépôt direct (Comptabilité → Paiements,
+    #: 2026-10-04). Lecture IA : liste « lots_paiement » (activity.py,
+    #: pôle Comptabilité), sans coordonnées bancaires. Les ÉCRITURES sont
+    #: interdites au connecteur (chemin /api/v1/paiements/ bloqué dans
+    #: mcp_server) : seuls des humains, avec double authentification,
+    #: engagent de l'argent. Coordonnées bancaires, clés de double
+    #: authentification et réglages ne sont volontairement PAS exposés.
+    "paiements_lots",
+    "paiements_lots_lignes",
+    "paiements_lots_approbations",
+    "paiements_comptes_fournisseurs",
+    "paiements_reglages",
+    "paiements_journal",
+    "utilisateurs_2fa",
     "user_access_overrides",
     "achats",
     "agenda_events",

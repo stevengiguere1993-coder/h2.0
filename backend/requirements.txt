@@ -119,3 +119,7 @@ tzdata>=2024.1
 # installe requirements.txt (le token CI ne peut pas modifier les
 # workflows GitHub, donc pas de requirements-dev séparé pour l'instant).
 aiosqlite>=0.19.0,<1.0.0
+
+# Codes QR de la double authentification (Comptabilité → Paiements) : la
+# clé TOTP à scanner dans l'application d'authentification. Pur Python.
+segno>=1.6.0,<2.0.0

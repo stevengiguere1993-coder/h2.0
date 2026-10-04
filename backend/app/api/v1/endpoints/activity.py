@@ -46,6 +46,7 @@ from app.models.devlog_project_task import DevlogProjectTask
 from app.models.devlog_project import DevlogProject
 from app.models.employe import Employe
 from app.models.entreprise import Entreprise, EntreprisePartner
+from app.models.paiement_fournisseur import LotPaiement
 from app.models.entreprise_tache import EntrepriseTache
 from app.models.immobilier import ImmLocataireContact, ImmTalDossier
 from app.models.project import Project
@@ -1918,6 +1919,17 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         list_cap="immobilier:locataire_contacts:list",
         order_attr="updated_at", stage_attr="role", supports_active=False,
     ),
+    # Comptabilité (2026-10-04) — lots de paiements fournisseurs par dépôt
+    # direct Desjardins ; `stage` filtre le statut (brouillon | soumis |
+    # approuve | fichier_cree | transmis | paye | refuse | annule). Lecture
+    # seule, sans coordonnées bancaires ; les écritures sont interdites au
+    # connecteur (mcp_server._ACTION_CHEMINS_INTERDITS).
+    "lots_paiement": _ListSpec(
+        model=LotPaiement, pole="comptabilite",
+        entity_type="lot_paiement",
+        list_cap="comptabilite:lots_paiement:list",
+        order_attr="updated_at", stage_attr="statut", supports_active=False,
+    ),
 }
 
 #: Alias supplémentaires (noms « complets ») vers les mêmes specs, pour que
@@ -1941,6 +1953,9 @@ _LIST_ALIASES: dict[str, str] = {
     "locataire_contact": "locataire_contacts",
     "imm_locataire_contact": "locataire_contacts",
     "garants": "locataire_contacts",
+    "lot_paiement": "lots_paiement",
+    "paiements_lots": "lots_paiement",
+    "lots_paiements": "lots_paiement",
 }
 
 

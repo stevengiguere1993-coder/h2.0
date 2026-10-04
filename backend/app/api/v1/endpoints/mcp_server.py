@@ -97,6 +97,9 @@ _ACTION_CHEMINS_INTERDITS = (
     "/api/v1/mcp",
     "/api/v1/public",
     "/api/v1/users",
+    # Paiements fournisseurs : l'argent ne bouge que par des humains, avec
+    # leur double authentification (Steven 2026-10-04).
+    "/api/v1/paiements/",
 )
 
 _ACTION_SCOPE = "api:actions:executer"

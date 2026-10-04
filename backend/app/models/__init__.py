@@ -255,6 +255,15 @@ from app.models.purchase_agreement_template import PurchaseAgreementTemplate
 from app.models.qbo_account_map import QboAccountMap
 from app.models.qbo_recu_drive import QboRecuDrive  # noqa: F401
 from app.models.recu_qbo_saisi import RecuQboSaisi  # noqa: F401
+from app.models.paiement_fournisseur import (  # noqa: F401
+    FournisseurCompteBancaire,
+    LotPaiement,
+    LotPaiementApprobation,
+    LotPaiementLigne,
+    PaiementEvenement,
+    PaiementReglage,
+    Utilisateur2FA,
+)
 from app.models.qbo_loyers import (
     QboAliasPayeur,
     QboCompteLoyer,
