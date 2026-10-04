@@ -56,6 +56,25 @@ async def executer(data: ExecuterIn, db: DBSession, user: CurrentUser) -> Dict[s
     return {"lance": True, "simulation": data.simulation}
 
 
+class ScopeIn(BaseModel):
+    #: « construction » (QuickBooks d'Horizon) ou vide / « inc:{id} » (la sienne).
+    scope: Optional[str] = None
+
+
+@router.post(
+    "/entreprises/{entreprise_id}/scope",
+    summary="Choisit la connexion QuickBooks d'une entreprise (la sienne ou celle d'Horizon)",
+)
+async def changer_scope(
+    entreprise_id: int, data: ScopeIn, db: DBSession, _: CurrentUser
+) -> Dict[str, Any]:
+    try:
+        scope = await svc.changer_scope(db, entreprise_id, data.scope)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    return {"entreprise_id": entreprise_id, "qbo_scope": scope}
+
+
 @router.get("/journal", summary="Dernières copies (mémoire anti-doublon)")
 async def journal(
     db: DBSession,

@@ -129,6 +129,12 @@ class Entreprise(Base, TimestampUpdateMixin):
         String(1024), nullable=True
     )
 
+    # Connexion QuickBooks à utiliser pour cette entreprise (reçus →
+    # Drive, 2026-10-04). NULL = sa propre compagnie (« inc:{id}) ;
+    # « construction » = le QuickBooks d'Horizon Services Immobiliers
+    # (connexion historique du pôle Construction). Colonne additive.
+    qbo_scope: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+
     # Ordre d'affichage dans la sidebar « Mes entreprises ». Modifiable
     # par drag & drop côté frontend. On alloue par pas de 1000 à la
     # création pour pouvoir insérer entre deux items sans renuméroter

@@ -32,6 +32,8 @@ type EntrepriseEtat = {
   qbo_scope: string;
   qbo_connectee: boolean;
   qbo_company_name: string | null;
+  // La connexion Construction (Horizon) est disponible comme alternative.
+  qbo_construction_disponible: boolean;
   drive_folder_url: string | null;
   drive_folder_id: string | null;
   // "fiche" (URL collée) | "lien" (Documents Drive de la fiche) |
@@ -233,6 +235,26 @@ export default function RecusQuickbooksPage() {
     }
   }
 
+  // Associer à une entreprise la connexion QuickBooks d'Horizon
+  // (Construction) au lieu d'une compagnie à elle (Phil 2026-10-04 :
+  // « les reçus dans Horizon Services Immobiliers »).
+  async function choisirScope(e: EntrepriseEtat, scope: string | null) {
+    setConnecting(e.entreprise_id);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/qbo-recus-drive/entreprises/${e.entreprise_id}/scope`,
+        { method: "POST", body: JSON.stringify({ scope }) }
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await charger();
+    } catch (ex) {
+      setErr(`Connexion QuickBooks : ${(ex as Error).message}`);
+    } finally {
+      setConnecting(null);
+    }
+  }
+
   async function connecterQbo(e: EntrepriseEtat) {
     setConnecting(e.entreprise_id);
     try {
@@ -336,22 +358,46 @@ export default function RecusQuickbooksPage() {
                       </td>
                       <td className="px-3 py-2 text-xs">
                         {e.qbo_connectee ? (
-                          <span className="inline-flex items-center gap-1 text-white">
+                          <span className="inline-flex flex-wrap items-center gap-1 text-white">
                             <Check className="h-3.5 w-3.5 text-emerald-600" />
                             {e.qbo_company_name || "Connectée"}
+                            {e.qbo_scope === "construction" ? (
+                              <button
+                                type="button"
+                                onClick={() => void choisirScope(e, null)}
+                                disabled={connecting === e.entreprise_id}
+                                className="btn-ghost btn-xs"
+                                title="Revenir à sa propre compagnie QuickBooks"
+                              >
+                                (changer)
+                              </button>
+                            ) : null}
                           </span>
                         ) : (
-                          <button
-                            type="button"
-                            onClick={() => void connecterQbo(e)}
-                            disabled={connecting === e.entreprise_id}
-                            className="btn-outline-accent btn-xs"
-                          >
-                            {connecting === e.entreprise_id ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
+                          <span className="inline-flex flex-wrap items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => void connecterQbo(e)}
+                              disabled={connecting === e.entreprise_id}
+                              className="btn-outline-accent btn-xs"
+                            >
+                              {connecting === e.entreprise_id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : null}
+                              Connecter QuickBooks
+                            </button>
+                            {e.qbo_construction_disponible ? (
+                              <button
+                                type="button"
+                                onClick={() => void choisirScope(e, "construction")}
+                                disabled={connecting === e.entreprise_id}
+                                className="btn-secondary btn-xs"
+                                title="Cette entreprise est Horizon : utiliser la connexion QuickBooks du pôle Construction"
+                              >
+                                Utiliser le QuickBooks Horizon
+                              </button>
                             ) : null}
-                            Connecter QuickBooks
-                          </button>
+                          </span>
                         )}
                       </td>
                       <td className="px-3 py-2 text-xs">

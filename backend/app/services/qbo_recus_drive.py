@@ -42,6 +42,7 @@ from app.models.drive_entity_link import DriveEntityLink
 from app.models.entreprise import Entreprise
 from app.models.qbo_connection import QboConnection
 from app.models.qbo_recu_drive import QboRecuDrive
+from app.models.qbo_token import QboToken
 
 log = logging.getLogger(__name__)
 
@@ -179,6 +180,32 @@ def infos_transaction(txn_type: str, txn: Dict[str, Any]) -> Dict[str, Any]:
 
 #: Type d'entité des liens Drive de la fiche entreprise (<EntityDriveSection>).
 ENTITY_TYPE_ENTREPRISE = "Entreprise"
+#: Connexion QuickBooks historique du pôle Construction (Horizon Services
+#: Immobiliers) — table qbo_tokens, pas qbo_connections.
+SCOPE_CONSTRUCTION = "construction"
+
+
+def scope_de(e: Entreprise) -> str:
+    """Scope QuickBooks de l'entreprise : choix enregistré, sinon sa
+    propre compagnie « inc:{id} »."""
+    return (getattr(e, "qbo_scope", None) or "").strip() or f"inc:{e.id}"
+
+
+async def changer_scope(db: AsyncSession, entreprise_id: int, scope: Optional[str]) -> str:
+    """Enregistre la connexion QuickBooks à utiliser pour une entreprise :
+    None / « inc:{id} » = la sienne, « construction » = celle d'Horizon."""
+    e = await db.get(Entreprise, entreprise_id)
+    if e is None:
+        raise ValueError("Entreprise introuvable.")
+    s = (scope or "").strip()
+    if s in ("", f"inc:{e.id}"):
+        e.qbo_scope = None
+    elif s == SCOPE_CONSTRUCTION:
+        e.qbo_scope = SCOPE_CONSTRUCTION
+    else:
+        raise ValueError("Connexion inconnue : « construction » ou vide.")
+    await db.commit()
+    return scope_de(e)
 #: Cache de la découverte automatique (entreprise_id → (folder_id|None, ts)).
 _DECOUVERTE: Dict[int, tuple] = {}
 _DECOUVERTE_TTL = 600.0
@@ -299,6 +326,13 @@ async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
             )
         ).scalars().all()
     }
+    # Connexion Construction (Horizon) : table historique qbo_tokens.
+    tok = (await db.execute(select(QboToken).where(QboToken.id == 1))).scalar_one_or_none()
+    construction = {
+        "connectee": bool(tok and tok.refresh_token and tok.realm_id),
+        "company_name": (getattr(tok, "company_name", None) if tok else None) or "Horizon (Construction)",
+        "realm_id": tok.realm_id if tok else None,
+    }
     stats = {
         int(eid): (int(n), last)
         for eid, n, last in (
@@ -316,8 +350,16 @@ async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
     }
     out: List[Dict[str, Any]] = []
     for e in ents:
-        scope = f"inc:{e.id}"
-        c = conns.get(scope)
+        scope = scope_de(e)
+        if scope == SCOPE_CONSTRUCTION:
+            qbo_ok = construction["connectee"]
+            qbo_nom = construction["company_name"]
+            qbo_realm = construction["realm_id"]
+        else:
+            c = conns.get(scope)
+            qbo_ok = bool(c and c.realm_id and c.refresh_token)
+            qbo_nom = c.company_name if c else None
+            qbo_realm = c.realm_id if c else None
         folder, url, source = await _dossier_entreprise(db, e, liens, convention, drive_user_id)
         n, last = stats.get(e.id, (0, None))
         out.append(
@@ -325,13 +367,14 @@ async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
                 "entreprise_id": e.id,
                 "name": e.name,
                 "qbo_scope": scope,
-                "qbo_connectee": bool(c and c.realm_id and c.refresh_token),
-                "qbo_company_name": c.company_name if c else None,
-                "qbo_realm_id": c.realm_id if c else None,
+                "qbo_connectee": qbo_ok,
+                "qbo_company_name": qbo_nom,
+                "qbo_realm_id": qbo_realm,
+                "qbo_construction_disponible": construction["connectee"],
                 "drive_folder_url": url,
                 "drive_folder_id": folder,
                 "drive_source": source,
-                "prete": bool(c and c.realm_id and c.refresh_token and folder),
+                "prete": bool(qbo_ok and folder),
                 "copies": n,
                 "derniere_copie": last.isoformat() if last else None,
             }
