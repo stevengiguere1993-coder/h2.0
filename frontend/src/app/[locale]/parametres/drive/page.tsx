@@ -406,10 +406,10 @@ function RecusQuickbooksSection() {
           </p>
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/entreprises/recus-quickbooks" as any}
+            href={"/parametres/drive/recus-quickbooks" as any}
             className="btn-outline-accent btn-xs mt-3 inline-flex items-center gap-1"
           >
-            Ouvrir « Reçus QuickBooks → Drive » <ExternalLink className="h-3 w-3" />
+            Ouvrir « Reçus QuickBooks → Drive » <ChevronRight className="h-3 w-3" />
           </Link>
         </div>
       </div>

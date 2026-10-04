@@ -23,6 +23,7 @@ import {
   Map as MapIcon,
   Phone,
   Plug,
+  Receipt,
   RefreshCw,
   Repeat,
   ScrollText,
@@ -188,6 +189,12 @@ export const SECTIONS: Section[] = [
         href: "/parametres/qbo-migration",
         icon: RefreshCw,
         minRole: "admin"
+      },
+      {
+        title: "Reçus QuickBooks → Drive",
+        desc: "Copie des reçus de dépense de chaque entreprise dans son Drive (Factures / année / mois), et son Drive à partir de Factures.",
+        href: "/parametres/drive/recus-quickbooks",
+        icon: Receipt
       }
     ]
   },
