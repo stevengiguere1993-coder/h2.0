@@ -139,12 +139,15 @@ async def get_drive_service(
     Lève :class:`DriveAuthError` si l'utilisateur n'a pas de connexion
     Drive valide.
     """
-    access_token = await drive_oauth.get_valid_access_token(
+    # Jeton de l'utilisateur, sinon celui du compte Drive PARTAGÉ (le
+    # Drive est commun : pas besoin que chacun refasse l'OAuth).
+    access_token, _ = await drive_oauth.get_valid_access_token_ou_partage(
         db, user_id=user_id
     )
     if not access_token:
         raise DriveAuthError(
-            "Connecte d'abord ton compte Google Drive dans Paramètres."
+            "Aucun compte Google Drive connecté dans Kratos : connecte le "
+            "compte Horizon dans Paramètres → Drive."
         )
     return await asyncio.to_thread(_build_service_sync, access_token)
 
@@ -218,8 +221,18 @@ def _strip_user_id(file_obj: dict[str, Any]) -> dict[str, Any]:
 async def _google_email_for(
     user_id: int, db: AsyncSession
 ) -> Optional[str]:
+    """Courriel Google de l'audit : celui de l'utilisateur, sinon celui du
+    compte partagé réellement utilisé (le user_id de l'audit reste
+    l'utilisateur Kratos qui a agi)."""
     try:
-        return await drive_oauth.get_user_email(db, user_id=user_id)
+        email = await drive_oauth.get_user_email(db, user_id=user_id)
+        if email:
+            return email
+        partage = await drive_oauth.utilisateur_partage(db)
+        if partage is not None and partage != user_id:
+            e2 = await drive_oauth.get_user_email(db, user_id=partage)
+            return f"{e2} (compte partagé)" if e2 else None
+        return None
     except Exception:  # noqa: BLE001
         return None
 

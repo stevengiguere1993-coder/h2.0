@@ -51,6 +51,9 @@ type DriveStatus = {
   expires_at?: string | null;
   updated_at?: string | null;
   server_configured: boolean;
+  expired?: boolean;
+  // Compte Drive partagé utilisé à la place (pas de connexion personnelle).
+  partage_via?: string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -430,10 +433,25 @@ function ConnectionSection({
         </div>
       ) : (
         <div className="mt-5 space-y-3">
+          {status?.partage_via ? (
+            <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-xs text-white">
+              <p className="flex items-center gap-2 font-semibold">
+                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                Les sections Drive de Kratos fonctionnent déjà pour toi via le
+                compte partagé {status.partage_via}.
+              </p>
+              <p className="mt-1 text-white/70">
+                Connecter ton propre compte Google est facultatif : utile
+                seulement si tu veux agir sous ton nom dans Drive.
+              </p>
+            </div>
+          ) : null}
           <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-amber-200">
             <p className="flex items-center gap-2 font-semibold">
               <AlertCircle className="h-4 w-4" />
-              Aucun compte Google connecté.
+              {status?.partage_via
+                ? "Pas de compte Google personnel connecté."
+                : "Aucun compte Google connecté."}
             </p>
             <p className="mt-1 opacity-80">
               Connecte ton compte Google pour accéder à tes documents Drive
