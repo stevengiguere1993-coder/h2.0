@@ -6,11 +6,7 @@ import { Calendar, ChevronRight, Loader2, MapPin } from "lucide-react";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { useZoneEmploye } from "../zone-employe-context";
-import {
-  EVENT_TYPE_LABELS,
-  ZONE_EVENT_TYPES,
-  type EventMini
-} from "../_autre/shared";
+import { EVENT_TYPE_LABELS, type EventMini } from "../_autre/shared";
 
 // Types affichés en étiquette sur la carte (événements planifiés par un
 // admin depuis l'agenda du site ou la section Employés : meetings,
@@ -115,14 +111,11 @@ export default function MobileAgenda() {
                     <EventCard
                       key={e.id}
                       event={e}
-                      // Pas d'intervention Construction derrière : un
-                      // employé « autre », ou un événement planifié depuis
-                      // la section Employés sans projet (réunion, tournage,
-                      // rendez-vous, formation…).
-                      plain={
-                        variant === "autre" ||
-                        (!e.project_id && ZONE_EVENT_TYPES.has(e.event_type))
-                      }
+                      // Employé « autre » : pas d'intervention de chantier
+                      // derrière, la carte montre tout (type, lieu, notes).
+                      // Construction : inchangé (réunion / tournage ouvrent
+                      // la fiche résumé de l'intervention).
+                      plain={variant === "autre"}
                     />
                   ))}
                 </ul>

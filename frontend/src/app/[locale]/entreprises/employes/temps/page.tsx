@@ -128,15 +128,17 @@ export default function SuiviTempsPage() {
     }
   }, [raccourci, debutCourante, perso]);
 
+  // « Période précédente » sans référence : on charge d'abord la courante
+  // pour apprendre son début (puis la plage se calcule).
+  const besoinReference = raccourci === "precedente" && !debutCourante;
+
   useEffect(() => {
     if (plage === undefined) {
-      // « Période précédente » sans référence : on charge d'abord la
-      // courante pour l'apprendre.
-      if (raccourci === "precedente" && !debutCourante) void charger(null);
+      if (besoinReference) void charger(null);
       return;
     }
     void charger(plage);
-  }, [plage, raccourci, debutCourante, charger]);
+  }, [plage, besoinReference, charger]);
 
   const lignes = useMemo(
     () =>
@@ -272,10 +274,8 @@ export default function SuiviTempsPage() {
                       <td className="px-3 py-2.5">
                         <div className="flex items-center gap-2">
                           <span
-                            className={`font-medium ${
-                              actif
-                                ? "text-[var(--qg-accent)]"
-                                : "text-[var(--qg-text)]"
+                            className={`text-[var(--qg-text)] ${
+                              actif ? "font-bold underline decoration-[var(--qg-accent)] decoration-2 underline-offset-4" : "font-medium"
                             }`}
                           >
                             {l.display_name}

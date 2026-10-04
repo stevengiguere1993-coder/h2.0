@@ -182,8 +182,9 @@ function CarteEmploye({
 
       <div className="mt-4 flex items-center gap-2 border-t border-[var(--qg-border)] pt-3">
         {actif ? (
-          <span className="mr-auto inline-flex items-center gap-1 text-xs font-semibold text-[var(--qg-accent)]">
-            <CheckCircle2 className="h-3.5 w-3.5" /> Sélectionné
+          <span className="mr-auto inline-flex items-center gap-1 text-xs font-semibold text-[var(--qg-text)]">
+            <CheckCircle2 className="h-3.5 w-3.5 text-[var(--qg-accent)]" />{" "}
+            Sélectionné
           </span>
         ) : (
           <span className="mr-auto text-xs text-[var(--qg-text-soft)]">

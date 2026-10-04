@@ -87,16 +87,6 @@ export const EVENT_TYPE_LABELS: Record<string, string> = {
   autre: "Autre"
 };
 
-/** Types planifiés depuis la section Employés : pas d'intervention
- *  Construction derrière, la carte agenda reste informative. */
-export const ZONE_EVENT_TYPES: ReadonlySet<string> = new Set([
-  "reunion",
-  "tournage",
-  "rdv",
-  "formation",
-  "autre"
-]);
-
 /** Statut d'une feuille de temps → libellé + classes de badge (toutes
  *  remappées pour le thème clair dans globals.css). */
 export const TIMESHEET_STATUS: Record<string, { label: string; cls: string }> =

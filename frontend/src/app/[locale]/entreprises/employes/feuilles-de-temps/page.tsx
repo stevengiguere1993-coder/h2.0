@@ -238,7 +238,7 @@ export default function FeuillesDeTempsPage() {
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={"/entreprises/feuille-de-temps" as any}
-          className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-[var(--qg-text-muted)] hover:text-[var(--qg-accent)]"
+          className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-[var(--qg-text-muted)] hover:text-[var(--qg-text)] hover:underline"
         >
           Ouvrir dans Feuille de temps <ExternalLink className="h-3.5 w-3.5" />
         </Link>

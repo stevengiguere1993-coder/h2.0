@@ -345,7 +345,7 @@ function TacheCard({
   return (
     <li
       className={`rounded-xl border px-3 py-3 ${
-        done ? "border-brand-800 bg-brand-900/50" : "border-brand-800 bg-brand-900"
+        done ? "border-brand-800 bg-brand-900/40" : "border-brand-800 bg-brand-900"
       }`}
     >
       <button

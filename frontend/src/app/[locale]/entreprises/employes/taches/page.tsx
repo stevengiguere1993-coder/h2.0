@@ -104,19 +104,16 @@ export default function TachesEmployesPage() {
     };
   }, []);
 
-  // Tâches : filtrées serveur sur l'employé sélectionné, sinon toutes
-  // (filtre client sur l'équipe ci-dessous).
+  // Tâches : chargées une fois, filtrées côté client — le filtre serveur
+  // `assignee_user_id` ne voit que l'assigné principal, pas les
+  // co-assignés.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       setLoading(true);
       setError(null);
       try {
-        const url =
-          selectedId != null
-            ? `/api/v1/entreprises/taches?assignee_user_id=${selectedId}`
-            : "/api/v1/entreprises/taches";
-        const r = await authedFetch(url);
+        const r = await authedFetch("/api/v1/entreprises/taches");
         if (!r.ok) throw new Error(await lireErreur(r));
         if (!cancelled) setTaches((await r.json()) as TacheEnt[]);
       } catch (e) {
@@ -128,7 +125,7 @@ export default function TachesEmployesPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedId]);
+  }, []);
 
   const idsEquipe = useMemo(() => new Set(equipe.map((e) => e.id)), [equipe]);
   const entById = useMemo(
@@ -137,7 +134,8 @@ export default function TachesEmployesPage() {
   );
 
   const visibles = useMemo(() => {
-    if (selectedId != null) return taches;
+    if (selectedId != null)
+      return taches.filter((t) => assignes(t).includes(selectedId));
     return taches.filter((t) => assignes(t).some((id) => idsEquipe.has(id)));
   }, [taches, selectedId, idsEquipe]);
 
@@ -332,7 +330,7 @@ export default function TachesEmployesPage() {
         </div>
         <p className="pb-2 text-xs text-[var(--qg-text-muted)]">
           {selected
-            ? `Une tâche créée ici est assignée à ${selected.display_name} ; il la voit dans sa zone employés.`
+            ? `Une tâche créée ici est assignée à ${selected.display_name}, qui la retrouve dans sa zone employés.`
             : "Sélectionne un employé pour pouvoir lui créer des tâches. Sans sélection, tu vois les tâches de toute l'équipe."}
         </p>
       </div>

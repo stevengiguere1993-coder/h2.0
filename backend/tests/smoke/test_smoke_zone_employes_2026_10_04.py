@@ -235,6 +235,16 @@ def test_agenda_planifie_visible_dans_la_zone(client, auth_headers, video):
     assert r.status_code == 200, r.text
     assert any(n["kind"] == "agenda.planifie" for n in r.json())
 
+    # Et dans l'agenda de son téléphone (flux ICS), même sans fiche
+    # Employé Construction.
+    r = client.get("/api/v1/calendar/my-agenda-url", headers=h)
+    assert r.status_code == 200, r.text
+    token = r.json()["token"]
+    r = client.get(f"/api/v1/calendar/my-agenda.ics?token={token}")
+    assert r.status_code == 200, r.text
+    assert f"UID:agenda-{ev['id']}@" in r.text
+    assert "Tournage capsule MGV" in r.text
+
     # Le gestionnaire le retrouve dans l'agenda de l'employé, avec prochain
     # événement sur la fiche d'équipe.
     r = client.get(f"/api/v1/entreprises/employes/{video['id']}/agenda", headers=auth_headers)

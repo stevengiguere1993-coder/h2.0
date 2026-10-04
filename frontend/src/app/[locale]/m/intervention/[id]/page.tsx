@@ -515,7 +515,10 @@ export default function MobileIntervention() {
 // notes) plutôt qu'en intervention de chantier.
 const SUMMARY_LABELS: Record<string, string> = {
   reunion: "Réunion",
-  tournage: "Tournage"
+  tournage: "Tournage",
+  // Planifiés depuis Entreprises → Employés (zone employés).
+  rdv: "Rendez-vous",
+  formation: "Formation"
 };
 
 function EventSummaryCard({
