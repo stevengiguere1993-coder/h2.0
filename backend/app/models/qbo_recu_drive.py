@@ -67,6 +67,9 @@ class QboRecuDrive(Base):
     detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     #: « rattrapage » (bouton), « cron » (nuit).
     declencheur: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
+    #: Identifiant du run (pour « Annuler cet import » : corbeille Drive +
+    #: oubli de la mémoire). Colonne additive (ajoutée au démarrage).
+    run_id: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, index=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

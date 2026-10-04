@@ -56,6 +56,27 @@ async def executer(data: ExecuterIn, db: DBSession, user: CurrentUser) -> Dict[s
     return {"lance": True, "simulation": data.simulation}
 
 
+@router.post("/arreter", summary="Arrête le run en cours (ce qui est copié reste copié)")
+async def arreter(_: CurrentUser) -> Dict[str, Any]:
+    return {"arret_demande": svc.demander_arret()}
+
+
+@router.get("/runs", summary="Imports réels récents (pour annulation)")
+async def runs(db: DBSession, _: CurrentUser) -> List[Dict[str, Any]]:
+    return await svc.runs_recents(db)
+
+
+@router.post(
+    "/annuler/{run_id}",
+    summary="Annule un import : fichiers copiés à la corbeille Drive, mémoire effacée",
+)
+async def annuler(run_id: str, db: DBSession, user: CurrentUser) -> Dict[str, Any]:
+    r = await svc.annuler_run(db, run_id, user_id=getattr(user, "id", None))
+    if not r.get("ok"):
+        raise HTTPException(status.HTTP_409_CONFLICT, r.get("erreur") or "Annulation impossible.")
+    return r
+
+
 class ScopeIn(BaseModel):
     #: « construction » (QuickBooks d'Horizon) ou vide / « inc:{id} » (la sienne).
     scope: Optional[str] = None
