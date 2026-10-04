@@ -438,6 +438,10 @@ def make_crud_router(
                 apply_payment_defaults,
             )
 
+            # Auteur — l'app mobile ne montre que son dernier achat.
+            if obj.created_by_user_id is None:
+                obj.created_by_user_id = user.id
+
             await apply_payment_defaults(db, obj)
             # Défaut « à refacturer » selon le TYPE DE PROJET quand
             # l'utilisateur ne l'a pas tranché (is_billable non fourni) :
