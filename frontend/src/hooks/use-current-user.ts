@@ -3,7 +3,15 @@
 import { useEffect, useState } from "react";
 
 import { useRouter } from "@/i18n/navigation";
-import { getMe, getToken, setToken, type CurrentUser } from "@/lib/auth";
+import {
+  getMe,
+  getToken,
+  isApercu,
+  localePrefix,
+  setToken,
+  stopApercu,
+  type CurrentUser
+} from "@/lib/auth";
 
 export function useCurrentUser(): {
   user: CurrentUser | null;
@@ -24,6 +32,17 @@ export function useCurrentUser(): {
     getMe(token)
       .then((u) => setUser(u))
       .catch(() => {
+        // Aperçu « voir comme » : c'est le jeton d'aperçu (2 h) qui est
+        // expiré/invalide, pas la session de l'admin. On restaure son jeton
+        // et on le ramène sur la page des comptes (même sortie que la
+        // branche 401 d'authedFetch) au lieu de le déconnecter.
+        if (isApercu()) {
+          stopApercu();
+          window.location.assign(
+            `${localePrefix()}/app/utilisateurs?apercu=expire`
+          );
+          return;
+        }
         setToken(null);
         router.replace("/connexion");
       })
