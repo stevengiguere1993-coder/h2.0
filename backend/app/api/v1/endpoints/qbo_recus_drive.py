@@ -27,6 +27,9 @@ class ExecuterIn(BaseModel):
     depuis: Optional[date] = None
     jusqua: Optional[date] = None
     simulation: bool = Field(default=True)
+    #: Mode « ce qui a bougé dans QuickBooks depuis N jours » (comme la
+    #: nuit) : ignore la période, prend toute pièce ajoutée/modifiée.
+    pieces_depuis_jours: Optional[int] = Field(default=None, ge=1, le=365)
 
 
 @router.get("/etat", summary="Entreprises (QuickBooks + Drive) et dernier run")
@@ -47,11 +50,12 @@ async def executer(data: ExecuterIn, db: DBSession, user: CurrentUser) -> Dict[s
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "La date de début dépasse la date de fin.")
     svc.lancer_en_arriere_plan(
         entreprise_ids=data.entreprise_ids or None,
-        depuis=data.depuis,
-        jusqua=data.jusqua,
+        depuis=None if data.pieces_depuis_jours else data.depuis,
+        jusqua=None if data.pieces_depuis_jours else data.jusqua,
         simulation=data.simulation,
         declencheur="simulation" if data.simulation else "rattrapage",
         user_id=getattr(user, "id", None),
+        pieces_depuis_jours=data.pieces_depuis_jours,
     )
     return {"lance": True, "simulation": data.simulation}
 

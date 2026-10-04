@@ -76,8 +76,9 @@ Le mega-cron `all-daily` inclut `materiaux-prix` : relevé quotidien des prix ch
 
 Sous-job `qbo-recus-drive` : pour chaque entreprise dont la compagnie
 QuickBooks est connectée (scope `inc:{entreprise_id}`) et dont la fiche a
-une URL de dossier Drive, les reçus (pièces jointes image/PDF) des
-DÉPENSES des 3 derniers jours sont copiés dans
+un dossier Drive, les reçus (pièces jointes image/PDF) de DÉPENSES
+AJOUTÉS OU MODIFIÉS dans QuickBooks depuis 2 jours (quelle que soit la
+date du reçu) sont copiés dans
 `<Drive entreprise>/Factures/<année>/<Mois>/AAAA-MM-JJ Fournisseur 2134,02$.ext`.
 Anti-doublon : table `qbo_recus_drive` + même nom déjà présent dans le
 dossier du mois. Rattrapage / simulation : page Entreprises → « Reçus
