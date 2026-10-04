@@ -144,6 +144,32 @@ async def _resolve_employe(db, user_email: str) -> Optional[Employe]:
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
+def _agenda_visibility(user, emp: Optional[Employe]) -> list:
+    """Prédicats « cet événement concerne cet employé », partagés par les
+    endpoints mobiles (/me, /agenda). L'employé voit SES événements :
+    assignés à son compte User (meetings, tournages… planifiés par un
+    admin) ou à sa fiche Employe. Les événements sans assigné restent
+    visibles aux seuls employés du volet Construction (consignes chantier
+    communes) : un employé d'un autre pôle (ex. vidéo / marketing) ne
+    voit pas l'agenda de la compagnie. Sans fiche ni assignation → rien.
+
+    Ne restreint que les endpoints mobiles : le CRUD générique
+    ``/api/v1/agenda`` (business.py, ``agenda_router``) reste lisible par
+    tout utilisateur connecté."""
+    mine = [AgendaEvent.assignee_user_id == user.id]
+    if emp is not None:
+        mine.append(AgendaEvent.assignee_id == emp.id)
+        if user.has_volet("construction"):
+            mine.append(
+                and_(
+                    AgendaEvent.assignee_id.is_(None),
+                    AgendaEvent.assignee_user_id.is_(None),
+                    AgendaEvent.scope == "construction",
+                )
+            )
+    return [or_(*mine)]
+
+
 @router.get("/me", response_model=MobileMe)
 async def me(db: DBSession, user: CurrentUser) -> MobileMe:
     emp = await _resolve_employe(db, user.email)
@@ -192,17 +218,10 @@ async def me(db: DBSession, user: CurrentUser) -> MobileMe:
         if emp.hourly_rate:
             revenue = round(hours_worked * float(emp.hourly_rate), 2)
 
-    # Current + next event for this employee (or any unassigned if they
-    # have no employe link)
+    # Current + next event for this employee — même visibilité que
+    # GET /mobile/agenda (voir _agenda_visibility).
     now = datetime.now(timezone.utc)
-    filt = []
-    if emp is not None:
-        filt.append(
-            or_(
-                AgendaEvent.assignee_id == emp.id,
-                AgendaEvent.assignee_id.is_(None),
-            )
-        )
+    filt = _agenda_visibility(user, emp)
 
     current_stmt = (
         select(AgendaEvent)
@@ -492,13 +511,7 @@ async def my_agenda(
         )
         .order_by(AgendaEvent.start_at.asc())
     )
-    if emp is not None:
-        stmt = stmt.where(
-            or_(
-                AgendaEvent.assignee_id == emp.id,
-                AgendaEvent.assignee_id.is_(None),
-            )
-        )
+    stmt = stmt.where(*_agenda_visibility(user, emp))
     rows = (await db.execute(stmt)).scalars().all()
     return [AgendaEventMini.model_validate(r) for r in rows]
 
@@ -860,6 +873,18 @@ async def my_projects(
             )
         ).all()
         project_ids.update(int(r[0]) for r in rows if r[0] is not None)
+
+    # Événements assignés au compte User (meetings, tournages planifiés
+    # par un admin), avec ou sans fiche Employe → on capte le projet.
+    rows = (
+        await db.execute(
+            select(AgendaEvent.project_id).where(
+                AgendaEvent.assignee_user_id == user.id,
+                AgendaEvent.project_id.is_not(None),
+            )
+        )
+    ).all()
+    project_ids.update(int(r[0]) for r in rows if r[0] is not None)
 
     if not project_ids:
         return []

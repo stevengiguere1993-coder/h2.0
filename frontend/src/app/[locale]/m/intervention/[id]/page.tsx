@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
+  CalendarDays,
   Camera,
   CheckCircle2,
   ChevronLeft,
@@ -14,7 +15,8 @@ import {
   Palmtree,
   Phone,
   Ruler as RulerIcon,
-  StickyNote
+  StickyNote,
+  Video
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
@@ -270,6 +272,9 @@ export default function MobileIntervention() {
     eventType === "conge" ||
     eventType === "ferie" ||
     eventType === "indispo";
+  // Réunion / tournage (planifiés par un admin dans l'agenda de
+  // l'employé) : pas de chantier, pas de photos — une fiche résumé.
+  const summaryLabel = SUMMARY_LABELS[eventType];
 
   return (
     <>
@@ -286,7 +291,7 @@ export default function MobileIntervention() {
           <ChevronLeft className="h-4 w-4" />
         </Link>
         <h1 className="flex-1 text-center text-base font-bold text-white">
-          {isConge ? "Congé" : "Intervention"}
+          {isConge ? "Congé" : summaryLabel || "Intervention"}
         </h1>
         <span className="w-6" />
       </header>
@@ -305,6 +310,8 @@ export default function MobileIntervention() {
         ) : isBlock ? (
           // Leave / unavailability: no checklist, just a summary card.
           <LeaveSummaryCard event={event} />
+        ) : summaryLabel ? (
+          <EventSummaryCard event={event} label={summaryLabel} />
         ) : (
           // Default: service intervention with photos + notes.
           <div className="space-y-4">
@@ -501,6 +508,63 @@ export default function MobileIntervention() {
         )}
       </div>
     </>
+  );
+}
+
+// Types d'événements affichés en fiche résumé (titre, horaire, lieu,
+// notes) plutôt qu'en intervention de chantier.
+const SUMMARY_LABELS: Record<string, string> = {
+  reunion: "Réunion",
+  tournage: "Tournage"
+};
+
+function EventSummaryCard({
+  event,
+  label
+}: {
+  event: AgendaEvent | null;
+  label: string;
+}) {
+  if (!event) {
+    return (
+      <p className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/50">
+        Événement introuvable.
+      </p>
+    );
+  }
+  const Icon = event.event_type === "tournage" ? Video : CalendarDays;
+  return (
+    <div className="space-y-4">
+      <section className="rounded-2xl border border-accent-500/40 bg-accent-500/10 p-5">
+        <div className="flex items-center gap-3">
+          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-500/20 text-accent-500">
+            <Icon className="h-5 w-5" />
+          </span>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs uppercase tracking-wider text-accent-500">
+              {label}
+            </p>
+            <p className="mt-0.5 truncate text-sm font-semibold text-white">
+              {event.title}
+            </p>
+          </div>
+        </div>
+        <p className="mt-4 text-sm text-white/80">
+          {fmtRange(event.start_at, event.end_at)}
+        </p>
+        {event.location ? (
+          <p className="mt-2 flex items-center gap-1.5 text-xs text-white/70">
+            <MapPin className="h-3.5 w-3.5" />
+            {event.location}
+          </p>
+        ) : null}
+        {event.description ? (
+          <p className="mt-3 rounded-lg border border-brand-800 bg-brand-950 p-3 text-xs text-white/60">
+            {event.description}
+          </p>
+        ) : null}
+      </section>
+    </div>
   );
 }
 

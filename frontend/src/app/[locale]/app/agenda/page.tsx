@@ -92,6 +92,7 @@ const TYPE_LABELS: Record<string, string> = {
   chantier: "Chantier",
   visite: "Visite",
   reunion: "Réunion",
+  tournage: "Tournage",
   livraison: "Livraison",
   conge: "Congé / vacances",
   busy: "Indisponible",
@@ -165,6 +166,7 @@ const TYPE_CLASS: Record<string, string> = {
   conge: "bg-orange-500/20 text-orange-300 border-orange-500/40",
   visite: "bg-blue-500/20 text-blue-300 border-blue-500/40",
   reunion: "bg-violet-500/20 text-violet-300 border-violet-500/40",
+  tournage: "bg-pink-500/20 text-pink-300 border-pink-500/40",
   livraison: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40",
   // Bloc opaque (event Prospection masqué). Gris neutre + curseur
   // par défaut (pas cliquable, géré dans onEventClick).
@@ -1943,6 +1945,8 @@ function eventAccent(type: string): string {
       return "bg-blue-500/80 border-blue-400 text-white";
     case "reunion":
       return "bg-violet-500/80 border-violet-400 text-white";
+    case "tournage":
+      return "bg-pink-500/80 border-pink-400 text-white";
     case "livraison":
       return "bg-emerald-500/80 border-emerald-400 text-white";
     case "conge":

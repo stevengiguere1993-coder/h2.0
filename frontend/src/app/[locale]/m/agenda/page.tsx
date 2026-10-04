@@ -18,6 +18,16 @@ type EventMini = {
   event_type: string;
 };
 
+// Types affichés en étiquette sur la carte (événements planifiés par un
+// admin depuis l'agenda du site : meetings, tournages vidéo…).
+const TYPE_LABELS: Record<string, string> = {
+  reunion: "Réunion",
+  tournage: "Tournage",
+  visite: "Visite",
+  livraison: "Livraison",
+  conge: "Congé"
+};
+
 function ymd(d: Date): string {
   if (Number.isNaN(d.getTime())) return "0000-00-00";
   // Use local components — la PWA iOS rendrait sinon une date UTC
@@ -141,7 +151,12 @@ function EventCard({ event: e }: { event: EventMini }) {
       ? "border-rose-500/40 bg-rose-500/10"
       : e.event_type === "chantier"
       ? "border-blue-500/30 bg-blue-500/5"
+      : e.event_type === "reunion"
+      ? "border-violet-500/40 bg-violet-500/10"
+      : e.event_type === "tournage"
+      ? "border-pink-500/40 bg-pink-500/10"
       : "border-brand-800 bg-brand-900";
+  const typeLabel = TYPE_LABELS[e.event_type];
   return (
     <li
       className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-3 ${tone}`}
@@ -158,6 +173,11 @@ function EventCard({ event: e }: { event: EventMini }) {
           ) : null}
         </div>
         <div className="min-w-0 flex-1">
+          {typeLabel ? (
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-white/60">
+              {typeLabel}
+            </p>
+          ) : null}
           <p className="truncate text-sm font-semibold text-white">
             {e.title}
           </p>
