@@ -28,6 +28,8 @@ from app.models.timesheet import (
     TimesheetCompany,
     TimesheetEntry,
     TimesheetReglement,
+    TimesheetTaskLine,
+    TimesheetUserCompany,
     TimesheetUserRate,
 )
 from app.models.user import User
@@ -296,6 +298,16 @@ class LigneOut(BaseModel):
     note: str = ""
 
 
+class TacheLigneOut(BaseModel):
+    id: int
+    day_index: int
+    company_id: int
+    company_label: str
+    entreprise_tache_id: Optional[int] = None
+    title: str
+    hours: float
+
+
 class TimesheetDetail(BaseModel):
     id: int
     user_id: int
@@ -320,6 +332,10 @@ class TimesheetDetail(BaseModel):
     total_heures: float
     montant_paie: float
     total_refacturation: float
+    #: Feuille « par tâche » : la grille est dérivée des lignes ``taches``
+    #: (lecture seule à l'écran) dès qu'il y a au moins une ligne.
+    mode_taches: bool = False
+    taches: List[TacheLigneOut] = []
 
 
 class EntryIn(BaseModel):
@@ -327,6 +343,44 @@ class EntryIn(BaseModel):
     day_index: int = Field(ge=0, le=TIMESHEET_DAYS - 1)
     hours: float = Field(ge=0)
     refacturable: bool = True
+
+
+class TacheLigneIn(BaseModel):
+    day_index: int = Field(ge=0, le=TIMESHEET_DAYS - 1)
+    company_id: int
+    entreprise_tache_id: Optional[int] = None
+    title: str = Field(min_length=1, max_length=255)
+    hours: float = Field(ge=0, le=24)
+
+
+class TachesReplace(BaseModel):
+    lignes: List[TacheLigneIn] = []
+    notes: Optional[Dict[str, str]] = None
+
+
+class TacheImportable(BaseModel):
+    id: int
+    title: str
+    status: str
+    entreprise_id: int
+    entreprise_name: str
+    #: Compagnie de la feuille qui correspond à l'entreprise principale
+    #: de la tâche (None si aucune ou si elle n'est pas assignée à
+    #: l'employé).
+    company_id: Optional[int] = None
+    due_date: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class UserCompaniesIn(BaseModel):
+    user_id: int
+    #: Liste vide = toutes les compagnies (comportement historique).
+    company_ids: List[int] = []
+
+
+class UserCompaniesOut(BaseModel):
+    user_id: int
+    company_ids: List[int]
 
 
 class EntriesReplace(BaseModel):
@@ -601,7 +655,10 @@ async def _load_companies_for(
     db, ts: Timesheet
 ) -> List[TimesheetCompany]:
     """Compagnies actives + toute compagnie inactive déjà utilisée dans la
-    feuille (pour ne pas perdre d'heures saisies sur une compagnie retirée)."""
+    feuille (pour ne pas perdre d'heures saisies sur une compagnie retirée).
+
+    Si l'employé a des compagnies ASSIGNÉES (``TimesheetUserCompany``), on
+    se limite à celles-ci (+ celles déjà utilisées dans la feuille)."""
     used_ids = set(
         (
             await db.execute(
@@ -611,7 +668,25 @@ async def _load_companies_for(
             )
         ).scalars().all()
     )
-    if used_ids:
+    used_ids |= set(
+        (
+            await db.execute(
+                select(TimesheetTaskLine.company_id).where(
+                    TimesheetTaskLine.timesheet_id == ts.id
+                )
+            )
+        ).scalars().all()
+    )
+    assigned = await _assigned_company_ids(db, ts.user_id)
+    if assigned:
+        q = select(TimesheetCompany).where(
+            or_(
+                TimesheetCompany.id.in_(assigned)
+                & TimesheetCompany.is_active.is_(True),
+                TimesheetCompany.id.in_(used_ids or {-1}),
+            )
+        )
+    elif used_ids:
         q = select(TimesheetCompany).where(
             or_(
                 TimesheetCompany.is_active.is_(True),
@@ -626,10 +701,66 @@ async def _load_companies_for(
     return sorted(rows, key=lambda c: (c.position, c.id))
 
 
+async def _assigned_company_ids(db, user_id: int) -> set:
+    return set(
+        (
+            await db.execute(
+                select(TimesheetUserCompany.company_id).where(
+                    TimesheetUserCompany.user_id == user_id
+                )
+            )
+        ).scalars().all()
+    )
+
+
+async def _load_task_lines(db, timesheet_id: int) -> List[TimesheetTaskLine]:
+    rows = (
+        await db.execute(
+            select(TimesheetTaskLine).where(
+                TimesheetTaskLine.timesheet_id == timesheet_id
+            )
+        )
+    ).scalars().all()
+    return sorted(rows, key=lambda r: (r.day_index, r.position, r.id))
+
+
+async def _rebuild_entries_from_lines(db, ts: Timesheet) -> None:
+    """Grille compagnie × jour = somme des lignes par tâche. Les compagnies
+    INTERNES (heures NR autorisées) reçoivent des heures non refacturables,
+    les autres des heures refacturables — même règle que la grille."""
+    lines = await _load_task_lines(db, ts.id)
+    nr_ok = {
+        c.id
+        for c in (await db.execute(select(TimesheetCompany))).scalars().all()
+        if bool(getattr(c, "heures_nr_autorisees", False))
+    }
+    cells: Dict[tuple, float] = {}
+    for ln in lines:
+        if (ln.hours or 0) <= 0:
+            continue
+        key = (ln.company_id, ln.day_index, ln.company_id not in nr_ok)
+        cells[key] = cells.get(key, 0.0) + float(ln.hours)
+    await db.execute(
+        delete(TimesheetEntry).where(TimesheetEntry.timesheet_id == ts.id)
+    )
+    for (company_id, day_index, refact), hours in cells.items():
+        db.add(
+            TimesheetEntry(
+                timesheet_id=ts.id,
+                company_id=company_id,
+                day_index=day_index,
+                refacturable=refact,
+                hours=round(hours, 2),
+            )
+        )
+    await db.flush()
+
+
 async def _build_detail(
     db, ts: Timesheet, user: User
 ) -> TimesheetDetail:
     companies = await _load_companies_for(db, ts)
+    task_lines = await _load_task_lines(db, ts.id)
     entries = (
         await db.execute(
             select(TimesheetEntry).where(
@@ -721,6 +852,7 @@ async def _build_detail(
         if ap:
             approver_name = ap.display_name or ap.email
 
+    labels = {c.id: c.label for c in companies}
     is_self = ts.user_id == user.id
     manager = _is_manager(user)
     # Une feuille SOUMISE est figée pour l'employé (retour Phil
@@ -759,6 +891,19 @@ async def _build_detail(
         total_heures=total_heures,
         montant_paie=montant_paie,
         total_refacturation=total_refac,
+        mode_taches=bool(task_lines),
+        taches=[
+            TacheLigneOut(
+                id=ln.id,
+                day_index=ln.day_index,
+                company_id=ln.company_id,
+                company_label=labels.get(ln.company_id, ""),
+                entreprise_tache_id=ln.entreprise_tache_id,
+                title=ln.title,
+                hours=float(ln.hours or 0.0),
+            )
+            for ln in task_lines
+        ],
     )
 
 
@@ -968,6 +1113,53 @@ async def upsert_user_rate(
         )
     await db.commit()
     return {"ok": True}
+
+
+# ── Compagnies assignées à un employé ──────────────────────────────────
+
+
+@router.get("/user-companies", response_model=UserCompaniesOut)
+async def get_user_companies(
+    db: DBSession, user: CurrentUser, user_id: int = Query(...)
+) -> UserCompaniesOut:
+    if not _is_manager(user):
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
+    ids = await _assigned_company_ids(db, user_id)
+    return UserCompaniesOut(user_id=user_id, company_ids=sorted(ids))
+
+
+@router.put("/user-companies", response_model=UserCompaniesOut)
+async def set_user_companies(
+    payload: UserCompaniesIn, db: DBSession, user: CurrentUser
+) -> UserCompaniesOut:
+    """Limite la feuille d'un employé à certaines compagnies (liste vide =
+    toutes). Ex. : un employé qui ne travaille que pour une compagnie."""
+    if not _is_manager(user):
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
+    if not await db.get(User, payload.user_id):
+        raise HTTPException(status_code=404, detail="Employé introuvable")
+    wanted = set(payload.company_ids)
+    if wanted:
+        found = set(
+            (
+                await db.execute(
+                    select(TimesheetCompany.id).where(
+                        TimesheetCompany.id.in_(wanted)
+                    )
+                )
+            ).scalars().all()
+        )
+        if found != wanted:
+            raise HTTPException(status_code=404, detail="Compagnie introuvable")
+    await db.execute(
+        delete(TimesheetUserCompany).where(
+            TimesheetUserCompany.user_id == payload.user_id
+        )
+    )
+    for cid in sorted(wanted):
+        db.add(TimesheetUserCompany(user_id=payload.user_id, company_id=cid))
+    await db.commit()
+    return UserCompaniesOut(user_id=payload.user_id, company_ids=sorted(wanted))
 
 
 # ── Dashboard soldes (paie + refacturation) ────────────────────────────
@@ -1685,6 +1877,13 @@ async def replace_entries(
     if not ts:
         raise HTTPException(status_code=404, detail="Feuille introuvable")
     _assert_editable(ts, user)
+    # Feuille « par tâche » : la grille est dérivée des lignes — on ne
+    # garde que les notes.
+    if await _load_task_lines(db, ts.id):
+        if payload.notes is not None:
+            ts.notes_json = json.dumps(payload.notes, ensure_ascii=False)
+        await db.commit()
+        return await _build_detail(db, ts, user)
     # Remplacement complet de la grille.
     await db.execute(
         delete(TimesheetEntry).where(
@@ -1817,6 +2016,143 @@ async def reopen_timesheet(
     return await _build_detail(db, ts, user)
 
 
+# ── Feuille par tâche (Steven 2026-10-04) ──────────────────────────────
+
+
+@router.put("/{timesheet_id}/taches", response_model=TimesheetDetail)
+async def replace_task_lines(
+    timesheet_id: int,
+    payload: TachesReplace,
+    db: DBSession,
+    user: CurrentUser,
+) -> TimesheetDetail:
+    """Remplace les lignes par tâche et recalcule la grille compagnie ×
+    jour à partir d'elles. Un gestionnaire peut aussi s'en servir pour
+    réimputer une ligne à la bonne compagnie après coup."""
+    ts = await db.get(Timesheet, timesheet_id)
+    if not ts:
+        raise HTTPException(status_code=404, detail="Feuille introuvable")
+    _assert_editable(ts, user)
+    allowed = {c.id for c in await _load_companies_for(db, ts)}
+    if not _is_manager(user):
+        bad = {ln.company_id for ln in payload.lignes} - allowed
+        if bad:
+            raise HTTPException(
+                status_code=400,
+                detail="Compagnie non disponible dans cette feuille",
+            )
+    else:
+        ids = {ln.company_id for ln in payload.lignes} - allowed
+        if ids:
+            found = set(
+                (
+                    await db.execute(
+                        select(TimesheetCompany.id).where(
+                            TimesheetCompany.id.in_(ids)
+                        )
+                    )
+                ).scalars().all()
+            )
+            if found != ids:
+                raise HTTPException(
+                    status_code=404, detail="Compagnie introuvable"
+                )
+    had_lines = bool(await _load_task_lines(db, ts.id))
+    await db.execute(
+        delete(TimesheetTaskLine).where(
+            TimesheetTaskLine.timesheet_id == ts.id
+        )
+    )
+    for i, ln in enumerate(payload.lignes):
+        title = ln.title.strip()
+        if not title:
+            continue
+        db.add(
+            TimesheetTaskLine(
+                timesheet_id=ts.id,
+                day_index=ln.day_index,
+                company_id=ln.company_id,
+                entreprise_tache_id=ln.entreprise_tache_id,
+                title=title[:255],
+                hours=round(float(ln.hours), 2),
+                position=i,
+            )
+        )
+    await db.flush()
+    # Grille dérivée — sauf feuille « grille » qui n'a jamais eu de
+    # lignes et qu'on ne touche pas pour une liste vide.
+    if payload.lignes or had_lines:
+        await _rebuild_entries_from_lines(db, ts)
+    if payload.notes is not None:
+        ts.notes_json = json.dumps(payload.notes, ensure_ascii=False)
+    await db.commit()
+    return await _build_detail(db, ts, user)
+
+
+@router.get(
+    "/{timesheet_id}/taches-importables",
+    response_model=List[TacheImportable],
+)
+async def importable_tasks(
+    timesheet_id: int, db: DBSession, user: CurrentUser
+) -> List[TacheImportable]:
+    """Tâches Gestion d'entreprises assignées à l'employé de la feuille :
+    celles en cours et celles terminées depuis le début de la période."""
+    from app.models.entreprise import Entreprise
+    from app.models.entreprise_tache import EntrepriseTache
+    from app.models.entreprise_tache_assignee import EntrepriseTacheAssignee
+
+    ts = await db.get(Timesheet, timesheet_id)
+    if not ts:
+        raise HTTPException(status_code=404, detail="Feuille introuvable")
+    if not (_is_manager(user) or ts.user_id == user.id):
+        raise HTTPException(status_code=403, detail="Accès refusé")
+    uid = ts.user_id
+    via_join = select(EntrepriseTacheAssignee.tache_id).where(
+        EntrepriseTacheAssignee.user_id == uid
+    )
+    since = datetime.combine(
+        ts.period_start, datetime.min.time(), tzinfo=timezone.utc
+    )
+    rows = (
+        await db.execute(
+            select(EntrepriseTache, Entreprise.name)
+            .join(Entreprise, Entreprise.id == EntrepriseTache.entreprise_id)
+            .where(
+                or_(
+                    EntrepriseTache.assignee_user_id == uid,
+                    EntrepriseTache.id.in_(via_join),
+                ),
+                or_(
+                    EntrepriseTache.status != "done",
+                    EntrepriseTache.completed_at >= since,
+                ),
+            )
+            .order_by(EntrepriseTache.updated_at.desc())
+            .limit(200)
+        )
+    ).all()
+    companies = await _load_companies_for(db, ts)
+    by_entreprise = {
+        c.entreprise_id: c.id for c in companies if c.entreprise_id
+    }
+    return [
+        TacheImportable(
+            id=t.id,
+            title=t.title,
+            status=t.status,
+            entreprise_id=t.entreprise_id,
+            entreprise_name=name or "",
+            company_id=by_entreprise.get(t.entreprise_id),
+            due_date=(t.due_date.isoformat() if t.due_date else None),
+            completed_at=(
+                t.completed_at.isoformat() if t.completed_at else None
+            ),
+        )
+        for t, name in rows
+    ]
+
+
 @router.delete("/{timesheet_id}")
 async def delete_timesheet(
     timesheet_id: int, db: DBSession, user: CurrentUser
@@ -1831,6 +2167,11 @@ async def delete_timesheet(
             raise HTTPException(status_code=403, detail="Accès refusé")
     await db.execute(
         delete(TimesheetEntry).where(TimesheetEntry.timesheet_id == ts.id)
+    )
+    await db.execute(
+        delete(TimesheetTaskLine).where(
+            TimesheetTaskLine.timesheet_id == ts.id
+        )
     )
     await db.delete(ts)
     await db.commit()
