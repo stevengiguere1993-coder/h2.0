@@ -58,6 +58,10 @@ export type CurrentUser = {
   /** Accès de page configurables (capacités), calculés dans /auth/me —
    *  P-05d. Ex. { "telephonie.access": true, "devlog.access": false }. */
   access?: Record<string, boolean>;
+  /** Mode aperçu « voir comme » : id de l'admin/owner qui regarde Kratos
+   *  avec ce compte (jeton d'aperçu LECTURE SEULE émis par
+   *  POST /users/{id}/apercu). NULL / absent hors aperçu. */
+  apercu_par?: number | null;
 };
 
 const ROLE_RANK: Record<UserRole, number> = {
@@ -71,6 +75,107 @@ const ROLE_RANK: Record<UserRole, number> = {
 export function hasMinRole(user: CurrentUser | null, min: UserRole): boolean {
   if (!user) return false;
   return ROLE_RANK[user.role] >= ROLE_RANK[min];
+}
+
+/* ---------------------------------------------------------------------
+ * Aperçu « voir Kratos comme cet utilisateur » (lecture seule)
+ * ---------------------------------------------------------------------
+ * Un admin/owner obtient (POST /users/{id}/apercu) un jeton d'aperçu
+ * valable 2 h qui fait voir Kratos exactement comme l'utilisateur ciblé
+ * (rôle, volets, pages). Le backend refuse toute écriture avec ce jeton
+ * (403). Côté client :
+ *  - le jeton ADMIN d'origine est mis de côté sous APERCU_ADMIN_TOKEN_KEY ;
+ *  - la fiche de l'utilisateur regardé est gardée sous APERCU_INFO_KEY
+ *    (affichée par <ApercuBanner />) ;
+ *  - le jeton d'aperçu prend la place du jeton courant (TOKEN_KEY), donc
+ *    tous les appels authedFetch / getMe passent « comme » cet utilisateur.
+ * stopApercu() restaure le jeton admin et nettoie les deux clés.
+ */
+const APERCU_ADMIN_TOKEN_KEY = "hsi_apercu_admin_token";
+const APERCU_INFO_KEY = "hsi_apercu_info";
+
+/** Fiche minimale de l'utilisateur regardé en aperçu (pour le bandeau). */
+export type ApercuInfo = {
+  id: number;
+  email: string;
+  display_name: string;
+  role: UserRole;
+  volets: string[];
+};
+
+/** Jeton admin mis de côté pendant l'aperçu — null hors aperçu, si le
+ *  stockage est inaccessible, ou côté serveur. */
+function getApercuAdminToken(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(APERCU_ADMIN_TOKEN_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Démarre l'aperçu : met le jeton admin de côté (une seule fois — si un
+ *  aperçu est DÉJÀ en cours on garde le jeton admin d'origine, jamais
+ *  écrasé par un jeton d'aperçu), mémorise la fiche regardée, puis
+ *  installe le jeton d'aperçu comme jeton courant. */
+export function startApercu(token: string, info: ApercuInfo): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (!window.localStorage.getItem(APERCU_ADMIN_TOKEN_KEY)) {
+      const adminToken = getToken();
+      if (adminToken)
+        window.localStorage.setItem(APERCU_ADMIN_TOKEN_KEY, adminToken);
+    }
+    window.localStorage.setItem(APERCU_INFO_KEY, JSON.stringify(info));
+  } catch {
+    /* ignore */
+  }
+  setToken(token);
+}
+
+/** Fiche de l'utilisateur regardé, ou null si aucun aperçu en cours
+ *  (aucun jeton admin mis de côté), fiche illisible, ou côté serveur. */
+export function getApercu(): ApercuInfo | null {
+  if (!getApercuAdminToken()) return null;
+  try {
+    const raw = window.localStorage.getItem(APERCU_INFO_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ApercuInfo | null;
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/** Quitte l'aperçu : restaure le jeton admin comme jeton courant et
+ *  supprime les deux clés. Renvoie false s'il n'y avait rien à restaurer. */
+export function stopApercu(): boolean {
+  if (typeof window === "undefined") return false;
+  const adminToken = getApercuAdminToken();
+  try {
+    window.localStorage.removeItem(APERCU_ADMIN_TOKEN_KEY);
+    window.localStorage.removeItem(APERCU_INFO_KEY);
+  } catch {
+    /* ignore */
+  }
+  if (!adminToken) return false;
+  setToken(adminToken);
+  return true;
+}
+
+/** True quand on regarde Kratos « comme » un autre utilisateur. */
+export function isApercu(): boolean {
+  return getApercuAdminToken() !== null;
+}
+
+/** Préfixe de locale pour une URL construite à la main : "/en" si le
+ *  1er segment du chemin courant est `en`, sinon "" (fr = locale par
+ *  défaut, sans préfixe — cf. `localePrefix: as-needed`). "" côté serveur. */
+export function localePrefix(): string {
+  if (typeof window === "undefined") return "";
+  const seg = window.location.pathname.split("/").filter(Boolean)[0];
+  return seg === "en" ? "/en" : "";
 }
 
 export async function login(
@@ -174,6 +279,17 @@ export async function authedFetch(
     typeof window !== "undefined" &&
     !window.location.pathname.includes("/connexion")
   ) {
+    // En APERÇU « voir comme » : c'est le jeton d'aperçu (2 h) qui a
+    // expiré ou a été invalidé, pas la session de l'admin. On ne le
+    // déconnecte PAS : on restaure son jeton et on le ramène sur la page
+    // des comptes avec `?apercu=expire` pour expliquer le changement de vue.
+    if (isApercu()) {
+      stopApercu();
+      window.location.assign(
+        `${localePrefix()}/app/utilisateurs?apercu=expire`
+      );
+      return res;
+    }
     setToken(null);
     const seg = window.location.pathname.split("/").filter(Boolean)[0];
     const locale = seg === "en" ? "en" : "fr";

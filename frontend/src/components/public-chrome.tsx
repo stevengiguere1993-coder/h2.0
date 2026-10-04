@@ -2,6 +2,7 @@
 
 import { usePathname } from "next/navigation";
 
+import { ApercuBanner } from "@/components/apercu-banner";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 
@@ -11,6 +12,12 @@ import { SiteFooter } from "@/components/site-footer";
  * /entreprises, /immobilier, /prospection, /investisseur, /dev,
  * /changer-mot-de-passe) on ne montre rien — chaque volet a son propre
  * chrome (sidebar + topbar).
+ *
+ * Exception : le bandeau d'aperçu « voir Kratos comme cet utilisateur »
+ * (<ApercuBanner />, lecture seule) est rendu EN PREMIER dans les deux
+ * cas — il doit suivre l'admin partout, y compris sur /connexion (qui
+ * sert de sélecteur de portail quand un jeton est présent) et dans la
+ * zone employé /m. Il ne rend rien hors aperçu.
  */
 
 const PORTAL_PREFIXES = [
@@ -68,11 +75,18 @@ export function PublicChrome({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || "/";
   const portal = isPortalRoute(pathname);
   if (portal) {
-    // Pas de chrome public — le volet rend le sien.
-    return <>{children}</>;
+    // Pas de chrome public — le volet rend le sien. Seul le bandeau
+    // d'aperçu « voir comme » reste, tout en haut.
+    return (
+      <>
+        <ApercuBanner />
+        {children}
+      </>
+    );
   }
   return (
     <>
+      <ApercuBanner />
       <SiteHeader />
       <main className="flex-1">{children}</main>
       <SiteFooter />

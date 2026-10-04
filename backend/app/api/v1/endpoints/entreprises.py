@@ -612,7 +612,9 @@ async def create_tache(
     # démarre en P4 « Non évaluée » côté UI, puis l'IA en
     # background remplit les valeurs et la pastille se met à jour
     # au prochain refetch.
-    t = EntrepriseTache(**payload, assignee_user_id=primary)
+    t = EntrepriseTache(
+        **payload, assignee_user_id=primary, created_by_user_id=user.id
+    )
     db.add(t)
     await db.flush()
     if uids is not None:

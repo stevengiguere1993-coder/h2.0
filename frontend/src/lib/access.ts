@@ -105,6 +105,16 @@ export function canDo(
  *  l'access en state avant d'avoir un objet user). */
 export type AccessHolder = { access?: Record<string, boolean> | null };
 
+/** Pages GÉNÉRALES (d'aucun pôle) dont la clé garde un préfixe de pôle
+ *  historique : elles n'ouvrent pas ce pôle. La « Zone employés » (/m)
+ *  garde la clé ``construction.mobile`` pour les exceptions déjà posées,
+ *  mais tout employé y entre, même sans le pôle Construction (Steven,
+ *  2026-10-04) — même règle que ``compute_access`` côté serveur, qui
+ *  dérive ``volet:construction`` des seules pages du pôle. */
+const CLES_GENERALES: ReadonlySet<string> = new Set([
+  "page:construction.mobile"
+]);
+
 /**
  * L'utilisateur peut-il ENTRER dans un pôle ? (permissions v2)
  *
@@ -126,8 +136,8 @@ export function canEnterVolet(
   if (!user) return false;
   const access = user.access;
   if (!access || Object.keys(access).length === 0) return true;
-  const pages = Object.entries(access).filter(([k]) =>
-    k.startsWith(`page:${keyPrefix}.`)
+  const pages = Object.entries(access).filter(
+    ([k]) => k.startsWith(`page:${keyPrefix}.`) && !CLES_GENERALES.has(k)
   );
   if (pages.length === 0) return true;
   return pages.some(([, v]) => v === true);

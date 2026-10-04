@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
 
+import { BackdropClickGuard } from "@/components/backdrop-click-guard";
 import { PwaRegister } from "@/components/pwa-register";
 
 // Polices self-hostées (sous-ensemble latin, fichiers variables) plutôt
@@ -90,6 +91,7 @@ export default function RootLayout({
         ) : null}
         {children}
         <PwaRegister />
+        <BackdropClickGuard />
       </body>
     </html>
   );

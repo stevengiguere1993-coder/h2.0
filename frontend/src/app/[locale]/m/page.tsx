@@ -20,6 +20,8 @@ import {
 
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { useZoneEmploye } from "./zone-employe-context";
+import { AccueilAutre } from "./_autre/accueil-autre";
 
 type EmployeMini = {
   id: number;
@@ -124,7 +126,15 @@ type WorkOrder = {
   status: string;
 };
 
+// Zone employés en deux variantes : Construction (punch, chantiers —
+// inchangé) et « autre » pour l'employé sans pôle Construction.
 export default function MobileHome() {
+  const { variant } = useZoneEmploye();
+  if (variant === "autre") return <AccueilAutre />;
+  return <MobileHomeConstruction />;
+}
+
+function MobileHomeConstruction() {
   const router = useRouter();
   const [data, setData] = useState<MobileMe | null>(null);
   const [loading, setLoading] = useState(true);

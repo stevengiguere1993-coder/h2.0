@@ -181,6 +181,7 @@ from app.api.v1.endpoints import (
     subcontractor_contracts,
     voice,
     webhooks,
+    zone_employes,
 )
 from app.api.v1.endpoints.business import (
     achats_router,
@@ -497,6 +498,12 @@ api_router.include_router(ai.router)
 # Signature). Prefix statique /esign : pas de collision avec le CRUD
 # /entreprises/{id}.
 api_router.include_router(esign.router, dependencies=DEP_ENTREPRISES)
+# Zone employés (Steven 2026-10-04) : section « Employés » du pôle
+# (gestionnaires+) et tâches personnelles de l'employé. AVANT
+# entreprises.router pour que /entreprises/employes et
+# /entreprises/mes-taches matchent avant /entreprises/{id}.
+api_router.include_router(zone_employes.router_admin, dependencies=DEP_ENTREPRISES)
+api_router.include_router(zone_employes.router_mes_taches, dependencies=DEP_ENTREPRISES)
 api_router.include_router(entreprises.router, dependencies=DEP_ENTREPRISES)
 # entreprise_extras DOIT être registered avant entreprises.router pour que
 # /entreprises/finance/* et /entreprises/value-plans/* matchent avant

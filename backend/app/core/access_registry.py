@@ -135,8 +135,13 @@ PAGES: list[PageEntry] = [
        "construction", "manager", "/app/templates-courriels"),
     _p("construction.relances", "Relances automatiques", "construction",
        "manager", "/app/relances"),
-    _p("construction.mobile", "App mobile staff", "construction", "employee",
-       "/m"),
+    # Zone employés (Steven 2026-10-04) — l'ancienne « app mobile staff »,
+    # ouverte à TOUT employé : un employé Construction y garde ses écrans
+    # (punch, projets, achats) ; un employé d'un autre pôle (ex. vidéo /
+    # marketing en Entreprises) y voit agenda, tâches et feuille de temps.
+    # Transverse (pas de check de volet) : la clé historique
+    # ``construction.mobile`` est conservée pour les exceptions déjà posées.
+    _p("construction.mobile", "Zone employés", GENERAL, "employee", "/m"),
     # Pages qui héritaient silencieusement de la racine /app (audit
     # permissions v2, 2026-07-24) — désormais réglables individuellement.
     # ⚠️ Paie = données salariales → admin (verrou volontaire).
@@ -233,6 +238,10 @@ PAGES: list[PageEntry] = [
     # employée Madagascar).
     _p("entreprises.feuille_de_temps", "Feuille de temps", "entreprises",
        "employee", "/entreprises/feuille-de-temps"),
+    # Section « Employés » (Steven 2026-10-04) : tâches, feuilles de temps,
+    # suivi du temps et agenda de chaque employé — admins seulement.
+    _p("entreprises.employes", "Employés", "entreprises", "admin",
+       "/entreprises/employes"),
     # Pages QG qui passaient par des entrées « general » (donc sans
     # check de volet et invisibles sous Gestion d'entreprise dans la
     # grille) — défaut admin = comportement pré-v2 du pôle.

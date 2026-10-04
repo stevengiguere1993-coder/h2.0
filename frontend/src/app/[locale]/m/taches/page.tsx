@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { CheckSquare, Loader2, Square } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { useZoneEmploye } from "../zone-employe-context";
+import { MesTachesAutre } from "../_autre/mes-taches-autre";
 
 type Task = {
   id: number;
@@ -38,7 +40,15 @@ function isOverdue(due: string | null): boolean {
   return d < today;
 }
 
+// Variante « autre » : tâches personnelles Gestion d'entreprises ;
+// variante Construction : tâches de projets (inchangé).
 export default function MobileTaches() {
+  const { variant } = useZoneEmploye();
+  if (variant === "autre") return <MesTachesAutre />;
+  return <MobileTachesConstruction />;
+}
+
+function MobileTachesConstruction() {
   const [items, setItems] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
