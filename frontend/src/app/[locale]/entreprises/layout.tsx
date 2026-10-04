@@ -10,7 +10,6 @@ import { usePathname } from "next/navigation";
 import {
   ArrowDownAZ,
   Brain,
-  Receipt,
   Briefcase,
   TrendingUp,
   Calendar,
@@ -302,12 +301,8 @@ export default function EntreprisesLayout({
           }
         ]
       : []),
-    // Après Abonnements (retour Phil 2026-10-04).
-    {
-      href: "/entreprises/recus-quickbooks",
-      label: "Reçus QuickBooks → Drive",
-      icon: Receipt
-    }
+    // « Reçus QuickBooks → Drive » vit sous Paramètres → Gestion documentaire
+    // Drive (Steven 2026-10-04) ; l'ancienne adresse redirige.
   ];
 
   function isActive(href: string) {

@@ -59,6 +59,12 @@ export default function ParametresLayout({
 
   const initialTheme = (user.theme_preference as Theme) || "light";
   const sansLocale = pathname.replace(/^\/(en|fr)(?=\/)/, "");
+  // Entrée active = la cible la plus précise qui couvre la page (une
+  // sous-page comme /parametres/drive/recus-quickbooks n'allume pas Drive).
+  const actifHref = sections
+    .flatMap((s) => s.cards.map((c) => c.href.split("?")[0]))
+    .filter((t) => sansLocale === t || sansLocale.startsWith(t + "/"))
+    .sort((a, b) => b.length - a.length)[0];
 
   const nav = (
     <nav className="flex h-full flex-col">
@@ -87,7 +93,7 @@ export default function ParametresLayout({
             </p>
             {s.cards.map((c) => {
               const cible = c.href.split("?")[0];
-              const actif = sansLocale === cible || sansLocale.startsWith(cible + "/");
+              const actif = cible === actifHref;
               return (
                 <Link
                   key={c.href}
