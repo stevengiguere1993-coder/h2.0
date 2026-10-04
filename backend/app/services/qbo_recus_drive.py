@@ -197,6 +197,39 @@ def correspond_dossier(nom_existant: Optional[str], voulu: str) -> int:
     return 0
 
 
+_RE_DATE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+_RE_MONTANT = re.compile(r"\$?\s*(\d[\d\s]*(?:[.,]\d{1,2})?)\s*\$?")
+
+
+def cle_recu(nom_fichier: Optional[str]) -> Optional[tuple]:
+    """(date, fournisseur normalisé, montant) lus dans un nom de fichier,
+    quelle que soit la ponctuation : « 2026-06-08: BOULET:$476.00.pdf »
+    et « 2026-06-08 Boulet 476,00$.pdf » donnent la même clé → même reçu
+    (règle Phil : même date, même fournisseur, exactement le même prix)."""
+    if not nom_fichier:
+        return None
+    base = re.sub(r"\.[A-Za-z0-9]+$", "", nom_fichier.strip())
+    base = re.sub(r"\s*\(\d+\)$", "", base)  # « … (2) »
+    m = _RE_DATE.search(base)
+    if not m:
+        return None
+    d = m.group(1)
+    reste = base[: m.start()] + " " + base[m.end():]
+    # Montant : un nombre avec $ devant ou derrière, le plus à droite.
+    montant = None
+    for mm in re.finditer(r"\$\s*(\d[\d\s]*(?:[.,]\d{1,2})?)|(\d[\d\s]*(?:[.,]\d{1,2})?)\s*\$", reste):
+        brut = (mm.group(1) or mm.group(2) or "").replace(" ", "").replace(",", ".")
+        try:
+            montant = round(float(brut), 2)
+            reste = reste[: mm.start()] + " " + reste[mm.end():]
+        except ValueError:
+            continue
+    if montant is None:
+        return None
+    fournisseur = normaliser_nom(re.sub(r"[:;,_]+", " ", reste), garder_prefixe=True)
+    return (d, fournisseur, montant)
+
+
 def montant_texte(montant: Optional[float]) -> str:
     """2134.02 → « 2134,02$ » (virgule décimale, sans espace de milliers)."""
     if montant is None:
@@ -502,9 +535,13 @@ class _Drive:
         self._contenu.setdefault(folder_id, []).append(f)
 
     async def sous_dossier(self, parent_id: str, nom: str, chemin: str) -> Optional[str]:
-        """Id du sous-dossier ``nom`` de ``parent_id`` (comparaison sans
-        casse ni accents superflus) ; créé s'il manque. None en
-        simulation quand il faudrait le créer."""
+        fid, _ = await self.sous_dossier_nomme(parent_id, nom, chemin)
+        return fid
+
+    async def sous_dossier_nomme(self, parent_id: str, nom: str, chemin: str) -> tuple:
+        """(id, nom réel) du sous-dossier équivalent à ``nom`` dans
+        ``parent_id`` (correspondance par score) ; créé s'il manque.
+        (None, nom) en simulation quand il faudrait le créer."""
         from app.services.drive_api import FOLDER_MIME, create_folder
 
         meilleur: Optional[Dict[str, Any]] = None
@@ -518,40 +555,63 @@ class _Drive:
             ):
                 meilleur, meilleur_score = f, score
         if meilleur is not None:
-            if normaliser_nom(meilleur.get("name")) != normaliser_nom(nom):
-                rec = f"{chemin} → « {meilleur.get('name')} »"
+            reel = str(meilleur.get("name") or nom)
+            if normaliser_nom(reel) != normaliser_nom(nom):
+                rec = f"{chemin} → « {reel} »"
                 if rec not in self.dossiers_reconnus:
                     self.dossiers_reconnus.append(rec)
-            return str(meilleur["id"])
+            return str(meilleur["id"]), reel
         if self.simulation:
             if chemin not in self.dossiers_a_creer:
                 self.dossiers_a_creer.append(chemin)
-            return None
+            return None, nom
         cree = await create_folder(self.user_id, self.db, parent_id, nom)
         self._ajouter(parent_id, cree)
         self._contenu[str(cree["id"])] = []
         self.dossiers_crees.append(chemin)
-        return str(cree["id"])
+        return str(cree["id"]), nom
 
     async def dossier_mois(self, racine_id: str, nom_entreprise: str, d: date, a_classer: bool = False) -> Optional[str]:
-        base = f"{nom_entreprise} / {DOSSIER_FACTURES}"
-        fid = await self.sous_dossier(racine_id, DOSSIER_FACTURES, base)
+        """Dossier du mois (créé au besoin). Les chemins du rapport portent
+        les VRAIS noms des dossiers reconnus (« 2 - Factures »), pas le
+        libellé générique (Phil 2026-10-04)."""
+        fid, reel = await self.sous_dossier_nomme(racine_id, DOSSIER_FACTURES, f"{nom_entreprise} / {DOSSIER_FACTURES}")
+        chemin = f"{nom_entreprise} / {reel}"
         if fid is None:
             return None
         annee = str(d.year)
-        fid = await self.sous_dossier(fid, annee, f"{base} / {annee}")
+        fid, reel = await self.sous_dossier_nomme(fid, annee, f"{chemin} / {annee}")
+        chemin = f"{chemin} / {reel}"
         if fid is None:
             return None
         mois = MOIS_FR[d.month - 1]
-        fid = await self.sous_dossier(fid, mois, f"{base} / {annee} / {mois}")
+        fid, reel = await self.sous_dossier_nomme(fid, mois, f"{chemin} / {mois}")
+        chemin = f"{chemin} / {reel}"
         if fid is None or not a_classer:
             return fid
-        return await self.sous_dossier(fid, DOSSIER_A_CLASSER, f"{base} / {annee} / {mois} / {DOSSIER_A_CLASSER}")
+        fid, _ = await self.sous_dossier_nomme(fid, DOSSIER_A_CLASSER, f"{chemin} / {DOSSIER_A_CLASSER}")
+        return fid
 
     async def fichier_existant(self, folder_id: str, nom: str) -> Optional[str]:
+        """Fichier déjà présent dans le dossier du mois : même nom, sinon
+        même reçu (date + fournisseur + montant lus dans le nom, toute
+        ponctuation confondue : « 2026-06-08: BOULET:$476.00.pdf »)."""
         voulu = nom.strip().casefold()
         for f in await self.contenu(folder_id):
-            if (f.get("name") or "").strip().casefold() == voulu:
+            n = (f.get("name") or "").strip()
+            if n.casefold() == voulu:
+                return str(f["id"])
+        # « … (2).pdf » = 2e pièce jointe de la MÊME dépense : volontairement
+        # distincte de la 1re → nom exact seulement, pas la clé.
+        if re.search(r"\(\d+\)\.[A-Za-z0-9]+$", nom.strip()):
+            return None
+        cle = cle_recu(nom)
+        if cle is None:
+            return None
+        for f in await self.contenu(folder_id):
+            if f.get("mimeType") == "application/vnd.google-apps.folder":
+                continue
+            if cle_recu(f.get("name")) == cle:
                 return str(f["id"])
         return None
 
