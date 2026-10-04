@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -103,6 +104,19 @@ def folder_id_depuis_url(url: Optional[str]) -> Optional[str]:
     if re.fullmatch(r"[A-Za-z0-9_-]{10,}", u):
         return u
     return None
+
+
+def normaliser_nom(s: Optional[str]) -> str:
+    """Clé de comparaison d'un nom de dossier Drive : sans accent, sans
+    casse, sans préfixe numérique « 2 - », sans ponctuation finale. Les
+    dossiers de Phil sont numérotés (« 1 - MGV Investissements inc »,
+    « 2 - Factures ») : on doit les reconnaître sans créer un doublon."""
+    t = unicodedata.normalize("NFKD", s or "")
+    t = "".join(ch for ch in t if not unicodedata.combining(ch))
+    t = t.casefold().strip()
+    t = re.sub(r"^\d+\s*[-–—.:)]\s*", "", t)  # « 2 - Factures » → « factures »
+    t = re.sub(r"[^\w\s]+", " ", t)  # ponctuation → espace (« inc. » → « inc »)
+    return " ".join(t.split())
 
 
 def montant_texte(montant: Optional[float]) -> str:
@@ -205,13 +219,13 @@ async def _dossier_entreprise(
     try:
         from app.services.drive_api import FOLDER_MIME, list_folder_contents
 
-        voulu = (e.name or "").strip().casefold()
+        voulu = normaliser_nom(e.name)
         trouve: Optional[Dict[str, Any]] = None
         token: Optional[str] = None
         for _ in range(20):
             page = await list_folder_contents(drive_user_id, db, parent, page_size=200, page_token=token)
             for f in page.get("files") or []:
-                if f.get("mimeType") == FOLDER_MIME and (f.get("name") or "").strip().casefold() == voulu:
+                if f.get("mimeType") == FOLDER_MIME and normaliser_nom(f.get("name")) == voulu:
                     trouve = f
                     break
             token = page.get("next_page_token")
@@ -369,9 +383,9 @@ class _Drive:
         simulation quand il faudrait le créer."""
         from app.services.drive_api import FOLDER_MIME, create_folder
 
-        voulu = nom.strip().casefold()
+        voulu = normaliser_nom(nom)
         for f in await self.contenu(parent_id):
-            if f.get("mimeType") == FOLDER_MIME and (f.get("name") or "").strip().casefold() == voulu:
+            if f.get("mimeType") == FOLDER_MIME and normaliser_nom(f.get("name")) == voulu:
                 return str(f["id"])
         if self.simulation:
             if chemin not in self.dossiers_a_creer:
