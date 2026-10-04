@@ -1,8 +1,9 @@
 "use client";
 
-/* Comptabilité → « Paiements » : à venir (Steven 2026-10-04 : reproduire
-   ce que fait Plooto dans Kratos). Rien n'est branché : cet onglet réserve
-   la place dans le menu en attendant la décision et le développement. */
+/* Comptabilité → « Paiements » : à venir. Steven a choisi le 2026-10-04 de
+   reproduire Plooto dans Kratos ; rien n'est encore branché. Cet écran
+   réserve la place en attendant le module de paiements, qui le remplacera
+   (et passera `aVenir` à false dans ./_onglet.ts). */
 
 import { Wallet } from "lucide-react";
 
@@ -19,7 +20,7 @@ export default function PaiementsPage() {
         </p>
         <p className="mx-auto mt-2 max-w-md text-sm text-[var(--qg-text-muted)]">
           Cet onglet servira à payer les factures fournisseurs des entreprises
-          depuis Kratos, comme le fait Plooto. Le projet est à l&apos;étude :
+          depuis Kratos, comme le fait Plooto. Le module est en construction :
           aucun paiement ne part d&apos;ici pour le moment.
         </p>
       </section>

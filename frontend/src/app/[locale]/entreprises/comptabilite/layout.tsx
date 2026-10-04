@@ -4,9 +4,10 @@
  * Section « Comptabilité » du pôle Entreprises (Steven 2026-10-04).
  *
  * Topbar QG + menu horizontal : « Nouveau reçu » (saisie directe dans le
- * QuickBooks de l'inc), « Paiements » (à venir : l'équivalent de Plooto
- * est à l'étude) et « Banque de reçus (Drive) » (le Drive de chaque
- * entreprise, ouvert sur son dossier Factures).
+ * QuickBooks de l'inc), « Paiements » (l'équivalent de Plooto, en
+ * construction dans paiements/ ; « à venir » en attendant) et « Banque de
+ * reçus (Drive) » (le Drive de chaque entreprise, ouvert sur son dossier
+ * Factures).
  *
  * EN DÉVELOPPEMENT : page `entreprises.comptabilite`, propriétaires
  * seulement par défaut (« visible seulement par le dev pour le moment »).
@@ -20,6 +21,7 @@ import { FlaskConical } from "lucide-react";
 import { Link } from "@/i18n/navigation";
 import { stripLocale } from "@/lib/access";
 import { QGTopbar } from "../layout";
+import { ONGLET_PAIEMENTS } from "./paiements/_onglet";
 
 const ONGLETS: Array<{
   href: string;
@@ -30,7 +32,8 @@ const ONGLETS: Array<{
   aVenir?: boolean;
 }> = [
   { href: "/entreprises/comptabilite", label: "Nouveau reçu" },
-  { href: "/entreprises/comptabilite/paiements", label: "Paiements", aVenir: true },
+  // Défini dans paiements/ : l'onglet se remplace sans toucher à ce fichier.
+  ONGLET_PAIEMENTS,
   {
     href: "/entreprises/comptabilite/banque-de-recus",
     label: "Banque de reçus",
