@@ -2,6 +2,7 @@
 
     GET  /api/v1/qbo-recus-drive/etat       état des entreprises + dernier run
     POST /api/v1/qbo-recus-drive/executer   lance un run (simulation ou réel)
+    POST /api/v1/qbo-recus-drive/reclasser  range les « À classer » dans les mois (Drive seulement)
     GET  /api/v1/qbo-recus-drive/journal    dernières copies
 
 Le run tourne en arrière-plan ; ``/etat`` renvoie la progression puis le
@@ -58,6 +59,34 @@ async def executer(data: ExecuterIn, db: DBSession, user: CurrentUser) -> Dict[s
         pieces_depuis_jours=data.pieces_depuis_jours,
     )
     return {"lance": True, "simulation": data.simulation}
+
+
+class ReclasserIn(BaseModel):
+    entreprise_ids: Optional[List[int]] = None
+    simulation: bool = Field(default=True)
+
+
+@router.post(
+    "/reclasser",
+    summary="Range les « À classer » / « Non classé » du Drive dans leurs mois (sans QuickBooks)",
+)
+async def reclasser(data: ReclasserIn, db: DBSession, user: CurrentUser) -> Dict[str, Any]:
+    """Steven 2026-10-04 : « enlever les sections À classer et mettre les
+    factures dans le mois, même si le prix ou le fournisseur n'est pas
+    là ». Tout fichier dont le nom porte une date va dans le dossier de ce
+    mois ; sans date → « Non classé » sous l'année. Rien n'est supprimé :
+    un dossier vidé va à la corbeille (réversible). Le rapport liste chaque
+    déplacement ; la nuit fait la même chose avant la copie."""
+    if svc.DERNIER_RUN.get("en_cours"):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Un run est déjà en cours.")
+    svc.lancer_en_arriere_plan(
+        entreprise_ids=data.entreprise_ids or None,
+        simulation=data.simulation,
+        declencheur="reclassement",
+        user_id=getattr(user, "id", None),
+        reclassement_seul=True,
+    )
+    return {"lance": True, "simulation": data.simulation, "reclassement": True}
 
 
 @router.post("/arreter", summary="Arrête le run en cours (ce qui est copié reste copié)")
