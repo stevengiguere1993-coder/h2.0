@@ -72,32 +72,7 @@ type Project = {
   address?: string | null;
   members?: Array<{ employe_id: number }> | null;
 };
-type Employe = {
-  id: number;
-  full_name: string;
-  email?: string | null;
-  active?: boolean;
-};
-// Compte utilisateur (GET /api/v1/users) — sert à assigner un événement
-// à un employé qui n'a PAS de fiche Employe (ex. vidéo / marketing en
-// Gestion d'entreprises) : l'event porte alors `assignee_user_id`.
-type UserMini = {
-  id: number;
-  email: string;
-  display_name: string;
-  is_active: boolean;
-};
-
-// Valeur du sélecteur « Assigné à » : fiche Employe (`e:12`) ou compte
-// User sans fiche (`u:34`). Vide = personne.
-function assigneeValue(e: {
-  assignee_id?: number | null;
-  assignee_user_id?: number | null;
-}): string {
-  if (e.assignee_id != null) return `e:${e.assignee_id}`;
-  if (e.assignee_user_id != null) return `u:${e.assignee_user_id}`;
-  return "";
-}
+type Employe = { id: number; full_name: string };
 type SousTraitant = { id: number; full_name: string; trade?: string | null };
 type Phase = {
   id: number;
@@ -351,11 +326,6 @@ export default function AgendaPage() {
   const [events, setEvents] = useState<AgendaEvent[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [employes, setEmployes] = useState<Employe[]>([]);
-  // Toutes les fiches Employe (tous pôles) + tous les comptes User :
-  // un admin peut mettre un meeting ou un tournage dans l'agenda mobile
-  // de n'importe quel employé, pas seulement ceux de Construction.
-  const [tousEmployes, setTousEmployes] = useState<Employe[]>([]);
-  const [users, setUsers] = useState<UserMini[]>([]);
   const [sousTraitants, setSousTraitants] = useState<SousTraitant[]>([]);
   const [phases, setPhases] = useState<Phase[]>([]);
   const [loading, setLoading] = useState(true);
@@ -365,32 +335,6 @@ export default function AgendaPage() {
   const [fType, setFType] = useState("");
   const [fProject, setFProject] = useState("");
   const [fAssignee, setFAssignee] = useState("");
-
-  // Personnes assignables hors équipe Construction : fiches Employe
-  // actives des autres pôles, puis comptes User actifs SANS fiche
-  // (liés par courriel). Un employé externe au pôle Construction n'a
-  // pas de fiche (il ne doit pas apparaître dans le punch / la liste
-  // Employés de Construction) : on l'assigne par son compte.
-  const autresEmployes = useMemo(() => {
-    const deja = new Set(employes.map((x) => x.id));
-    return tousEmployes.filter((x) => x.active !== false && !deja.has(x.id));
-  }, [employes, tousEmployes]);
-  const usersSansFiche = useMemo(() => {
-    const emails = new Set(
-      [...employes, ...tousEmployes]
-        .map((x) => (x.email || "").trim().toLowerCase())
-        .filter(Boolean)
-    );
-    return users
-      .filter(
-        (u) =>
-          u.is_active !== false &&
-          !emails.has((u.email || "").trim().toLowerCase())
-      )
-      .sort((a, b) =>
-        (a.display_name || a.email).localeCompare(b.display_name || b.email)
-      );
-  }, [employes, tousEmployes, users]);
 
   // Modal state
   // Modal de création/édition. Pour les nouvelles créations on peut
@@ -451,16 +395,13 @@ export default function AgendaPage() {
       setLoading(true);
       setError(null);
       try {
-        const [evRes, prRes, empRes, phRes, stRes, allEmpRes, usrRes] =
-          await Promise.all([
-            authedFetch("/api/v1/agenda?limit=500"),
-            authedFetch("/api/v1/projects?limit=200"),
-            authedFetch("/api/v1/employes?limit=200&volet=construction"),
-            authedFetch("/api/v1/phases"),
-            authedFetch("/api/v1/sous-traitants?limit=200"),
-            authedFetch("/api/v1/employes?limit=500"),
-            authedFetch("/api/v1/users")
-          ]);
+        const [evRes, prRes, empRes, phRes, stRes] = await Promise.all([
+          authedFetch("/api/v1/agenda?limit=500"),
+          authedFetch("/api/v1/projects?limit=200"),
+          authedFetch("/api/v1/employes?limit=200&volet=construction"),
+          authedFetch("/api/v1/phases"),
+          authedFetch("/api/v1/sous-traitants?limit=200")
+        ]);
         if (!evRes.ok) throw new Error(`http_${evRes.status}`);
         const rawEvs = (await evRes.json()) as AgendaEvent[];
         // Masque les events Prospection en blocs opaques (privacy
@@ -473,18 +414,12 @@ export default function AgendaPage() {
         const sts = stRes.ok
           ? ((await stRes.json()) as SousTraitant[])
           : [];
-        const allEmps = allEmpRes.ok
-          ? ((await allEmpRes.json()) as Employe[])
-          : [];
-        const usrs = usrRes.ok ? ((await usrRes.json()) as UserMini[]) : [];
         if (!cancelled) {
           setEvents(evs);
           setProjects(prs);
           setEmployes(emps);
           setPhases(phs);
           setSousTraitants(Array.isArray(sts) ? sts : []);
-          setTousEmployes(Array.isArray(allEmps) ? allEmps : []);
-          setUsers(Array.isArray(usrs) ? usrs : []);
         }
       } catch {
         if (!cancelled) setError("Impossible de charger l'agenda.");
@@ -948,7 +883,6 @@ export default function AgendaPage() {
           <ListView
             events={filteredEvents}
             employes={employes}
-            users={users}
             projects={projects}
             onEventClick={(e) =>
               e.event_type === "busy"
@@ -1011,8 +945,6 @@ export default function AgendaPage() {
           seed={modal}
           projects={projects}
           employes={employes}
-          autresEmployes={autresEmployes}
-          usersSansFiche={usersSansFiche}
           onClose={() => setModal(null)}
           onSaved={(e) => {
             upsertEvent(e);
@@ -1475,13 +1407,11 @@ function ListView({
   events,
   onEventClick,
   employes = [],
-  users = [],
   projects = []
 }: {
   events: AgendaEvent[];
   onEventClick: (e: AgendaEvent) => void;
   employes?: Employe[];
-  users?: UserMini[];
   projects?: Project[];
 }) {
   // Les événements PASSÉS n'encombrent plus la liste (retour
@@ -1569,12 +1499,7 @@ function ListView({
                             employes.find((x) => x.id === e.assignee_id)
                               ?.full_name || `#${e.assignee_id}`
                           ]
-                        : e.assignee_user_id != null
-                          ? [
-                              users.find((u) => u.id === e.assignee_user_id)
-                                ?.display_name || `#${e.assignee_user_id}`
-                            ]
-                          : [];
+                        : [];
                   return (
                     <p className="mt-0.5 flex items-center gap-1 text-xs text-white/70">
                       <Users className="h-3 w-3 shrink-0 text-accent-500" />
@@ -1636,8 +1561,6 @@ function EventModal({
   seed,
   projects,
   employes,
-  autresEmployes = [],
-  usersSansFiche = [],
   onClose,
   onSaved,
   onDeleted
@@ -1647,8 +1570,6 @@ function EventModal({
     | { date: Date; assigneeId?: number | null };
   projects: Project[];
   employes: Employe[];
-  autresEmployes?: Employe[];
-  usersSansFiche?: UserMini[];
   onClose: () => void;
   onSaved: (e: AgendaEvent) => void;
   onDeleted: (id: number) => void;
@@ -1674,24 +1595,15 @@ function EventModal({
   const [projectId, setProjectId] = useState(
     existing?.project_id ? String(existing.project_id) : ""
   );
-  // « e:<id> » = fiche Employe, « u:<id> » = compte User sans fiche.
-  const [assignee, setAssignee] = useState(
-    existing
-      ? assigneeValue(existing)
+  const [assigneeId, setAssigneeId] = useState(
+    existing?.assignee_id
+      ? String(existing.assignee_id)
       : seedAssignee
-        ? `e:${seedAssignee}`
+        ? String(seedAssignee)
         : ""
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Si l'event est assigné à quelqu'un qui n'est dans aucune liste
-  // (fiche désactivée, compte retiré…), on garde l'option pour ne pas
-  // la perdre silencieusement à l'enregistrement.
-  const assigneeInconnu =
-    assignee !== "" &&
-    !employes.some((e) => `e:${e.id}` === assignee) &&
-    !autresEmployes.some((e) => `e:${e.id}` === assignee) &&
-    !usersSansFiche.some((u) => `u:${u.id}` === assignee);
 
   async function save(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -1715,12 +1627,7 @@ function EventModal({
         all_day: allDay,
         event_type: type,
         project_id: projectId ? Number(projectId) : null,
-        assignee_id: assignee.startsWith("e:")
-          ? Number(assignee.slice(2))
-          : null,
-        assignee_user_id: assignee.startsWith("u:")
-          ? Number(assignee.slice(2))
-          : null
+        assignee_id: assigneeId ? Number(assigneeId) : null
       };
       const res = await authedFetch(
         existing
@@ -1880,50 +1787,17 @@ function EventModal({
             </label>
             <select
               id="ev_assignee"
-              value={assignee}
-              onChange={(e) => setAssignee(e.target.value)}
+              value={assigneeId}
+              onChange={(e) => setAssigneeId(e.target.value)}
               className="input"
             >
               <option value="">—</option>
-              {assigneeInconnu ? (
-                <option value={assignee}>
-                  {existing?.assignee_names?.[0] || `#${assignee.slice(2)}`}
+              {employes.map((e) => (
+                <option key={e.id} value={String(e.id)}>
+                  {e.full_name}
                 </option>
-              ) : null}
-              {autresEmployes.length > 0 || usersSansFiche.length > 0 ? (
-                <>
-                  <optgroup label="Construction">
-                    {employes.map((e) => (
-                      <option key={`e:${e.id}`} value={`e:${e.id}`}>
-                        {e.full_name}
-                      </option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Autres pôles">
-                    {autresEmployes.map((e) => (
-                      <option key={`e:${e.id}`} value={`e:${e.id}`}>
-                        {e.full_name}
-                      </option>
-                    ))}
-                    {usersSansFiche.map((u) => (
-                      <option key={`u:${u.id}`} value={`u:${u.id}`}>
-                        {u.display_name || u.email}
-                      </option>
-                    ))}
-                  </optgroup>
-                </>
-              ) : (
-                employes.map((e) => (
-                  <option key={`e:${e.id}`} value={`e:${e.id}`}>
-                    {e.full_name}
-                  </option>
-                ))
-              )}
+              ))}
             </select>
-            <p className="mt-1 text-xs text-white/60">
-              L&apos;événement apparaît dans l&apos;agenda de l&apos;app
-              mobile de cet employé.
-            </p>
           </div>
 
           <div>
