@@ -74,6 +74,8 @@ type RapportEntreprise = {
 type Rapport = {
   ok: boolean;
   erreur?: string;
+  run_id?: string;
+  arrete?: boolean;
   simulation: boolean;
   declencheur: string;
   depuis: string;
@@ -85,8 +87,17 @@ type Rapport = {
   totaux: { copies: number; prevus: number; ignores: number; erreurs: number };
 };
 
+type RunRecent = {
+  run_id: string;
+  declencheur: string | null;
+  debut: string | null;
+  lignes: number;
+  copies: number;
+};
+
 type Run = {
   en_cours: boolean;
+  run_id?: string | null;
   lance_a: string | null;
   termine_a: string | null;
   simulation: boolean | null;
@@ -146,6 +157,69 @@ export default function RecusQuickbooksPage() {
   const [lancement, setLancement] = useState(false);
   const [journal, setJournal] = useState<Journal[] | null>(null);
   const [connecting, setConnecting] = useState<number | null>(null);
+  const [runs, setRuns] = useState<RunRecent[]>([]);
+  const [annulation, setAnnulation] = useState<string | null>(null);
+
+  const chargerRuns = useCallback(async () => {
+    try {
+      const r = await authedFetch("/api/v1/qbo-recus-drive/runs");
+      if (r.ok) setRuns((await r.json()) as RunRecent[]);
+    } catch {
+      /* facultatif */
+    }
+  }, []);
+
+  async function arreter() {
+    try {
+      await authedFetch("/api/v1/qbo-recus-drive/arreter", { method: "POST" });
+      await charger();
+    } catch (e) {
+      setErr(`Arrêt impossible : ${(e as Error).message}`);
+    }
+  }
+
+  // Annuler un import : fichiers copiés → corbeille Drive (récupérables
+  // 30 jours), mémoire du run effacée pour pouvoir recommencer.
+  async function annuler(run: RunRecent | { run_id: string; copies: number }) {
+    if (
+      !window.confirm(
+        `Annuler cet import ? ${run.copies} fichier(s) copié(s) seront mis à la corbeille du Drive et la mémoire de ce run sera effacée.`
+      )
+    )
+      return;
+    setAnnulation(run.run_id);
+    setErr(null);
+    try {
+      const r = await authedFetch(`/api/v1/qbo-recus-drive/annuler/${run.run_id}`, {
+        method: "POST"
+      });
+      if (!r.ok) {
+        let d = `HTTP ${r.status}`;
+        try {
+          const j = await r.json();
+          if (typeof j.detail === "string") d = j.detail;
+        } catch {
+          /* corps vide */
+        }
+        throw new Error(d);
+      }
+      const res = (await r.json()) as {
+        fichiers_corbeille: number;
+        lignes_effacees: number;
+        erreurs: string[];
+      };
+      setErr(
+        `Import annulé : ${res.fichiers_corbeille} fichier(s) à la corbeille, ${res.lignes_effacees} entrée(s) oubliée(s)${
+          res.erreurs.length ? ` · ${res.erreurs.length} erreur(s) : ${res.erreurs.slice(0, 3).join(" ; ")}` : ""
+        }.`
+      );
+      await Promise.all([charger(), chargerJournal(), chargerRuns()]);
+    } catch (e) {
+      setErr(`Annulation impossible : ${(e as Error).message}`);
+    } finally {
+      setAnnulation(null);
+    }
+  }
 
   const charger = useCallback(async () => {
     try {
@@ -171,7 +245,8 @@ export default function RecusQuickbooksPage() {
   useEffect(() => {
     void charger();
     void chargerJournal();
-  }, [charger, chargerJournal]);
+    void chargerRuns();
+  }, [charger, chargerJournal, chargerRuns]);
 
   // Pendant un run : on rafraîchit la progression toutes les 3 s.
   const enCours = !!etat?.run?.en_cours;
@@ -183,8 +258,11 @@ export default function RecusQuickbooksPage() {
     return () => window.clearInterval(t);
   }, [enCours, charger]);
   useEffect(() => {
-    if (!enCours) void chargerJournal();
-  }, [enCours, chargerJournal]);
+    if (!enCours) {
+      void chargerJournal();
+      void chargerRuns();
+    }
+  }, [enCours, chargerJournal, chargerRuns]);
 
   async function lancer(simulation: boolean) {
     if (!etat) return;
@@ -498,10 +576,63 @@ export default function RecusQuickbooksPage() {
               {etat.run.progression
                 ? ` — ${etat.run.progression.entreprise} : pièce ${etat.run.progression.piece}/${etat.run.progression.pieces_jointes}, ${etat.run.progression.copies} reçu(s) ${etat.run.simulation ? "prévus" : "copiés"}`
                 : "…"}
+              <button
+                type="button"
+                onClick={() => void arreter()}
+                className="btn-outline-rose btn-xs ml-3"
+                title="S'arrête à la prochaine pièce jointe ; ce qui est déjà copié reste copié (annulable ensuite)"
+              >
+                Arrêter
+              </button>
             </div>
           ) : null}
 
-          {rapport && !enCours ? <RapportView rapport={rapport} run={etat!.run} /> : null}
+          {rapport && !enCours ? (
+            <RapportView
+              rapport={rapport}
+              run={etat!.run}
+              onAnnuler={
+                !rapport.simulation && rapport.run_id && rapport.totaux.copies > 0
+                  ? () =>
+                      void annuler({
+                        run_id: rapport.run_id as string,
+                        copies: rapport.totaux.copies
+                      })
+                  : undefined
+              }
+              annulation={annulation === rapport.run_id}
+            />
+          ) : null}
+
+          {runs.length ? (
+            <div className="mt-4 rounded-xl border border-brand-800 bg-brand-950 p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-white/70">
+                Imports récents (annulables)
+              </p>
+              <ul className="mt-2 divide-y divide-brand-800 text-xs">
+                {runs.map((r) => (
+                  <li key={r.run_id} className="flex flex-wrap items-center justify-between gap-2 py-1.5">
+                    <span className="text-white">
+                      {fmtDateTime(r.debut)} · {r.declencheur || "—"} · {r.copies} copié(s)
+                      {r.lignes > r.copies ? ` · ${r.lignes - r.copies} ignoré(s)` : ""}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void annuler(r)}
+                      disabled={annulation === r.run_id || enCours}
+                      className="btn-outline-rose btn-xs"
+                      title="Fichiers copiés à la corbeille Drive + mémoire effacée"
+                    >
+                      {annulation === r.run_id ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : null}
+                      Annuler cet import
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </section>
 
         {/* Étape 4 : la nuit */}
@@ -592,7 +723,17 @@ export default function RecusQuickbooksPage() {
   );
 }
 
-function RapportView({ rapport, run }: { rapport: Rapport; run: Run }) {
+function RapportView({
+  rapport,
+  run,
+  onAnnuler,
+  annulation
+}: {
+  rapport: Rapport;
+  run: Run;
+  onAnnuler?: () => void;
+  annulation?: boolean;
+}) {
   const t = rapport.totaux;
   return (
     <div className="mt-4 space-y-3">
@@ -600,7 +741,20 @@ function RapportView({ rapport, run }: { rapport: Rapport; run: Run }) {
         <span className="font-semibold">
           {rapport.simulation ? "Simulation" : "Copie"} du {rapport.depuis} au{" "}
           {rapport.jusqua}
+          {rapport.arrete ? " (arrêtée)" : ""}
         </span>
+        {onAnnuler ? (
+          <button
+            type="button"
+            onClick={onAnnuler}
+            disabled={annulation}
+            className="btn-outline-rose btn-xs ml-3"
+            title="Fichiers copiés à la corbeille Drive + mémoire effacée"
+          >
+            {annulation ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+            Annuler cet import
+          </button>
+        ) : null}
         <span className="ml-2 text-white/70">
           terminée {fmtDateTime(run.termine_a)} ·{" "}
           {rapport.simulation

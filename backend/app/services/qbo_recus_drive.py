@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import secrets
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -77,13 +78,24 @@ JOURS_FENETRE_NUIT = 3
 #: État du dernier run (lecture par la page) — un seul run à la fois.
 DERNIER_RUN: Dict[str, Any] = {
     "en_cours": False,
+    "run_id": None,
     "lance_a": None,
     "termine_a": None,
     "simulation": None,
     "declencheur": None,
     "progression": None,
     "rapport": None,
+    "arret_demande": False,
 }
+
+
+def demander_arret() -> bool:
+    """Bouton « Arrêter » : le run en cours s'interrompt proprement à la
+    prochaine pièce jointe (ce qui est déjà copié reste copié)."""
+    if not DERNIER_RUN.get("en_cours"):
+        return False
+    DERNIER_RUN["arret_demande"] = True
+    return True
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -564,6 +576,10 @@ async def _traiter_entreprise(
         return cache_contenu[att_id]
 
     for idx, att in enumerate(atts):
+        if DERNIER_RUN.get("arret_demande"):
+            rapport["messages"].append("Arrêté à la demande de l'utilisateur.")
+            rapport["arrete"] = True
+            break
         DERNIER_RUN["progression"] = {
             "entreprise": e["name"],
             "piece": idx + 1,
@@ -668,6 +684,7 @@ async def _traiter_entreprise(
                 nom_fichier=c["nom"],
                 drive_folder_id=dossier,
                 declencheur=declencheur,
+                run_id=DERNIER_RUN.get("run_id"),
             )
             if len(rapport["apercu"]) < 300:
                 rapport["apercu"].append(
@@ -734,17 +751,21 @@ async def executer(
     jusqua = jusqua or date.today()
     if DERNIER_RUN.get("en_cours"):
         return {"ok": False, "erreur": "Un run est déjà en cours."}
+    run_id = secrets.token_hex(6)
     DERNIER_RUN.update(
         en_cours=True,
+        run_id=run_id,
         lance_a=datetime.now(timezone.utc).isoformat(),
         termine_a=None,
         simulation=simulation,
         declencheur=declencheur,
         progression=None,
         rapport=None,
+        arret_demande=False,
     )
     rapport: Dict[str, Any] = {
         "ok": True,
+        "run_id": run_id,
         "simulation": simulation,
         "declencheur": declencheur,
         "depuis": depuis.isoformat(),
@@ -794,6 +815,9 @@ async def executer(
             t["prevus"] += r["prevus"]
             t["ignores"] += r["ignores_deja_traites"] + r["ignores_drive"]
             t["erreurs"] += r["erreurs"]
+            if r.get("arrete"):
+                rapport["arrete"] = True
+                break
         rapport["dossiers_crees"] = drive.dossiers_crees
         rapport["dossiers_a_creer"] = drive.dossiers_a_creer
         return rapport
@@ -803,7 +827,85 @@ async def executer(
             termine_a=datetime.now(timezone.utc).isoformat(),
             progression=None,
             rapport=rapport,
+            arret_demande=False,
         )
+
+
+async def runs_recents(db: AsyncSession, limit: int = 10) -> List[Dict[str, Any]]:
+    """Imports réels récents (un par run_id) : pour « Annuler cet import »."""
+    rows = (
+        await db.execute(
+            select(
+                QboRecuDrive.run_id,
+                QboRecuDrive.declencheur,
+                func.min(QboRecuDrive.created_at),
+                func.count(QboRecuDrive.id),
+                func.count(QboRecuDrive.drive_file_id),
+            )
+            .where(QboRecuDrive.run_id.is_not(None))
+            .group_by(QboRecuDrive.run_id, QboRecuDrive.declencheur)
+            .order_by(func.min(QboRecuDrive.created_at).desc())
+            .limit(limit)
+        )
+    ).all()
+    out = []
+    for run_id, decl, debut, n, n_fichiers in rows:
+        copies = (
+            await db.execute(
+                select(func.count(QboRecuDrive.id)).where(
+                    QboRecuDrive.run_id == run_id, QboRecuDrive.statut == "copie"
+                )
+            )
+        ).scalar_one()
+        out.append(
+            {
+                "run_id": run_id,
+                "declencheur": decl,
+                "debut": debut.isoformat() if debut else None,
+                "lignes": int(n),
+                "copies": int(copies or 0),
+            }
+        )
+    return out
+
+
+async def annuler_run(
+    db: AsyncSession, run_id: str, *, user_id: Optional[int] = None
+) -> Dict[str, Any]:
+    """« Annuler cet import » : les fichiers copiés par ce run sont mis à la
+    corbeille du Drive (récupérables 30 jours) et la mémoire du run est
+    effacée, pour pouvoir recommencer proprement. Les dossiers créés
+    restent (vides, sans effet)."""
+    from app.services.drive_api import trash_file
+    from app.services.drive_auto_upload_dispatcher import resolve_drive_owner_user_id
+
+    if DERNIER_RUN.get("en_cours"):
+        return {"ok": False, "erreur": "Attends la fin (ou l'arrêt) du run en cours."}
+    rows = (
+        await db.execute(select(QboRecuDrive).where(QboRecuDrive.run_id == run_id))
+    ).scalars().all()
+    if not rows:
+        return {"ok": False, "erreur": "Import introuvable (déjà annulé ?)."}
+    owner = await resolve_drive_owner_user_id(db, user_id)
+    corbeille = 0
+    erreurs: List[str] = []
+    for r in rows:
+        if r.statut == "copie" and r.drive_file_id and owner is not None:
+            try:
+                await trash_file(owner, db, r.drive_file_id)
+                corbeille += 1
+            except Exception as exc:  # noqa: BLE001
+                erreurs.append(f"{r.nom_fichier} : {str(exc)[:120]}")
+                continue
+        await db.delete(r)
+    await db.commit()
+    return {
+        "ok": True,
+        "run_id": run_id,
+        "fichiers_corbeille": corbeille,
+        "lignes_effacees": len(rows) - len(erreurs),
+        "erreurs": erreurs,
+    }
 
 
 async def executer_en_arriere_plan(**kwargs: Any) -> None:
