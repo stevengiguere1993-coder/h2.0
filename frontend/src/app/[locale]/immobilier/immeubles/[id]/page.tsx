@@ -1704,6 +1704,67 @@ function Kpi({
   );
 }
 
+/** Carte d'alerte « À surveiller » (Phil 2026-10-04) : repliée par
+ *  défaut, un clic sur le titre déplie les unités concernées ; chaque
+ *  unité est un lien vers sa fiche. */
+function AlerteCard({
+  titre,
+  items
+}: {
+  titre: React.ReactNode;
+  items: {
+    key: string | number;
+    label: string;
+    right?: string;
+    href?: string;
+  }[];
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 text-left text-sm font-semibold text-amber-200"
+        aria-expanded={open}
+        title={open ? "Replier" : "Voir les unités concernées"}
+      >
+        <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+        <span className="flex-1">{titre}</span>
+        <ChevronDown
+          className={`h-4 w-4 flex-shrink-0 transition-transform ${
+            open ? "rotate-180" : ""
+          }`}
+        />
+      </button>
+      {open ? (
+        <ul className="mt-2 space-y-1 border-t border-amber-500/30 pt-2 text-xs text-amber-200">
+          {items.map((it) => (
+            <li
+              key={it.key}
+              className="flex items-center justify-between gap-3"
+            >
+              {it.href ? (
+                <Link
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  href={it.href as any}
+                  className="font-semibold underline-offset-2 hover:underline"
+                  title="Ouvrir la fiche"
+                >
+                  {it.label} →
+                </Link>
+              ) : (
+                <span>{it.label}</span>
+              )}
+              {it.right ? <span className="font-mono">{it.right}</span> : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 function Section({
   title,
   children,
@@ -2018,107 +2079,72 @@ function OverviewTab({
           ) : (
             <div className="grid gap-3 lg:grid-cols-2">
               {bauxBientot.length > 0 ? (
-                <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
-                  <p className="flex items-center gap-2 text-sm font-semibold text-amber-200">
-                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                    {bauxBientot.length}{" "}
-                    {bauxBientot.length > 1 ? "baux échoient" : "bail échoit"}{" "}
-                    d&apos;ici {regleBail?.seuil ?? 90} jours
-                  </p>
-                  {/* text-amber-200 SANS alpha : la variante /80 échappe au
-                      remap du thème clair → texte illisible (retour Phil). */}
-                  <ul className="mt-2 space-y-1 text-xs text-amber-200 opacity-90">
-                    {bauxBientot.map((b) => (
-                      <li
-                        key={b.id}
-                        className="flex items-center justify-between gap-3"
-                      >
-                        <span>
-                          Logement{" "}
-                          {logMap.get(b.logement_id) || `#${b.logement_id}`}
-                        </span>
-                        <span className="font-mono">{b.date_fin}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+                <AlerteCard
+                  titre={
+                    <>
+                      {bauxBientot.length}{" "}
+                      {bauxBientot.length > 1 ? "baux échoient" : "bail échoit"}{" "}
+                      d&apos;ici {regleBail?.seuil ?? 90} jours
+                    </>
+                  }
+                  items={bauxBientot.map((b) => ({
+                    key: b.id,
+                    label: `Logement ${logMap.get(b.logement_id) || `#${b.logement_id}`}`,
+                    right: b.date_fin,
+                    href: `/immobilier/logements/${b.logement_id}?from=immeuble`
+                  }))}
+                />
               ) : null}
               {termesBientot.length > 0 ? (
-                <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
-                  <p className="flex items-center gap-2 text-sm font-semibold text-amber-200">
-                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                    Fin de terme hypothécaire dans moins de{" "}
-                    {regleHypo?.seuil ?? 6} mois
-                  </p>
-                  {/* text-amber-200 SANS alpha : la variante /80 échappe au
-                      remap du thème clair → texte illisible (retour Phil). */}
-                  <ul className="mt-2 space-y-1 text-xs text-amber-200 opacity-90">
-                    {termesBientot.map((h) => (
-                      <li
-                        key={h.id}
-                        className="flex items-center justify-between gap-3"
-                      >
-                        <span>
-                          {h.preteur} (rang {h.rang})
-                        </span>
-                        <span className="font-mono">
-                          {h.date_fin_terme || "—"}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+                <AlerteCard
+                  titre={
+                    <>
+                      Fin de terme hypothécaire dans moins de{" "}
+                      {regleHypo?.seuil ?? 6} mois
+                    </>
+                  }
+                  items={termesBientot.map((h) => ({
+                    key: h.id,
+                    label: `${h.preteur} (rang ${h.rang})`,
+                    right: h.date_fin_terme || "—",
+                    href: `/immobilier/immeubles/${immeuble.id}?tab=hypotheques`
+                  }))}
+                />
               ) : null}
               {logementsVacants.length > 0 ? (
-                <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
-                  <p className="flex items-center gap-2 text-sm font-semibold text-amber-200">
-                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                    {logementsVacants.length} logement
-                    {logementsVacants.length > 1 ? "s" : ""} vacant
-                    {logementsVacants.length > 1 ? "s" : ""}
-                  </p>
-                  <ul className="mt-2 space-y-1 text-xs text-amber-200 opacity-90">
-                    {logementsVacants.map((l) => (
-                      <li
-                        key={l.id}
-                        className="flex items-center justify-between gap-3"
-                      >
-                        <span>Logement {l.numero}</span>
-                        <span className="font-mono">
-                          {l.loyer_demande != null
-                            ? fmtCurrency(l.loyer_demande)
-                            : "—"}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+                <AlerteCard
+                  titre={
+                    <>
+                      {logementsVacants.length} logement
+                      {logementsVacants.length > 1 ? "s" : ""} vacant
+                      {logementsVacants.length > 1 ? "s" : ""}
+                    </>
+                  }
+                  items={logementsVacants.map((l) => ({
+                    key: l.id,
+                    label: `Logement ${l.numero}`,
+                    right:
+                      l.loyer_demande != null ? fmtCurrency(l.loyer_demande) : "—",
+                    href: `/immobilier/logements/${l.id}?from=immeuble`
+                  }))}
+                />
               ) : null}
               {bauxProposes.length > 0 ? (
-                <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
-                  <p className="flex items-center gap-2 text-sm font-semibold text-amber-200">
-                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                    {bauxProposes.length} bail
-                    {bauxProposes.length > 1 ? "x" : ""} en attente de
-                    signature
-                  </p>
-                  <ul className="mt-2 space-y-1 text-xs text-amber-200 opacity-90">
-                    {bauxProposes.map((b) => (
-                      <li
-                        key={b.id}
-                        className="flex items-center justify-between gap-3"
-                      >
-                        <span>
-                          Logement{" "}
-                          {logMap.get(b.logement_id) || `#${b.logement_id}`}
-                        </span>
-                        <span className="font-mono">
-                          début {b.date_debut}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+                <AlerteCard
+                  titre={
+                    <>
+                      {bauxProposes.length} bail
+                      {bauxProposes.length > 1 ? "x" : ""} en attente de
+                      signature
+                    </>
+                  }
+                  items={bauxProposes.map((b) => ({
+                    key: b.id,
+                    label: `Logement ${logMap.get(b.logement_id) || `#${b.logement_id}`}`,
+                    right: `début ${b.date_debut}`,
+                    href: `/immobilier/logements/${b.logement_id}?from=immeuble`
+                  }))}
+                />
               ) : null}
               {evalAgeeMsg ? (
                 <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">

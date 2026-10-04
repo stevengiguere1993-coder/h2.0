@@ -30,6 +30,7 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { PdfApercuModal } from "@/components/pdf-apercu-modal";
 import { BoutonExportZip } from "@/components/immobilier/bouton-export";
 import {
   docTypeLabel,
@@ -1293,6 +1294,17 @@ export function DocsList({
     }
   }
 
+  // Aperçu en modale (Phil 2026-10-04) plutôt qu'un nouvel onglet.
+  const [apercu, setApercu] = useState<{ url: string; titre: string } | null>(
+    null
+  );
+  const fermerApercu = useCallback(() => {
+    setApercu((cur) => {
+      if (cur) URL.revokeObjectURL(cur.url);
+      return null;
+    });
+  }, []);
+
   async function voir(d: BailDocument) {
     setBusyId(d.id);
     setErr(null);
@@ -1303,8 +1315,7 @@ export function DocsList({
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
-      window.open(url, "_blank");
-      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+      setApercu({ url, titre: d.titre });
     } catch (e) {
       setErr(`Ouverture échouée : ${(e as Error).message}`);
     } finally {
@@ -1378,6 +1389,13 @@ export function DocsList({
 
   return (
     <div className="space-y-3">
+      {apercu ? (
+        <PdfApercuModal
+          url={apercu.url}
+          titre={apercu.titre}
+          onClose={fermerApercu}
+        />
+      ) : null}
       {flash ? (
             <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
               {flash}
@@ -2014,14 +2032,24 @@ export function BailDocActions({
         );
       }
       const url = URL.createObjectURL(await r.blob());
-      window.open(url, "_blank");
-      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+      setApercu({ url, titre: "Bail" });
     } catch (e) {
       setErr((e as Error).message);
     } finally {
       setBusy(false);
     }
   }
+
+  // Aperçu en modale (Phil 2026-10-04) plutôt qu'un nouvel onglet.
+  const [apercu, setApercu] = useState<{ url: string; titre: string } | null>(
+    null
+  );
+  const fermerApercu = useCallback(() => {
+    setApercu((cur) => {
+      if (cur) URL.revokeObjectURL(cur.url);
+      return null;
+    });
+  }, []);
 
   // Import en 2 temps (retour Phil 2026-07-27) : on choisit le fichier,
   // PUIS un mini-modal demande la date d'entrée en vigueur — elle donne
@@ -2094,6 +2122,13 @@ export function BailDocActions({
 
   return (
     <span className="inline-flex items-center gap-1.5">
+      {apercu ? (
+        <PdfApercuModal
+          url={apercu.url}
+          titre={apercu.titre}
+          onClose={fermerApercu}
+        />
+      ) : null}
       {proposerConsentement ? (
         <div
           className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4"
