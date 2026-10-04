@@ -6,14 +6,17 @@ import {
   Check,
   ExternalLink,
   FolderOpen,
+  IdCard,
   Loader2,
   Play,
   RefreshCw,
-  Search
+  Search,
+  X
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { DriveFolderExplorer } from "@/components/drive/DriveFolderExplorer";
 import { QGTopbar } from "../layout";
 
 /**
@@ -200,6 +203,8 @@ export default function RecusQuickbooksPage() {
   const [connecting, setConnecting] = useState<number | null>(null);
   const [runs, setRuns] = useState<RunRecent[]>([]);
   const [annulation, setAnnulation] = useState<string | null>(null);
+  // Entreprise dont le Drive est ouvert en grand (sur son dossier Factures).
+  const [driveOuvert, setDriveOuvert] = useState<{ id: number; name: string } | null>(null);
 
   const chargerRuns = useCallback(async () => {
     try {
@@ -502,13 +507,29 @@ export default function RecusQuickbooksPage() {
                         />
                       </td>
                       <td className="px-3 py-2 font-semibold text-white">
-                        <Link
-                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                          href={`/entreprises/${e.entreprise_id}` as any}
-                          className="hover:text-accent-500 hover:underline"
-                        >
-                          {e.name}
-                        </Link>
+                        <span className="inline-flex items-center gap-1.5">
+                          {e.drive_folder_id ? (
+                            <button
+                              type="button"
+                              onClick={() => setDriveOuvert({ id: e.entreprise_id, name: e.name })}
+                              className="text-left hover:text-accent-500 hover:underline"
+                              title="Ouvrir le Drive de l'entreprise (dossier Factures)"
+                            >
+                              {e.name}
+                            </button>
+                          ) : (
+                            <span>{e.name}</span>
+                          )}
+                          <Link
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            href={`/entreprises/${e.entreprise_id}` as any}
+                            className="text-white/60 hover:text-accent-500"
+                            title="Fiche de l'entreprise"
+                            aria-label={`Fiche de ${e.name}`}
+                          >
+                            <IdCard className="h-3.5 w-3.5" />
+                          </Link>
+                        </span>
                       </td>
                       <td className="px-3 py-2 text-xs">
                         {e.qbo_connectee ? (
@@ -556,11 +577,11 @@ export default function RecusQuickbooksPage() {
                       </td>
                       <td className="px-3 py-2 text-xs">
                         {e.drive_folder_id ? (
-                          <a
-                            href={e.drive_folder_url || "#"}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-white hover:text-accent-500 hover:underline"
+                          <button
+                            type="button"
+                            onClick={() => setDriveOuvert({ id: e.entreprise_id, name: e.name })}
+                            className="inline-flex items-center gap-1 text-left text-white hover:text-accent-500 hover:underline"
+                            title="Ouvrir le Drive de l'entreprise (dossier Factures)"
                           >
                             <FolderOpen className="h-3.5 w-3.5 text-emerald-600" />
                             {e.drive_folder_name
@@ -570,8 +591,7 @@ export default function RecusQuickbooksPage() {
                                 : e.drive_source === "lien"
                                   ? "Dossier de la fiche"
                                   : "Dossier lié"}
-                            <ExternalLink className="h-3 w-3" />
-                          </a>
+                          </button>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-amber-200">
                             <AlertTriangle className="h-3.5 w-3.5" />
@@ -808,10 +828,24 @@ export default function RecusQuickbooksPage() {
                               {fmtHeure(j.created_at)}
                             </td>
                             <td className="px-3 py-1.5 text-white/70">
-                              {(j.entreprise_id != null &&
-                                etat?.entreprises.find((e) => e.entreprise_id === j.entreprise_id)
-                                  ?.name) ||
-                                "—"}
+                              {(() => {
+                                const ent =
+                                  j.entreprise_id != null
+                                    ? etat?.entreprises.find((e) => e.entreprise_id === j.entreprise_id)
+                                    : undefined;
+                                if (!ent) return "—";
+                                if (!ent.drive_folder_id) return ent.name;
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={() => setDriveOuvert({ id: ent.entreprise_id, name: ent.name })}
+                                    className="text-left hover:text-accent-500 hover:underline"
+                                    title="Ouvrir le Drive de l'entreprise (dossier Factures)"
+                                  >
+                                    {ent.name}
+                                  </button>
+                                );
+                              })()}
                             </td>
                             <td className="px-3 py-1.5 text-white">{j.nom_fichier}</td>
                             <td className="px-3 py-1.5 text-white/70">
@@ -859,7 +893,147 @@ export default function RecusQuickbooksPage() {
           )}
         </section>
       </div>
+      {driveOuvert ? (
+        <DriveFacturesPanneau
+          entrepriseId={driveOuvert.id}
+          nom={driveOuvert.name}
+          onClose={() => setDriveOuvert(null)}
+        />
+      ) : null}
     </>
+  );
+}
+
+type DossierFactures = {
+  drive_folder_id: string | null;
+  drive_folder_url: string | null;
+  factures_id: string | null;
+  factures_nom: string | null;
+  factures_url: string | null;
+};
+
+/**
+ * Drive d'une entreprise en grand, ouvert sur son dossier « Factures »
+ * (Steven 2026-10-04 : cliquer sur une inc → le Drive à partir de
+ * Factures, comme « Documents Drive » sur la fiche). Le fil d'Ariane
+ * remonte à la racine de l'inc. Rien n'est créé en ouvrant : sans dossier
+ * Factures, on ouvre la racine.
+ */
+function DriveFacturesPanneau({
+  entrepriseId,
+  nom,
+  onClose
+}: {
+  entrepriseId: number;
+  nom: string;
+  onClose: () => void;
+}) {
+  const [dossier, setDossier] = useState<DossierFactures | null>(null);
+  const [erreur, setErreur] = useState<string | null>(null);
+
+  useEffect(() => {
+    let annule = false;
+    (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/qbo-recus-drive/entreprises/${entrepriseId}/dossier-factures`
+        );
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const d = (await r.json()) as DossierFactures;
+        if (!annule) setDossier(d);
+      } catch (e) {
+        if (!annule) setErreur(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => {
+      annule = true;
+    };
+  }, [entrepriseId]);
+
+  useEffect(() => {
+    function onKey(ev: KeyboardEvent) {
+      if (ev.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const lienExterne = dossier?.factures_url || dossier?.drive_folder_url;
+
+  return (
+    <div
+      className="fixed inset-0 z-[1300] flex flex-col bg-black/80 p-4 md:p-6"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Drive — ${nom}`}
+      onClick={onClose}
+    >
+      <div
+        className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-2xl border border-brand-800 bg-brand-900 shadow-2xl"
+        onClick={(ev) => ev.stopPropagation()}
+      >
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-brand-800 px-5 py-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <FolderOpen className="h-5 w-5 shrink-0 text-emerald-600" />
+            <h2 className="truncate text-base font-bold text-white">
+              {nom}
+              {dossier ? (
+                <span className="ml-2 text-sm font-normal text-white/70">
+                  {dossier.factures_nom
+                    ? `« ${dossier.factures_nom} »`
+                    : "Aucun dossier Factures : racine de l'entreprise"}
+                </span>
+              ) : null}
+            </h2>
+          </div>
+          <div className="flex items-center gap-2">
+            {lienExterne ? (
+              <a
+                href={lienExterne}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 px-2.5 py-1.5 text-xs font-semibold text-white/70 hover:bg-white/10 hover:text-white"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Ouvrir dans Google Drive
+              </a>
+            ) : null}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Fermer"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 px-2.5 py-1.5 text-xs font-semibold text-white/70 hover:bg-white/10 hover:text-white"
+            >
+              <X className="h-3.5 w-3.5" />
+              Fermer
+            </button>
+          </div>
+        </header>
+        <div className="min-h-0 flex-1 overflow-auto p-4 md:p-5">
+          {erreur ? (
+            <p className="inline-flex items-center gap-1.5 text-sm text-rose-300">
+              <AlertTriangle className="h-4 w-4" />
+              Dossier Drive introuvable ({erreur}).
+            </p>
+          ) : !dossier ? (
+            <p className="inline-flex items-center gap-1.5 text-sm text-white/70">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Recherche du dossier Factures…
+            </p>
+          ) : dossier.drive_folder_id ? (
+            <DriveFolderExplorer
+              folderId={dossier.drive_folder_id}
+              initialFolderId={dossier.factures_id}
+            />
+          ) : (
+            <p className="inline-flex items-center gap-1.5 text-sm text-amber-200">
+              <AlertTriangle className="h-4 w-4" />
+              Aucun dossier : fiche → Documents Drive → « Lier un dossier »
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

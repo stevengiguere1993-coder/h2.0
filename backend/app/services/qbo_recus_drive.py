@@ -439,11 +439,11 @@ async def _dossier_entreprise(
     return fid, url_dossier(fid), "convention", trouve.get("name")
 
 
-async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
-    """Toutes les entreprises actives avec leur état de préparation :
-    connexion QuickBooks (scope inc:{id}), dossier Drive, compteurs."""
-    from app.services.drive_auto_upload_dispatcher import resolve_drive_owner_user_id
-
+async def _liens_et_convention(
+    db: AsyncSession,
+) -> tuple[Dict[int, DriveEntityLink], Optional[DriveConvention]]:
+    """Liens « Documents Drive » des fiches entreprise + convention
+    Entreprise active (pour la découverte du dossier par son nom)."""
     liens = {
         int(l.entity_id): l
         for l in (
@@ -463,6 +463,15 @@ async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
             .order_by(DriveConvention.priority.desc(), DriveConvention.id.asc())
         )
     ).scalars().first()
+    return liens, convention
+
+
+async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
+    """Toutes les entreprises actives avec leur état de préparation :
+    connexion QuickBooks (scope inc:{id}), dossier Drive, compteurs."""
+    from app.services.drive_auto_upload_dispatcher import resolve_drive_owner_user_id
+
+    liens, convention = await _liens_et_convention(db)
     drive_user_id = await resolve_drive_owner_user_id(db) if convention else None
     ents = (
         await db.execute(
@@ -534,6 +543,43 @@ async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
             }
         )
     return out
+
+
+async def dossier_factures(
+    db: AsyncSession, entreprise_id: int, user_id: Optional[int] = None
+) -> Dict[str, Any]:
+    """Dossier Drive de l'entreprise et son sous-dossier « Factures »
+    (reconnu comme à la copie : « 2 - Factures et reçus » compte), pour
+    ouvrir l'explorateur Drive depuis la page des reçus. Lecture seule :
+    rien n'est créé ; ``factures_id`` est None s'il n'existe pas encore.
+    Steven 2026-10-04 : « cliquer sur une inc et se retrouver sur le menu
+    du drive à partir de Factures »."""
+    from app.services.drive_auto_upload_dispatcher import resolve_drive_owner_user_id
+
+    e = await db.get(Entreprise, entreprise_id)
+    if e is None:
+        raise ValueError("Entreprise introuvable.")
+    liens, convention = await _liens_et_convention(db)
+    drive_user_id = await resolve_drive_owner_user_id(db, preferred_user_id=user_id)
+    racine, url, _source, nom_dossier = await _dossier_entreprise(
+        db, e, liens, convention, drive_user_id
+    )
+    factures: Optional[Dict[str, Any]] = None
+    if racine and drive_user_id is not None:
+        try:
+            factures = await _Drive(drive_user_id, db, simulation=True).trouver(racine, DOSSIER_FACTURES)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Dossier Factures de %s introuvable : %s", e.name, exc)
+    return {
+        "entreprise_id": e.id,
+        "name": e.name,
+        "drive_folder_id": racine,
+        "drive_folder_url": url,
+        "drive_folder_name": nom_dossier,
+        "factures_id": str(factures["id"]) if factures else None,
+        "factures_nom": factures.get("name") if factures else None,
+        "factures_url": url_dossier(str(factures["id"])) if factures else None,
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────

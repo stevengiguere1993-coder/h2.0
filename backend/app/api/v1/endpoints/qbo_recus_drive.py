@@ -100,6 +100,17 @@ async def changer_scope(
     return {"entreprise_id": entreprise_id, "qbo_scope": scope}
 
 
+@router.get(
+    "/entreprises/{entreprise_id}/dossier-factures",
+    summary="Dossier Drive de l'entreprise et son sous-dossier Factures (lecture seule)",
+)
+async def dossier_factures(entreprise_id: int, db: DBSession, user: CurrentUser) -> Dict[str, Any]:
+    try:
+        return await svc.dossier_factures(db, entreprise_id, user_id=getattr(user, "id", None))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+
 @router.get("/journal", summary="Dernières copies (mémoire anti-doublon)")
 async def journal(
     db: DBSession,
