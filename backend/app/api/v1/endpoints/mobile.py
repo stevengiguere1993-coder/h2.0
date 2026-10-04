@@ -492,13 +492,24 @@ async def my_agenda(
         )
         .order_by(AgendaEvent.start_at.asc())
     )
+    # L'employé voit SES événements : assignés à sa fiche Employe ou à son
+    # compte User (meetings, tournages… ajoutés par un admin depuis le
+    # site). Les événements sans assigné restent visibles aux seuls
+    # employés du volet Construction (consignes chantier communes) : un
+    # employé d'un autre pôle (ex. vidéo / marketing) ne voit pas tout
+    # l'agenda de la compagnie. Sans fiche ni assignation → rien.
+    mine = [AgendaEvent.assignee_user_id == user.id]
     if emp is not None:
-        stmt = stmt.where(
-            or_(
-                AgendaEvent.assignee_id == emp.id,
-                AgendaEvent.assignee_id.is_(None),
+        mine.append(AgendaEvent.assignee_id == emp.id)
+        if user.has_volet("construction"):
+            mine.append(
+                and_(
+                    AgendaEvent.assignee_id.is_(None),
+                    AgendaEvent.assignee_user_id.is_(None),
+                    AgendaEvent.scope == "construction",
+                )
             )
-        )
+    stmt = stmt.where(or_(*mine))
     rows = (await db.execute(stmt)).scalars().all()
     return [AgendaEventMini.model_validate(r) for r in rows]
 
