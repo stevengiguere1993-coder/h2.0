@@ -52,7 +52,7 @@ export default function ImmeublesDiagnosticPage() {
     <>
       <ImmobilierTopbar
         breadcrumbs={[
-          { label: "Gestion immobilière", href: "/immobilier" },
+          { label: "Immobilier", href: "/immobilier" },
           { label: "Diagnostic immeubles" }
         ]}
       />

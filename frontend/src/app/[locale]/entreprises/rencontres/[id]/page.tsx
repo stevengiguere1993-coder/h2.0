@@ -1340,7 +1340,7 @@ ${raw}` : raw;
                     type="button"
                     onClick={openTasksPanel}
                     className="btn-outline-accent btn-sm"
-                    title="Transforme les actions ci-dessus en tâches dans le kanban Gestion d'entreprise"
+                    title="Transforme les actions ci-dessus en tâches dans le kanban Entreprises"
                   >
                     <ListTodo className="h-3 w-3" />
                     Créer des tâches Kratos

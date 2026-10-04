@@ -164,7 +164,7 @@ export default function EntreprisesDashboard() {
         if (!healthRes.ok) {
           if (healthRes.status === 403) {
             throw new Error(
-              "Accès refusé — ton compte n'a pas le volet Gestion d'entreprises."
+              "Accès refusé — ton compte n'a pas le volet Entreprises."
             );
           }
           throw new Error(`HTTP ${healthRes.status}`);

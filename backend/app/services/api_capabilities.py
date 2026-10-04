@@ -28,17 +28,17 @@ from typing import Optional
 # ── Pôles (slugs stables ↔ libellés FR de POLES_KRATOS) ────────────
 #
 # Les slugs sont l'identité technique (préfixe des scopes, jamais
-# affichée). Les libellés FR sont EXACTEMENT ceux de POLES_KRATOS côté
-# frontend (frontend/.../parametres/drive/page.tsx) pour la cohérence
-# avec la gestion du Drive « Afficher Drive sur les pages ».
+# affichée). Les libellés FR sont ceux des menus du site (« Entreprises »,
+# « Immobilier »…), les mêmes que montre Paramètres → Drive via
+# ``libellePole`` (frontend/.../parametres/drive/page.tsx).
 
 #: Pôles exposant des capacités d'API, dans l'ordre d'affichage.
 POLES: list[dict[str, str]] = [
     {"slug": "prospection", "label_fr": "Prospection"},
     {"slug": "devlog", "label_fr": "Développement logiciel"},
     {"slug": "construction", "label_fr": "Construction"},
-    {"slug": "entreprise", "label_fr": "Gestion d'entreprises"},
-    {"slug": "immobilier", "label_fr": "Gestion immobilière"},
+    {"slug": "entreprise", "label_fr": "Entreprises"},
+    {"slug": "immobilier", "label_fr": "Immobilier"},
     {"slug": "comptabilite", "label_fr": "Comptabilité"},
 ]
 
@@ -315,7 +315,7 @@ def _build_capabilities() -> list[dict]:
             "entreprise",
             "Lister les entreprises",
             (
-                "Lister les entreprises du pôle Gestion d'entreprises (vue "
+                "Lister les entreprises du pôle Entreprises (vue "
                 "d'ensemble) : nom, type, NEQ, statut. Résumés paginés "
                 "(limite raisonnable)."
             ),

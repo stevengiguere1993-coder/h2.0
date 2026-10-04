@@ -805,7 +805,7 @@ async def _h_marquer_loyer_paye(
 _POLES_TACHE = ("entreprise", "devlog", "prospection", "construction")
 
 _POLE_TACHE_LABELS = {
-    "entreprise": "Gestion d'entreprises",
+    "entreprise": "Entreprises",
     "devlog": "Développement logiciel",
     "prospection": "Prospection",
     "construction": "Construction",

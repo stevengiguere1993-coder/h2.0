@@ -131,7 +131,7 @@ export default function BauxPage() {
     <>
       <ImmobilierTopbar
         breadcrumbs={[
-          { label: "Gestion immobilière", href: "/immobilier" },
+          { label: "Immobilier", href: "/immobilier" },
           { label: "Baux" }
         ]}
       />

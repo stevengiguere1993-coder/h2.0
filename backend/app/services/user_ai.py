@@ -200,7 +200,7 @@ async def _digest_pour(db: AsyncSession, user: User) -> str:
                 )
             ).scalar() or 0
             lignes.append(
-                f"Gestion d'entreprise : {n_ouvertes} tâches ouvertes."
+                f"Entreprises : {n_ouvertes} tâches ouvertes."
             )
         except Exception:  # noqa: BLE001
             pass

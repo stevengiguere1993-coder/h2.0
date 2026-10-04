@@ -777,7 +777,7 @@ export default function ImmeubleDetailPage({
       <>
         <ImmobilierTopbar
           breadcrumbs={[
-            { label: "Gestion immobilière", href: "/immobilier" },
+            { label: "Immobilier", href: "/immobilier" },
             { label: "Immeuble" }
           ]}
         />
@@ -795,7 +795,7 @@ export default function ImmeubleDetailPage({
       <>
         <ImmobilierTopbar
           breadcrumbs={[
-            { label: "Gestion immobilière", href: "/immobilier" },
+            { label: "Immobilier", href: "/immobilier" },
             { label: "Immeuble" }
           ]}
         />
@@ -810,7 +810,7 @@ export default function ImmeubleDetailPage({
     <>
       <ImmobilierTopbar
         breadcrumbs={[
-          { label: "Gestion immobilière", href: "/immobilier" },
+          { label: "Immobilier", href: "/immobilier" },
           { label: "Immeubles", href: "/immobilier/immeubles" },
           { label: immeuble.name }
         ]}
@@ -1387,7 +1387,7 @@ export default function ImmeubleDetailPage({
                 </select>
                 <p className="mt-1 text-[11px] text-white/60">
                   L&apos;immeuble est réassigné à 100 % à cette compagnie.
-                  Le changement se reflète dans Gestion d&apos;entreprise
+                  Le changement se reflète dans le volet Entreprises
                   (fiche de l&apos;entreprise, organigramme de détention).
                 </p>
               </EditField>

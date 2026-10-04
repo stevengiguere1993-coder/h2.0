@@ -767,7 +767,7 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
     <>
       <ImmobilierTopbar
         breadcrumbs={[
-          { label: "Gestion immobilière", href: "/immobilier" },
+          { label: "Immobilier", href: "/immobilier" },
           { label: "Paiements" }
         ]}
       />

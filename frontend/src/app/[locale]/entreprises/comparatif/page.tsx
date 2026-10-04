@@ -97,7 +97,7 @@ export default function ComparatifPage() {
     <>
       <EntreprisesTopbar
         breadcrumbs={[
-          { label: "Gestion d'entreprises", href: "/entreprises" },
+          { label: "Entreprises", href: "/entreprises" },
           { label: "Comparatif portefeuille" }
         ]}
       />

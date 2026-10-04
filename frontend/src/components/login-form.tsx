@@ -342,7 +342,7 @@ export function LoginForm() {
               </span>
               <span className="flex-1">
                 <span className="block text-base font-bold text-white">
-                  Application mobile
+                  Zone employés
                 </span>
                 <span className="mt-0.5 block text-xs text-white/60">
                   Employé sur chantier — poinçonner, agenda, intervention
@@ -413,7 +413,7 @@ export function LoginForm() {
               </span>
               <span className="flex-1">
                 <span className="block text-base font-bold text-white">
-                  Gestion d&apos;entreprises
+                  Entreprises
                 </span>
                 <span className="mt-0.5 block text-xs text-white/60">
                   Tâches multi-entreprises, scoring, assignation, daily
@@ -434,7 +434,7 @@ export function LoginForm() {
               </span>
               <span className="flex-1">
                 <span className="block text-base font-bold text-white">
-                  Gestion immobilière
+                  Immobilier
                 </span>
                 <span className="mt-0.5 block text-xs text-white/60">
                   Immeubles, locataires, baux, refinancements,

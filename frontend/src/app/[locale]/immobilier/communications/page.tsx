@@ -685,7 +685,7 @@ export default function CommunicationsPage() {
     <>
       <ImmobilierTopbar
         breadcrumbs={[
-          { label: "Gestion immobilière", href: "/immobilier" },
+          { label: "Immobilier", href: "/immobilier" },
           { label: "Communications" }
         ]}
       />

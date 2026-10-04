@@ -67,7 +67,7 @@ export default function ParametresHubPage() {
           href={origine.href}
           className="inline-flex items-center gap-1 rounded-lg border border-brand-800 px-3 py-2 text-sm text-white/70 hover:text-white"
         >
-          <ArrowLeft className="h-4 w-4" /> Retour à {origine.label}
+          <ArrowLeft className="h-4 w-4" /> Retour {origine.label}
         </a>
         <h1 className="flex items-center gap-2 text-2xl font-bold text-white">
           <Settings className="h-6 w-6 text-accent-500" />

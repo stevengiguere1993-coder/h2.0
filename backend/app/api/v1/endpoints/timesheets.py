@@ -1703,9 +1703,9 @@ async def facturer_solde_qbo(
         raise HTTPException(
             status_code=503,
             detail=(
-                "Le QuickBooks de Gestion d'entreprise n'est pas connecté. "
+                "Le QuickBooks du pôle Entreprises n'est pas connecté. "
                 "Va dans Paramètres → Comptabilité → « QuickBooks — autres "
-                "pôles » et connecte la carte Gestion d'entreprise."
+                "pôles » et connecte la carte Entreprises."
             ),
         )
 

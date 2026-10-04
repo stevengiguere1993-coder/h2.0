@@ -711,7 +711,7 @@ async def facturer(
             status_code=422,
             detail=(
                 "QuickBooks exige un code de taxe : choisis-le dans "
-                "Gestion d'entreprise → Feuille de temps → Facturation → "
+                "Entreprises → Feuille de temps → Facturation → "
                 "Réglages QuickBooks (même QuickBooks)."
             ),
         )
@@ -1185,7 +1185,7 @@ async def facturer_groupe(
             status_code=422,
             detail=(
                 "QuickBooks exige un code de taxe : choisis-le dans "
-                "Gestion d'entreprise → Feuille de temps → Facturation → "
+                "Entreprises → Feuille de temps → Facturation → "
                 "Réglages QuickBooks (même QuickBooks)."
             ),
         )

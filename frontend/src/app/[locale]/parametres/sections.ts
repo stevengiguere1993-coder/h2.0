@@ -157,8 +157,8 @@ export const SECTIONS: Section[] = [
   },
   {
     key: "entreprise",
-    label: "Gestion d'entreprise",
-    title: "Gestion d'entreprise & comptabilité",
+    label: "Entreprises",
+    title: "Entreprises & comptabilité",
     icon: Building2,
     volet: "entreprises",
     cards: [
@@ -200,8 +200,8 @@ export const SECTIONS: Section[] = [
   },
   {
     key: "immobilier",
-    label: "Gestion immobilière",
-    title: "Gestion immobilière",
+    label: "Immobilier",
+    title: "Immobilier",
     icon: Home,
     volet: "immobilier",
     cards: [

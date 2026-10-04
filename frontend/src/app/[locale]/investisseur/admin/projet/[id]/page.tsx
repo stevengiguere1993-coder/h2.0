@@ -304,7 +304,7 @@ export default function AdminProjetPage() {
       if (body.statut === "aucun_projet") {
         setBanner(
           "Non applicable — cette compagnie n'a pas de projet dans la " +
-            "section optimisation (gestion d'entreprise)."
+            "section optimisation (volet Entreprises)."
         );
       } else if (body.statut === "sans_qbo") {
         setBanner(
@@ -947,7 +947,7 @@ export default function AdminProjetPage() {
                 <p className="py-4 text-center text-sm text-white/50">
                   {data.partenaires.length > 0
                     ? "Aucune participation active — activez un actionnaire ci-dessus."
-                    : "Aucun actionnaire dans la fiche entreprise (Parts & actionnaires) — ajoutez-les là (gestion d'entreprise), ils apparaîtront ici."}
+                    : "Aucun actionnaire dans la fiche entreprise (Parts & actionnaires) — ajoutez-les là (volet Entreprises), ils apparaîtront ici."}
                 </p>
               ) : (
                 <div className="space-y-3">
@@ -992,7 +992,7 @@ export default function AdminProjetPage() {
               </h2>
               <p className="mb-3 mt-1 text-[11px] text-white/35">
                 Toute la fiche est calculée automatiquement (pôle
-                locatif, gestion d&apos;entreprise, QuickBooks). Cette
+                locatif, pôle Entreprises, QuickBooks). Cette
                 carte contrôle seulement l&apos;habillage et le niveau
                 de transparence de ce que l&apos;investisseur voit.
               </p>
@@ -1145,7 +1145,7 @@ export default function AdminProjetPage() {
                       } else {
                         setBanner(
                           "Aucun dossier Drive lié à cette compagnie — " +
-                            "ouvrez sa fiche dans gestion d'entreprise " +
+                            "ouvrez sa fiche dans le volet Entreprises " +
                             "et liez son dossier dans la section " +
                             "« Documents Drive » (le même dossier sera " +
                             "utilisé ici), puis revenez cocher les " +
