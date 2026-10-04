@@ -267,10 +267,17 @@ PAGES: list[PageEntry] = [
        "/entreprises/signature"),
     _p("entreprises.abonnements", "Abonnements", "entreprises", "admin",
        "/entreprises/abonnements"),
-    # Saisie des reçus vers QuickBooks (Steven 2026-10-04) : crée des
-    # dépenses dans le QuickBooks des inc → direction par défaut.
-    _p("entreprises.recus", "Reçus (saisie vers QuickBooks)", "entreprises",
-       "admin", "/entreprises/recus"),
+    # Section « Comptabilité » (Steven 2026-10-04) : Nouveau reçu (saisie
+    # directe dans le QuickBooks des inc), Paiements (à venir) et Banque
+    # de reçus (Drive des factures de chaque entreprise). EN DÉVELOPPEMENT
+    # → propriétaires seulement par défaut (« visible seulement par le dev
+    # pour le moment ») ; l'ouvrir à quelqu'un = exception dans Paramètres
+    # → Permissions. Clé neuve exprès : le seed ne réécrit jamais un seuil
+    # déjà semé. /entreprises/recus (ancienne adresse de la saisie)
+    # redirige vers la section.
+    _p("entreprises.comptabilite", "Comptabilité (en développement)",
+       "entreprises", "owner", "/entreprises/comptabilite",
+       "/entreprises/recus"),
     # ── Investisseurs ──
     _p("investisseur.portefeuille", "Mon portefeuille", "investisseur",
        "employee", "/investisseur"),
