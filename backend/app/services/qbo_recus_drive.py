@@ -172,6 +172,7 @@ MOTS_EXCLUS = ("voir", "avant", "ancien", "anciens", "anciennes", "archive", "ar
 #: Au-delà de ce nombre de mots, un nom n'est plus un simple dossier de
 #: classement (« 1 - Factures 2026 » = 2 mots ; « 2026 & avant : Voir Impôts » = 4).
 MAX_MOTS_MOTCLE = 3
+_MOTS_LIAISON = {"et", "de", "des", "du", "d", "la", "le", "les", "l", "and", "of", "the", "a", "au", "aux"}
 ABREV_MOIS = {
     "Janvier": ("janv", "jan"), "Février": ("fev", "feb"), "Mars": ("mar",), "Avril": ("avr", "apr"),
     "Mai": ("may",), "Juin": ("jun",), "Juillet": ("juil", "jul"), "Août": ("aou", "aug"),
@@ -192,9 +193,11 @@ def correspond_dossier(nom_existant: Optional[str], voulu: str) -> int:
     if n == v:
         return 2
     # Mots-clés sur le nom COMPLET (préfixe gardé) : « 2026 - Reçus ».
-    liste = normaliser_nom(nom_existant, garder_prefixe=True).split()
-    mots = set(liste)
-    if len(liste) > MAX_MOTS_MOTCLE or (mots & set(MOTS_EXCLUS)):
+    mots = set(normaliser_nom(nom_existant, garder_prefixe=True).split())
+    # Longueur jugée sans le préfixe numérique ni les mots de liaison :
+    # « 2 - Factures et reçus » = 2 mots ; « 2026 & avant : Voir Impôts » = 4.
+    significatifs = [m for m in n.split() if m not in _MOTS_LIAISON]
+    if len(significatifs) > MAX_MOTS_MOTCLE or (mots & set(MOTS_EXCLUS)):
         return 0
     if v == "factures":
         return 1 if (mots & set(MOTS_FACTURES)) else 0
