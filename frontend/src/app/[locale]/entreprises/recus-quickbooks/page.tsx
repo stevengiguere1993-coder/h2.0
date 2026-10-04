@@ -21,7 +21,8 @@ import { QGTopbar } from "../layout";
  *
  * Pour chaque entreprise : connexion QuickBooks (compagnie inc:{id}) +
  * dossier Drive de la fiche. Les reçus des dépenses sont copiés dans
- * Factures / année / Mois sous « AAAA-MM-JJ Fournisseur 2134,02$.pdf ».
+ * Factures / année / « 10 - Octobre » sous « AAAA-MM-JJ Fournisseur 2134,02$.pdf »
+ * (fournisseur absent → « ND » ; pièce sans dépense → « Non classé » sous l'année).
  * Simulation = liste sans toucher au Drive. La nuit, le cron copie la
  * veille (3 jours de marge).
  */
@@ -62,7 +63,8 @@ type RapportEntreprise = {
   pieces_jointes: number;
   copies: number;
   prevus: number;
-  a_classer: number;
+  non_classes: number;
+  non_classes_deplaces?: number;
   ignores_deja_traites: number;
   ignores_drive: number;
   hors_periode: number;
@@ -71,6 +73,7 @@ type RapportEntreprise = {
   txn_supprimees?: number;
   erreurs: number;
   messages: string[];
+  infos?: string[];
   apercu: Apercu[];
 };
 
@@ -88,6 +91,8 @@ type Rapport = {
   dossiers_crees: string[];
   dossiers_a_creer: string[];
   dossiers_reconnus?: string[];
+  dossiers_renommes?: string[];
+  dossiers_a_renommer?: string[];
   totaux: { copies: number; prevus: number; ignores: number; erreurs: number };
 };
 
@@ -424,7 +429,7 @@ export default function RecusQuickbooksPage() {
         // la description détaillée est dans les étapes plus bas.
         subtitle={
           <span className="hidden sm:inline">
-            Copiés dans le Drive de chaque entreprise : Factures / année / mois.
+            Copiés dans le Drive de chaque entreprise : Factures / année / « 10 - Octobre ».
           </span>
         }
         rightSlot={
@@ -752,7 +757,10 @@ export default function RecusQuickbooksPage() {
             reçu de janvier déposé hier est classé dans Janvier. Rien n&apos;est
             rescanné. Un reçu déjà copié, ou un fichier portant déjà la même
             date, le même fournisseur et le même montant dans le dossier du
-            mois, n&apos;est jamais mis en double.
+            mois, n&apos;est jamais mis en double. Fournisseur absent dans
+            QuickBooks : « ND » dans le nom, classé dans son mois quand même.
+            Pièce sans dépense liée (aucune information) : dossier « Non
+            classé », à côté des mois.
           </p>
         </section>
 
@@ -807,7 +815,7 @@ export default function RecusQuickbooksPage() {
                             </td>
                             <td className="px-3 py-1.5 text-white">{j.nom_fichier}</td>
                             <td className="px-3 py-1.5 text-white/70">
-                              {j.txn_type || "À classer"} · {j.declencheur || "—"}
+                              {j.txn_type || "Non classé"} · {j.declencheur || "—"}
                             </td>
                             <td className="px-3 py-1.5">
                               <span
@@ -926,6 +934,14 @@ function RapportView({
           {(rapport.simulation ? rapport.dossiers_a_creer : rapport.dossiers_crees).join(" · ")}
         </p>
       ) : null}
+      {(rapport.simulation ? rapport.dossiers_a_renommer : rapport.dossiers_renommes)?.length ? (
+        <p className="text-xs text-white/70">
+          {rapport.simulation
+            ? "Mois à numéroter (pour rester en ordre) : "
+            : "Mois numérotés : "}
+          {(rapport.simulation ? rapport.dossiers_a_renommer : rapport.dossiers_renommes)!.join(" · ")}
+        </p>
+      ) : null}
 
       {rapport.entreprises.map((r) => (
         <details
@@ -941,13 +957,21 @@ function RapportView({
               {r.ignores_deja_traites} déjà traité(s) · {r.ignores_drive} déjà dans le
               Drive · {r.hors_periode} hors période · {r.hors_depenses} hors dépenses ·{" "}
               {r.txn_supprimees ? `${r.txn_supprimees} dépense(s) supprimée(s) dans QuickBooks · ` : ""}
-              {r.a_classer} à classer ·{" "}
+              {r.non_classes} non classé(s) ·{" "}
+              {r.non_classes_deplaces ? `${r.non_classes_deplaces} déplacé(s) vers « Non classé » · ` : ""}
               {r.erreurs} erreur(s)
             </span>
           </summary>
           {r.messages.length ? (
             <ul className="mt-2 space-y-0.5 text-xs text-rose-200">
               {r.messages.slice(0, 30).map((m, i) => (
+                <li key={i}>• {m}</li>
+              ))}
+            </ul>
+          ) : null}
+          {r.infos?.length ? (
+            <ul className="mt-2 space-y-0.5 text-xs text-white/80">
+              {r.infos.slice(0, 30).map((m, i) => (
                 <li key={i}>• {m}</li>
               ))}
             </ul>

@@ -79,7 +79,10 @@ QuickBooks est connectée (scope `inc:{entreprise_id}`) et dont la fiche a
 un dossier Drive, les reçus (pièces jointes image/PDF) de DÉPENSES
 AJOUTÉS OU MODIFIÉS dans QuickBooks depuis 2 jours (quelle que soit la
 date du reçu) sont copiés dans
-`<Drive entreprise>/Factures/<année>/<Mois>/AAAA-MM-JJ Fournisseur 2134,02$.ext`.
+`<Drive entreprise>/Factures/<année>/<MM - Mois>/AAAA-MM-JJ Fournisseur 2134,02$.ext`
+(fournisseur absent → « ND » ; pièce sans dépense liée → `Factures/<année>/Non classé`).
+Les anciens « À classer » dans les mois sont migrés vers « Non classé » et les
+mois sans chiffre devant sont renommés (« 09 - Septembre ») à chaque run.
 Anti-doublon : table `qbo_recus_drive` + même nom déjà présent dans le
 dossier du mois. Rattrapage / simulation : page Entreprises → « Reçus
 QuickBooks → Drive » (`POST /api/v1/qbo-recus-drive/executer`).

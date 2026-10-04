@@ -35,7 +35,7 @@ import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.drive_convention import DriveConvention
@@ -51,9 +51,18 @@ MOIS_FR = [
     "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
     "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre",
 ]
+#: Nom canonique du dossier de chaque mois : « 01 - Janvier » … le
+#: préfixe numérique garde les mois en ordre (Phil 2026-10-04).
+MOIS_DOSSIER = [f"{i:02d} - {m}" for i, m in enumerate(MOIS_FR, 1)]
 DOSSIER_FACTURES = "Factures"
-DOSSIER_A_CLASSER = "À classer"
-FOURNISSEUR_INCONNU = "Fournisseur inconnu"
+#: Pièces sans aucune information (pas de dépense liée) : dossier au même
+#: niveau que les mois, sous l'année (Phil 2026-10-04). Remplace l'ancien
+#: « À classer » qui vivait dans chaque mois.
+DOSSIER_NON_CLASSE = "Non classé"
+DOSSIER_A_CLASSER = "À classer"  # ancien nom, migré vers « Non classé »
+#: Fournisseur absent de la dépense : « ND », la date et le montant
+#: restent dans le nom et le reçu est classé dans son mois.
+FOURNISSEUR_INCONNU = "ND"
 #: Types de transaction QuickBooks considérés comme des DÉPENSES.
 TXN_DEPENSES = ("Purchase", "Bill")
 #: Pièces jointes acceptées (reçus) : extension → type MIME.
@@ -209,11 +218,17 @@ def correspond_dossier(nom_existant: Optional[str], voulu: str) -> int:
         if len(annees) > 1:
             return 0
         return 1 if v in mots else 0
-    if voulu in MOIS_FR:  # mois : nom complet ou abréviation, p. ex. « 10 - Oct 2026 »
+    mois_voulu = next((m for m in MOIS_FR if normaliser_nom(m) == v), None)
+    if mois_voulu:  # mois : nom complet ou abréviation, p. ex. « 10 - Oct 2026 »
         if v in mots:
             return 1
-        return 1 if any(m == a or m.startswith(v[:4]) for m in mots for a in ABREV_MOIS.get(voulu, ())) else 0
+        return 1 if any(m == a or m.startswith(v[:4]) for m in mots for a in ABREV_MOIS.get(mois_voulu, ())) else 0
     return 0
+
+
+def sans_prefixe_numerique(nom: Optional[str]) -> bool:
+    """Vrai si le nom de dossier ne commence pas par un chiffre (« Septembre »)."""
+    return not re.match(r"^\s*\d", nom or "")
 
 
 _RE_DATE = re.compile(r"(\d{4}-\d{2}-\d{2})")
@@ -541,6 +556,10 @@ class _Drive:
         #: « 2 - Factures et reçus ») : affichés dans le rapport pour
         #: vérification avant la copie.
         self.dossiers_reconnus: List[str] = []
+        #: Dossiers de mois renommés pour porter le préfixe numérique
+        #: (« Septembre » → « 09 - Septembre ») ; en simulation : à renommer.
+        self.dossiers_renommes: List[str] = []
+        self.dossiers_a_renommer: List[str] = []
 
     async def contenu(self, folder_id: str) -> List[Dict[str, Any]]:
         if folder_id in self._contenu:
@@ -567,11 +586,10 @@ class _Drive:
         fid, _ = await self.sous_dossier_nomme(parent_id, nom, chemin)
         return fid
 
-    async def sous_dossier_nomme(self, parent_id: str, nom: str, chemin: str) -> tuple:
-        """(id, nom réel) du sous-dossier équivalent à ``nom`` dans
-        ``parent_id`` (correspondance par score) ; créé s'il manque.
-        (None, nom) en simulation quand il faudrait le créer."""
-        from app.services.drive_api import FOLDER_MIME, create_folder
+    async def trouver(self, parent_id: str, nom: str) -> Optional[Dict[str, Any]]:
+        """Meilleur sous-dossier EXISTANT équivalent à ``nom`` (score de
+        ``correspond_dossier``), sans rien créer ; None s'il n'y en a pas."""
+        from app.services.drive_api import FOLDER_MIME
 
         meilleur: Optional[Dict[str, Any]] = None
         meilleur_score = 0
@@ -583,8 +601,46 @@ class _Drive:
                 score == meilleur_score and score > 0 and (f.get("name") or "") < (meilleur.get("name") or "")
             ):
                 meilleur, meilleur_score = f, score
+        return meilleur
+
+    async def renommer_mois(self, dossier: Dict[str, Any], mois_canonique: str, chemin_parent: str) -> str:
+        """Un dossier de mois sans chiffre devant (« Septembre ») prend le
+        nom canonique (« 09 - Septembre ») pour rester en ordre. Retourne
+        le nom (réel ou futur)."""
+        from app.services.drive_api import rename_file
+
+        reel = str(dossier.get("name") or "")
+        if not sans_prefixe_numerique(reel) or reel == mois_canonique:
+            return reel
+        rec = f"{chemin_parent} : « {reel} » → « {mois_canonique} »"
+        if self.simulation:
+            if rec not in self.dossiers_a_renommer:
+                self.dossiers_a_renommer.append(rec)
+            return reel
+        await rename_file(self.user_id, self.db, str(dossier["id"]), mois_canonique)
+        dossier["name"] = mois_canonique
+        self.dossiers_renommes.append(rec)
+        return mois_canonique
+
+    async def deplacer(self, fichier: Dict[str, Any], de_id: str, vers_id: str) -> None:
+        from app.services.drive_api import move_file
+
+        await move_file(self.user_id, self.db, str(fichier["id"]), vers_id, de_id)
+        self._contenu[de_id] = [f for f in self._contenu.get(de_id, []) if f.get("id") != fichier.get("id")]
+        fichier["parents"] = [vers_id]
+        self._ajouter(vers_id, fichier)
+
+    async def sous_dossier_nomme(self, parent_id: str, nom: str, chemin: str) -> tuple:
+        """(id, nom réel) du sous-dossier équivalent à ``nom`` dans
+        ``parent_id`` (correspondance par score) ; créé s'il manque.
+        (None, nom) en simulation quand il faudrait le créer."""
+        from app.services.drive_api import create_folder
+
+        meilleur = await self.trouver(parent_id, nom)
         if meilleur is not None:
             reel = str(meilleur.get("name") or nom)
+            if nom in MOIS_DOSSIER:
+                reel = await self.renommer_mois(meilleur, nom, chemin.rsplit(" / ", 1)[0])
             if normaliser_nom(reel) != normaliser_nom(nom):
                 rec = f"{chemin} → « {reel} »"
                 if rec not in self.dossiers_reconnus:
@@ -600,26 +656,86 @@ class _Drive:
         self.dossiers_crees.append(chemin)
         return str(cree["id"]), nom
 
-    async def dossier_mois(self, racine_id: str, nom_entreprise: str, d: date, a_classer: bool = False) -> Optional[str]:
-        """Dossier du mois (créé au besoin). Les chemins du rapport portent
-        les VRAIS noms des dossiers reconnus (« 2 - Factures »), pas le
-        libellé générique (Phil 2026-10-04)."""
+    async def dossier_annee(self, racine_id: str, nom_entreprise: str, annee: int) -> tuple:
+        """(id, chemin réel) du dossier Factures / <année> (créé au besoin)."""
         fid, reel = await self.sous_dossier_nomme(racine_id, DOSSIER_FACTURES, f"{nom_entreprise} / {DOSSIER_FACTURES}")
         chemin = f"{nom_entreprise} / {reel}"
         if fid is None:
-            return None
-        annee = str(d.year)
-        fid, reel = await self.sous_dossier_nomme(fid, annee, f"{chemin} / {annee}")
-        chemin = f"{chemin} / {reel}"
+            return None, chemin
+        fid, reel = await self.sous_dossier_nomme(fid, str(annee), f"{chemin} / {annee}")
+        return fid, f"{chemin} / {reel}"
+
+    async def dossier_mois(self, racine_id: str, nom_entreprise: str, d: date, non_classe: bool = False) -> Optional[str]:
+        """Dossier du mois « 10 - Octobre » (créé au besoin), ou « Non
+        classé » au même niveau que les mois pour une pièce sans dépense
+        liée. Les chemins du rapport portent les VRAIS noms des dossiers
+        reconnus (« 2 - Factures »), pas le libellé générique (Phil 2026-10-04)."""
+        fid, chemin = await self.dossier_annee(racine_id, nom_entreprise, d.year)
         if fid is None:
             return None
-        mois = MOIS_FR[d.month - 1]
-        fid, reel = await self.sous_dossier_nomme(fid, mois, f"{chemin} / {mois}")
-        chemin = f"{chemin} / {reel}"
-        if fid is None or not a_classer:
-            return fid
-        fid, _ = await self.sous_dossier_nomme(fid, DOSSIER_A_CLASSER, f"{chemin} / {DOSSIER_A_CLASSER}")
+        nom = DOSSIER_NON_CLASSE if non_classe else MOIS_DOSSIER[d.month - 1]
+        fid, _ = await self.sous_dossier_nomme(fid, nom, f"{chemin} / {nom}")
         return fid
+
+    async def migrer_a_classer(self, racine_id: str, nom_entreprise: str, rapport: Dict[str, Any]) -> List[tuple]:
+        """Ancien classement : « À classer » dans chaque mois. Nouveau :
+        « Non classé » sous l'année (Phil 2026-10-04). Déplace les fichiers
+        trouvés, met le dossier vide à la corbeille, numérote les mois
+        sans chiffre. Ne crée rien si Factures / année n'existent pas.
+        Retourne [(file_id, nouveau_dossier_id)] pour la mémoire."""
+        from app.services.drive_api import FOLDER_MIME, trash_file
+
+        deplaces: List[tuple] = []
+        factures = await self.trouver(racine_id, DOSSIER_FACTURES)
+        if factures is None:
+            return deplaces
+        chemin_f = f"{nom_entreprise} / {factures.get('name')}"
+        for an in list(await self.contenu(str(factures["id"]))):
+            if an.get("mimeType") != FOLDER_MIME:
+                continue
+            m_an = re.search(r"\b((?:19|20)\d{2})\b", an.get("name") or "")
+            if not m_an or correspond_dossier(an.get("name"), m_an.group(1)) == 0:
+                continue
+            chemin_an = f"{chemin_f} / {an.get('name')}"
+            non_classe_id: Optional[str] = None
+            for mois in list(await self.contenu(str(an["id"]))):
+                if mois.get("mimeType") != FOLDER_MIME:
+                    continue
+                canon = next((c for c in MOIS_DOSSIER if correspond_dossier(mois.get("name"), c) > 0), None)
+                if canon is None:
+                    continue
+                nom_mois = await self.renommer_mois(mois, canon, chemin_an)
+                for sous in list(await self.contenu(str(mois["id"]))):
+                    if sous.get("mimeType") != FOLDER_MIME or correspond_dossier(sous.get("name"), DOSSIER_A_CLASSER) != 2:
+                        continue
+                    chemin_ac = f"{chemin_an} / {nom_mois} / {sous.get('name')}"
+                    fichiers = [f for f in await self.contenu(str(sous["id"])) if f.get("mimeType") != FOLDER_MIME]
+                    sous_dossiers = [f for f in await self.contenu(str(sous["id"])) if f.get("mimeType") == FOLDER_MIME]
+                    if self.simulation:
+                        rapport["infos"].append(
+                            f"« {chemin_ac} » : {len(fichiers)} fichier(s) à déplacer vers « {DOSSIER_NON_CLASSE} »"
+                            + (" puis dossier à mettre à la corbeille." if not sous_dossiers else ".")
+                        )
+                        rapport["non_classes_deplaces"] += len(fichiers)
+                        continue
+                    if fichiers and non_classe_id is None:
+                        non_classe_id, _ = await self.sous_dossier_nomme(
+                            str(an["id"]), DOSSIER_NON_CLASSE, f"{chemin_an} / {DOSSIER_NON_CLASSE}"
+                        )
+                    for f in fichiers:
+                        await self.deplacer(f, str(sous["id"]), str(non_classe_id))
+                        deplaces.append((str(f["id"]), str(non_classe_id)))
+                    rapport["non_classes_deplaces"] += len(fichiers)
+                    if not sous_dossiers:
+                        await trash_file(self.user_id, self.db, str(sous["id"]))
+                        self._contenu[str(mois["id"])] = [
+                            x for x in self._contenu.get(str(mois["id"]), []) if x.get("id") != sous.get("id")
+                        ]
+                    rapport["infos"].append(
+                        f"« {chemin_ac} » : {len(fichiers)} fichier(s) déplacé(s) vers « {DOSSIER_NON_CLASSE} »"
+                        + (" ; dossier mis à la corbeille." if not sous_dossiers else ".")
+                    )
+        return deplaces
 
     async def fichier_existant(self, folder_id: str, nom: str) -> Optional[str]:
         """Fichier déjà présent dans le dossier du mois : même nom, sinon
@@ -665,7 +781,8 @@ def _nouveau_rapport_entreprise(e: Dict[str, Any]) -> Dict[str, Any]:
         "pieces_jointes": 0,
         "copies": 0,
         "prevus": 0,
-        "a_classer": 0,
+        "non_classes": 0,
+        "non_classes_deplaces": 0,
         "ignores_deja_traites": 0,
         "ignores_drive": 0,
         "hors_periode": 0,
@@ -674,6 +791,7 @@ def _nouveau_rapport_entreprise(e: Dict[str, Any]) -> Dict[str, Any]:
         "txn_supprimees": 0,
         "erreurs": 0,
         "messages": [],
+        "infos": [],
         "apercu": [],
     }
 
@@ -700,6 +818,22 @@ async def _traiter_entreprise(
         return
     realm = str(qbo.realm_id or e.get("qbo_realm_id") or "")
     racine = e["drive_folder_id"]
+
+    # Ancien classement « À classer » dans les mois → « Non classé » sous
+    # l'année, et mois numérotés. Fait avant la copie, à chaque run.
+    try:
+        deplaces = await drive.migrer_a_classer(racine, e["name"], rapport)
+        if deplaces and not simulation:
+            for file_id, dossier_id in deplaces:
+                await db.execute(
+                    update(QboRecuDrive)
+                    .where(QboRecuDrive.drive_file_id == file_id)
+                    .values(drive_folder_id=dossier_id)
+                )
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        rapport["erreurs"] += 1
+        rapport["messages"].append(f"Drive : migration des « À classer » impossible ({str(exc)[:160]}).")
 
     try:
         if pieces_depuis is not None:
@@ -789,7 +923,8 @@ async def _traiter_entreprise(
             rapport["hors_depenses"] += 1
             continue
 
-        # Pièce jointe sans transaction liée → « À classer » du mois de dépôt.
+        # Pièce jointe sans transaction liée (aucune info) → « Non classé »
+        # de l'année de dépôt, au même niveau que les mois.
         cibles: List[Dict[str, Any]] = []
         if not refs:
             d_depot = _date_iso(((att.get("MetaData") or {}).get("CreateTime")))
@@ -805,7 +940,7 @@ async def _traiter_entreprise(
                     "fournisseur": FOURNISSEUR_INCONNU,
                     "montant": None,
                     "nom": f"{d_depot.isoformat()} {nettoyer_nom(base)}{ext}",
-                    "a_classer": True,
+                    "non_classe": True,
                 }
             )
         else:
@@ -844,7 +979,7 @@ async def _traiter_entreprise(
                         "nom": nom_indexe(
                             nom_fichier(info["date"], info["fournisseur"], info["montant"], ext), t, v, att_id
                         ),
-                        "a_classer": False,
+                        "non_classe": False,
                     }
                 )
 
@@ -856,7 +991,7 @@ async def _traiter_entreprise(
                 rapport["hors_periode"] += 1
                 continue
             try:
-                dossier = await drive.dossier_mois(racine, e["name"], c["date"], a_classer=c["a_classer"])
+                dossier = await drive.dossier_mois(racine, e["name"], c["date"], non_classe=c["non_classe"])
             except Exception as exc:  # noqa: BLE001
                 rapport["erreurs"] += 1
                 rapport["messages"].append(f"Drive : dossier du mois inaccessible ({str(exc)[:160]}).")
@@ -883,8 +1018,8 @@ async def _traiter_entreprise(
                         "fournisseur": c["fournisseur"],
                         "montant": c["montant"],
                         "nom": c["nom"],
-                        "dossier": f"{DOSSIER_FACTURES}/{c['date'].year}/{MOIS_FR[c['date'].month - 1]}"
-                        + (f"/{DOSSIER_A_CLASSER}" if c["a_classer"] else ""),
+                        "dossier": f"{DOSSIER_FACTURES}/{c['date'].year}/"
+                        + (DOSSIER_NON_CLASSE if c["non_classe"] else MOIS_DOSSIER[c["date"].month - 1]),
                         "statut": "doublon_drive" if existant else ("prevu" if simulation else "copie"),
                     }
                 )
@@ -897,8 +1032,8 @@ async def _traiter_entreprise(
                     db.add(ligne)
                     deja.add((att_id, c["txn_type"], c["txn_id"]))
                 continue
-            if c["a_classer"]:
-                rapport["a_classer"] += 1
+            if c["non_classe"]:
+                rapport["non_classes"] += 1
             if simulation:
                 rapport["prevus"] += 1
                 continue
@@ -974,6 +1109,8 @@ async def executer(
         "dossiers_crees": [],
         "dossiers_a_creer": [],
         "dossiers_reconnus": [],
+        "dossiers_renommes": [],
+        "dossiers_a_renommer": [],
         "totaux": {"copies": 0, "prevus": 0, "ignores": 0, "erreurs": 0},
     }
     try:
@@ -1021,6 +1158,8 @@ async def executer(
         rapport["dossiers_crees"] = drive.dossiers_crees
         rapport["dossiers_a_creer"] = drive.dossiers_a_creer
         rapport["dossiers_reconnus"] = drive.dossiers_reconnus
+        rapport["dossiers_renommes"] = drive.dossiers_renommes
+        rapport["dossiers_a_renommer"] = drive.dossiers_a_renommer
         return rapport
     finally:
         DERNIER_RUN.update(
