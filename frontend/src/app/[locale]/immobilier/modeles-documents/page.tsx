@@ -142,7 +142,7 @@ export default function ModelesDocumentsPage() {
     <>
       <ImmobilierTopbar
         breadcrumbs={[
-          { label: "Gestion immobilière", href: "/immobilier" },
+          { label: "Immobilier", href: "/immobilier" },
           { label: "Modèles de documents" }
         ]}
       />

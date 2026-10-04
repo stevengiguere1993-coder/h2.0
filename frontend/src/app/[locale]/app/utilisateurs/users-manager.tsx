@@ -37,8 +37,8 @@ type User = {
 const VOLET_OPTIONS: { key: string; label: string }[] = [
   { key: "construction", label: "Construction" },
   { key: "prospection", label: "Prospection" },
-  { key: "immobilier", label: "Gestion immobilière" },
-  { key: "entreprises", label: "Gestion d'entreprises" },
+  { key: "immobilier", label: "Immobilier" },
+  { key: "entreprises", label: "Entreprises" },
   { key: "investisseur", label: "Investisseurs" },
   { key: "developpement_logiciel", label: "Dév. logiciel" },
   { key: "communication", label: "Communication" }
@@ -489,7 +489,7 @@ export function UsersManager({
       {variant === "immobilier" ? (
         <ImmobilierTopbar
           breadcrumbs={[
-            { label: "Gestion immobilière", href: "/immobilier" },
+            { label: "Immobilier", href: "/immobilier" },
             { label: "Utilisateurs & accès" }
           ]}
           rightSlot={addBtn}
@@ -861,7 +861,7 @@ export function UsersManager({
                           </label>
                           <p className="mt-1 text-xs text-white/60">
                             Coche les immeubles que cet utilisateur peut voir
-                            en gestion immobilière.
+                            dans le volet Immobilier.
                           </p>
                         </div>
                         {hasImmChanges ? (
@@ -882,7 +882,7 @@ export function UsersManager({
 
                       {allImmeubles.length === 0 ? (
                         <p className="mt-3 rounded border border-dashed border-brand-800 bg-brand-950 px-3 py-4 text-center text-xs text-white/50">
-                          Aucun immeuble. Crée-en dans Gestion immobilière.
+                          Aucun immeuble. Crée-en dans Immobilier.
                         </p>
                       ) : (
                         <ul className="mt-3 max-h-80 space-y-1 overflow-y-auto">

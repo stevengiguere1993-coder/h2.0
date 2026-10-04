@@ -156,7 +156,7 @@ export default function PilotagePage({
     <>
       <EntreprisesTopbar
         breadcrumbs={[
-          { label: "Gestion d'entreprises", href: "/entreprises" },
+          { label: "Entreprises", href: "/entreprises" },
           {
             label: ent?.name || "Entreprise",
             href: `/entreprises/${entrepriseId}`

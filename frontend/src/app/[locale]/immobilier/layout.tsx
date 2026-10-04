@@ -223,7 +223,7 @@ export default function ImmobilierLayout({
             <div>
               <p className="mb-2 flex items-center gap-1.5 px-3 text-xs font-semibold uppercase tracking-wider text-accent-500">
                 <Sparkles className="h-3 w-3" />
-                Gestion immobilière
+                Immobilier
               </p>
               <ul className="space-y-0.5">
                 {NAV.filter((item) => canSeeHref(item.href)).map((item) => {
@@ -287,7 +287,7 @@ function NoAccess() {
     <div className="mx-auto mt-20 max-w-md rounded-2xl border border-rose-500/40 bg-rose-500/5 p-6 text-center">
       <h2 className="text-lg font-bold text-white">Accès refusé</h2>
       <p className="mt-2 text-sm text-white/60">
-        Ton compte n&apos;a pas accès au volet « Gestion immobilière ».
+        Ton compte n&apos;a pas accès au volet « Immobilier ».
       </p>
     </div>
   );

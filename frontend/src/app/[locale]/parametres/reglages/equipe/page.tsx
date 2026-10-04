@@ -12,7 +12,7 @@ export default function ReglagesEquipePage() {
         <div>
           <h1 className="text-2xl font-bold text-white">Équipe</h1>
           <p className="mt-1 max-w-2xl text-sm text-white/60">
-            Membres ayant accès au volet Gestion d&apos;entreprises.
+            Membres ayant accès au volet Entreprises.
           </p>
         </div>
       </header>

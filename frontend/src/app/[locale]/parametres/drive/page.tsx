@@ -1652,6 +1652,19 @@ const POLES_KRATOS = [
   "Téléphonie"
 ] as const;
 
+// Libellés d'affichage des pôles. Les CLÉS ci-dessus (champ `pole` des
+// modules backend, props `pole` des <PageDriveSection>) restent
+// inchangées ; seuls les noms montrés dans les onglets suivent les menus
+// du site (« Entreprises », « Immobilier »).
+const LIBELLES_POLES: Record<string, string> = {
+  "Gestion d'entreprises": "Entreprises",
+  "Gestion immobilière": "Immobilier"
+};
+
+function libellePole(pole: string): string {
+  return LIBELLES_POLES[pole] ?? pole;
+}
+
 function PageModulesSection() {
   const [modules, setModules] = useState<DrivePageModule[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1832,7 +1845,7 @@ function PageModulesSection() {
                       selected ? "text-white" : "text-white/70"
                     }`}
                   >
-                    {p.pole}
+                    {libellePole(p.pole)}
                   </span>
                   <span
                     className={`mt-0.5 text-[10px] font-medium ${

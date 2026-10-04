@@ -176,7 +176,7 @@ export default function LocatairesPage() {
     <>
       <ImmobilierTopbar
         breadcrumbs={[
-          { label: "Gestion immobilière", href: "/immobilier" },
+          { label: "Immobilier", href: "/immobilier" },
           { label: "Locataires" }
         ]}
         rightSlot={

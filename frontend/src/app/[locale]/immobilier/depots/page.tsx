@@ -204,7 +204,7 @@ export default function DepotsPage() {
     <>
       <ImmobilierTopbar
         breadcrumbs={[
-          { label: "Gestion immobilière", href: "/immobilier" },
+          { label: "Immobilier", href: "/immobilier" },
           { label: "Dépôts de garantie" }
         ]}
       />

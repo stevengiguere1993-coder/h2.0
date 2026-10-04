@@ -9,8 +9,8 @@ const CLE = "kratos.parametres.origine";
 
 const POLES: [string, string][] = [
   ["/app", "Construction"],
-  ["/entreprises", "Gestion d'entreprises"],
-  ["/immobilier", "Gestion immobilière"],
+  ["/entreprises", "Entreprises"],
+  ["/immobilier", "Immobilier"],
   ["/prospection", "Prospection"],
   ["/dev-logiciel", "Dev logiciel"],
   ["/investisseurs", "Investisseurs"],

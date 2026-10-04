@@ -2103,7 +2103,7 @@ function QboFacturationConfig() {
 
       {open && !opts?.connected && (
         <p className="mt-3 text-sm text-[var(--qg-text-faint)]">
-          Connecte d&apos;abord le QuickBooks de Gestion d&apos;entreprise :
+          Connecte d&apos;abord le QuickBooks du pôle Entreprises :
           Paramètres → Comptabilité → « QuickBooks — autres pôles ».
         </p>
       )}
