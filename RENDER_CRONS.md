@@ -89,8 +89,11 @@ fournisseur n'est pas là »).
 sont vidés (fichier daté → son mois, sans date → « Non classé ») puis mis à la
 corbeille, les fichiers datés de « Non classé » rejoignent leur mois, les mois
 sans chiffre devant sont renommés (« 09 - Septembre »). Chaque déplacement est
-noté dans le rapport et dans la mémoire (`detail`). Un reçu copié « brut » puis
-rattaché à une dépense est renommé avec elle, pas recopié.
+noté dans le rapport et dans la mémoire (`detail`). Une entreprise qui a un
+dossier Drive mais pas de connexion QuickBooks est reclassée aussi (sans copie).
+Un reçu copié « brut » puis rattaché à une dépense est renommé avec elle, pas
+recopié (recopié seulement si le fichier brut n'est plus dans le Drive) ;
+« Annuler cet import » rétablit alors son nom d'origine au lieu de le jeter.
 Anti-doublon : table `qbo_recus_drive` + même nom déjà présent dans le
 dossier du mois. Rattrapage / simulation / « Reclasser » : page Paramètres →
 Drive → « Reçus QuickBooks → Drive » (`POST /api/v1/qbo-recus-drive/executer`,

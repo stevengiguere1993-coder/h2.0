@@ -125,6 +125,8 @@ type Rapport = {
   dossiers_reconnus?: string[];
   dossiers_renommes?: string[];
   dossiers_a_renommer?: string[];
+  // Deux dossiers pour le même mois (« Juin » et « 06 - Juin ») : à fusionner.
+  mois_en_double?: string[];
   totaux: {
     copies: number;
     prevus: number;
@@ -152,7 +154,8 @@ type Run = {
   declencheur: string | null;
   progression: {
     entreprise: string;
-    // "reclassement" pendant le rangement des « À classer » d'une entreprise.
+    // "reclassement" pendant le rangement des « À classer » d'une entreprise,
+    // "quickbooks" pendant la lecture des pièces jointes.
     phase?: string;
     piece: number;
     pieces_jointes: number;
@@ -321,7 +324,7 @@ export default function RecusQuickbooksPage() {
   async function annuler(run: RunRecent | { run_id: string; copies: number }) {
     if (
       !window.confirm(
-        `Annuler cet import ? ${run.copies} fichier(s) copié(s) seront mis à la corbeille du Drive et la mémoire de ce run sera effacée.`
+        `Annuler cet import ? Les ${run.copies} fichier(s) copié(s) par ce run seront mis à la corbeille du Drive (un reçu déjà copié puis renommé avec sa dépense reprend simplement son nom d'origine) et la mémoire de ce run sera effacée.`
       )
     )
       return;
@@ -343,11 +346,14 @@ export default function RecusQuickbooksPage() {
       }
       const res = (await r.json()) as {
         fichiers_corbeille: number;
+        fichiers_restaures?: number;
         lignes_effacees: number;
         erreurs: string[];
       };
       setErr(
-        `Import annulé : ${res.fichiers_corbeille} fichier(s) à la corbeille, ${res.lignes_effacees} entrée(s) oubliée(s)${
+        `Import annulé : ${res.fichiers_corbeille} fichier(s) à la corbeille, ${
+          res.fichiers_restaures ? `${res.fichiers_restaures} reçu(s) remis sous leur nom d'origine, ` : ""
+        }${res.lignes_effacees} entrée(s) oubliée(s)${
           res.erreurs.length ? ` · ${res.erreurs.length} erreur(s) : ${res.erreurs.slice(0, 3).join(" ; ")}` : ""
         }.`
       );
@@ -386,7 +392,7 @@ export default function RecusQuickbooksPage() {
         jours.set(cle, g);
       }
       g.lignes.push(j);
-      if (j.statut === "copie") g.copies += 1;
+      if (j.statut === "copie" || j.statut === "rattache") g.copies += 1;
       else if (j.statut === "erreur") g.erreurs += 1;
       else g.doublons += 1;
       const nom = j.entreprise_id != null ? noms.get(j.entreprise_id) : undefined;
@@ -629,7 +635,8 @@ export default function RecusQuickbooksPage() {
             « Documents Drive » de sa fiche, ou retrouvé automatiquement dans le
             dossier partagé des entreprises (même nom). Coche des entreprises
             pour limiter un run ; sans coche, toutes les entreprises prêtes sont
-            traitées. « Ouvrir le Drive » affiche ici même le Drive de
+            traitées. « Reclasser » traite toute entreprise qui a un dossier
+            Drive, connectée à QuickBooks ou non. « Ouvrir le Drive » affiche ici même le Drive de
             l&apos;entreprise, à partir de son dossier Factures.
           </p>
           {etat === null ? (
@@ -661,7 +668,7 @@ export default function RecusQuickbooksPage() {
                         <input
                           type="checkbox"
                           checked={selection.has(e.entreprise_id)}
-                          disabled={!e.prete}
+                          disabled={!e.prete && !e.drive_folder_id}
                           onChange={(ev) =>
                             setSelection((s) => {
                               const n = new Set(s);
@@ -986,13 +993,19 @@ export default function RecusQuickbooksPage() {
               {etat.run.progression
                 ? etat.run.progression.phase === "reclassement"
                   ? ` — ${etat.run.progression.entreprise} : rangement des « À classer » dans les mois`
-                  : ` — ${etat.run.progression.entreprise} : pièce ${etat.run.progression.piece}/${etat.run.progression.pieces_jointes}, ${etat.run.progression.copies} reçu(s) ${etat.run.simulation ? "prévus" : "copiés"}`
+                  : etat.run.progression.phase === "quickbooks"
+                    ? ` — ${etat.run.progression.entreprise} : lecture des pièces jointes QuickBooks`
+                    : ` — ${etat.run.progression.entreprise} : pièce ${etat.run.progression.piece}/${etat.run.progression.pieces_jointes}, ${etat.run.progression.copies} reçu(s) ${etat.run.simulation ? "prévus" : "copiés"}`
                 : "…"}
               <button
                 type="button"
                 onClick={() => void arreter()}
                 className="btn-outline-rose btn-xs ml-3"
-                title="S'arrête à la prochaine pièce jointe ; ce qui est déjà copié reste copié (annulable ensuite)"
+                title={
+                  etat.run.declencheur === "reclassement"
+                    ? "S'arrête au prochain dossier ; ce qui est déjà déplacé reste déplacé"
+                    : "S'arrête à la prochaine pièce jointe ; ce qui est déjà copié reste copié (annulable ensuite)"
+                }
               >
                 Arrêter
               </button>
@@ -1061,8 +1074,11 @@ export default function RecusQuickbooksPage() {
             date, le même fournisseur et le même montant dans le dossier du
             mois, n&apos;est jamais mis en double. Fournisseur absent dans
             QuickBooks : « ND » dans le nom, classé dans son mois quand même.
-            Pièce sans dépense liée (aucune information) : dossier « Non
-            classé », à côté des mois.
+            Pièce sans dépense liée (ni fournisseur ni montant) : classée dans
+            le mois de son dépôt, nommée « AAAA-MM-JJ nom d&apos;origine » ;
+            seule une pièce sans aucune date va dans « Non classé », à côté des
+            mois. Avant la copie, les anciens « À classer » sont rangés dans
+            leurs mois (même chose que le bouton « Reclasser »).
           </p>
         </section>
 
@@ -1133,12 +1149,13 @@ export default function RecusQuickbooksPage() {
                             </td>
                             <td className="px-3 py-1.5 text-white">{j.nom_fichier}</td>
                             <td className="px-3 py-1.5 text-white/70">
-                              {j.txn_type || "Non classé"} · {j.declencheur || "—"}
+                              {j.txn_type || (j.date_recu ? "Sans dépense" : "Non classé")} ·{" "}
+                              {j.declencheur || "—"}
                             </td>
                             <td className="px-3 py-1.5">
                               <span
                                 className={`badge ${
-                                  j.statut === "copie"
+                                  j.statut === "copie" || j.statut === "rattache"
                                     ? "badge-emerald"
                                     : j.statut === "erreur"
                                       ? "badge-rose"
@@ -1148,9 +1165,11 @@ export default function RecusQuickbooksPage() {
                               >
                                 {j.statut === "copie"
                                   ? "copié"
-                                  : j.statut === "ignore_doublon"
-                                    ? "déjà dans le Drive"
-                                    : j.statut}
+                                  : j.statut === "rattache"
+                                    ? "copié, renommé avec sa dépense"
+                                    : j.statut === "ignore_doublon"
+                                      ? "déjà dans le Drive"
+                                      : j.statut}
                               </span>
                             </td>
                             <td className="px-3 py-1.5 text-right">
@@ -1275,7 +1294,7 @@ function RapportView({
           {rapport.reclassement
             ? `${rapport.simulation ? "Simulation du reclassement" : "Reclassement"} des « À classer » dans les mois`
             : `${rapport.simulation ? "Simulation" : "Copie"} du ${rapport.depuis} au ${rapport.jusqua}`}
-          {rapport.arrete ? " (arrêtée)" : ""}
+          {rapport.arrete ? (rapport.reclassement ? " (arrêté)" : " (arrêtée)") : ""}
         </span>
         {onAnnuler ? (
           <button
@@ -1290,7 +1309,7 @@ function RapportView({
           </button>
         ) : null}
         <span className="ml-2 text-white/70">
-          terminée {fmtDateTime(run.termine_a)} ·{" "}
+          {rapport.reclassement ? "terminé" : "terminée"} {fmtDateTime(run.termine_a)} ·{" "}
           {rapport.reclassement
             ? `${t.reclasses ?? 0} fichier(s) ${rapport.simulation ? "à déplacer" : "déplacé(s)"} dans leur mois · ${t.non_classes_deplaces ?? 0} vers « Non classé »`
             : `${
@@ -1338,6 +1357,13 @@ function RapportView({
             ? "Mois à numéroter (pour rester en ordre) : "
             : "Mois numérotés : "}
           {(rapport.simulation ? rapport.dossiers_a_renommer : rapport.dossiers_renommes)!.join(" · ")}
+        </p>
+      ) : null}
+
+      {rapport.mois_en_double?.length ? (
+        <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-white">
+          Deux dossiers pour le même mois (non renommés, à fusionner à la main) :{" "}
+          {rapport.mois_en_double.join(" · ")}
         </p>
       ) : null}
 

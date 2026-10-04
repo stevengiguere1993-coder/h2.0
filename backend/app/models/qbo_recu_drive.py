@@ -50,7 +50,8 @@ class QboRecuDrive(Base):
     realm_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     attachable_id: Mapped[str] = mapped_column(String(64), nullable=False)
     #: « Purchase » (dépense / chèque / carte), « Bill » (facture
-    #: fournisseur) ou « » (pièce jointe sans transaction → « À classer »).
+    #: fournisseur) ou « » (pièce jointe sans transaction → classée dans le
+    #: mois de son dépôt ; « Non classé » seulement sans aucune date).
     txn_type: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     txn_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
 
@@ -62,7 +63,9 @@ class QboRecuDrive(Base):
     drive_folder_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     drive_file_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     #: « copie » (téléversé), « ignore_doublon » (un fichier du même nom
-    #: existait déjà dans le dossier du mois), « erreur ».
+    #: existait déjà dans le dossier du mois), « rattache » (reçu brut dont
+    #: le fichier a été renommé avec sa dépense : la ligne de la dépense
+    #: porte désormais ce fichier), « erreur ».
     statut: Mapped[str] = mapped_column(String(24), nullable=False, default="copie")
     detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     #: « rattrapage » (bouton), « cron » (nuit).

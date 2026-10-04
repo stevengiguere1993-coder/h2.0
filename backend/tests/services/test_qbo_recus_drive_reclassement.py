@@ -38,6 +38,11 @@ class FauxDrive:
         self.corbeille: List[str] = []
         self.renommes: List[tuple] = []
         self.deplacements: List[tuple] = []
+        #: Fichiers absents du PREMIER listing de leur dossier (troncature).
+        self.masques: set = set()
+        self._listes: set = set()
+        #: Dossiers dont le listing lève une erreur (droits, panne Drive).
+        self.en_panne: set = set()
 
     def ajouter(self, parent: Optional[str], name: str, mime: str = "application/pdf") -> str:
         self.n += 1
@@ -67,7 +72,20 @@ class FauxDrive:
 
     # ── API Drive simulée ────────────────────────────────────────────
     async def list_folder_contents(self, user_id, db, folder_id, *, page_size=100, page_token=None, order_by="folder,name"):
-        return {"files": self.enfants(folder_id), "next_page_token": None}
+        if folder_id in self.en_panne:
+            raise RuntimeError("Google Drive a refusé cette opération")
+        files = self.enfants(folder_id)
+        if folder_id not in self._listes:
+            self._listes.add(folder_id)
+            files = [f for f in files if f["id"] not in self.masques]
+        return {"files": files, "next_page_token": None}
+
+    async def get_file_metadata(self, user_id, db, file_id):
+        from app.services.drive_exceptions import DriveNotFoundError
+
+        if file_id not in self.fichiers:
+            raise DriveNotFoundError("introuvable")
+        return dict(self.fichiers[file_id])
 
     async def move_file(self, user_id, db, file_id, new_parent_folder_id, old_parent_folder_id=None):
         f = self.fichiers[file_id]
@@ -91,7 +109,7 @@ class FauxDrive:
 @pytest.fixture
 def faux(monkeypatch) -> FauxDrive:
     d = FauxDrive()
-    for nom in ("list_folder_contents", "move_file", "trash_file", "create_folder", "rename_file"):
+    for nom in ("list_folder_contents", "move_file", "trash_file", "create_folder", "rename_file", "get_file_metadata"):
         monkeypatch.setattr(drive_api, nom, getattr(d, nom))
     return d
 
@@ -243,6 +261,8 @@ def test_rattacher_renomme_sans_recopier(faux: FauxDrive) -> None:
         ("Invoice_52_2026-06-16.pdf", date(2026, 6, 16)),
         ("2026-13-45 bidon.pdf", None),
         ("Facture 12120.pdf", None),
+        ("INV-2026-01-0123.pdf", None),
+        ("12026-06-01 x.pdf", None),
         ("facture-A20.pdf", None),
         ("tel 5141234567.pdf", None),
         ("1999-01-01 trop vieux.pdf", None),
@@ -268,3 +288,105 @@ def test_cible_sans_depense_sans_aucune_date() -> None:
     assert c["non_classe"] is True and c["date_recu"] is None
     assert c["date"] == date(2026, 10, 4)
     assert c["nom"] == "facture-A7.pdf"
+
+
+@pytest.mark.parametrize(
+    "nom, voulu, attendu",
+    [
+        ("Maison", "05 - Mai", 0),
+        ("Maintenance", "05 - Mai", 0),
+        ("Marseille", "03 - Mars", 0),
+        ("Octogone", "10 - Octobre", 0),
+        ("Mai", "05 - Mai", 2),
+        ("05 - Mai", "05 - Mai", 2),
+        ("10 - Oct 2026", "10 - Octobre", 1),
+        ("Sept", "09 - Septembre", 1),
+        ("fevr 2026", "02 - Février", 1),
+        ("May", "05 - Mai", 1),
+    ],
+)
+def test_correspond_dossier_mois(nom, voulu, attendu) -> None:
+    assert svc.correspond_dossier(nom, voulu) == attendu
+
+
+def test_maison_n_est_pas_mai(faux: FauxDrive) -> None:
+    racine = faux.dossier(None, "Inc")
+    an = faux.dossier(faux.dossier(racine, "Factures"), "2026")
+    maison = faux.dossier(an, "Maison")
+    faux.ajouter(maison, "contrat.pdf")
+    ac = faux.dossier(an, "À classer")
+    faux.ajouter(ac, "2026-05-10 recu.pdf")
+    rapport = _rapport()
+    asyncio.run(svc._Drive(1, None, simulation=False).reclasser(racine, "Inc", rapport))
+    assert faux.fichiers[maison]["name"] == "Maison"
+    assert [f["name"] for f in faux.enfants(maison)] == ["contrat.pdf"]
+    mai = faux.trouver(an, "05 - Mai")
+    assert mai and mai != maison and faux.trouver(mai, "2026-05-10 recu.pdf")
+
+
+def test_mois_en_double_pas_renomme(faux: FauxDrive) -> None:
+    racine = faux.dossier(None, "Inc")
+    an = faux.dossier(faux.dossier(racine, "Factures"), "2026")
+    juin = faux.dossier(an, "Juin")
+    juin_canon = faux.dossier(an, "06 - Juin")
+    ac = faux.dossier(juin, "À classer")
+    faux.ajouter(ac, "2026-06-01 facture-A7.pdf")
+    drive = svc._Drive(1, None, simulation=False)
+    rapport = _rapport()
+    asyncio.run(drive.reclasser(racine, "Inc", rapport))
+    assert faux.fichiers[juin]["name"] == "Juin"  # pas de deuxième « 06 - Juin »
+    assert drive.mois_en_double and "« Juin » et « 06 - Juin »" in drive.mois_en_double[0]
+    assert faux.trouver(juin_canon, "2026-06-01 facture-A7.pdf")
+    assert ac in faux.corbeille
+
+
+def test_listing_tronque_pas_de_corbeille(faux: FauxDrive) -> None:
+    racine = faux.dossier(None, "Inc")
+    an = faux.dossier(faux.dossier(racine, "Factures"), "2026")
+    ac = faux.dossier(an, "À classer")
+    faux.ajouter(ac, "2026-06-01 a.pdf")
+    cache = faux.ajouter(ac, "2026-06-02 b.pdf")
+    faux.masques.add(cache)  # absent du premier listing
+    rapport = _rapport()
+    asyncio.run(svc._Drive(1, None, simulation=False).reclasser(racine, "Inc", rapport))
+    assert ac not in faux.corbeille
+    assert faux.fichiers[cache]["parents"] == [ac] and not faux.fichiers[cache]["trashed"]
+    assert any("non mis à la corbeille" in m for m in rapport["messages"])
+
+
+def test_annee_en_panne_n_arrete_pas_les_autres(faux: FauxDrive) -> None:
+    racine = faux.dossier(None, "Inc")
+    factures = faux.dossier(racine, "Factures")
+    a2025 = faux.dossier(factures, "2025")
+    a2026 = faux.dossier(factures, "2026")
+    faux.en_panne.add(a2025)
+    ac = faux.dossier(a2026, "À classer")
+    fid = faux.ajouter(ac, "2026-06-01 a.pdf")
+    rapport = _rapport()
+    deplaces = asyncio.run(svc._Drive(1, None, simulation=False).reclasser(racine, "Inc", rapport))
+    assert [d[0] for d in deplaces] == [fid]
+    assert rapport["erreurs"] == 1 and any("2025" in m for m in rapport["messages"])
+
+
+def test_arret_demande_ne_deplace_rien(faux: FauxDrive) -> None:
+    ids = _arbre(faux)
+    svc.DERNIER_RUN["arret_demande"] = True
+    try:
+        rapport = _rapport()
+        deplaces = asyncio.run(svc._Drive(1, None, simulation=False).reclasser(ids["racine"], "MGV", rapport))
+    finally:
+        svc.DERNIER_RUN["arret_demande"] = False
+    assert deplaces == [] and faux.deplacements == []
+
+
+def test_rattacher_fichier_a_la_corbeille(faux: FauxDrive) -> None:
+    racine = faux.dossier(None, "Inc")
+    juin = faux.dossier(racine, "06 - Juin")
+    brut = faux.ajouter(juin, "2026-06-01 facture-A7.pdf")
+    faux.fichiers[brut]["trashed"] = True
+    drive = svc._Drive(1, None, simulation=False)
+    with pytest.raises(svc.BrutIntrouvable):
+        asyncio.run(drive.rattacher(brut, juin, juin, "2026-06-01 Rona 1,00$.pdf"))
+    with pytest.raises(svc.BrutIntrouvable):
+        asyncio.run(drive.rattacher("inexistant", juin, juin, "x.pdf"))
+    assert faux.renommes == []
