@@ -299,7 +299,7 @@ async def convert_po_to_achat(
     po_id: int,
     data: ConvertToAchatRequest,
     db: DBSession,
-    _: CurrentUser,
+    current_user: CurrentUser,
     background: BackgroundTasks,
     defer_sync: bool = False,
 ) -> AchatRead:
@@ -380,6 +380,7 @@ async def convert_po_to_achat(
         status=AchatStatus.RECEIVED.value,
         received_at=datetime.now(timezone.utc),
         notes=data.notes,
+        created_by_user_id=current_user.id,
     )
     db.add(achat)
     await db.flush()

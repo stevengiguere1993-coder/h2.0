@@ -202,6 +202,16 @@ class Achat(Base, TimestampUpdateMixin):
     )
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Qui a saisi l'achat (2026-10-04) : l'app mobile ne montre à
+    # l'employé que SON dernier achat, jamais ceux de la compagnie.
+    # NULL pour les achats importés de QBO / antérieurs à la colonne.
+    # Colonne → ensure_critical_columns.
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     # Liaison QuickBooks Online — Bill ou Purchase selon le mode de
     # paiement (voir services/achat_qbo.py).
     qbo_bill_id: Mapped[Optional[str]] = mapped_column(

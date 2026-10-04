@@ -88,6 +88,7 @@ from app.api.v1.endpoints import (
     rencontres_teams,
     timesheets,
     achat_receipt,
+    achat_mobile,
     bon_items,
     bon_tasks,
     bon_photos,
@@ -435,6 +436,8 @@ api_router.include_router(project_to_facture.router, dependencies=DEP_CONSTRUCTI
 # is matched before the generic /achats/{item_id} tries to parse
 # "receipt" as an integer.
 api_router.include_router(achat_receipt.router, dependencies=DEP_CONSTRUCTION_IMMO)
+# Idem : /achats/mobile/mon-dernier avant le CRUD générique.
+api_router.include_router(achat_mobile.router, dependencies=DEP_CONSTRUCTION_IMMO)
 api_router.include_router(achats_router, dependencies=DEP_CONSTRUCTION_IMMO)
 api_router.include_router(purchase_orders_router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(purchase_order_items.router, dependencies=DEP_CONSTRUCTION)
