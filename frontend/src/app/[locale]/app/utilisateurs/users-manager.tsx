@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
+  Eye,
   KeyRound,
   Loader2,
   Plus,
@@ -18,7 +19,13 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { ImmobilierTopbar } from "../../immobilier/layout";
 import { useAppLayout } from "../layout";
-import { authedFetch, type UserRole } from "@/lib/auth";
+import {
+  authedFetch,
+  hasMinRole,
+  localePrefix,
+  startApercu,
+  type UserRole
+} from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
@@ -84,6 +91,15 @@ const ROLE_CLASS: Record<UserRole, string> = {
   admin: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
   manager: "bg-sky-500/15 text-sky-300 border-sky-500/40",
   employee: "bg-white/5 text-white/60 border-brand-800"
+};
+
+/** Rang des rôles (miroir de ROLE_RANK côté backend) : on ne peut « voir
+ *  Kratos comme » qu'un compte de rang égal ou inférieur au sien. */
+const ROLE_RANK: Record<UserRole, number> = {
+  owner: 4,
+  admin: 3,
+  manager: 2,
+  employee: 1
 };
 
 /** Wrapper topbar pour le volet construction (utilise le contexte /app). */
@@ -179,6 +195,16 @@ export function UsersManager({
   useEffect(() => {
     void loadUsers();
   }, [loadUsers]);
+
+  // Retour d'un aperçu « voir comme » expiré : authedFetch a restauré le
+  // jeton admin et nous ramène ici avec `?apercu=expire`. On explique le
+  // changement de vue. Placé APRÈS l'effet loadUsers (qui fait
+  // setError(null) en démarrant) pour que le message ne soit pas écrasé.
+  useEffect(() => {
+    if (window.location.search.includes("apercu=expire")) {
+      setError("L'aperçu a expiré : te revoilà sur ton compte.");
+    }
+  }, []);
 
   useEffect(() => {
     if (selected != null) {
@@ -392,6 +418,73 @@ export function UsersManager({
     }
   }
 
+  // Aperçu « voir Kratos comme cet utilisateur » (lecture seule, 2 h).
+  // Réservé admin/owner, jamais vers un rang supérieur, jamais soi-même ni
+  // un compte désactivé (le backend applique les mêmes règles).
+  function peutVoirComme(u: User): boolean {
+    return (
+      !!me &&
+      u.id !== me.id &&
+      u.is_active &&
+      hasMinRole(me, "admin") &&
+      ROLE_RANK[u.role] <= ROLE_RANK[me.role]
+    );
+  }
+
+  async function voirComme(u: User) {
+    setBusyUser(u.id);
+    setError(null);
+    try {
+      const res = await authedFetch(`/api/v1/users/${u.id}/apercu`, {
+        method: "POST"
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        let detail = "";
+        try {
+          const d = (JSON.parse(t) as { detail?: unknown }).detail;
+          if (typeof d === "string") detail = d;
+        } catch {
+          /* corps non JSON : on affiche le texte brut tronqué */
+        }
+        setError(
+          `Aperçu impossible : ${
+            detail || t.slice(0, 200) || `HTTP ${res.status}`
+          }`
+        );
+        return;
+      }
+      const data = (await res.json()) as {
+        access_token: string;
+        user?: {
+          display_name?: string;
+          full_name?: string | null;
+          volets?: string[];
+        };
+      };
+      startApercu(data.access_token, {
+        id: u.id,
+        email: u.email,
+        display_name:
+          data.user?.display_name ||
+          data.user?.full_name ||
+          u.full_name ||
+          u.email,
+        role: u.role,
+        volets: data.user?.volets || u.volets || []
+      });
+      // Rechargement COMPLET (pas de router.push) : le sélecteur de portail
+      // ou la zone employé /m s'affichent exactement comme pour cet
+      // utilisateur, et tous les layouts relisent /auth/me avec son jeton.
+      window.location.assign(`${localePrefix()}/connexion`);
+    } catch (e) {
+      setError(`Aperçu impossible : ${(e as Error).message}`);
+    } finally {
+      // Le rechargement interrompt de toute façon le composant.
+      setBusyUser(null);
+    }
+  }
+
   function toggleAssignment(projectId: number) {
     setDirtyIds((prev) => {
       const next = new Set(prev ?? new Set(assignments.map((a) => a.id)));
@@ -558,6 +651,20 @@ export function UsersManager({
                           ) : null}
                         </div>
                         <div className="flex items-center gap-1">
+                          {peutVoirComme(u) ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void voirComme(u);
+                              }}
+                              disabled={busyUser === u.id}
+                              title="Voir Kratos comme cet utilisateur (aperçu lecture seule)"
+                              className="rounded-md p-1.5 text-white/40 hover:bg-white/5 hover:text-accent-500 disabled:opacity-30"
+                            >
+                              <Eye className="h-4 w-4" />
+                            </button>
+                          ) : null}
                           <button
                             type="button"
                             onClick={(e) => {
@@ -651,22 +758,36 @@ export function UsersManager({
                         )}
                       </p>
                     </div>
-                    {selectedUser.id !== me?.id ? (
-                      <button
-                        type="button"
-                        onClick={() => removeUser(selectedUser)}
-                        disabled={busyUser === selectedUser.id}
-                        className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/20 disabled:opacity-60"
-                        title="Supprimer définitivement ce compte"
-                      >
-                        {busyUser === selectedUser.id ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <UserX className="h-3.5 w-3.5" />
-                        )}
-                        Supprimer le compte
-                      </button>
-                    ) : null}
+                    <div className="flex shrink-0 items-center gap-2">
+                      {peutVoirComme(selectedUser) ? (
+                        <button
+                          type="button"
+                          onClick={() => void voirComme(selectedUser)}
+                          disabled={busyUser === selectedUser.id}
+                          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-medium text-accent-500 hover:bg-accent-500/20 disabled:opacity-60"
+                          title="Voir Kratos comme cet utilisateur (aperçu lecture seule, 2 h)"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                          Voir comme
+                        </button>
+                      ) : null}
+                      {selectedUser.id !== me?.id ? (
+                        <button
+                          type="button"
+                          onClick={() => removeUser(selectedUser)}
+                          disabled={busyUser === selectedUser.id}
+                          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/20 disabled:opacity-60"
+                          title="Supprimer définitivement ce compte"
+                        >
+                          {busyUser === selectedUser.id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <UserX className="h-3.5 w-3.5" />
+                          )}
+                          Supprimer le compte
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                   <div className="space-y-4 border-b border-brand-800 p-4">
                     <div>

@@ -12,13 +12,14 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Request,
     Response,
     UploadFile,
     status,
 )
 from fastapi.security import OAuth2PasswordRequestForm
 
-from app.api.deps import CurrentAdmin, CurrentUser, DBSession
+from app.api.deps import CurrentAdmin, CurrentUser, DBSession, apercu_par_de
 from app.schemas.token import Token
 from app.schemas.user import UserCreate, UserRead
 from app.services.auth import AuthService
@@ -133,7 +134,9 @@ async def register(
     summary="Get current user",
     description="Retrieve the profile of the currently authenticated user.",
 )
-async def get_me(current_user: CurrentUser, db: DBSession) -> UserRead:
+async def get_me(
+    request: Request, current_user: CurrentUser, db: DBSession
+) -> UserRead:
     """
     Get current authenticated user's profile.
 
@@ -142,12 +145,24 @@ async def get_me(current_user: CurrentUser, db: DBSession) -> UserRead:
     2026-07) — volets (``volet:x``), pages (``page:<key>``) et capacités —
     consommé par le garde frontend, les sidebars et le masquage d'actions.
     Les anciennes clés (telephonie.access, devlog.access) restent présentes.
+
+    Mode aperçu « voir comme » (jeton émis par POST /users/{id}/apercu) :
+    la fiche retournée est celle de l'utilisateur REGARDÉ, avec en plus
+    ``apercu_par`` = id de l'admin qui regarde (le frontend affiche le
+    bandeau d'aperçu).
     """
     # Import local : évite tout cycle d'import à l'assemblage du routeur.
     from app.services.access_service import compute_access
 
     out = UserRead.model_validate(current_user)
     out.access = await compute_access(db, current_user)
+    # Aperçu lecture seule : on expose QUI regarde et on neutralise
+    # must_change_password — l'aperçu ne doit jamais tomber sur l'écran de
+    # changement de mot de passe (les écritures sont bloquées de toute
+    # façon par get_current_user, le changement serait impossible).
+    out.apercu_par = apercu_par_de(request)
+    if out.apercu_par is not None:
+        out.must_change_password = False
     return out
 
 

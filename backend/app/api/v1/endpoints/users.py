@@ -4,6 +4,7 @@
     POST   /api/v1/users                   — create a user (admin/owner)
     PATCH  /api/v1/users/{id}/role         — change role
     PATCH  /api/v1/users/{id}/volets       — change accessible volets
+    POST   /api/v1/users/{id}/apercu       — jeton « voir comme » (lecture seule, 2 h)
     POST   /api/v1/users/{id}/deactivate   — disable account
     POST   /api/v1/users/{id}/activate     — re-enable account
     GET    /api/v1/users/{id}/projects     — project members for this user
@@ -14,7 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, File, UploadFile, HTTPException, status
@@ -22,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import delete, func, insert, select
 
 from app.api.deps import CurrentUser, DBSession, RequireAdminRole, RequireOwner
-from app.core.security import get_password_hash
+from app.core.security import create_access_token, get_password_hash
 from app.models.employe import Employe
 from app.models.immobilier import Immeuble
 from app.models.project import Project
@@ -447,6 +448,88 @@ async def update_volets(
         details={"target_email": u.email, "volets": cleaned},
     )
     return _user_read(u, None)
+
+
+# ---------- Aperçu « voir comme cet utilisateur » (lecture seule) ----------
+
+#: Durée de vie d'un jeton d'aperçu. Courte volontairement : l'admin peut
+#: toujours en redemander un depuis la page Utilisateurs.
+APERCU_DUREE = timedelta(hours=2)
+
+
+class ApercuRead(BaseModel):
+    """Jeton d'aperçu « voir comme » + fiche de l'utilisateur regardé."""
+
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int  # secondes
+    user: UserRead
+
+
+@router.post(
+    "/{user_id}/apercu",
+    response_model=ApercuRead,
+    summary="Voir Kratos comme cet utilisateur (aperçu lecture seule, 2 h)",
+)
+async def apercu_utilisateur(
+    user_id: int, db: DBSession, admin: RequireAdminRole
+) -> ApercuRead:
+    """Émet un jeton d'APERÇU au nom de ``user_id`` pour que l'admin/owner
+    voie Kratos (site + zone employé) exactement comme cet utilisateur —
+    rôle, volets, pages — sans connaître son mot de passe ni se
+    déconnecter.
+
+    Sécurité :
+      - lecture seule GARANTIE par ``get_current_user`` : le jeton porte
+        ``apercu_par`` (id de l'admin qui regarde) et toute requête autre
+        que GET/HEAD/OPTIONS est refusée (403), peu importe les droits de
+        l'utilisateur regardé ;
+      - réservé admin/owner (``RequireAdminRole``), jamais vers un compte
+        de rang supérieur (``_guard_rank`` : un admin ne regarde pas un
+        owner), ni vers soi-même, ni vers un compte désactivé ;
+      - journalisé (``user.apercu``) : on trace QUI a regardé QUI.
+    """
+    u = (
+        await db.execute(select(User).where(User.id == user_id))
+    ).scalar_one_or_none()
+    if u is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Utilisateur introuvable."
+        )
+    _guard_rank(u, admin)
+    if u.id == admin.id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Tu vois déjà Kratos avec ton propre compte.",
+        )
+    if not u.is_active:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Compte désactivé : réactive-le avant de l'utiliser en aperçu.",
+        )
+    token = create_access_token(
+        subject=str(u.id),
+        expires_delta=APERCU_DUREE,
+        additional_claims={
+            "email": u.email,
+            "is_admin": u.is_admin,
+            "apercu_par": admin.id,
+        },
+    )
+    await log_action(
+        db,
+        user=admin,
+        action="user.apercu",
+        entity_type="user",
+        entity_id=u.id,
+        details={"target_email": u.email, "role": u.role, "volets": u.volets},
+    )
+    names = await _user_full_names(db, [u])
+    return ApercuRead(
+        access_token=token,
+        expires_in=int(APERCU_DUREE.total_seconds()),
+        user=_user_read(u, names.get(u.id)),
+    )
 
 
 class CanAssignUpdate(BaseModel):

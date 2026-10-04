@@ -80,10 +80,22 @@ un dossier Drive, les reçus (pièces jointes image/PDF) de DÉPENSES
 AJOUTÉS OU MODIFIÉS dans QuickBooks depuis 2 jours (quelle que soit la
 date du reçu) sont copiés dans
 `<Drive entreprise>/Factures/<année>/<MM - Mois>/AAAA-MM-JJ Fournisseur 2134,02$.ext`
-(fournisseur absent → « ND » ; pièce sans dépense liée → `Factures/<année>/Non classé`).
-Les anciens « À classer » dans les mois sont migrés vers « Non classé » et les
-mois sans chiffre devant sont renommés (« 09 - Septembre ») à chaque run.
+(fournisseur absent → « ND » ; pièce sans dépense liée → son MOIS par date de
+dépôt, nommée `AAAA-MM-JJ <nom d'origine>` ; seule une pièce sans aucune date
+va dans `Factures/<année>/Non classé`, au même niveau que les mois — Steven
+2026-10-04 : « mettre les factures dans le mois même si le prix ou le
+fournisseur n'est pas là »).
+À chaque run, AVANT la copie, reclassement du Drive : les anciens « À classer »
+sont vidés (fichier daté → son mois, sans date → « Non classé ») puis mis à la
+corbeille, les fichiers datés de « Non classé » rejoignent leur mois, les mois
+sans chiffre devant sont renommés (« 09 - Septembre »). Chaque déplacement est
+noté dans le rapport et dans la mémoire (`detail`). Une entreprise qui a un
+dossier Drive mais pas de connexion QuickBooks est reclassée aussi (sans copie).
+Un reçu copié « brut » puis rattaché à une dépense est renommé avec elle, pas
+recopié (recopié seulement si le fichier brut n'est plus dans le Drive) ;
+« Annuler cet import » rétablit alors son nom d'origine au lieu de le jeter.
 Anti-doublon : table `qbo_recus_drive` + même nom déjà présent dans le
-dossier du mois. Rattrapage / simulation : page Entreprises → « Reçus
-QuickBooks → Drive » (`POST /api/v1/qbo-recus-drive/executer`).
+dossier du mois. Rattrapage / simulation / « Reclasser » : page Paramètres →
+Drive → « Reçus QuickBooks → Drive » (`POST /api/v1/qbo-recus-drive/executer`,
+`POST /api/v1/qbo-recus-drive/reclasser`).
 
