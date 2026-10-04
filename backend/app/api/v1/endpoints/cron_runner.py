@@ -841,6 +841,19 @@ async def trigger_all_daily(
 
     await _safe("qbo-cost-pull", _run_qbo_cost_pull, details)
 
+    # Reçus QuickBooks → Drive (Phil 2026-10-04) : pour chaque compagnie
+    # connectée (inc:{entreprise}), les reçus des 3 derniers jours sont
+    # copiés dans Factures / année / mois du Drive de l'entreprise.
+    async def _run_qbo_recus_drive():
+        from app.services.qbo_recus_drive import executer_pour_cron
+
+        async with AsyncSessionLocal() as db:
+            r = await executer_pour_cron(db)
+            await db.commit()
+            return r
+
+    await _safe("qbo-recus-drive", _run_qbo_recus_drive, details)
+
     # Validation bancaire des loyers : import QBO (lecture seule) des
     # écritures « Loyer à remettre » + rapprochement déterministe.
     # Inerte tant que la feature n'est pas activée dans Paramètres.

@@ -163,6 +163,7 @@ from app.api.v1.endpoints import (
     qbo_account_map,
     qbo_bulk,
     qbo_oauth,
+    qbo_recus_drive,
     qbo_token,
     qbo_webhook,
     search,
@@ -481,6 +482,7 @@ api_router.include_router(org_seed_canonical.router)
 # teams-sync AVANT rencontres : /rencontres/teams-sync/* ne doit pas
 # être avalé par /rencontres/{id}.
 api_router.include_router(optimisation.router, dependencies=DEP_ENTREPRISES)
+api_router.include_router(qbo_recus_drive.router, dependencies=DEP_ENTREPRISES)
 api_router.include_router(rencontres_teams.router)
 api_router.include_router(rencontres.router)
 api_router.include_router(timesheets.router)

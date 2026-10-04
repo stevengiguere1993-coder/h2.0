@@ -1,0 +1,637 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import {
+  AlertTriangle,
+  Check,
+  ExternalLink,
+  FolderOpen,
+  Loader2,
+  Play,
+  RefreshCw,
+  Search
+} from "lucide-react";
+
+import { Link } from "@/i18n/navigation";
+import { authedFetch } from "@/lib/auth";
+import { QGTopbar } from "../layout";
+
+/**
+ * Reçus QuickBooks → Drive (chantier Phil 2026-10-04).
+ *
+ * Pour chaque entreprise : connexion QuickBooks (compagnie inc:{id}) +
+ * dossier Drive de la fiche. Les reçus des dépenses sont copiés dans
+ * Factures / année / Mois sous « AAAA-MM-JJ Fournisseur 2134,02$.pdf ».
+ * Simulation = liste sans toucher au Drive. La nuit, le cron copie la
+ * veille (3 jours de marge).
+ */
+
+type EntrepriseEtat = {
+  entreprise_id: number;
+  name: string;
+  qbo_scope: string;
+  qbo_connectee: boolean;
+  qbo_company_name: string | null;
+  drive_folder_url: string | null;
+  drive_folder_id: string | null;
+  prete: boolean;
+  copies: number;
+  derniere_copie: string | null;
+};
+
+type Apercu = {
+  date: string;
+  fournisseur: string;
+  montant: number | null;
+  nom: string;
+  dossier: string;
+  statut: "prevu" | "copie" | "doublon_drive";
+};
+
+type RapportEntreprise = {
+  entreprise_id: number;
+  name: string;
+  qbo_company_name: string | null;
+  pieces_jointes: number;
+  copies: number;
+  prevus: number;
+  a_classer: number;
+  ignores_deja_traites: number;
+  ignores_drive: number;
+  hors_periode: number;
+  non_recu: number;
+  hors_depenses: number;
+  erreurs: number;
+  messages: string[];
+  apercu: Apercu[];
+};
+
+type Rapport = {
+  ok: boolean;
+  erreur?: string;
+  simulation: boolean;
+  declencheur: string;
+  depuis: string;
+  jusqua: string;
+  entreprises: RapportEntreprise[];
+  non_pretes: { entreprise_id: number; name: string; manque: string[] }[];
+  dossiers_crees: string[];
+  dossiers_a_creer: string[];
+  totaux: { copies: number; prevus: number; ignores: number; erreurs: number };
+};
+
+type Run = {
+  en_cours: boolean;
+  lance_a: string | null;
+  termine_a: string | null;
+  simulation: boolean | null;
+  declencheur: string | null;
+  progression: {
+    entreprise: string;
+    piece: number;
+    pieces_jointes: number;
+    copies: number;
+  } | null;
+  rapport: Rapport | null;
+};
+
+type Etat = {
+  entreprises: EntrepriseEtat[];
+  run: Run;
+  debut_par_defaut: string;
+};
+
+type Journal = {
+  id: number;
+  entreprise_id: number | null;
+  date_recu: string | null;
+  fournisseur: string | null;
+  montant: number | null;
+  nom_fichier: string;
+  txn_type: string;
+  statut: string;
+  detail: string | null;
+  declencheur: string | null;
+  drive_url: string | null;
+  created_at: string | null;
+};
+
+function money(n: number | null | undefined): string {
+  if (n == null) return "—";
+  return new Intl.NumberFormat("fr-CA", {
+    style: "currency",
+    currency: "CAD"
+  }).format(n);
+}
+
+function fmtDateTime(iso: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("fr-CA", {
+    dateStyle: "short",
+    timeStyle: "short"
+  });
+}
+
+export default function RecusQuickbooksPage() {
+  const [etat, setEtat] = useState<Etat | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [selection, setSelection] = useState<Set<number>>(new Set());
+  const [depuis, setDepuis] = useState("2026-01-01");
+  const [jusqua, setJusqua] = useState(new Date().toISOString().slice(0, 10));
+  const [lancement, setLancement] = useState(false);
+  const [journal, setJournal] = useState<Journal[] | null>(null);
+  const [connecting, setConnecting] = useState<number | null>(null);
+
+  const charger = useCallback(async () => {
+    try {
+      const r = await authedFetch("/api/v1/qbo-recus-drive/etat");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = (await r.json()) as Etat;
+      setEtat(d);
+      setDepuis((cur) => cur || d.debut_par_defaut);
+    } catch (e) {
+      setErr(`Chargement impossible : ${(e as Error).message}`);
+    }
+  }, []);
+
+  const chargerJournal = useCallback(async () => {
+    try {
+      const r = await authedFetch("/api/v1/qbo-recus-drive/journal?limit=150");
+      if (r.ok) setJournal((await r.json()) as Journal[]);
+    } catch {
+      /* journal facultatif */
+    }
+  }, []);
+
+  useEffect(() => {
+    void charger();
+    void chargerJournal();
+  }, [charger, chargerJournal]);
+
+  // Pendant un run : on rafraîchit la progression toutes les 3 s.
+  const enCours = !!etat?.run?.en_cours;
+  useEffect(() => {
+    if (!enCours) return;
+    const t = window.setInterval(() => {
+      void charger();
+    }, 3000);
+    return () => window.clearInterval(t);
+  }, [enCours, charger]);
+  useEffect(() => {
+    if (!enCours) void chargerJournal();
+  }, [enCours, chargerJournal]);
+
+  async function lancer(simulation: boolean) {
+    if (!etat) return;
+    const ids = Array.from(selection);
+    const cibles = ids.length
+      ? etat.entreprises.filter((e) => ids.includes(e.entreprise_id))
+      : etat.entreprises.filter((e) => e.prete);
+    if (!cibles.length) {
+      setErr("Aucune entreprise prête (connexion QuickBooks + dossier Drive).");
+      return;
+    }
+    if (
+      !simulation &&
+      !window.confirm(
+        `Copier les reçus du ${depuis} au ${jusqua} dans le Drive de : ${cibles
+          .map((c) => c.name)
+          .join(", ")} ?`
+      )
+    )
+      return;
+    setLancement(true);
+    setErr(null);
+    try {
+      const r = await authedFetch("/api/v1/qbo-recus-drive/executer", {
+        method: "POST",
+        body: JSON.stringify({
+          entreprise_ids: ids.length ? ids : null,
+          depuis,
+          jusqua,
+          simulation
+        })
+      });
+      if (!r.ok) {
+        let d = `HTTP ${r.status}`;
+        try {
+          const j = await r.json();
+          if (typeof j.detail === "string") d = j.detail;
+        } catch {
+          /* corps vide */
+        }
+        throw new Error(d);
+      }
+      await charger();
+    } catch (e) {
+      setErr(`Lancement impossible : ${(e as Error).message}`);
+    } finally {
+      setLancement(false);
+    }
+  }
+
+  async function connecterQbo(e: EntrepriseEtat) {
+    setConnecting(e.entreprise_id);
+    try {
+      const r = await authedFetch(
+        `/api/v1/qbo/connect?scope=${encodeURIComponent(e.qbo_scope)}`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = (await r.json()) as { auth_url: string };
+      window.location.assign(d.auth_url);
+    } catch (ex) {
+      setErr(`Connexion QuickBooks : ${(ex as Error).message}`);
+      setConnecting(null);
+    }
+  }
+
+  const rapport = etat?.run?.rapport ?? null;
+  const pretes = etat?.entreprises.filter((e) => e.prete).length ?? 0;
+
+  return (
+    <>
+      <QGTopbar
+        greeting={<>Reçus QuickBooks → Drive</>}
+        subtitle="Chaque reçu de dépense QuickBooks copié dans le Drive de l'entreprise : Factures / année / mois, nommé « date fournisseur montant »."
+        rightSlot={
+          <button
+            type="button"
+            onClick={() => void charger()}
+            className="btn-ghost btn-xs"
+            title="Rafraîchir"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+        }
+      />
+
+      <div className="px-5 pb-10 lg:px-8">
+        {err ? (
+          <p className="mt-3 rounded-lg border border-rose-500/50 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+            {err}
+          </p>
+        ) : null}
+
+        {/* Étape 1 : préparation */}
+        <section className="mt-4 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+            Étape 1 — Entreprises prêtes ({pretes}/{etat?.entreprises.length ?? 0})
+          </h2>
+          <p className="mt-1 text-xs text-white/70">
+            Il faut, par entreprise, sa compagnie QuickBooks connectée (depuis ton
+            login comptable) et l&apos;URL de son dossier Drive sur sa fiche. Coche
+            des entreprises pour limiter un run ; sans coche, toutes les
+            entreprises prêtes sont traitées.
+          </p>
+          {etat === null ? (
+            <p className="mt-3 text-xs text-white/60">
+              <Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Chargement…
+            </p>
+          ) : (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full min-w-[760px] text-left text-sm">
+                <thead className="border-b border-brand-800 text-[10px] uppercase tracking-wider text-white/60">
+                  <tr>
+                    <th className="w-8 py-2 pl-2"></th>
+                    <th className="px-3 py-2">Entreprise</th>
+                    <th className="px-3 py-2">QuickBooks</th>
+                    <th className="px-3 py-2">Dossier Drive</th>
+                    <th className="px-3 py-2 text-right">Reçus copiés</th>
+                    <th className="px-3 py-2">Dernière copie</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-brand-800">
+                  {etat.entreprises.map((e) => (
+                    <tr key={e.entreprise_id} className={e.prete ? "" : "opacity-80"}>
+                      <td className="py-2 pl-2">
+                        <input
+                          type="checkbox"
+                          checked={selection.has(e.entreprise_id)}
+                          disabled={!e.prete}
+                          onChange={(ev) =>
+                            setSelection((s) => {
+                              const n = new Set(s);
+                              if (ev.target.checked) n.add(e.entreprise_id);
+                              else n.delete(e.entreprise_id);
+                              return n;
+                            })
+                          }
+                          className="h-3.5 w-3.5 accent-accent-500"
+                          aria-label={`Sélectionner ${e.name}`}
+                        />
+                      </td>
+                      <td className="px-3 py-2 font-semibold text-white">
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={`/entreprises/${e.entreprise_id}` as any}
+                          className="hover:text-accent-500 hover:underline"
+                        >
+                          {e.name}
+                        </Link>
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        {e.qbo_connectee ? (
+                          <span className="inline-flex items-center gap-1 text-white">
+                            <Check className="h-3.5 w-3.5 text-emerald-600" />
+                            {e.qbo_company_name || "Connectée"}
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => void connecterQbo(e)}
+                            disabled={connecting === e.entreprise_id}
+                            className="btn-outline-accent btn-xs"
+                          >
+                            {connecting === e.entreprise_id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : null}
+                            Connecter QuickBooks
+                          </button>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        {e.drive_folder_id ? (
+                          <a
+                            href={e.drive_folder_url || "#"}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-white hover:text-accent-500 hover:underline"
+                          >
+                            <FolderOpen className="h-3.5 w-3.5 text-emerald-600" />
+                            Dossier lié
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-amber-200">
+                            <AlertTriangle className="h-3.5 w-3.5" />
+                            URL Drive manquante (bouton Drive de la fiche)
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono text-xs text-white">
+                        {e.copies}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-white/70">
+                        {fmtDateTime(e.derniere_copie)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        {/* Étape 2 / 3 : simulation puis rattrapage */}
+        <section className="mt-4 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+            Étapes 2 et 3 — Simuler, puis copier
+          </h2>
+          <div className="mt-3 flex flex-wrap items-end gap-3">
+            <label className="text-[11px] font-semibold text-white/70">
+              Du
+              <input
+                type="date"
+                value={depuis}
+                onChange={(e) => setDepuis(e.target.value)}
+                className="input mt-0.5 w-40 px-2 py-1 text-xs"
+              />
+            </label>
+            <label className="text-[11px] font-semibold text-white/70">
+              Au
+              <input
+                type="date"
+                value={jusqua}
+                onChange={(e) => setJusqua(e.target.value)}
+                className="input mt-0.5 w-40 px-2 py-1 text-xs"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => void lancer(true)}
+              disabled={lancement || enCours}
+              className="btn-secondary btn-sm"
+              title="Liste ce qui serait copié, sans rien écrire dans le Drive"
+            >
+              <Search className="h-3.5 w-3.5" /> Simuler
+            </button>
+            <button
+              type="button"
+              onClick={() => void lancer(false)}
+              disabled={lancement || enCours}
+              className="btn-accent btn-sm"
+              title="Crée les dossiers manquants et copie les reçus"
+            >
+              {lancement ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Play className="h-3.5 w-3.5" />
+              )}{" "}
+              Copier dans le Drive
+            </button>
+            <span className="text-[11px] text-white/60">
+              {selection.size
+                ? `${selection.size} entreprise(s) cochée(s)`
+                : "toutes les entreprises prêtes"}
+            </span>
+          </div>
+
+          {enCours && etat?.run ? (
+            <div className="mt-4 rounded-xl border border-accent-500/50 bg-accent-500/10 px-3 py-2 text-xs text-white">
+              <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin text-accent-500" />
+              {etat.run.simulation ? "Simulation" : "Copie"} en cours
+              {etat.run.progression
+                ? ` — ${etat.run.progression.entreprise} : pièce ${etat.run.progression.piece}/${etat.run.progression.pieces_jointes}, ${etat.run.progression.copies} reçu(s) ${etat.run.simulation ? "prévus" : "copiés"}`
+                : "…"}
+            </div>
+          ) : null}
+
+          {rapport && !enCours ? <RapportView rapport={rapport} run={etat!.run} /> : null}
+        </section>
+
+        {/* Étape 4 : la nuit */}
+        <section className="mt-4 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+            Étape 4 — Chaque nuit
+          </h2>
+          <p className="mt-1 text-xs text-white/70">
+            Le méga-cron de 6 h copie automatiquement les reçus des trois
+            derniers jours (marge pour les reçus joints en retard) de toutes
+            les entreprises prêtes. Un reçu déjà copié, ou un fichier portant
+            déjà la même date, le même fournisseur et le même montant dans le
+            dossier du mois, n&apos;est jamais mis en double.
+          </p>
+        </section>
+
+        {/* Journal */}
+        <section className="mt-4 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+            Journal des dernières copies
+          </h2>
+          {journal === null ? (
+            <p className="mt-2 text-xs text-white/60">Chargement…</p>
+          ) : journal.length === 0 ? (
+            <p className="mt-2 text-xs text-white/60">Aucune copie encore.</p>
+          ) : (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full min-w-[760px] text-left text-xs">
+                <thead className="border-b border-brand-800 text-[10px] uppercase tracking-wider text-white/60">
+                  <tr>
+                    <th className="px-3 py-2">Quand</th>
+                    <th className="px-3 py-2">Fichier</th>
+                    <th className="px-3 py-2">Source</th>
+                    <th className="px-3 py-2">Statut</th>
+                    <th className="px-3 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-brand-800">
+                  {journal.map((j) => (
+                    <tr key={j.id}>
+                      <td className="px-3 py-1.5 font-mono text-white/70">
+                        {fmtDateTime(j.created_at)}
+                      </td>
+                      <td className="px-3 py-1.5 text-white">{j.nom_fichier}</td>
+                      <td className="px-3 py-1.5 text-white/70">
+                        {j.txn_type || "À classer"} · {j.declencheur || "—"}
+                      </td>
+                      <td className="px-3 py-1.5">
+                        <span
+                          className={`badge ${
+                            j.statut === "copie"
+                              ? "badge-emerald"
+                              : j.statut === "erreur"
+                                ? "badge-rose"
+                                : "badge-neutral"
+                          }`}
+                          title={j.detail || undefined}
+                        >
+                          {j.statut === "copie"
+                            ? "copié"
+                            : j.statut === "ignore_doublon"
+                              ? "déjà dans le Drive"
+                              : j.statut}
+                        </span>
+                      </td>
+                      <td className="px-3 py-1.5 text-right">
+                        {j.drive_url ? (
+                          <a
+                            href={j.drive_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn-ghost btn-xs"
+                            title="Ouvrir dans Drive"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </div>
+    </>
+  );
+}
+
+function RapportView({ rapport, run }: { rapport: Rapport; run: Run }) {
+  const t = rapport.totaux;
+  return (
+    <div className="mt-4 space-y-3">
+      <div className="rounded-xl border border-brand-700 bg-brand-950 px-3 py-2 text-xs text-white">
+        <span className="font-semibold">
+          {rapport.simulation ? "Simulation" : "Copie"} du {rapport.depuis} au{" "}
+          {rapport.jusqua}
+        </span>
+        <span className="ml-2 text-white/70">
+          terminée {fmtDateTime(run.termine_a)} ·{" "}
+          {rapport.simulation
+            ? `${t.prevus} reçu(s) à copier`
+            : `${t.copies} reçu(s) copié(s)`}{" "}
+          · {t.ignores} ignoré(s) · {t.erreurs} erreur(s)
+        </span>
+        {rapport.erreur ? (
+          <p className="mt-1 text-rose-200">{rapport.erreur}</p>
+        ) : null}
+      </div>
+
+      {rapport.non_pretes.length ? (
+        <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          Non traitées :{" "}
+          {rapport.non_pretes
+            .map((n) => `${n.name} (${n.manque.join(" + ")})`)
+            .join(" · ")}
+        </p>
+      ) : null}
+
+      {rapport.dossiers_a_creer.length || rapport.dossiers_crees.length ? (
+        <p className="text-xs text-white/70">
+          {rapport.simulation ? "Dossiers à créer : " : "Dossiers créés : "}
+          {(rapport.simulation ? rapport.dossiers_a_creer : rapport.dossiers_crees).join(" · ")}
+        </p>
+      ) : null}
+
+      {rapport.entreprises.map((r) => (
+        <details
+          key={r.entreprise_id}
+          className="rounded-xl border border-brand-800 bg-brand-950 p-3"
+          open={rapport.entreprises.length === 1}
+        >
+          <summary className="cursor-pointer text-sm font-semibold text-white">
+            {r.name}
+            <span className="ml-2 text-xs font-normal text-white/70">
+              {r.pieces_jointes} pièce(s) jointe(s) ·{" "}
+              {rapport.simulation ? `${r.prevus} à copier` : `${r.copies} copié(s)`} ·{" "}
+              {r.ignores_deja_traites} déjà traité(s) · {r.ignores_drive} déjà dans le
+              Drive · {r.hors_periode} hors période · {r.hors_depenses} hors dépenses ·{" "}
+              {r.a_classer} à classer ·{" "}
+              {r.erreurs} erreur(s)
+            </span>
+          </summary>
+          {r.messages.length ? (
+            <ul className="mt-2 space-y-0.5 text-xs text-rose-200">
+              {r.messages.slice(0, 30).map((m, i) => (
+                <li key={i}>• {m}</li>
+              ))}
+            </ul>
+          ) : null}
+          {r.apercu.length ? (
+            <table className="mt-2 w-full text-xs">
+              <thead className="text-[10px] uppercase tracking-wider text-white/60">
+                <tr>
+                  <th className="py-1 text-left">Dossier</th>
+                  <th className="py-1 text-left">Fichier</th>
+                  <th className="py-1 text-left">Statut</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-brand-800">
+                {r.apercu.map((a, i) => (
+                  <tr key={i}>
+                    <td className="py-1 pr-3 font-mono text-white/70">{a.dossier}</td>
+                    <td className="py-1 pr-3 text-white">{a.nom}</td>
+                    <td className="py-1">
+                      <span
+                        className={`badge ${
+                          a.statut === "doublon_drive" ? "badge-neutral" : "badge-emerald"
+                        }`}
+                      >
+                        {a.statut === "doublon_drive"
+                          ? "déjà dans le Drive"
+                          : a.statut === "prevu"
+                            ? "à copier"
+                            : "copié"}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : null}
+        </details>
+      ))}
+    </div>
+  );
+}

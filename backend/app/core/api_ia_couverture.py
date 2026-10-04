@@ -23,6 +23,7 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     # — existantes au moment du cliquet.
     "construction_bon_defaults",
     "qbo_connections",
+    "qbo_recus_drive",
     "user_access_overrides",
     "achats",
     "agenda_events",
