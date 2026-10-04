@@ -57,7 +57,10 @@ function fmtDate(s: string | null | undefined): string {
 }
 
 export default function MobileAchats() {
-  const [items, setItems] = useState<Achat[]>([]);
+  // Seul le DERNIER achat saisi par l'employé est visible ici (retour
+  // Steven 2026-10-04) : les achats de la compagnie se consultent
+  // uniquement sur le site.
+  const [dernier, setDernier] = useState<Achat | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -67,13 +70,17 @@ export default function MobileAchats() {
       setLoading(true);
       setError(null);
       try {
-        const res = await authedFetch("/api/v1/achats?limit=50");
+        const res = await authedFetch("/api/v1/achats/mobile/mon-dernier");
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}`);
         }
         const body = (await res.json()) as unknown;
         if (!cancelled) {
-          setItems(Array.isArray(body) ? (body as Achat[]) : []);
+          setDernier(
+            body && typeof body === "object" && "id" in body
+              ? (body as Achat)
+              : null
+          );
         }
       } catch (err) {
         if (!cancelled) setError((err as Error).message);
@@ -128,14 +135,17 @@ export default function MobileAchats() {
           <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {error}
           </p>
-        ) : items.length === 0 ? (
+        ) : !dernier ? (
           <p className="rounded-xl border border-brand-800 bg-brand-900 px-4 py-6 text-center text-sm text-white/50">
-            Aucun achat enregistré.
+            Aucun achat saisi par vous pour l&apos;instant.
           </p>
         ) : (
-          <ul className="space-y-2">
-            {items.map((a) => (
-              <li key={a.id}>
+          <div className="space-y-2">
+            <p className="px-1 text-[11px] font-semibold uppercase tracking-wide text-white/60">
+              Votre dernier achat
+            </p>
+            {[dernier].map((a) => (
+              <div key={a.id}>
                 <Link
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   href={`/app/achats/${a.id}` as any}
@@ -165,14 +175,14 @@ export default function MobileAchats() {
                     </div>
                   </div>
                 </Link>
-              </li>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
 
         <div className="flex items-center gap-2 pt-3 text-[11px] text-white/40">
           <Receipt className="h-3 w-3" />
-          <span>Géré côté bureau dans le portail Construction.</span>
+          <span>Les autres achats se consultent sur le site.</span>
         </div>
       </div>
     </>

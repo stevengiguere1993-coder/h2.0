@@ -303,6 +303,9 @@ async def ensure_critical_columns() -> None:
         # Reçu sans projet/BT rattaché directement à un CLIENT (CustomerRef
         # QB = client mère).
         ("achats", "client_id", "INTEGER"),
+        # Auteur de l'achat (2026-10-04) — l'app mobile ne montre à
+        # l'employé que son dernier achat.
+        ("achats", "created_by_user_id", "INTEGER"),
         # Gestion externe d'un immeuble (compagnie tierce) : sans ces
         # colonnes, tout SELECT sur imm_immeubles plante → 500 sur tout
         # le volet immobilier. Table préexistante → create_all ne les
