@@ -36,6 +36,7 @@ import { useSearchParams } from "next/navigation";
 
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch, getToken } from "@/lib/auth";
+import { parseNombre } from "@/lib/nombre";
 import { compareNumero } from "@/components/immobilier/numero-sort";
 import {
   ouvrirDossierTal,
@@ -641,13 +642,13 @@ export default function ImmeubleDetailPage({
         postal_code: editForm.postal_code.trim() || null,
         type: editForm.type,
         annee_construction: editForm.annee_construction
-          ? Number(editForm.annee_construction)
+          ? parseNombre(editForm.annee_construction)
           : null,
         nb_logements: editForm.nb_logements
-          ? Number(editForm.nb_logements)
+          ? parseNombre(editForm.nb_logements)
           : null,
         purchase_price: editForm.purchase_price
-          ? Number(editForm.purchase_price)
+          ? parseNombre(editForm.purchase_price)
           : null,
         urgence_phone: editForm.urgence_phone.trim() || null,
         gestion_externe: editForm.gestion_externe,
@@ -686,7 +687,7 @@ export default function ImmeubleDetailPage({
       // changé. La fiche d'entreprise et l'organigramme de détention
       // lisent la même table → la propagation est immédiate.
       const nouvelOwner = editForm.owner_entreprise_id
-        ? Number(editForm.owner_entreprise_id)
+        ? parseNombre(editForm.owner_entreprise_id)
         : null;
       if (nouvelOwner != null && nouvelOwner !== ownerId) {
         const resOwner = await authedFetch(
@@ -4526,12 +4527,12 @@ function HypothequeForm({
   };
 
   const amortissementMois = f.amortissement_annees.trim()
-    ? Math.round(Number(f.amortissement_annees) * 12)
+    ? Math.round(parseNombre(f.amortissement_annees) * 12)
     : 0;
   const balanceRef = f.balance_actuelle.trim()
-    ? Number(f.balance_actuelle)
+    ? parseNombre(f.balance_actuelle)
     : f.montant_initial.trim()
-      ? Number(f.montant_initial)
+      ? parseNombre(f.montant_initial)
       : 0;
 
   const compositionChoisie: CompositionInterets =
@@ -4540,7 +4541,7 @@ function HypothequeForm({
   const computedPmt = useMemo(() => {
     if (f.taux_pct.trim() === "") return null;
     return computePaiementMensuel(
-      Number(f.taux_pct),
+      parseNombre(f.taux_pct),
       amortissementMois,
       balanceRef,
       compositionChoisie
@@ -4558,8 +4559,8 @@ function HypothequeForm({
     )
       return null;
     return computeBalanceCalculee(
-      Number(f.montant_initial),
-      Number(f.taux_pct),
+      parseNombre(f.montant_initial),
+      parseNombre(f.taux_pct),
       amortissementMois,
       compositionChoisie,
       f.date_debut
@@ -4575,7 +4576,7 @@ function HypothequeForm({
   // Fin du terme calculée = date_debut + terme (années, décimales OK).
   const finTermeCalculee = useMemo(() => {
     if (!f.date_debut || f.terme_annees.trim() === "") return null;
-    const annees = Number(f.terme_annees);
+    const annees = parseNombre(f.terme_annees);
     if (!Number.isFinite(annees) || annees <= 0) return null;
     return addAnneesIso(f.date_debut, annees);
   }, [f.date_debut, f.terme_annees]);
@@ -4592,7 +4593,7 @@ function HypothequeForm({
 
   const pmtEffective =
     pmtOverride && f.paiement_mensuel.trim() !== ""
-      ? Number(f.paiement_mensuel)
+      ? parseNombre(f.paiement_mensuel)
       : computedPmt != null
         ? Math.round(computedPmt * 100) / 100
         : null;
@@ -4600,18 +4601,18 @@ function HypothequeForm({
   const valid =
     f.preteur.trim() !== "" &&
     f.montant_initial.trim() !== "" &&
-    !Number.isNaN(Number(f.montant_initial));
+    !Number.isNaN(parseNombre(f.montant_initial));
 
   function submit() {
     if (!valid) return;
     onSubmit({
-      rang: f.rang.trim() ? Math.max(1, Math.round(Number(f.rang))) : 1,
+      rang: f.rang.trim() ? Math.max(1, Math.round(parseNombre(f.rang))) : 1,
       preteur: f.preteur.trim(),
-      montant_initial: Number(f.montant_initial),
+      montant_initial: parseNombre(f.montant_initial),
       balance_actuelle: f.balance_actuelle.trim()
-        ? Number(f.balance_actuelle)
+        ? parseNombre(f.balance_actuelle)
         : null,
-      taux_pct: f.taux_pct.trim() ? Number(f.taux_pct) : null,
+      taux_pct: f.taux_pct.trim() ? parseNombre(f.taux_pct) : null,
       type_taux: f.type_taux || null,
       composition_interets: compositionChoisie,
       amortissement_mois: amortissementMois > 0 ? amortissementMois : null,
@@ -5157,15 +5158,15 @@ function EvaluationForm({
 
   const valid =
     f.valeur.trim() !== "" &&
-    !Number.isNaN(Number(f.valeur)) &&
-    Number(f.valeur) >= 0 &&
+    !Number.isNaN(parseNombre(f.valeur)) &&
+    parseNombre(f.valeur) >= 0 &&
     f.date_evaluation !== "";
 
   function submit() {
     if (!valid) return;
     onSubmit({
       kind: f.kind,
-      valeur: Number(f.valeur),
+      valeur: parseNombre(f.valeur),
       date_evaluation: f.date_evaluation,
       source: f.source.trim() || null,
       notes: f.notes.trim() || null
