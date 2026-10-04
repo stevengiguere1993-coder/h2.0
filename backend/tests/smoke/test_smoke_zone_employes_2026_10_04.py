@@ -332,3 +332,58 @@ def test_suivi_du_temps(client, auth_headers, video):
         headers=auth_headers,
     )
     assert r.status_code == 400
+
+
+def test_suivi_du_temps_punch_jour_local(client, auth_headers, run):
+    """Un punch Construction de 21 h (heure de Montréal) compte pour SON
+    jour, même s'il tombe le lendemain en UTC."""
+    from zoneinfo import ZoneInfo
+
+    from app.models.employe import Employe
+    from app.models.punch import Punch
+
+    mtl = ZoneInfo("America/Toronto")
+    jour = date(2026, 3, 10)
+    debut_punch = datetime(2026, 3, 10, 21, 0, tzinfo=mtl)
+
+    async def _seed():
+        async with TestSessionLocal() as s:
+            u = User(
+                email="punch.zone@example.com",
+                hashed_password=get_password_hash("x" * 12),
+                is_active=True,
+                is_admin=False,
+                role="employee",
+            )
+            emp = Employe(full_name="Punch Zone", email="Punch.Zone@example.com")
+            s.add_all([u, emp])
+            await s.flush()
+            s.add(
+                Punch(
+                    employe_id=emp.id,
+                    started_at=debut_punch,
+                    ended_at=debut_punch + timedelta(hours=2, minutes=30),
+                    hours=2.5,
+                )
+            )
+            await s.commit()
+            return u.id
+
+    uid = run(_seed())
+    r = client.get(
+        f"/api/v1/entreprises/employes/suivi-temps?debut={jour}&fin={jour}",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    ligne = next(l for l in r.json()["lignes"] if l["user_id"] == uid)
+    assert ligne["type"] == "construction"
+    assert ligne["heures_punch"] == 2.5
+    assert ligne["jours_travailles"] == 1
+    # Le lendemain : rien.
+    lendemain = jour + timedelta(days=1)
+    r = client.get(
+        f"/api/v1/entreprises/employes/suivi-temps?debut={lendemain}&fin={lendemain}",
+        headers=auth_headers,
+    )
+    ligne = next(l for l in r.json()["lignes"] if l["user_id"] == uid)
+    assert ligne["heures_punch"] == 0.0

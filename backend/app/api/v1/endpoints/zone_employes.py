@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -50,6 +51,9 @@ router_admin = APIRouter(prefix="/entreprises/employes", tags=["zone-employes"])
 router_mes_taches = APIRouter(
     prefix="/entreprises/mes-taches", tags=["zone-employes"]
 )
+
+#: Fuseau des journées de travail (heure de Montréal).
+TZ_LOCAL = ZoneInfo("America/Toronto")
 
 #: Scope des événements planifiés depuis la section Employés. Distinct de
 #: « construction » : l'agenda d'un employé « autre » n'est pas relié à
@@ -443,8 +447,10 @@ async def suivi_temps(
         if (u.email or "").lower() in employes
     }
     if emp_vers_user:
-        d0 = datetime.combine(debut, time.min, tzinfo=timezone.utc)
-        d1 = datetime.combine(fin + timedelta(days=1), time.min, tzinfo=timezone.utc)
+        # Journées locales (Montréal) : un punch de 21 h compte pour le
+        # jour où il a été fait, pas pour le lendemain UTC.
+        d0 = datetime.combine(debut, time.min, tzinfo=TZ_LOCAL)
+        d1 = datetime.combine(fin + timedelta(days=1), time.min, tzinfo=TZ_LOCAL)
         punches = (
             await db.execute(
                 select(Punch).where(
@@ -459,13 +465,13 @@ async def suivi_temps(
             uid = emp_vers_user.get(p.employe_id)
             if uid is None or not p.hours:
                 continue
-            jour = p.started_at.date()
+            jour = _aware(p.started_at).astimezone(TZ_LOCAL).date()
             cumul = heures_punch.setdefault(uid, {})
             cumul[jour] = cumul.get(jour, 0.0) + float(p.hours)
 
     taches = await _taches_par_assigne(db, ids)
-    t0 = datetime.combine(debut, time.min, tzinfo=timezone.utc)
-    t1 = datetime.combine(fin + timedelta(days=1), time.min, tzinfo=timezone.utc)
+    t0 = datetime.combine(debut, time.min, tzinfo=TZ_LOCAL)
+    t1 = datetime.combine(fin + timedelta(days=1), time.min, tzinfo=TZ_LOCAL)
 
     lignes: List[SuiviTempsLigne] = []
     total = 0.0
