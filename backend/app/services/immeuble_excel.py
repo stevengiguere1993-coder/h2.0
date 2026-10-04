@@ -145,7 +145,7 @@ def generate_template() -> bytes:
         "5. Les dates s'écrivent AAAA-MM-JJ (ou en format date d'Excel).",
         "6. Les colonnes marquées * sont obligatoires ; les lignes d'exemple",
         "   en gris peuvent être écrasées ou supprimées.",
-        "7. Retourne dans Kratos → Gestion immobilière → Immeubles →",
+        "7. Retourne dans Kratos → Immobilier → Immeubles →",
         "   « Importer (Excel) », choisis l'entreprise propriétaire et téléverse",
         "   le fichier. Rien n'est créé s'il reste des erreurs (elles te seront",
         "   listées avec la feuille et la ligne).",

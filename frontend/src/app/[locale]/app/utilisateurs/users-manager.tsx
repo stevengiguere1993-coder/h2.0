@@ -882,7 +882,7 @@ export function UsersManager({
 
                       {allImmeubles.length === 0 ? (
                         <p className="mt-3 rounded border border-dashed border-brand-800 bg-brand-950 px-3 py-4 text-center text-xs text-white/50">
-                          Aucun immeuble. Crée-en dans Immobilier.
+                          Aucun immeuble. Crée-en dans le volet Immobilier.
                         </p>
                       ) : (
                         <ul className="mt-3 max-h-80 space-y-1 overflow-y-auto">

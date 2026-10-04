@@ -73,7 +73,7 @@ export default function ParametresLayout({
           href={origine.href}
           className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-white/70 hover:bg-brand-900 hover:text-white"
         >
-          <ArrowLeft className="h-4 w-4" /> Retour à {origine.label}
+          <ArrowLeft className="h-4 w-4" /> Retour {origine.label}
         </a>
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any

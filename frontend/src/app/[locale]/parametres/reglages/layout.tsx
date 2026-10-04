@@ -36,7 +36,7 @@ export default function ReglagesLayout({
       <AppTopbar
         breadcrumbs={[
           { label: "Paramètres", href: "/parametres" },
-          { label: "Entreprises" }
+          { label: "Réglages" }
         ]}
         onOpenSidebar={onOpenSidebar}
       />

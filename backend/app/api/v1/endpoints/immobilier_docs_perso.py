@@ -42,7 +42,7 @@ def _require_volet(user: CurrentUser) -> None:
     if volets is None or "immobilier" not in volets:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Volet « Gestion immobilière » non autorisé.",
+            detail="Volet « Immobilier » non autorisé.",
         )
 
 

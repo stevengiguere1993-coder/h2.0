@@ -992,7 +992,7 @@ export default function AdminProjetPage() {
               </h2>
               <p className="mb-3 mt-1 text-[11px] text-white/35">
                 Toute la fiche est calculée automatiquement (pôle
-                locatif, volet Entreprises, QuickBooks). Cette
+                locatif, pôle Entreprises, QuickBooks). Cette
                 carte contrôle seulement l&apos;habillage et le niveau
                 de transparence de ce que l&apos;investisseur voit.
               </p>
