@@ -344,7 +344,7 @@ async def _dossier_entreprise(
     liens: Dict[int, DriveEntityLink],
     convention: Optional[DriveConvention],
     drive_user_id: Optional[int],
-) -> tuple[Optional[str], Optional[str], Optional[str]]:
+) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
     """(folder_id, url, source) du dossier Drive de l'entreprise, dans
     l'ordre : URL collée sur la fiche → lien « Documents Drive » de la
     fiche → découverte dans le dossier parent de la convention Entreprise
@@ -353,29 +353,38 @@ async def _dossier_entreprise(
     du dossier partagé pour chacune des entreprises »."""
     fid = folder_id_depuis_url(getattr(e, "drive_folder_url", None))
     if fid:
-        return fid, getattr(e, "drive_folder_url", None), "fiche"
+        return fid, getattr(e, "drive_folder_url", None), "fiche", None
     lien = liens.get(e.id)
     if lien is not None and lien.drive_folder_id:
-        return lien.drive_folder_id, url_dossier(lien.drive_folder_id), "lien"
+        return lien.drive_folder_id, url_dossier(lien.drive_folder_id), "lien", lien.drive_folder_name
     parent = getattr(convention, "parent_folder_drive_id", None) if convention else None
     if not parent or drive_user_id is None:
-        return None, None, None
+        return None, None, None, None
     import time as _time
 
     cache = _DECOUVERTE.get(e.id)
     if cache and _time.monotonic() - cache[1] < _DECOUVERTE_TTL:
         fid = cache[0]
-        return (fid, url_dossier(fid), "convention") if fid else (None, None, None)
+        return (fid, url_dossier(fid), "convention", cache[2]) if fid else (None, None, None, None)
     try:
         from app.services.drive_api import FOLDER_MIME, list_folder_contents
 
         voulu = normaliser_nom(e.name)
+        # Numéro d'entreprise (« 9520-8955 », « 9417-1287 ») : s'il est
+        # dans le nom Kratos ET dans le nom du dossier, c'est le même
+        # (« 3 - 9520-8955 Qc inc. (Vincent & …) »).
+        numeros = set(re.findall(r"\d{4}-\d{4}", e.name or ""))
         trouve: Optional[Dict[str, Any]] = None
         token: Optional[str] = None
         for _ in range(20):
             page = await list_folder_contents(drive_user_id, db, parent, page_size=200, page_token=token)
             for f in page.get("files") or []:
-                if f.get("mimeType") == FOLDER_MIME and normaliser_nom(f.get("name")) == voulu:
+                if f.get("mimeType") != FOLDER_MIME:
+                    continue
+                nom_f = f.get("name") or ""
+                if normaliser_nom(nom_f) == voulu or (
+                    numeros and numeros & set(re.findall(r"\d{4}-\d{4}", nom_f))
+                ):
                     trouve = f
                     break
             token = page.get("next_page_token")
@@ -383,11 +392,11 @@ async def _dossier_entreprise(
                 break
     except Exception as exc:  # noqa: BLE001
         log.warning("Découverte du dossier Drive de %s impossible : %s", e.name, exc)
-        _DECOUVERTE[e.id] = (None, _time.monotonic())
-        return None, None, None
+        _DECOUVERTE[e.id] = (None, _time.monotonic(), None)
+        return None, None, None, None
     if trouve is None:
-        _DECOUVERTE[e.id] = (None, _time.monotonic())
-        return None, None, None
+        _DECOUVERTE[e.id] = (None, _time.monotonic(), None)
+        return None, None, None, None
     fid = str(trouve["id"])
     # On enregistre le lien : la section « Documents Drive » de la fiche
     # et la copie des reçus pointent désormais le même dossier.
@@ -405,8 +414,8 @@ async def _dossier_entreprise(
     except Exception as exc:  # noqa: BLE001
         await db.rollback()
         log.warning("Lien Drive de %s non enregistré : %s", e.name, exc)
-    _DECOUVERTE[e.id] = (fid, _time.monotonic())
-    return fid, url_dossier(fid), "convention"
+    _DECOUVERTE[e.id] = (fid, _time.monotonic(), trouve.get("name"))
+    return fid, url_dossier(fid), "convention", trouve.get("name")
 
 
 async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
@@ -483,7 +492,7 @@ async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
             qbo_ok = bool(c and c.realm_id and c.refresh_token)
             qbo_nom = c.company_name if c else None
             qbo_realm = c.realm_id if c else None
-        folder, url, source = await _dossier_entreprise(db, e, liens, convention, drive_user_id)
+        folder, url, source, nom_dossier = await _dossier_entreprise(db, e, liens, convention, drive_user_id)
         n, last = stats.get(e.id, (0, None))
         out.append(
             {
@@ -497,6 +506,7 @@ async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
                 "drive_folder_url": url,
                 "drive_folder_id": folder,
                 "drive_source": source,
+                "drive_folder_name": nom_dossier,
                 "prete": bool(qbo_ok and folder),
                 "copies": n,
                 "derniere_copie": last.isoformat() if last else None,
@@ -655,6 +665,7 @@ def _nouveau_rapport_entreprise(e: Dict[str, Any]) -> Dict[str, Any]:
         "hors_periode": 0,
         "non_recu": 0,
         "hors_depenses": 0,
+        "txn_supprimees": 0,
         "erreurs": 0,
         "messages": [],
         "apercu": [],
@@ -801,8 +812,15 @@ async def _traiter_entreprise(
                         cache_txn[(t, v)] = await (qbo.get_bill(v) if t == "Bill" else qbo.get_purchase(v))
                     except QuickBooksError as exc:
                         cache_txn[(t, v)] = None
-                        rapport["erreurs"] += 1
-                        rapport["messages"].append(f"{t} {v} : lecture impossible ({str(exc)[:120]}).")
+                        msg = str(exc)
+                        if re.search(r"inactive|introuvable|not found|deleted|supprim", msg, re.I):
+                            # Dépense supprimée / rendue inactive dans QuickBooks :
+                            # la pièce jointe subsiste mais n'a plus de dépense.
+                            # Ce n'est pas une erreur (simulation Phil 2026-10-04).
+                            rapport["txn_supprimees"] += 1
+                        else:
+                            rapport["erreurs"] += 1
+                            rapport["messages"].append(f"{t} {v} : lecture impossible ({msg[:120]}).")
                 txn = cache_txn[(t, v)]
                 if txn is None:
                     continue

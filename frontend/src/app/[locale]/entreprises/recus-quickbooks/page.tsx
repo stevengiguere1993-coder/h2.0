@@ -39,6 +39,8 @@ type EntrepriseEtat = {
   // "fiche" (URL collée) | "lien" (Documents Drive de la fiche) |
   // "convention" (retrouvé dans le dossier parent des entreprises).
   drive_source: "fiche" | "lien" | "convention" | null;
+  // Nom réel du dossier Drive lié (quand il est connu).
+  drive_folder_name?: string | null;
   prete: boolean;
   copies: number;
   derniere_copie: string | null;
@@ -66,6 +68,7 @@ type RapportEntreprise = {
   hors_periode: number;
   non_recu: number;
   hors_depenses: number;
+  txn_supprimees?: number;
   erreurs: number;
   messages: string[];
   apercu: Apercu[];
@@ -493,11 +496,13 @@ export default function RecusQuickbooksPage() {
                             className="inline-flex items-center gap-1 text-white hover:text-accent-500 hover:underline"
                           >
                             <FolderOpen className="h-3.5 w-3.5 text-emerald-600" />
-                            {e.drive_source === "convention"
-                              ? "Dossier retrouvé dans le Drive"
-                              : e.drive_source === "lien"
-                                ? "Dossier de la fiche"
-                                : "Dossier lié"}
+                            {e.drive_folder_name
+                              ? `« ${e.drive_folder_name} »`
+                              : e.drive_source === "convention"
+                                ? "Dossier retrouvé dans le Drive"
+                                : e.drive_source === "lien"
+                                  ? "Dossier de la fiche"
+                                  : "Dossier lié"}
                             <ExternalLink className="h-3 w-3" />
                           </a>
                         ) : (
@@ -848,6 +853,7 @@ function RapportView({
               {rapport.simulation ? `${r.prevus} à copier` : `${r.copies} copié(s)`} ·{" "}
               {r.ignores_deja_traites} déjà traité(s) · {r.ignores_drive} déjà dans le
               Drive · {r.hors_periode} hors période · {r.hors_depenses} hors dépenses ·{" "}
+              {r.txn_supprimees ? `${r.txn_supprimees} dépense(s) supprimée(s) dans QuickBooks · ` : ""}
               {r.a_classer} à classer ·{" "}
               {r.erreurs} erreur(s)
             </span>
