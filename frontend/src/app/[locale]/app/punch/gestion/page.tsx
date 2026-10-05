@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Download,
   Loader2,
   Plus,
+  Search,
   Trash2,
   Users
 } from "lucide-react";
@@ -180,6 +182,14 @@ function fmtHm(h: number): string {
   const hh = Math.floor(totalMin / 60);
   const mm = totalMin % 60;
   return `${hh} h ${String(mm).padStart(2, "0")}`;
+}
+
+// Recherche insensible aux accents et à la casse (« eric » trouve « Éric »).
+function sansAccents(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
 }
 
 export default function PunchGestionPage() {
@@ -724,18 +734,12 @@ export default function PunchGestionPage() {
             </>
           )}
 
-          <select
-            value={filterEmploye}
-            onChange={(e) => setFilterEmploye(e.target.value)}
-            className="input ml-auto w-48"
-          >
-            <option value="">Tous les employés</option>
-            {employes.map((e) => (
-              <option key={e.id} value={String(e.id)}>
-                {e.full_name}
-              </option>
-            ))}
-          </select>
+          <ChoixEmploye
+            employes={employes}
+            valeur={filterEmploye}
+            onChoisir={setFilterEmploye}
+            className="ml-auto w-48"
+          />
 
           <div className="rounded-md bg-brand-900 px-3 py-2 text-sm">
             <span className="text-white/50">Total </span>
@@ -1563,6 +1567,233 @@ function MonthCalendar({
         Clique le numéro de la journée pour filtrer la liste, ou un
         nom pour ouvrir le punch correspondant.
       </p>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// ChoixEmploye — filtre « employé » de la barre d'outils (Steven,
+// 2026-10-05). Même comportement que la liste d'entreprises de
+// Comptabilité : un clic ouvre le menu, on tape quelques lettres du nom
+// (sans se soucier des accents ni des majuscules), puis flèches + Entrée
+// ou clic pour choisir. La fenêtre montre trois lignes à la fois et défile
+// pour les autres ; « Tous les employés » reste le premier choix.
+// ---------------------------------------------------------------------------
+
+type LigneEmploye = { id: string; nom: string };
+
+function ChoixEmploye({
+  employes,
+  valeur,
+  onChoisir,
+  className
+}: {
+  employes: Employe[];
+  /** Id de l'employé filtré ; "" = tous les employés. */
+  valeur: string;
+  onChoisir: (id: string) => void;
+  className?: string;
+}) {
+  const [ouvert, setOuvert] = useState(false);
+  const [texte, setTexte] = useState("");
+  // `defiler` : la liste fait défiler la ligne active jusqu'à la montrer
+  // (clavier, ouverture, frappe). Pas au survol de la souris : la ligne
+  // est déjà sous le curseur et la liste sauterait pendant qu'on la fait
+  // défiler à la molette.
+  const [actif, setActif] = useState({ index: 0, defiler: false });
+  const boite = useRef<HTMLDivElement | null>(null);
+  const bouton = useRef<HTMLButtonElement | null>(null);
+  const liste = useRef<HTMLUListElement | null>(null);
+
+  const choisi = employes.find((e) => String(e.id) === valeur) ?? null;
+  const toutes = useMemo<LigneEmploye[]>(
+    () => [
+      { id: "", nom: "Tous les employés" },
+      ...employes.map((e) => ({ id: String(e.id), nom: e.full_name }))
+    ],
+    [employes]
+  );
+  // Pendant une recherche, seuls les noms qui la contiennent restent.
+  const lignes = useMemo(() => {
+    const q = sansAccents(texte.trim());
+    return q
+      ? toutes.filter((l) => l.id && sansAccents(l.nom).includes(q))
+      : toutes;
+  }, [toutes, texte]);
+
+  function ouvrirMenu(debut = "") {
+    setTexte(debut);
+    setActif({
+      index: debut ? 0 : Math.max(0, toutes.findIndex((l) => l.id === valeur)),
+      defiler: true
+    });
+    setOuvert(true);
+  }
+
+  function fermer(rendreLeFocus: boolean) {
+    setOuvert(false);
+    if (rendreLeFocus) bouton.current?.focus();
+  }
+
+  function choisir(l: LigneEmploye | undefined) {
+    if (!l) return;
+    fermer(true);
+    onChoisir(l.id);
+  }
+
+  // Un clic hors du menu le ferme.
+  useEffect(() => {
+    if (!ouvert) return;
+    function onDown(ev: MouseEvent) {
+      if (boite.current && !boite.current.contains(ev.target as Node))
+        setOuvert(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [ouvert]);
+
+  useEffect(() => {
+    if (!ouvert || !actif.defiler) return;
+    const ligne = liste.current?.children[actif.index] as
+      | HTMLElement
+      | undefined;
+    ligne?.scrollIntoView({ block: "nearest" });
+  }, [ouvert, actif]);
+
+  return (
+    <div ref={boite} className={`relative ${className || ""}`}>
+      <button
+        ref={bouton}
+        type="button"
+        className="input flex items-center gap-2 text-left text-sm"
+        aria-haspopup="listbox"
+        aria-expanded={ouvert}
+        title={choisi ? choisi.full_name : "Filtrer par employé"}
+        onClick={() => (ouvert ? fermer(false) : ouvrirMenu())}
+        onKeyDown={(ev) => {
+          if (ouvert) return;
+          if (ev.key === "ArrowDown") {
+            ev.preventDefault();
+            ouvrirMenu();
+          } else if (
+            ev.key.length === 1 &&
+            ev.key !== " " &&
+            !ev.ctrlKey &&
+            !ev.metaKey &&
+            !ev.altKey
+          ) {
+            // Taper une lettre sur le bouton lance la recherche avec elle.
+            ev.preventDefault();
+            ouvrirMenu(ev.key);
+          }
+        }}
+      >
+        <span className="min-w-0 flex-1 truncate">
+          {choisi ? choisi.full_name : "Tous les employés"}
+        </span>
+        <ChevronDown
+          className={`h-4 w-4 shrink-0 text-white/50 transition ${
+            ouvert ? "rotate-180" : ""
+          }`}
+        />
+      </button>
+
+      {ouvert ? (
+        <div className="absolute inset-x-0 z-30 mt-1 overflow-hidden rounded-lg border border-brand-800 bg-brand-950 shadow-2xl">
+          <div className="relative border-b border-brand-800 p-2">
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
+            {/* text-base sur téléphone : sous 16 px, iOS zoome la page
+                quand le champ prend le focus. */}
+            <input
+              type="text"
+              autoFocus
+              className="input py-1.5 pl-8 pr-2 text-base sm:text-sm"
+              placeholder="Tape un nom…"
+              value={texte}
+              maxLength={60}
+              autoComplete="off"
+              aria-label="Chercher un employé"
+              onChange={(ev) => {
+                setTexte(ev.target.value);
+                setActif({ index: 0, defiler: true });
+              }}
+              onKeyDown={(ev) => {
+                if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+                  ev.preventDefault();
+                  const pas = ev.key === "ArrowDown" ? 1 : -1;
+                  setActif({
+                    index: Math.min(
+                      Math.max(actif.index + pas, 0),
+                      Math.max(lignes.length - 1, 0)
+                    ),
+                    defiler: true
+                  });
+                } else if (ev.key === "Enter") {
+                  ev.preventDefault();
+                  choisir(lignes[Math.min(actif.index, lignes.length - 1)]);
+                } else if (ev.key === "Escape") {
+                  ev.preventDefault();
+                  fermer(true);
+                } else if (ev.key === "Tab") {
+                  setOuvert(false);
+                }
+              }}
+            />
+          </div>
+          {lignes.length === 0 ? (
+            <p className="px-3 py-3 text-sm text-white/60">
+              Aucun employé ne correspond à « {texte.trim()} ».
+            </p>
+          ) : (
+            // h-10 par ligne et 7.5rem de haut : trois lignes visibles.
+            <ul
+              ref={liste}
+              role="listbox"
+              aria-label="Employés"
+              className="max-h-[7.5rem] overflow-y-auto"
+            >
+              {lignes.map((l, i) => (
+                <li
+                  key={l.id || "tous"}
+                  role="option"
+                  aria-selected={l.id === valeur}
+                >
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    className={`flex h-10 w-full items-center gap-2 px-3 text-left text-sm ${
+                      i === actif.index ? "bg-brand-800" : ""
+                    }`}
+                    // onMouseMove et non onMouseEnter : quand la liste
+                    // change sous un curseur immobile (frappe, molette),
+                    // la ligne active ne doit pas sauter sur celle qui
+                    // passe sous la souris.
+                    onMouseMove={() => {
+                      if (actif.index !== i)
+                        setActif({ index: i, defiler: false });
+                    }}
+                    onClick={() => choisir(l)}
+                  >
+                    <span
+                      className={`min-w-0 flex-1 truncate ${
+                        l.id === valeur
+                          ? "font-semibold text-white"
+                          : "text-white/85"
+                      }`}
+                    >
+                      {l.nom}
+                    </span>
+                    {l.id === valeur ? (
+                      <Check className="h-4 w-4 shrink-0 text-accent-500" />
+                    ) : null}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
