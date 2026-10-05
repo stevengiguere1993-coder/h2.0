@@ -1005,6 +1005,12 @@ function PunchModal({
     if (ms < 0) return null;
     return Math.round((ms / 3600_000) * 100) / 100;
   }, [startedAt, endedAt]);
+  // Un début après la fin passait sans erreur : heures vides, punch rangé
+  // à la date du début (Steven, 2026-10-05). Refusé à l'enregistrement.
+  const finAvantDebut =
+    !!startedAt &&
+    !!endedAt &&
+    new Date(endedAt).getTime() < new Date(startedAt).getTime();
 
   async function save(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -1014,6 +1020,13 @@ function PunchModal({
     }
     if (!startedAt) {
       setError("Date de début requise.");
+      return;
+    }
+    if (
+      endedAt &&
+      new Date(endedAt).getTime() <= new Date(startedAt).getTime()
+    ) {
+      setError("L'heure de début doit être avant l'heure de fin.");
       return;
     }
     setBusy(true);
@@ -1186,6 +1199,11 @@ function PunchModal({
             <span className="font-semibold text-white">
               {computedHours != null ? fmtHm(computedHours) : "—"}
             </span>
+            {finAvantDebut ? (
+              <span className="ml-2 font-semibold text-rose-300">
+                La fin est avant le début.
+              </span>
+            ) : null}
           </div>
 
           {existing?.geolocation ? (

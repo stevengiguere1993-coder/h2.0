@@ -455,6 +455,21 @@ def _exiger_admin_pour_regime(user, regime: Optional[str]) -> None:
         )
 
 
+def _exiger_debut_avant_fin(debut: Optional[datetime], fin: Optional[datetime]) -> None:
+    """Un punch saisi à la main doit finir après son début : un début après
+    la fin passait avec des heures vides (Steven, 2026-10-05). Une date
+    sans fuseau compte comme UTC (sinon la comparaison plante)."""
+    if debut is None or fin is None:
+        return
+    if fin.replace(tzinfo=fin.tzinfo or timezone.utc) <= debut.replace(
+        tzinfo=debut.tzinfo or timezone.utc
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "L'heure de début doit être avant l'heure de fin.",
+        )
+
+
 class ApproveBody(BaseModel):
     #: Régime posé à l'approbation (admin+) : ccq | hors_decret.
     regime: Optional[str] = None
@@ -1390,6 +1405,7 @@ async def create_manual_punch(
     data: PunchManualCreate, db: DBSession, user: RequireManager
 ) -> PunchRead:
     _exiger_admin_pour_regime(user, data.regime)
+    _exiger_debut_avant_fin(data.started_at, data.ended_at)
     hours = (
         data.hours
         if data.hours is not None
@@ -1438,6 +1454,12 @@ async def update_manual_punch(
         if fields["regime"] is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Régime requis (ccq | hors_decret).")
         _exiger_admin_pour_regime(user, fields["regime"])
+    # Seulement quand les heures changent : approuver ou changer le régime
+    # d'un ancien punch à l'envers reste possible.
+    if "started_at" in fields or "ended_at" in fields:
+        _exiger_debut_avant_fin(
+            fields.get("started_at", p.started_at), fields.get("ended_at", p.ended_at)
+        )
     avant = {k: getattr(p, k) for k in ("regime", "hours", "started_at", "ended_at", "project_id", "approved", "employe_id")}
     for k, v in fields.items():
         if k in ("task", "notes") and v == "":
