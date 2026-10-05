@@ -23,6 +23,12 @@ destinataire Interac) n'entrent en usage qu'une fois approuvées par une
 autre personne que celle qui les a saisies. Une ligne de coordonnées
 n'est jamais modifiée : un changement crée une nouvelle ligne, l'ancienne
 passe à « remplace ».
+
+Paiement automatique (Steven, 2026-10-05 : « l'idée est de reproduire
+Plooto et ce qu'il fait ») : une entreprise qui l'active dans ses réglages
+n'a plus rien à envoyer dans AccèsD. À l'approbation, Kratos prélève le
+total du lot dans son compte Desjardins et paie chaque fournisseur par
+VoPay (``PaiementOperation``), puis inscrit les paiements dans QuickBooks.
 """
 
 from __future__ import annotations
@@ -86,6 +92,30 @@ class PaiementReglage(Base):
     #: Compte bancaire QuickBooks d'où partent les paiements inscrits.
     qbo_compte_banque_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     qbo_compte_banque_nom: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    #: Paiement automatique par VoPay. Colonnes facultatives : le
+    #: démarrage les ajoute aux bases existantes. Le compte prélevé est le
+    #: compte de l'entreprise ci-dessus (``retour_*``).
+    auto_actif: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    #: « test » (environnement de test VoPay, aucun argent réel) ou
+    #: « production ».
+    auto_environnement: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    vopay_account_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    #: Clé d'API et secret partagé VoPay, chiffrés (``secret_vault``) ;
+    #: jamais renvoyés par l'API.
+    vopay_cle_chiffree: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    vopay_secret_chiffre: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    #: Sous-compte VoPay (ClientAccountID), quand un seul compte VoPay sert
+    #: plusieurs entreprises.
+    vopay_sous_compte: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    #: Adresse de l'entreprise : VoPay l'exige pour prélever son compte.
+    adresse: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    ville: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    province: Mapped[Optional[str]] = mapped_column(String(2), nullable=True)
+    code_postal: Mapped[Optional[str]] = mapped_column(String(7), nullable=True)
+    #: Virements Interac automatiques : question et réponse (chiffrée) pour
+    #: les fournisseurs qui n'ont pas le dépôt automatique Interac.
+    interac_question: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    interac_reponse_chiffree: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     modifie_par_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -169,6 +199,9 @@ class LotPaiement(Base):
     #: « brouillon », « soumis », « approuve », « fichier_cree » (dépôt
     #: direct) ou « a_envoyer » (Interac), « transmis » (fichier transmis
     #: ou tous les virements envoyés), « paye », « refuse » ou « annule ».
+    #: Paiement automatique : « prelevement » (compte de l'entreprise en
+    #: cours de prélèvement), « envoi » (fournisseurs en cours de
+    #: paiement), « echec » (prélèvement refusé).
     statut: Mapped[str] = mapped_column(
         String(16), nullable=False, default="brouillon", index=True
     )
@@ -220,6 +253,22 @@ class LotPaiement(Base):
     transmis_le: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     #: Paiements inscrits dans QuickBooks.
     paye_le: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Payé automatiquement par VoPay (décidé à l'approbation complète,
+    #: selon les réglages de l'entreprise).
+    envoi_auto: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    #: Ce qui empêche le paiement automatique d'avancer (réglages
+    #: incomplets, QuickBooks injoignable…), et quand Kratos réessaie.
+    auto_erreur: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    auto_prochain_essai: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    auto_tentatives: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    #: Environnement VoPay du lot (« test » ou « production »), fixé au
+    #: lancement du prélèvement. Un lot de test n'inscrit rien dans
+    #: QuickBooks : aucun argent réel n'a bougé.
+    auto_environnement: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    #: Prélèvement du compte de l'entreprise réussi.
+    preleve_le: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     annule_par_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -297,6 +346,72 @@ class LotPaiementApprobation(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class PaiementOperation(Base):
+    """Une opération chez VoPay (paiement automatique) : le prélèvement du
+    compte de l'entreprise pour un lot, le paiement d'un fournisseur, ou le
+    retour à l'entreprise de l'argent d'un paiement retiré du lot. Une
+    reprise crée une nouvelle opération ; l'ancienne reste pour
+    l'historique."""
+
+    __tablename__ = "paiements_operations"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    lot_id: Mapped[int] = mapped_column(
+        ForeignKey("paiements_lots.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    entreprise_id: Mapped[int] = mapped_column(
+        ForeignKey("entreprises.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    #: « prelevement », « paiement » ou « retour ».
+    sorte: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: « eft » (dépôt direct) ou « interac ».
+    rail: Mapped[str] = mapped_column(String(16), nullable=False)
+    qbo_vendor_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    fournisseur_nom: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    #: Coordonnées approuvées du fournisseur utilisées pour ce paiement.
+    compte_bancaire_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("paiements_comptes_fournisseurs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    montant_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: « test » ou « production », au moment de l'opération.
+    environnement: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: Clé d'idempotence envoyée à VoPay : une reprise de la même
+    #: opération réutilise la même clé, VoPay refuse le doublon.
+    cle_idempotence: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    #: Référence lisible dans le portail VoPay (ClientReferenceNumber).
+    reference: Mapped[str] = mapped_column(String(64), nullable=False)
+    transaction_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    #: « a_envoyer », « envoi » (demande en route vers VoPay), « incertain »
+    #: (réponse perdue : Kratos reprend la demande une fois, avec la même
+    #: clé), « a_verifier » (un approbateur dit si elle est partie, portail
+    #: VoPay à l'appui), « en_cours », « reussi », « echoue » ou « annule ».
+    statut: Mapped[str] = mapped_column(String(16), nullable=False, default="a_envoyer", index=True)
+    #: Statut tel que VoPay le donne (« in progress », « sent »…).
+    statut_vopay: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    erreur: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    #: Demandes envoyées à VoPay avec cette clé.
+    tentatives: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Prochain geste de Kratos : envoi, reprise ou suivi.
+    prochain_essai: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Première réponse perdue : une deuxième incertitude attend un approbateur.
+    incertain_le: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cree_par_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    #: Demande acceptée par VoPay, dernière vérification, fin (réussie ou non).
+    envoye_le: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    verifie_le: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    termine_le: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class PaiementEvenement(Base):

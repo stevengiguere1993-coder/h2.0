@@ -8,7 +8,13 @@
          dans AccèsD
        → Interac : envoi préparé (approbateur, avec code) → chaque
          virement envoyé dans AccèsD par l'approbateur, puis indiqué ici
-       → payé (paiements inscrits dans QuickBooks). */
+       → payé (paiements inscrits dans QuickBooks).
+
+   Paiement automatique (VoPay, entreprise qui l'a activé) : à la dernière
+   approbation, Kratos fait tout seul le reste, le jour prévu :
+     approuvé → prélèvement du total dans le compte de l'entreprise →
+       paiement de chaque fournisseur → fournisseurs payés → payé
+       (inscrit dans QuickBooks ; un lot de test s'arrête avant). */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -22,14 +28,17 @@ import {
   FileText,
   Loader2,
   RefreshCw,
+  RotateCcw,
   Send,
   Trash2,
   Undo2,
-  X
+  X,
+  Zap
 } from "lucide-react";
 
 import {
   BADGE_LOT,
+  BADGE_OPERATION,
   CARTE,
   ACTIONS,
   ErreurApi,
@@ -42,9 +51,13 @@ import {
   type LotResume,
   type ModePaiement,
   type Moi,
+  type OperationVoPay,
+  type PaiementAuto,
   type StatutLot,
+  type SuiviAuto,
   type Virement,
   argent,
+  aujourdhui,
   compteMasque,
   destinataireLisible,
   envoyer,
@@ -53,6 +66,7 @@ import {
   message,
   moment,
   obtenir,
+  payeAutomatiquement,
   telecharger
 } from "./_api";
 import { type AppelSensible, estAnnulation } from "./_deux-facteurs";
@@ -145,8 +159,19 @@ export function ListeLots({
                 <span className="text-sm font-semibold text-[var(--qg-text)]">Lot n° {l.id}</span>
                 <span className={`badge ${BADGE_LOT[l.statut]}`}>{l.statut_libelle}</span>
                 {l.mode === "interac" ? <span className="badge badge-neutral">Interac</span> : null}
+                {l.envoi_auto ? (
+                  <span
+                    className={`badge inline-flex items-center gap-1 ${
+                      l.auto_environnement === "test" ? "badge-amber" : "badge-neutral"
+                    }`}
+                  >
+                    <Zap className="h-3 w-3" />
+                    {l.auto_environnement === "test" ? "Automatique (test)" : "Automatique"}
+                  </span>
+                ) : null}
                 <span className="text-sm text-[var(--qg-text-muted)]">
-                  {l.mode === "interac" ? "Envoi prévu le" : "Dépôt le"} {jour(l.date_paiement)}
+                  {l.envoi_auto ? "Paiement le" : l.mode === "interac" ? "Envoi prévu le" : "Dépôt le"}{" "}
+                  {jour(l.date_paiement)}
                 </span>
                 <span className="text-sm text-[var(--qg-text-muted)]">
                   {l.nb_lignes} facture{l.nb_lignes > 1 ? "s" : ""}
@@ -191,6 +216,21 @@ const ETAPES: Record<ModePaiement, { statut: StatutLot; libelle: string }[]> = {
     { statut: "paye", libelle: "Payé" }
   ]
 };
+
+/** Paiement automatique : Kratos fait tout après l'approbation. Un lot de
+ *  test (aucun argent réel) n'est pas inscrit dans QuickBooks. */
+function etapesAuto(test: boolean): { statut: StatutLot; libelle: string }[] {
+  const debut: { statut: StatutLot; libelle: string }[] = [
+    { statut: "brouillon", libelle: "Préparé" },
+    { statut: "soumis", libelle: "Soumis" },
+    { statut: "approuve", libelle: "Approuvé" },
+    { statut: "prelevement", libelle: "Prélèvement" },
+    { statut: "envoi", libelle: "Paiements" }
+  ];
+  return test
+    ? [...debut, { statut: "paye", libelle: "Terminé (test)" }]
+    : [...debut, { statut: "transmis", libelle: "Fournisseurs payés" }, { statut: "paye", libelle: "QuickBooks" }];
+}
 
 type Edition = { date: string; note: string; montants: Record<number, string>; retirees: number[] };
 
@@ -309,12 +349,25 @@ export function DetailLot({
 
   const a = lot.actions;
   const interac = lot.mode === "interac";
-  const etapes = ETAPES[lot.mode];
-  const nbVersements = interac ? lot.virements.length : depots.length;
-  // L'erreur d'un geste sur un virement s'affiche sous ce virement.
-  const [, virementEnErreur] = /^(?:envoye|retirer):(.+)$/.exec(dernierGeste ?? "") ?? [];
+  // Paiement automatique : décidé à l'approbation (avant, selon le réglage
+  // actuel de l'entreprise).
+  const auto = payeAutomatiquement(lot);
+  const testAuto = auto && (lot.auto_environnement ?? lot.auto_environnement_entreprise) === "test";
+  const testEnRoute =
+    lot.envoi_auto && lot.auto_environnement === "test" && (lot.statut === "prelevement" || lot.statut === "envoi");
+  const etapes = auto ? etapesAuto(testAuto) : ETAPES[lot.mode];
+  const nbVersements = auto
+    ? new Set(lot.lignes.map((l) => l.fournisseur_id)).size
+    : interac
+      ? lot.virements.length
+      : depots.length;
+  // L'erreur d'un geste sur une ligne (virement, paiement automatique)
+  // s'affiche sous cette ligne.
+  const [, ligneEnErreur] = /^(?:envoye|retirer|auto):(.+)$/.exec(dernierGeste ?? "") ?? [];
+  const erreurLigne = ligneEnErreur && erreurAction ? { id: ligneEnErreur, texte: erreurAction } : null;
   const rang = etapes.findIndex((e) => e.statut === lot.statut);
   const nbApprobations = lot.decisions.filter((d) => d.decision === "approuve").length;
+  const derniereApprobation = nbApprobations + 1 >= lot.approbations_requises;
 
   return (
     <div className="space-y-3">
@@ -326,11 +379,18 @@ export function DetailLot({
           <p className="text-lg font-bold text-[var(--qg-text)]">Lot n° {lot.id}</p>
           <span className={`badge ${BADGE_LOT[lot.statut]}`}>{lot.statut_libelle}</span>
           <span className="badge badge-neutral">{interac ? "Virements Interac" : "Dépôt direct"}</span>
+          {auto ? (
+            <span className={`badge inline-flex items-center gap-1 ${testAuto ? "badge-amber" : "badge-emerald"}`}>
+              <Zap className="h-3 w-3" />
+              {testAuto ? "Paiement automatique (test)" : "Paiement automatique"}
+            </span>
+          ) : null}
           <span className="ml-auto text-lg font-bold tabular-nums text-[var(--qg-text)]">{argent(lot.total)}</span>
         </div>
         <p className="mt-1 text-sm text-[var(--qg-text-muted)]">
-          {interac ? "Envoi prévu le" : "Dépôt le"} {jour(lot.date_paiement)} · {lot.nb_lignes} facture
-          {lot.nb_lignes > 1 ? "s" : ""} · {nbVersements} {interac ? "virement" : "dépôt"}
+          {auto ? "Paiement le" : interac ? "Envoi prévu le" : "Dépôt le"} {jour(lot.date_paiement)} · {lot.nb_lignes}{" "}
+          facture
+          {lot.nb_lignes > 1 ? "s" : ""} · {nbVersements} {auto ? "paiement" : interac ? "virement" : "dépôt"}
           {nbVersements > 1 ? "s" : ""}
           {lot.cree_par ? ` · préparé par ${lot.cree_par}` : ""}
           {lot.fichier_numero ? ` · fichier n° ${String(lot.fichier_numero).padStart(4, "0")}` : ""}
@@ -362,18 +422,48 @@ export function DetailLot({
           </ol>
         ) : null}
 
-        <Consigne lot={lot} moi={moi} />
+        <Consigne lot={lot} moi={moi} auto={auto} test={testAuto} />
       </section>
 
       {/* Fichier tout juste créé : où le transmettre */}
       {fichier ? <PanneauFichier fichier={fichier} /> : null}
 
-      {/* Virements Interac (un par fournisseur), ou dépôts du fichier */}
-      {interac ? (
+      {/* Paiement automatique (VoPay), virements Interac (un par
+          fournisseur), ou dépôts du fichier */}
+      {lot.envoi_auto && lot.auto ? (
+        <PanneauAuto
+          lot={lot}
+          suivi={lot.auto}
+          test={testAuto}
+          occupe={occupe}
+          erreur={erreurLigne}
+          onReessayer={(cle, op) =>
+            void agir(`auto:${cle}`, () =>
+              appeler<LotDetail>(`/lots/${lot.id}/auto/reessayer`, { operation_id: op.id })
+            )
+          }
+          onResoudre={(cle, op, parti, transaction) =>
+            void agir(`auto:${cle}`, () =>
+              appeler<LotDetail>(`/lots/${lot.id}/operations/${op.id}/resoudre`, {
+                parti,
+                transaction_id: parti ? transaction.trim() : null
+              })
+            )
+          }
+          onRetirer={(cle, p, motif) =>
+            void agir(`auto:${cle}`, () =>
+              appeler<LotDetail>(`/lots/${lot.id}/paiements/${encodeURIComponent(p.fournisseur_id)}/retirer`, {
+                motif: motif.trim()
+              })
+            )
+          }
+        />
+      ) : interac ? (
         <PanneauVirements
           lot={lot}
+          auto={auto}
           occupe={occupe}
-          erreur={virementEnErreur && erreurAction ? { id: virementEnErreur, texte: erreurAction } : null}
+          erreur={erreurLigne}
           onEnvoye={(v, reference) =>
             void agir(`envoye:${v.fournisseur_id}`, () =>
               envoyer<LotDetail>(`/lots/${lot.id}/virements/${encodeURIComponent(v.fournisseur_id)}/envoye`, {
@@ -390,7 +480,7 @@ export function DetailLot({
           }
         />
       ) : (
-        <PanneauDepots depots={depots} />
+        <PanneauDepots depots={depots} auto={auto} />
       )}
 
       {/* Factures */}
@@ -570,6 +660,21 @@ export function DetailLot({
       <section className="rounded-2xl border p-4" style={CARTE}>
         {saisie === "approuver" || saisie === "refuser" || saisie === "annuler" ? (
           <div className="space-y-2">
+            {saisie === "approuver" && auto && derniereApprobation ? (
+              <p
+                className={`flex items-start gap-1.5 text-sm ${testAuto ? "text-[var(--qg-text)]" : "text-amber-300"}`}
+              >
+                <Zap className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>
+                  Ton approbation est la dernière : Kratos paiera ce lot tout seul.{" "}
+                  {lot.date_paiement > aujourdhui()
+                    ? `Le ${jour(lot.date_paiement)}, il prélèvera`
+                    : "Il prélève tout de suite"}{" "}
+                  {argent(lot.total)} dans le compte de l&apos;entreprise, puis paiera chaque fournisseur par VoPay
+                  {testAuto ? " (environnement de test : aucun argent réel)." : "."}
+                </span>
+              </p>
+            ) : null}
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-[var(--qg-text-muted)]">
                 {saisie === "approuver"
@@ -580,7 +685,9 @@ export function DetailLot({
                       ? "Pourquoi annuler ? Le fichier ne doit pas avoir été transmis à Desjardins."
                       : lot.statut === "a_envoyer"
                         ? "Pourquoi annuler ? Aucun virement ne doit avoir été envoyé dans AccèsD."
-                        : "Pourquoi annuler ? (facultatif)"}
+                        : testEnRoute
+                          ? "Pourquoi abandonner ce lot de test ? (aucun argent réel)"
+                          : "Pourquoi annuler ? (facultatif)"}
               </span>
               <textarea
                 className="input min-h-[4.5rem] text-sm"
@@ -613,7 +720,7 @@ export function DetailLot({
                   }
                 >
                   {occupe === "approuver" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                  Approuver {argent(lot.total)}
+                  {auto && derniereApprobation ? "Approuver et payer" : "Approuver"} {argent(lot.total)}
                 </button>
               ) : saisie === "refuser" ? (
                 <button
@@ -633,7 +740,8 @@ export function DetailLot({
                   type="button"
                   className={ROUGE_SM}
                   disabled={
-                    occupe !== null || ((lot.statut === "fichier_cree" || lot.statut === "a_envoyer") && !texte.trim())
+                    occupe !== null ||
+                    ((lot.statut === "fichier_cree" || lot.statut === "a_envoyer" || testEnRoute) && !texte.trim())
                   }
                   onClick={() =>
                     void agir("annuler", () =>
@@ -641,7 +749,7 @@ export function DetailLot({
                     )
                   }
                 >
-                  Annuler le lot
+                  {testEnRoute ? "Abandonner le lot de test" : "Annuler le lot"}
                 </button>
               )}
             </div>
@@ -761,6 +869,37 @@ export function DetailLot({
                 Télécharger de nouveau
               </BoutonGeste>
             ) : null}
+            {a.reessayer_auto ? (
+              <BoutonGeste
+                occupe={occupe}
+                nom="auto-reessayer"
+                classe="btn-accent"
+                icone={<RotateCcw className="h-4 w-4" />}
+                onClick={() => {
+                  if (
+                    lot.statut === "echec" &&
+                    !window.confirm(
+                      `Réessayer le prélèvement de ${argent(lot.total)} dans le compte de l'entreprise ? Kratos revérifie d'abord les factures et les coordonnées.`
+                    )
+                  )
+                    return;
+                  void agir("auto-reessayer", () => appeler<LotDetail>(`/lots/${lot.id}/auto/reessayer`, {}));
+                }}
+              >
+                {lot.statut === "echec" ? "Réessayer le prélèvement" : "Réessayer maintenant"}
+              </BoutonGeste>
+            ) : null}
+            {a.verifier_auto ? (
+              <BoutonGeste
+                occupe={occupe}
+                nom="auto-verifier"
+                classe="btn-secondary"
+                icone={<RefreshCw className="h-4 w-4" />}
+                onClick={() => void agir("auto-verifier", () => envoyer<LotDetail>(`/lots/${lot.id}/auto/verifier`))}
+              >
+                Vérifier maintenant
+              </BoutonGeste>
+            ) : null}
             {a.enregistrer_qbo ? (
               <BoutonGeste
                 occupe={occupe}
@@ -789,7 +928,7 @@ export function DetailLot({
                 className="btn-ghost btn-sm ml-auto inline-flex items-center gap-1.5"
                 onClick={() => setSaisie("annuler")}
               >
-                <Trash2 className="h-4 w-4" /> Annuler le lot
+                <Trash2 className="h-4 w-4" /> {testEnRoute ? "Abandonner le lot de test" : "Annuler le lot"}
               </button>
             ) : null}
             {!Object.values(a).some(Boolean) ? (
@@ -797,7 +936,7 @@ export function DetailLot({
             ) : null}
           </div>
         )}
-        {erreurAction && !virementEnErreur ? <p className="mt-3 text-sm text-rose-300">{erreurAction}</p> : null}
+        {erreurAction && !ligneEnErreur ? <p className="mt-3 text-sm text-rose-300">{erreurAction}</p> : null}
         {manquants.length ? (
           <div className="mt-2 flex flex-wrap gap-2">
             {manquants.map((m) =>
@@ -836,7 +975,7 @@ export function DetailLot({
                 <span className="text-[var(--qg-text)]">{ACTIONS[e.action] ?? e.action}</span>
                 {e.detail ? <span className="text-[var(--qg-text-muted)]"> · {e.detail}</span> : null}
                 <span className="block text-xs text-[var(--qg-text-muted)]">
-                  {e.par ?? "—"}, {moment(e.le)}
+                  {e.par ?? "Kratos"}, {moment(e.le)}
                 </span>
               </li>
             ))}
@@ -847,15 +986,16 @@ export function DetailLot({
   );
 }
 
-/** Lot par dépôt direct : un dépôt par fournisseur, ce que contiendra le fichier. */
-function PanneauDepots({ depots }: { depots: Depot[] }) {
+/** Lot par dépôt direct : un dépôt par fournisseur, ce que contiendra le
+ *  fichier (ou ce que VoPay déposera, en paiement automatique). */
+function PanneauDepots({ depots, auto }: { depots: Depot[]; auto: boolean }) {
   return (
     <section className="rounded-2xl border" style={CARTE}>
       <header className="border-b px-4 py-3" style={{ borderColor: "var(--qg-border)" }}>
         <p className="text-sm font-bold text-[var(--qg-text)]">Dépôts</p>
         <p className="text-xs text-[var(--qg-text-muted)]">
-          Un dépôt par fournisseur, dans le compte approuvé. Avant d&apos;approuver, vérifie surtout les
-          comptes approuvés récemment.
+          Un dépôt par fournisseur, dans le compte approuvé{auto ? ", fait par VoPay après l'approbation" : ""}.
+          Avant d&apos;approuver, vérifie surtout les comptes approuvés récemment.
         </p>
       </header>
       <ul>
@@ -927,10 +1067,107 @@ function BoutonGeste({
   );
 }
 
+/** Paiement automatique : ce qui se passe, ce qui attend, et de qui. Rien
+ *  de particulier à dire : null (consigne habituelle). */
+function consigneAuto(lot: LotDetail, moi: Moi, test: boolean): { texte: string; ton: string } | null {
+  const discret = "text-[var(--qg-text-muted)]";
+  const sansArgent = test ? " (environnement de test VoPay : aucun argent réel)" : "";
+  const suivi = lot.auto;
+  switch (lot.statut) {
+    case "brouillon":
+      return {
+        texte: `Vérifie les montants et la date, puis soumets le lot. Une fois approuvé, Kratos le paiera tout seul par VoPay le jour prévu${sansArgent}.`,
+        ton: discret
+      };
+    case "soumis":
+      if (!lot.actions.approuver) return null;
+      return {
+        texte: `À toi d'approuver : vérifie chaque paiement (fournisseur, ${
+          lot.mode === "interac" ? "courriel ou cellulaire" : "compte"
+        }, montant). Après la dernière approbation, plus personne n'a rien à envoyer : Kratos prélève le total dans le compte de l'entreprise le jour prévu, puis paie chaque fournisseur${sansArgent}. Ton code de double authentification sera demandé.`,
+        ton: "text-amber-300"
+      };
+    case "approuve":
+      if (lot.auto_erreur)
+        return {
+          texte: `Paiement en attente : ${lot.auto_erreur}${
+            lot.auto_prochain_essai ? ` Kratos réessaie seul (prochain essai : ${moment(lot.auto_prochain_essai)}).` : ""
+          }`,
+          ton: "text-amber-300"
+        };
+      return {
+        texte:
+          lot.date_paiement > aujourdhui()
+            ? `Approuvé. Le ${jour(lot.date_paiement)}, Kratos prélèvera ${argent(lot.total)} dans le compte de l'entreprise, puis paiera chaque fournisseur${sansArgent}.`
+            : `Approuvé : Kratos lance le prélèvement de ${argent(lot.total)}${sansArgent}.`,
+        ton: discret
+      };
+    case "prelevement":
+      if (suivi?.a_verifier)
+        return {
+          texte: moi.peut_approuver
+            ? "VoPay n'a pas confirmé une demande : cherche sa référence dans le portail VoPay et indique ce que tu y vois, plus bas."
+            : "Une demande à VoPay attend la vérification d'un approbateur.",
+          ton: "text-amber-300"
+        };
+      return {
+        texte: `Kratos a demandé à VoPay de prélever ${argent(lot.total)} dans le compte de l'entreprise${sansArgent}. La banque confirme habituellement un prélèvement en quelques jours ouvrables ; ensuite seulement, Kratos paie les fournisseurs.`,
+        ton: discret
+      };
+    case "envoi": {
+      const paiements = suivi?.paiements_auto ?? [];
+      const payes = paiements.filter((p) => p.operation?.statut === "reussi").length;
+      const refuses = paiements.filter((p) => p.operation?.statut === "echoue").length;
+      if (refuses)
+        return {
+          texte: moi.peut_approuver
+            ? `${refuses > 1 ? `${refuses} paiements ont été refusés` : "Un paiement a été refusé"} : réessaie-le une fois les coordonnées corrigées, ou retire-le du lot (le montant revient au compte de l'entreprise).`
+            : `${refuses > 1 ? `${refuses} paiements ont été refusés` : "Un paiement a été refusé"} : un approbateur doit le réessayer ou le retirer du lot.`,
+          ton: "text-rose-300"
+        };
+      if (suivi?.a_verifier)
+        return {
+          texte: moi.peut_approuver
+            ? "VoPay n'a pas confirmé une demande : cherche sa référence dans le portail VoPay et indique ce que tu y vois, plus bas."
+            : "Une demande à VoPay attend la vérification d'un approbateur.",
+          ton: "text-amber-300"
+        };
+      return {
+        texte: `Prélèvement confirmé${lot.preleve_le ? ` (${moment(lot.preleve_le)})` : ""}. Kratos paie les fournisseurs : ${payes} sur ${paiements.length} payé${payes > 1 ? "s" : ""}${sansArgent}.`,
+        ton: discret
+      };
+    }
+    case "transmis":
+      return lot.auto_erreur
+        ? { texte: `Fournisseurs payés. ${lot.auto_erreur}`, ton: "text-amber-300" }
+        : { texte: "Fournisseurs payés : Kratos inscrit les paiements dans QuickBooks.", ton: discret };
+    case "paye":
+      return test
+        ? {
+            texte: "Terminé en environnement de test VoPay : aucun argent réel n'a bougé et rien n'est inscrit dans QuickBooks (les factures restent à payer).",
+            ton: "text-emerald-300"
+          }
+        : { texte: "Payé : les fournisseurs ont reçu leur paiement, inscrit dans QuickBooks.", ton: "text-emerald-300" };
+    case "echec":
+      return {
+        texte: `Prélèvement refusé${lot.auto_erreur ? ` : ${lot.auto_erreur}` : ""}. Aucun fournisseur n'a été payé. ${
+          moi.peut_approuver
+            ? "Réessaie quand le compte est prêt, ou remets le lot en brouillon, ou annule-le."
+            : "Un approbateur doit réessayer, remettre le lot en brouillon ou l'annuler."
+        }`,
+        ton: "text-rose-300"
+      };
+    default:
+      return null;
+  }
+}
+
 /** Ce qui est attendu, et de qui, à l'étape où en est le lot. */
-function Consigne({ lot, moi }: { lot: LotDetail; moi: Moi }) {
+function Consigne({ lot, moi, auto, test }: { lot: LotDetail; moi: Moi; auto: boolean; test: boolean }) {
   const a = lot.actions;
   const interac = lot.mode === "interac";
+  const parKratos = auto ? consigneAuto(lot, moi, test) : null;
+  if (parKratos) return <p className={`mt-3 text-sm ${parKratos.ton}`}>{parKratos.texte}</p>;
   let texte: string;
   let ton = "text-[var(--qg-text-muted)]";
   switch (lot.statut) {
@@ -1038,12 +1275,16 @@ function PanneauFichier({ fichier }: { fichier: FichierDepot }) {
  *  Interac), puis l'indique ici, avec la référence d'AccèsD s'il veut. */
 function PanneauVirements({
   lot,
+  auto,
   occupe,
   erreur,
   onEnvoye,
   onRetirer
 }: {
   lot: LotDetail;
+  /** Lot pas encore approuvé d'une entreprise en paiement automatique :
+   *  VoPay enverra les virements. */
+  auto: boolean;
   occupe: string | null;
   erreur: { id: string; texte: string } | null;
   onEnvoye: (v: Virement, reference: string) => void;
@@ -1060,7 +1301,9 @@ function PanneauVirements({
         <p className="text-xs text-[var(--qg-text-muted)]">
           {envoi
             ? "Pour chacun : dans AccèsD Affaires, Virements Interac, choisis le destinataire qui a exactement ce courriel ou ce cellulaire, saisis le montant et le message, envoie, puis indique-le ici."
-            : `Un virement par fournisseur, au destinataire approuvé (${argent(lot.limite_interac)} au plus par virement chez Desjardins). Avant d'approuver, vérifie surtout les destinataires approuvés récemment.`}
+            : auto
+              ? `Un virement par fournisseur, au destinataire approuvé, envoyé par VoPay après l'approbation (${argent(lot.limite_interac)} au plus par virement). Avant d'approuver, vérifie surtout les destinataires approuvés récemment.`
+              : `Un virement par fournisseur, au destinataire approuvé (${argent(lot.limite_interac)} au plus par virement chez Desjardins). Avant d'approuver, vérifie surtout les destinataires approuvés récemment.`}
         </p>
       </header>
       <ul>
@@ -1202,6 +1445,339 @@ function PanneauVirements({
         })}
       </ul>
     </section>
+  );
+}
+
+/** Lot payé automatiquement : le prélèvement dans le compte de
+ *  l'entreprise, le paiement de chaque fournisseur et les retours, avec ce
+ *  qu'un approbateur peut faire quand VoPay refuse ou ne répond pas. */
+function PanneauAuto({
+  lot,
+  suivi,
+  test,
+  occupe,
+  erreur,
+  onReessayer,
+  onResoudre,
+  onRetirer
+}: {
+  lot: LotDetail;
+  suivi: SuiviAuto;
+  test: boolean;
+  occupe: string | null;
+  erreur: { id: string; texte: string } | null;
+  onReessayer: (cle: string, op: OperationVoPay) => void;
+  onResoudre: (cle: string, op: OperationVoPay, parti: boolean, transaction: string) => void;
+  onRetirer: (cle: string, p: PaiementAuto, motif: string) => void;
+}) {
+  const [historique, setHistorique] = useState(false);
+  const rail = lot.mode === "interac" ? "virement Interac" : "dépôt direct";
+  const attentePaiement =
+    lot.statut === "approuve" || lot.statut === "prelevement"
+      ? "Après le prélèvement"
+      : lot.statut === "echec" || lot.statut === "annule"
+        ? "Pas payé"
+        : "En attente";
+  const commun = { occupe, onReessayer, onResoudre };
+
+  return (
+    <section className="rounded-2xl border" style={CARTE}>
+      <header className="border-b px-4 py-3" style={{ borderColor: "var(--qg-border)" }}>
+        <p className="flex flex-wrap items-center gap-2 text-sm font-bold text-[var(--qg-text)]">
+          <Zap className="h-4 w-4" /> Paiement par VoPay
+          {test ? <span className="badge badge-amber">Test : aucun argent réel</span> : null}
+        </p>
+        <p className="text-xs text-[var(--qg-text-muted)]">
+          Kratos prélève le total dans le compte de l&apos;entreprise ; une fois le prélèvement confirmé, il paie
+          chaque fournisseur par {rail}, dans ses coordonnées approuvées
+          {test ? "." : ", puis inscrit les paiements dans QuickBooks."}
+        </p>
+      </header>
+      <ul>
+        <LigneOperation
+          {...commun}
+          cle="prelevement"
+          titre="Prélèvement"
+          detail="Dans le compte bancaire de l'entreprise"
+          montant={suivi.prelevement?.montant ?? lot.total}
+          op={suivi.prelevement}
+          attente={lot.statut === "approuve" ? `Prévu le ${jour(lot.date_paiement)}` : "En attente"}
+          erreur={erreur?.id === "prelevement" ? erreur.texte : null}
+          retrait={null}
+        />
+        {suivi.paiements_auto.map((p) => {
+          const cle = `f-${p.fournisseur_id}`;
+          return (
+            <LigneOperation
+              {...commun}
+              key={cle}
+              cle={cle}
+              titre={p.fournisseur}
+              detail={`${p.nb_factures} facture${p.nb_factures > 1 ? "s" : ""} · ${rail}`}
+              montant={p.montant}
+              op={p.operation}
+              attente={attentePaiement}
+              erreur={erreur?.id === cle ? erreur.texte : null}
+              retrait={p.peut_retirer ? (motif) => onRetirer(cle, p, motif) : null}
+            />
+          );
+        })}
+        {suivi.retours.map((r) => {
+          const cle = `r-${r.id}`;
+          return (
+            <LigneOperation
+              {...commun}
+              key={cle}
+              cle={cle}
+              titre={`Retour à l'entreprise${r.fournisseur ? ` : ${r.fournisseur}` : ""}`}
+              detail="Paiement retiré du lot : le montant revient au compte de l'entreprise"
+              montant={r.montant}
+              op={r}
+              attente="En attente"
+              erreur={erreur?.id === cle ? erreur.texte : null}
+              retrait={null}
+            />
+          );
+        })}
+      </ul>
+      {suivi.operations.length ? (
+        <div className="border-t" style={{ borderColor: "var(--qg-border)" }}>
+          <button
+            type="button"
+            className="flex w-full items-center justify-between px-4 py-2.5 text-left text-xs font-semibold text-[var(--qg-text)]"
+            onClick={() => setHistorique((v) => !v)}
+            aria-expanded={historique}
+          >
+            Demandes à VoPay
+            <span className="font-normal text-[var(--qg-text-muted)]">
+              {historique ? "Masquer" : `${suivi.operations.length} demande${suivi.operations.length > 1 ? "s" : ""}`}
+            </span>
+          </button>
+          {historique ? (
+            <ul className="px-4 pb-3">
+              {suivi.operations.map((o) => (
+                <li key={o.id} className="py-1.5 text-xs">
+                  <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="font-semibold text-[var(--qg-text)]">
+                      {o.sorte_libelle}
+                      {o.fournisseur ? ` · ${o.fournisseur}` : ""}
+                    </span>
+                    <span className={`badge ${BADGE_OPERATION[o.statut]}`}>{o.statut_libelle}</span>
+                    <span className="ml-auto tabular-nums text-[var(--qg-text)]">{argent(o.montant)}</span>
+                  </span>
+                  <span className="block text-[var(--qg-text-muted)]">{infosOperation(o)}</span>
+                  {o.erreur ? <span className="block text-[var(--qg-text-muted)]">{o.erreur}</span> : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/** Référence, transaction VoPay et moments clés d'une demande. */
+function infosOperation(o: OperationVoPay): string {
+  const morceaux = [`Référence ${o.reference}`];
+  if (o.transaction_id) morceaux.push(`transaction VoPay ${o.transaction_id}`);
+  if (o.envoye_le) morceaux.push(`transmise ${moment(o.envoye_le)}`);
+  if (o.statut === "reussi" && o.termine_le) morceaux.push(`confirmée ${moment(o.termine_le)}`);
+  else if (o.termine_le) morceaux.push(`terminée ${moment(o.termine_le)}`);
+  if (o.prochain_essai)
+    morceaux.push(
+      o.statut === "en_cours" ? `prochaine vérification ${moment(o.prochain_essai)}` : `prochain essai ${moment(o.prochain_essai)}`
+    );
+  return morceaux.join(" · ");
+}
+
+function LigneOperation({
+  cle,
+  titre,
+  detail,
+  montant,
+  op,
+  attente,
+  occupe,
+  erreur,
+  retrait,
+  onReessayer,
+  onResoudre
+}: {
+  cle: string;
+  titre: string;
+  detail: string;
+  montant: number;
+  op: OperationVoPay | null;
+  /** Affiché tant qu'aucune demande n'est partie. */
+  attente: string;
+  occupe: string | null;
+  erreur: string | null;
+  /** Retirer ce fournisseur du lot (son paiement est refusé ou pas parti). */
+  retrait: ((motif: string) => void) | null;
+  onReessayer: (cle: string, op: OperationVoPay) => void;
+  onResoudre: (cle: string, op: OperationVoPay, parti: boolean, transaction: string) => void;
+}) {
+  const [transaction, setTransaction] = useState<string | null>(null);
+  const [motif, setMotif] = useState<string | null>(null);
+  const geste = `auto:${cle}`;
+  const enCours = occupe === geste;
+
+  return (
+    <li className="space-y-2 border-b px-4 py-3 last:border-b-0" style={{ borderColor: "var(--qg-border)" }}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-semibold text-[var(--qg-text)]">{titre}</span>
+          <span className="block text-xs text-[var(--qg-text-muted)]">{detail}</span>
+        </span>
+        {op ? (
+          <span className={`badge ${BADGE_OPERATION[op.statut]}`}>{op.statut_libelle}</span>
+        ) : (
+          <span className="badge badge-neutral">{attente}</span>
+        )}
+        <span className="w-28 text-right text-sm font-semibold tabular-nums text-[var(--qg-text)]">
+          {argent(montant)}
+        </span>
+      </div>
+      {op ? <p className="text-xs text-[var(--qg-text-muted)]">{infosOperation(op)}</p> : null}
+      {op?.erreur && op.statut !== "reussi" ? (
+        <p
+          className={`flex items-start gap-1.5 text-xs ${
+            op.statut === "echoue" || op.statut === "a_verifier" ? "text-rose-300" : "text-amber-300"
+          }`}
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          {op.erreur}
+        </p>
+      ) : null}
+
+      {op?.peut_resoudre ? (
+        transaction === null ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-[var(--qg-text)]">
+              Cherche la référence <span className="font-mono">{op.reference}</span> dans le portail VoPay :
+            </span>
+            <button
+              type="button"
+              className="btn-secondary btn-xs"
+              disabled={occupe !== null}
+              onClick={() => setTransaction("")}
+            >
+              Elle y est
+            </button>
+            <button
+              type="button"
+              className="btn-secondary btn-xs inline-flex items-center gap-1"
+              disabled={occupe !== null}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    `Confirmer que la référence ${op.reference} n'apparaît pas dans le portail VoPay ? Kratos la classera comme refusée ; il faudra la réessayer.`
+                  )
+                )
+                  return;
+                onResoudre(cle, op, false, "");
+              }}
+            >
+              {enCours ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Elle n&apos;y est pas
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              className="input w-full font-mono text-sm sm:w-56"
+              placeholder="Numéro de transaction VoPay"
+              value={transaction}
+              maxLength={64}
+              autoFocus
+              onChange={(ev) => setTransaction(ev.target.value)}
+              aria-label="Numéro de transaction VoPay"
+            />
+            <button type="button" className="btn-secondary btn-xs" onClick={() => setTransaction(null)}>
+              Retour
+            </button>
+            <button
+              type="button"
+              className="btn-accent btn-xs inline-flex items-center gap-1"
+              disabled={occupe !== null || !transaction.trim()}
+              onClick={() => onResoudre(cle, op, true, transaction)}
+            >
+              {enCours ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              Confirmer
+            </button>
+          </div>
+        )
+      ) : null}
+
+      {motif !== null && retrait ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            className="input min-w-[14rem] flex-1 text-sm"
+            placeholder="Pourquoi retirer ce paiement du lot ?"
+            value={motif}
+            maxLength={2000}
+            autoFocus
+            onChange={(ev) => setMotif(ev.target.value)}
+          />
+          <button type="button" className="btn-secondary btn-xs" onClick={() => setMotif(null)}>
+            Retour
+          </button>
+          <button
+            type="button"
+            className={ROUGE_XS}
+            disabled={!motif.trim() || occupe !== null}
+            onClick={() => {
+              if (
+                !window.confirm(
+                  `Retirer ${titre} du lot ? Ses factures redeviennent à payer et ${argent(montant)} revient au compte de l'entreprise.`
+                )
+              )
+                return;
+              retrait(motif);
+            }}
+          >
+            {enCours ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            Retirer du lot
+          </button>
+        </div>
+      ) : op?.peut_reessayer || retrait ? (
+        <div className="flex flex-wrap items-center gap-2">
+          {op?.peut_reessayer ? (
+            <button
+              type="button"
+              className="btn-accent btn-xs inline-flex items-center gap-1"
+              disabled={occupe !== null}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    op.sorte === "retour"
+                      ? `Réessayer le retour de ${argent(op.montant)} au compte de l'entreprise ?`
+                      : `Réessayer le paiement de ${argent(op.montant)} à ${titre} ? Kratos prend ses coordonnées approuvées actuelles et relit les soldes dans QuickBooks.`
+                  )
+                )
+                  return;
+                onReessayer(cle, op);
+              }}
+            >
+              {enCours ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+              Réessayer
+            </button>
+          ) : null}
+          {retrait ? (
+            <button
+              type="button"
+              className="btn-ghost btn-xs"
+              disabled={occupe !== null}
+              onClick={() => setMotif("")}
+            >
+              Retirer du lot
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {erreur ? <p className="text-xs text-rose-300">{erreur}</p> : null}
+    </li>
   );
 }
 

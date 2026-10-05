@@ -51,8 +51,9 @@ _EXCLUS = (
 _CLES_SENSIBLES = re.compile(
     r"password|passe|api_key|apikey|token|secret|cle|key$"
     # Paiements fournisseurs : numéro de compte bancaire, code de double
-    # authentification.
-    r"|numero_compte|code_2fa",
+    # authentification, réponse Interac (les clés VoPay tombent sous
+    # « cle » et « secret »).
+    r"|numero_compte|code_2fa|interac_reponse",
     re.I,
 )
 

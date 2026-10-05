@@ -1922,8 +1922,9 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
     # Comptabilité (2026-10-04) — lots de paiements fournisseurs par dépôt
     # direct Desjardins ou virements Interac (champ `mode`) ; `stage` filtre
     # le statut (brouillon | soumis | approuve | fichier_cree | a_envoyer |
-    # transmis | paye | refuse | annule). Lecture seule, sans coordonnées
-    # de paiement ; les écritures sont interdites au connecteur
+    # transmis | paye | refuse | annule, et pour le paiement automatique
+    # par VoPay : prelevement | envoi | echec). Lecture seule, sans
+    # coordonnées de paiement ; les écritures sont interdites au connecteur
     # (mcp_server._ACTION_CHEMINS_INTERDITS).
     "lots_paiement": _ListSpec(
         model=LotPaiement, pole="comptabilite",
