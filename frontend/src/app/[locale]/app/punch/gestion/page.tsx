@@ -11,7 +11,8 @@ import {
   Plus,
   Search,
   Trash2,
-  Users
+  Users,
+  Utensils
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
@@ -23,7 +24,16 @@ import { useCurrentUser } from "@/hooks/use-current-user";
 import { projectLabel } from "@/lib/project";
 import { useConfirm } from "@/components/confirm-dialog";
 
-type Employe = { id: number; full_name: string; email: string | null; is_ccq?: boolean };
+type Employe = {
+  id: number;
+  full_name: string;
+  email: string | null;
+  is_ccq?: boolean;
+  // Case « dîner » de la fiche : 30 min retirées quand la journée dépasse
+  // 5 h, pour les journées à partir de `diner_depuis` (YYYY-MM-DD).
+  diner_auto?: boolean;
+  diner_depuis?: string | null;
+};
 type Project = {
   id: number;
   name: string;
@@ -68,7 +78,22 @@ type Punch = {
   // "ccq" | "hors_decret" | null (punch d'avant la règle : suit la fiche
   // employé). Posé par un admin+ à l'approbation ou en saisie manuelle.
   regime: string | null;
+  // Minutes de dîner non payé retirées de ce punch : `hours` est déjà net.
+  // null = aucune décision (le serveur applique la case de la fiche à la
+  // fermeture) ; 0 = retrait enlevé à la main.
+  diner_minutes?: number | null;
 };
+
+// Règle du dîner (miroir de backend/app/services/punch_diner.py) : sert à
+// pré-cocher la case d'un nouveau punch comme le ferait le serveur.
+const DINER_MINUTES = 30;
+const SEUIL_JOURNEE_DINER_H = 5;
+const MIN_PUNCH_DINER_H = 1;
+
+// Heures punchées avant le retrait du dîner.
+function heuresBrutes(p: Punch): number {
+  return Number(p.hours ?? 0) + (p.diner_minutes ?? 0) / 60;
+}
 
 const REGIME_LABEL: Record<string, string> = {
   ccq: "CCQ",
@@ -421,6 +446,22 @@ export default function PunchGestionPage() {
       ),
     [visible]
   );
+  // Dîners non payés déjà retirés du total ci-dessus.
+  const totalDiner = useMemo(
+    () => visible.reduce((sum, p) => sum + (p.diner_minutes ?? 0) / 60, 0),
+    [visible]
+  );
+
+  // Après une saisie dans la modale : le serveur a pu retirer le dîner
+  // d'un AUTRE punch de la même journée (le plus long) — on relit la liste.
+  async function rechargerPunchs() {
+    try {
+      const res = await authedFetch("/api/v1/punch?limit=500");
+      if (res.ok) setPunches((await res.json()) as Punch[]);
+    } catch {
+      /* la liste reste telle quelle jusqu'au prochain chargement */
+    }
+  }
 
   function upsert(p: Punch) {
     setPunches((xs) => {
@@ -755,6 +796,14 @@ export default function PunchGestionPage() {
               })}{" "}
               h)
             </span>
+            {totalDiner > 0 ? (
+              <span
+                className="ml-2 text-xs text-amber-300"
+                title="Dîners non payés déjà retirés du total"
+              >
+                dîners −{fmtHm(totalDiner)}
+              </span>
+            ) : null}
           </div>
         </div>
 
@@ -847,6 +896,15 @@ export default function PunchGestionPage() {
                       </td>
                       <td className="px-4 py-3 text-right font-semibold text-white">
                         {p.hours != null ? fmtHm(Number(p.hours)) : "—"}
+                        {p.diner_minutes ? (
+                          <span
+                            className="mt-0.5 flex items-center justify-end gap-1 whitespace-nowrap text-[10px] font-medium text-amber-300"
+                            title="Dîner non payé retiré des heures (case « dîner » de la fiche employé)"
+                          >
+                            <Utensils className="h-3 w-3" />
+                            Dîner −{p.diner_minutes} min
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3 text-xs text-white/60">
                         <span className="line-clamp-1">{p.task || "—"}</span>
@@ -927,6 +985,7 @@ export default function PunchGestionPage() {
           seed={modal}
           isAdmin={isAdmin}
           employes={employes}
+          punches={punches}
           projects={projects}
           prospects={prospects}
           bons={bons}
@@ -935,6 +994,7 @@ export default function PunchGestionPage() {
           onSaved={(p) => {
             upsert(p);
             setModal(null);
+            void rechargerPunchs();
           }}
         />
       ) : null}
@@ -946,6 +1006,7 @@ function PunchModal({
   seed,
   isAdmin,
   employes,
+  punches,
   projects,
   prospects,
   bons,
@@ -956,6 +1017,7 @@ function PunchModal({
   seed: Punch | { fresh: true };
   isAdmin: boolean;
   employes: Employe[];
+  punches: Punch[];
   projects: Project[];
   prospects: Prospect[];
   bons: BonMini[];
@@ -1012,6 +1074,43 @@ function PunchModal({
     !!endedAt &&
     new Date(endedAt).getTime() < new Date(startedAt).getTime();
 
+  // Dîner non payé. Un punch déjà décidé garde son état ; sinon la case
+  // suit la règle du serveur (fiche cochée, journée > 5 h, une fois par
+  // jour, sur ce punch s'il dure au moins 1 h). Le choix ne part au
+  // serveur que si on change cet état : sinon le serveur décide lui-même.
+  const empChoisi = employes.find((e) => String(e.id) === employeId) || null;
+  const dinerParDefaut = useMemo(() => {
+    if (existing && existing.diner_minutes != null) {
+      return existing.diner_minutes > 0;
+    }
+    if (!empChoisi?.diner_auto || computedHours == null || !startedAt) {
+      return false;
+    }
+    const debut = new Date(startedAt);
+    if (empChoisi.diner_depuis && shortISO(debut) < empChoisi.diner_depuis) {
+      return false;
+    }
+    const memeJour = punches.filter(
+      (p) =>
+        p.id !== existing?.id &&
+        p.employe_id === empChoisi.id &&
+        p.ended_at &&
+        p.hours != null &&
+        sameDay(new Date(p.started_at), debut)
+    );
+    if (memeJour.some((p) => p.diner_minutes != null)) return false;
+    const journee =
+      memeJour.reduce((sum, p) => sum + heuresBrutes(p), 0) + computedHours;
+    return (
+      journee > SEUIL_JOURNEE_DINER_H && computedHours >= MIN_PUNCH_DINER_H
+    );
+  }, [existing, empChoisi, computedHours, startedAt, punches]);
+  const [dinerChoisi, setDinerChoisi] = useState<boolean | null>(null);
+  const dinerCoche = dinerChoisi ?? dinerParDefaut;
+  const dinerMin = dinerCoche ? (existing?.diner_minutes || DINER_MINUTES) : 0;
+  const heuresPayees =
+    computedHours != null ? Math.max(computedHours - dinerMin / 60, 0) : null;
+
   async function save(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!employeId) {
@@ -1036,7 +1135,8 @@ function PunchModal({
         employe_id: Number(employeId),
         started_at: new Date(startedAt).toISOString(),
         ended_at: endedAt ? new Date(endedAt).toISOString() : null,
-        hours: computedHours,
+        // Pas de « hours » : le serveur les calcule depuis le début et la
+        // fin, moins le dîner retiré.
         task: task.trim() || null,
         notes: notes.trim() || null,
         approved,
@@ -1051,6 +1151,10 @@ function PunchModal({
           ? Number(target.slice(2))
           : null
       };
+
+      if (dinerChoisi !== null && dinerChoisi !== dinerParDefaut) {
+        payload.diner_minutes = dinerChoisi ? DINER_MINUTES : 0;
+      }
 
       // Le régime ne part que si un admin l'a choisi (le backend refuse
       // sinon) ; en création sans choix, le backend pose « hors décret ».
@@ -1204,7 +1308,29 @@ function PunchModal({
                 La fin est avant le début.
               </span>
             ) : null}
+            {dinerCoche && heuresPayees != null ? (
+              <span className="ml-2 text-xs text-amber-300">
+                dîner −{dinerMin} min → {fmtHm(heuresPayees)} payées
+              </span>
+            ) : null}
           </div>
+
+          <label className="flex items-start gap-2 text-sm text-white/80">
+            <input
+              type="checkbox"
+              checked={dinerCoche}
+              onChange={(e) => setDinerChoisi(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              Retirer {DINER_MINUTES} min pour le dîner (non payé)
+              <span className="block text-xs text-white/60">
+                {empChoisi?.diner_auto
+                  ? "La fiche de cet employé a la case « dîner » : le retrait se fait seul, une fois par jour, quand sa journée dépasse 5 h."
+                  : "La fiche de cet employé n'a pas la case « dîner » : retrait seulement si tu le coches ici."}
+              </span>
+            </span>
+          </label>
 
           {existing?.geolocation ? (
             <GeolocationDisplay raw={existing.geolocation} />

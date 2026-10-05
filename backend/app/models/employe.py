@@ -1,8 +1,9 @@
 """Employee / staff member (internal + partners)."""
 
+from datetime import date
 from typing import Optional
 
-from sqlalchemy import Boolean, Numeric, String
+from sqlalchemy import Boolean, Date, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -67,3 +68,16 @@ class Employe(Base, TimestampUpdateMixin):
     employeur_d_url: Mapped[Optional[str]] = mapped_column(
         String(500), nullable=True
     )
+
+    # ---- Dîner non payé (Steven, 2026-10-05) ----
+    #: Coché : 30 min de dîner sont retirées de ses heures de punch, une
+    #: fois par jour, quand la journée punchée dépasse 5 h (voir
+    #: ``app/services/punch_diner.py``). Pour les employés qui ne
+    #: dépunchent pas pour dîner.
+    diner_auto: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    #: Jour où la case a été cochée : le retrait ne s'applique qu'aux
+    #: journées à partir de cette date (les heures déjà punchées avant ne
+    #: changent pas). NULL quand la case est décochée.
+    diner_depuis: Mapped[Optional[date]] = mapped_column(Date, nullable=True)

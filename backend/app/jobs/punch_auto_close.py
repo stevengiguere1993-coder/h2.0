@@ -34,6 +34,7 @@ from app.models.employe import Employe
 from app.models.punch import Punch
 from app.services.audit import log_action
 from app.services.notifications import notify_role
+from app.services.punch_diner import appliquer_diner_auto
 
 
 log = logging.getLogger(__name__)
@@ -114,6 +115,9 @@ async def _run() -> None:
                     select(Employe).where(Employe.id == p.employe_id)
                 )
             ).scalar_one_or_none()
+            # Case « dîner » de la fiche : même règle qu'au clock-out (le
+            # retrait suit si un gestionnaire corrige ensuite l'heure de fin).
+            await appliquer_diner_auto(db, p, emp)
             if emp:
                 names.append(emp.full_name or f"#{emp.id}")
             closed_count += 1
