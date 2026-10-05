@@ -621,6 +621,30 @@ async def ensure_critical_columns() -> None:
                 exc,
             )
 
+    # Paiements (2026-10-04) : des coordonnées de paiement peuvent être un
+    # destinataire Interac, sans institution, transit ni compte. La table
+    # a été créée avec ces colonnes NOT NULL. Transaction par colonne ;
+    # DROP NOT NULL est idempotent sur Postgres (SQLite des tests : la
+    # table est créée directement à jour).
+    if engine.dialect.name == "postgresql":
+        for column in ("institution", "transit", "compte_chiffre", "compte_fin"):
+            try:
+                async with engine.begin() as conn:
+                    await conn.execute(text("SET LOCAL lock_timeout = '15s'"))
+                    await conn.execute(
+                        text(
+                            "ALTER TABLE paiements_comptes_fournisseurs "
+                            f"ALTER COLUMN {column} DROP NOT NULL"
+                        )
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log.error(
+                    "ensure_critical_columns DROP NOT NULL "
+                    "paiements_comptes_fournisseurs.%s failed: %s",
+                    column,
+                    exc,
+                )
+
     # Annuaire fournisseurs (retour Phil 2026-08-18) : la section
     # Fournisseurs n'est PAS un miroir des Vendors QuickBooks — c'est
     # l'annuaire téléphonique du chargé de projet. Ajout ONE-SHOT de la

@@ -1,5 +1,6 @@
 /* Comptabilité → Paiements : types et appels de l'API /api/v1/paiements
-   (l'équivalent de Plooto dans Kratos, Steven 2026-10-04). */
+   (l'équivalent de Plooto dans Kratos, Steven 2026-10-04) : dépôt direct
+   Desjardins ou virements Interac. */
 
 import { authedFetch } from "@/lib/auth";
 
@@ -29,11 +30,17 @@ export type EntreprisePaiement = {
   comptes_a_approuver: number;
 };
 
+/** « depot_direct » : fichier norme 005. « interac » : un virement par
+ *  fournisseur, envoyé dans AccèsD Affaires par un approbateur. */
+export type ModePaiement = "depot_direct" | "interac";
+
 export type CompteResume = {
+  mode: ModePaiement;
   statut: StatutCompte;
-  institution: string;
-  transit: string;
-  compte_fin: string;
+  institution: string | null;
+  transit: string | null;
+  compte_fin: string | null;
+  interac_destinataire: string | null;
   approuve_le: string | null;
   approuve_par?: string | null;
 };
@@ -50,6 +57,7 @@ export type Facture = {
   devise: string;
   lien_qbo: string | null;
   compte: CompteResume | null;
+  interac: CompteResume | null;
   lot_id: number | null;
   achat_construction_id: number | null;
   payable: boolean;
@@ -59,6 +67,8 @@ export type FacturesAPayer = {
   entreprise: { entreprise_id: number; name: string; qbo_company_name: string | null };
   factures: Facture[];
   premiere_date: string;
+  aujourdhui: string;
+  limite_interac: number;
 };
 
 export type StatutCompte = "en_attente" | "approuve" | "remplace" | "refuse" | "retire";
@@ -68,9 +78,13 @@ export type CompteFournisseur = {
   entreprise_id: number;
   fournisseur_id: string;
   fournisseur: string;
-  institution: string;
-  transit: string;
-  compte_fin: string;
+  mode: ModePaiement;
+  institution: string | null;
+  transit: string | null;
+  compte_fin: string | null;
+  interac_destinataire: string | null;
+  /** Ex. le courriel Interac est celui d'un compte Kratos. */
+  alerte: string | null;
   source: string | null;
   statut: StatutCompte;
   propose_par_id: number | null;
@@ -108,6 +122,7 @@ export type StatutLot =
   | "soumis"
   | "approuve"
   | "fichier_cree"
+  | "a_envoyer"
   | "transmis"
   | "paye"
   | "refuse"
@@ -116,6 +131,7 @@ export type StatutLot =
 export type LotResume = {
   id: number;
   entreprise_id: number;
+  mode: ModePaiement;
   statut: StatutLot;
   statut_libelle: string;
   date_paiement: string;
@@ -129,6 +145,7 @@ export type LotResume = {
   approuve_le: string | null;
   fichier_numero: number | null;
   fichier_cree_le: string | null;
+  envoi_prepare_le: string | null;
   transmis_le: string | null;
   paye_le: string | null;
   annule_le: string | null;
@@ -146,9 +163,27 @@ export type LigneLot = {
   montant: number;
   lien_qbo: string | null;
   compte: CompteResume | null;
+  envoye_le: string | null;
+  envoye_par: string | null;
+  reference_interac: string | null;
   qbo_bill_payment_id: string | null;
   lien_paiement_qbo: string | null;
   erreur_qbo: string | null;
+};
+
+/** Lot Interac : un virement par fournisseur, à saisir dans AccèsD. */
+export type Virement = {
+  fournisseur_id: string;
+  fournisseur: string;
+  destinataire: string | null;
+  destinataire_statut: StatutCompte | null;
+  montant: number;
+  nb_factures: number;
+  message: string;
+  depasse_limite: boolean;
+  envoye_le: string | null;
+  envoye_par: string | null;
+  reference: string | null;
 };
 
 export type Evenement = {
@@ -167,6 +202,8 @@ export type ActionsLot = {
   refuser: boolean;
   creer_fichier: boolean;
   marquer_transmis: boolean;
+  preparer_envoi: boolean;
+  marquer_envoye: boolean;
   enregistrer_qbo: boolean;
   annuler: boolean;
 };
@@ -175,10 +212,13 @@ export type LotDetail = LotResume & {
   soumis_par: string | null;
   fichier_date: string | null;
   fichier_cree_par: string | null;
+  envoi_prepare_par: string | null;
   transmis_par: string | null;
   annule_par: string | null;
   motif_annulation: string | null;
   lignes: LigneLot[];
+  virements: Virement[];
+  limite_interac: number;
   decisions: { par: string | null; decision: string; commentaire: string | null; le: string | null }[];
   journal: Evenement[];
   actions: ActionsLot;
@@ -319,9 +359,29 @@ export function lireMontant(s: string): number {
   return /^\d+(\.\d{0,2})?$/.test(net) ? Number(net) : NaN;
 }
 
-export function compteMasque(c: { institution: string; transit: string; compte_fin: string }): string {
-  return `${c.institution}-${c.transit} · •••${c.compte_fin}`;
+export function compteMasque(c: {
+  institution: string | null;
+  transit: string | null;
+  compte_fin: string | null;
+}): string {
+  return `${c.institution ?? "—"}-${c.transit ?? "—"} · •••${c.compte_fin ?? "—"}`;
 }
+
+/** « 4505551234 » → « 450 555-1234 » ; un courriel reste tel quel. */
+export function destinataireLisible(d: string | null | undefined): string {
+  if (!d) return "—";
+  return /^\d{10}$/.test(d) ? `${d.slice(0, 3)} ${d.slice(3, 6)}-${d.slice(6)}` : d;
+}
+
+/** Compte bancaire masqué, ou destinataire Interac en entier. */
+export function coordonnees(c: CompteResume | CompteFournisseur): string {
+  return c.mode === "interac" ? destinataireLisible(c.interac_destinataire) : compteMasque(c);
+}
+
+export const MODES: Record<ModePaiement, string> = {
+  depot_direct: "Dépôt direct",
+  interac: "Virement Interac"
+};
 
 export const CARTE = { borderColor: "var(--qg-border)", backgroundColor: "var(--qg-card-bg)" };
 
@@ -335,6 +395,7 @@ export const BADGE_LOT: Record<StatutLot, string> = {
   soumis: "badge-amber",
   approuve: "badge-sky",
   fichier_cree: "badge-violet",
+  a_envoyer: "badge-violet",
   transmis: "badge-blue",
   paye: "badge-emerald",
   refuse: "badge-rose",
@@ -350,11 +411,11 @@ export const COMPTE: Record<StatutCompte, { libelle: string; badge: string }> = 
 };
 
 export const ACTIONS: Record<string, string> = {
-  compte_propose: "Coordonnées bancaires saisies",
+  compte_propose: "Coordonnées de paiement saisies",
   compte_revele: "Numéro de compte complet consulté",
-  compte_approuve: "Coordonnées bancaires approuvées",
-  compte_refuse: "Coordonnées bancaires refusées",
-  compte_retire: "Coordonnées bancaires retirées",
+  compte_approuve: "Coordonnées de paiement approuvées",
+  compte_refuse: "Coordonnées de paiement refusées",
+  compte_retire: "Coordonnées de paiement retirées",
   lot_cree: "Lot créé",
   lot_modifie: "Lot modifié",
   lot_soumis: "Lot soumis aux approbateurs",
@@ -366,9 +427,13 @@ export const ACTIONS: Record<string, string> = {
   fichier_cree: "Fichier de dépôt créé",
   fichier_retelecharge: "Fichier téléchargé de nouveau",
   fichier_transmis: "Fichier transmis à Desjardins",
+  envoi_prepare: "Envoi des virements Interac préparé",
+  interac_envoye: "Virement Interac envoyé",
+  virement_retire: "Virement Interac retiré du lot",
+  virements_envoyes: "Tous les virements Interac envoyés",
   qbo_enregistre: "Paiements inscrits dans QuickBooks",
   qbo_partiel: "Paiements inscrits en partie dans QuickBooks",
-  reglages_modifies: "Réglages du dépôt direct modifiés",
+  reglages_modifies: "Réglages des paiements modifiés",
   "2fa_activee": "Double authentification activée",
   "2fa_desactivee": "Double authentification désactivée"
 };

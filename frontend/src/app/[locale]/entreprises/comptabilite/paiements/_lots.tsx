@@ -4,14 +4,19 @@
    d'un lot, avec les gestes permis à chacun selon son rôle :
 
      brouillon → soumis → approuvé (par une AUTRE personne, avec code)
-       → fichier créé (approbateur, avec code) → transmis dans AccèsD
+       → dépôt direct : fichier créé (approbateur, avec code) → transmis
+         dans AccèsD
+       → Interac : envoi préparé (approbateur, avec code) → chaque
+         virement envoyé dans AccèsD par l'approbateur, puis indiqué ici
        → payé (paiements inscrits dans QuickBooks). */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   ArrowLeft,
   Check,
   CheckCircle2,
+  Copy,
   Download,
   ExternalLink,
   FileText,
@@ -29,14 +34,19 @@ import {
   ACTIONS,
   ErreurApi,
   ROUGE_SM,
+  ROUGE_XS,
   type EntreprisePaiement,
   type FichierDepot,
+  type LigneLot,
   type LotDetail,
   type LotResume,
+  type ModePaiement,
   type Moi,
   type StatutLot,
+  type Virement,
   argent,
   compteMasque,
+  destinataireLisible,
   envoyer,
   jour,
   lireMontant,
@@ -134,7 +144,10 @@ export function ListeLots({
               >
                 <span className="text-sm font-semibold text-[var(--qg-text)]">Lot n° {l.id}</span>
                 <span className={`badge ${BADGE_LOT[l.statut]}`}>{l.statut_libelle}</span>
-                <span className="text-sm text-[var(--qg-text-muted)]">Dépôt le {jour(l.date_paiement)}</span>
+                {l.mode === "interac" ? <span className="badge badge-neutral">Interac</span> : null}
+                <span className="text-sm text-[var(--qg-text-muted)]">
+                  {l.mode === "interac" ? "Envoi prévu le" : "Dépôt le"} {jour(l.date_paiement)}
+                </span>
                 <span className="text-sm text-[var(--qg-text-muted)]">
                   {l.nb_lignes} facture{l.nb_lignes > 1 ? "s" : ""}
                 </span>
@@ -158,14 +171,26 @@ export function ListeLots({
 
 // ── Détail ────────────────────────────────────────────────────────────
 
-const ETAPES: { statut: StatutLot; libelle: string }[] = [
-  { statut: "brouillon", libelle: "Préparé" },
-  { statut: "soumis", libelle: "Soumis" },
-  { statut: "approuve", libelle: "Approuvé" },
-  { statut: "fichier_cree", libelle: "Fichier créé" },
-  { statut: "transmis", libelle: "Transmis" },
-  { statut: "paye", libelle: "Payé" }
-];
+type Depot = { fournisseur: string; compte: LigneLot["compte"]; montant: number; nb: number };
+
+const ETAPES: Record<ModePaiement, { statut: StatutLot; libelle: string }[]> = {
+  depot_direct: [
+    { statut: "brouillon", libelle: "Préparé" },
+    { statut: "soumis", libelle: "Soumis" },
+    { statut: "approuve", libelle: "Approuvé" },
+    { statut: "fichier_cree", libelle: "Fichier créé" },
+    { statut: "transmis", libelle: "Transmis" },
+    { statut: "paye", libelle: "Payé" }
+  ],
+  interac: [
+    { statut: "brouillon", libelle: "Préparé" },
+    { statut: "soumis", libelle: "Soumis" },
+    { statut: "approuve", libelle: "Approuvé" },
+    { statut: "a_envoyer", libelle: "À envoyer" },
+    { statut: "transmis", libelle: "Envoyés" },
+    { statut: "paye", libelle: "Payé" }
+  ]
+};
 
 type Edition = { date: string; note: string; montants: Record<number, string>; retirees: number[] };
 
@@ -182,12 +207,13 @@ export function DetailLot({
   appeler: AppelSensible;
   onRetour: () => void;
   onChange: () => void;
-  onAjouterCompte: (fournisseurId: string) => void;
+  onAjouterCompte: (fournisseurId: string, mode: ModePaiement) => void;
 }) {
   const [lot, setLot] = useState<LotDetail | null>(null);
   const [erreur, setErreur] = useState<string | null>(null);
   const [occupe, setOccupe] = useState<string | null>(null);
   const [erreurAction, setErreurAction] = useState<string | null>(null);
+  const [dernierGeste, setDernierGeste] = useState<string | null>(null);
   const [manquants, setManquants] = useState<{ nom: string; id: string | null }[]>([]);
   const [fichier, setFichier] = useState<FichierDepot | null>(null);
   const [saisie, setSaisie] = useState<null | "approuver" | "refuser" | "annuler" | "fichier">(null);
@@ -214,10 +240,7 @@ export function DetailLot({
   }, [charger]);
 
   const depots = useMemo(() => {
-    const groupes = new Map<
-      string,
-      { fournisseur: string; compte: LotDetail["lignes"][number]["compte"]; montant: number; nb: number }
-    >();
+    const groupes = new Map<string, Depot>();
     for (const l of lot?.lignes ?? []) {
       const cle = `${l.fournisseur_id}|${l.compte ? compteMasque(l.compte) : ""}`;
       const g = groupes.get(cle);
@@ -231,6 +254,7 @@ export function DetailLot({
 
   async function agir(nom: string, geste: () => Promise<LotDetail | null>) {
     setOccupe(nom);
+    setDernierGeste(nom);
     setErreurAction(null);
     setManquants([]);
     try {
@@ -284,7 +308,12 @@ export function DetailLot({
     );
 
   const a = lot.actions;
-  const rang = ETAPES.findIndex((e) => e.statut === lot.statut);
+  const interac = lot.mode === "interac";
+  const etapes = ETAPES[lot.mode];
+  const nbVersements = interac ? lot.virements.length : depots.length;
+  // L'erreur d'un geste sur un virement s'affiche sous ce virement.
+  const [, virementEnErreur] = /^(?:envoye|retirer):(.+)$/.exec(dernierGeste ?? "") ?? [];
+  const rang = etapes.findIndex((e) => e.statut === lot.statut);
   const nbApprobations = lot.decisions.filter((d) => d.decision === "approuve").length;
 
   return (
@@ -296,11 +325,13 @@ export function DetailLot({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <p className="text-lg font-bold text-[var(--qg-text)]">Lot n° {lot.id}</p>
           <span className={`badge ${BADGE_LOT[lot.statut]}`}>{lot.statut_libelle}</span>
+          <span className="badge badge-neutral">{interac ? "Virements Interac" : "Dépôt direct"}</span>
           <span className="ml-auto text-lg font-bold tabular-nums text-[var(--qg-text)]">{argent(lot.total)}</span>
         </div>
         <p className="mt-1 text-sm text-[var(--qg-text-muted)]">
-          Dépôt le {jour(lot.date_paiement)} · {lot.nb_lignes} facture{lot.nb_lignes > 1 ? "s" : ""} ·{" "}
-          {depots.length} dépôt{depots.length > 1 ? "s" : ""}
+          {interac ? "Envoi prévu le" : "Dépôt le"} {jour(lot.date_paiement)} · {lot.nb_lignes} facture
+          {lot.nb_lignes > 1 ? "s" : ""} · {nbVersements} {interac ? "virement" : "dépôt"}
+          {nbVersements > 1 ? "s" : ""}
           {lot.cree_par ? ` · préparé par ${lot.cree_par}` : ""}
           {lot.fichier_numero ? ` · fichier n° ${String(lot.fichier_numero).padStart(4, "0")}` : ""}
         </p>
@@ -308,7 +339,7 @@ export function DetailLot({
 
         {rang >= 0 ? (
           <ol className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-            {ETAPES.map((e, i) => (
+            {etapes.map((e, i) => (
               <li key={e.statut} className="flex items-center gap-2">
                 <span
                   className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold ${
@@ -325,7 +356,7 @@ export function DetailLot({
                     ? ` (${Math.min(nbApprobations, lot.approbations_requises)}/${lot.approbations_requises})`
                     : ""}
                 </span>
-                {i < ETAPES.length - 1 ? <span className="text-[var(--qg-text-muted)]">›</span> : null}
+                {i < etapes.length - 1 ? <span className="text-[var(--qg-text-muted)]">›</span> : null}
               </li>
             ))}
           </ol>
@@ -337,45 +368,30 @@ export function DetailLot({
       {/* Fichier tout juste créé : où le transmettre */}
       {fichier ? <PanneauFichier fichier={fichier} /> : null}
 
-      {/* Dépôts (ce que contient le fichier) */}
-      <section className="rounded-2xl border" style={CARTE}>
-        <header className="border-b px-4 py-3" style={{ borderColor: "var(--qg-border)" }}>
-          <p className="text-sm font-bold text-[var(--qg-text)]">Dépôts</p>
-          <p className="text-xs text-[var(--qg-text-muted)]">
-            Un dépôt par fournisseur, dans le compte approuvé. Avant d&apos;approuver, vérifie surtout les
-            comptes approuvés récemment.
-          </p>
-        </header>
-        <ul>
-          {depots.map((d, i) => (
-            <li
-              key={i}
-              className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b px-4 py-2.5 last:border-b-0"
-              style={{ borderColor: "var(--qg-border)" }}
-            >
-              <span className="min-w-0 flex-1 truncate text-sm font-semibold text-[var(--qg-text)]">
-                {d.fournisseur}
-              </span>
-              {d.compte ? (
-                <span className="text-xs text-[var(--qg-text-muted)]">
-                  <span className="font-mono text-[var(--qg-text)]">{compteMasque(d.compte)}</span>
-                  {d.compte.approuve_le
-                    ? ` · approuvé le ${jour(d.compte.approuve_le)}${d.compte.approuve_par ? ` par ${d.compte.approuve_par}` : ""}`
-                    : ""}
-                </span>
-              ) : (
-                <span className="text-xs text-[var(--qg-text-muted)]">Compte choisi à la soumission</span>
-              )}
-              <span className="text-xs text-[var(--qg-text-muted)]">
-                {d.nb} facture{d.nb > 1 ? "s" : ""}
-              </span>
-              <span className="w-28 text-right text-sm font-semibold tabular-nums text-[var(--qg-text)]">
-                {argent(d.montant)}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </section>
+      {/* Virements Interac (un par fournisseur), ou dépôts du fichier */}
+      {interac ? (
+        <PanneauVirements
+          lot={lot}
+          occupe={occupe}
+          erreur={virementEnErreur && erreurAction ? { id: virementEnErreur, texte: erreurAction } : null}
+          onEnvoye={(v, reference) =>
+            void agir(`envoye:${v.fournisseur_id}`, () =>
+              envoyer<LotDetail>(`/lots/${lot.id}/virements/${encodeURIComponent(v.fournisseur_id)}/envoye`, {
+                reference: reference.trim() || null
+              })
+            )
+          }
+          onRetirer={(v, motif) =>
+            void agir(`retirer:${v.fournisseur_id}`, () =>
+              envoyer<LotDetail>(`/lots/${lot.id}/virements/${encodeURIComponent(v.fournisseur_id)}/retirer`, {
+                motif: motif.trim()
+              })
+            )
+          }
+        />
+      ) : (
+        <PanneauDepots depots={depots} />
+      )}
 
       {/* Factures */}
       <section className="rounded-2xl border" style={CARTE}>
@@ -407,7 +423,9 @@ export function DetailLot({
             style={{ borderColor: "var(--qg-border)" }}
           >
             <label className="block">
-              <span className="mb-1 block text-xs font-medium text-[var(--qg-text-muted)]">Date du dépôt</span>
+              <span className="mb-1 block text-xs font-medium text-[var(--qg-text-muted)]">
+                {interac ? "Envoi prévu le" : "Date du dépôt"}
+              </span>
               <input
                 type="date"
                 className="input text-sm"
@@ -517,7 +535,7 @@ export function DetailLot({
                 void agir("modifier", () =>
                   envoyer<LotDetail>(
                     `/lots/${lot.id}`,
-                    { date_paiement: edition.date, note: edition.note.trim() || null, lignes },
+                    { mode: lot.mode, date_paiement: edition.date, note: edition.note.trim() || null, lignes },
                     "PUT"
                   )
                 );
@@ -560,7 +578,9 @@ export function DetailLot({
                     ? "Pourquoi refuser ce lot ?"
                     : lot.statut === "fichier_cree"
                       ? "Pourquoi annuler ? Le fichier ne doit pas avoir été transmis à Desjardins."
-                      : "Pourquoi annuler ? (facultatif)"}
+                      : lot.statut === "a_envoyer"
+                        ? "Pourquoi annuler ? Aucun virement ne doit avoir été envoyé dans AccèsD."
+                        : "Pourquoi annuler ? (facultatif)"}
               </span>
               <textarea
                 className="input min-h-[4.5rem] text-sm"
@@ -612,7 +632,9 @@ export function DetailLot({
                 <button
                   type="button"
                   className={ROUGE_SM}
-                  disabled={occupe !== null || (lot.statut === "fichier_cree" && !texte.trim())}
+                  disabled={
+                    occupe !== null || ((lot.statut === "fichier_cree" || lot.statut === "a_envoyer") && !texte.trim())
+                  }
                   onClick={() =>
                     void agir("annuler", () =>
                       envoyer<LotDetail>(`/lots/${lot.id}/annuler`, { motif: texte.trim() || null })
@@ -680,6 +702,22 @@ export function DetailLot({
               <button type="button" className={ROUGE_SM} onClick={() => setSaisie("refuser")}>
                 Refuser
               </button>
+            ) : null}
+            {a.preparer_envoi ? (
+              <BoutonGeste
+                occupe={occupe}
+                nom="envoi"
+                classe="btn-accent"
+                icone={<Send className="h-4 w-4" />}
+                onClick={() => void agir("envoi", () => appeler<LotDetail>(`/lots/${lot.id}/envoi`))}
+              >
+                Préparer l&apos;envoi des virements
+              </BoutonGeste>
+            ) : null}
+            {a.marquer_envoye ? (
+              <p className="text-sm text-[var(--qg-text-muted)]">
+                Indique chaque virement envoyé dans la liste des virements, plus haut.
+              </p>
             ) : null}
             {a.creer_fichier && lot.statut === "approuve" ? (
               <button
@@ -759,7 +797,7 @@ export function DetailLot({
             ) : null}
           </div>
         )}
-        {erreurAction ? <p className="mt-3 text-sm text-rose-300">{erreurAction}</p> : null}
+        {erreurAction && !virementEnErreur ? <p className="mt-3 text-sm text-rose-300">{erreurAction}</p> : null}
         {manquants.length ? (
           <div className="mt-2 flex flex-wrap gap-2">
             {manquants.map((m) =>
@@ -768,7 +806,7 @@ export function DetailLot({
                   key={m.nom}
                   type="button"
                   className="btn-secondary btn-xs"
-                  onClick={() => onAjouterCompte(m.id as string)}
+                  onClick={() => onAjouterCompte(m.id as string, lot.mode)}
                 >
                   Ajouter les coordonnées de {m.nom}
                 </button>
@@ -806,6 +844,50 @@ export function DetailLot({
         ) : null}
       </section>
     </div>
+  );
+}
+
+/** Lot par dépôt direct : un dépôt par fournisseur, ce que contiendra le fichier. */
+function PanneauDepots({ depots }: { depots: Depot[] }) {
+  return (
+    <section className="rounded-2xl border" style={CARTE}>
+      <header className="border-b px-4 py-3" style={{ borderColor: "var(--qg-border)" }}>
+        <p className="text-sm font-bold text-[var(--qg-text)]">Dépôts</p>
+        <p className="text-xs text-[var(--qg-text-muted)]">
+          Un dépôt par fournisseur, dans le compte approuvé. Avant d&apos;approuver, vérifie surtout les
+          comptes approuvés récemment.
+        </p>
+      </header>
+      <ul>
+        {depots.map((d, i) => (
+          <li
+            key={i}
+            className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b px-4 py-2.5 last:border-b-0"
+            style={{ borderColor: "var(--qg-border)" }}
+          >
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-[var(--qg-text)]">
+              {d.fournisseur}
+            </span>
+            {d.compte ? (
+              <span className="text-xs text-[var(--qg-text-muted)]">
+                <span className="font-mono text-[var(--qg-text)]">{compteMasque(d.compte)}</span>
+                {d.compte.approuve_le
+                  ? ` · approuvé le ${jour(d.compte.approuve_le)}${d.compte.approuve_par ? ` par ${d.compte.approuve_par}` : ""}`
+                  : ""}
+              </span>
+            ) : (
+              <span className="text-xs text-[var(--qg-text-muted)]">Compte choisi à la soumission</span>
+            )}
+            <span className="text-xs text-[var(--qg-text-muted)]">
+              {d.nb} facture{d.nb > 1 ? "s" : ""}
+            </span>
+            <span className="w-28 text-right text-sm font-semibold tabular-nums text-[var(--qg-text)]">
+              {argent(d.montant)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -848,6 +930,7 @@ function BoutonGeste({
 /** Ce qui est attendu, et de qui, à l'étape où en est le lot. */
 function Consigne({ lot, moi }: { lot: LotDetail; moi: Moi }) {
   const a = lot.actions;
+  const interac = lot.mode === "interac";
   let texte: string;
   let ton = "text-[var(--qg-text-muted)]";
   switch (lot.statut) {
@@ -856,19 +939,33 @@ function Consigne({ lot, moi }: { lot: LotDetail; moi: Moi }) {
       break;
     case "soumis":
       if (a.approuver) {
-        texte =
-          "À toi d'approuver : vérifie chaque dépôt (fournisseur, compte, montant). Ton code de double authentification sera demandé.";
+        texte = interac
+          ? "À toi d'approuver : vérifie chaque virement (fournisseur, courriel ou cellulaire, montant). Ton code de double authentification sera demandé."
+          : "À toi d'approuver : vérifie chaque dépôt (fournisseur, compte, montant). Ton code de double authentification sera demandé.";
         ton = "text-amber-300";
       } else if (lot.a_prepare) texte = "En attente de l'approbation d'une autre personne.";
       else if (moi.peut_approuver) texte = "Tu as déjà donné ton approbation : il en faut une autre.";
       else texte = "En attente d'un approbateur.";
       break;
     case "approuve":
-      texte = moi.peut_approuver
-        ? "Approuvé. Crée le fichier de dépôt, puis transmets-le dans AccèsD Affaires (onglet Transmission)."
-        : "Approuvé. Un approbateur doit créer le fichier et le transmettre à Desjardins.";
+      if (interac)
+        texte = moi.peut_approuver
+          ? "Approuvé. Prépare l'envoi : Kratos relit les soldes dans QuickBooks, puis tu envoies chaque virement toi-même dans AccèsD Affaires."
+          : "Approuvé. Un approbateur doit envoyer les virements Interac dans AccèsD Affaires.";
+      else
+        texte = moi.peut_approuver
+          ? "Approuvé. Crée le fichier de dépôt, puis transmets-le dans AccèsD Affaires (onglet Transmission)."
+          : "Approuvé. Un approbateur doit créer le fichier et le transmettre à Desjardins.";
       if (moi.peut_approuver) ton = "text-amber-300";
       break;
+    case "a_envoyer": {
+      const restants = lot.virements.filter((v) => !v.envoye_le).length;
+      texte = moi.peut_approuver
+        ? `Envoie ${restants > 1 ? `les ${restants} virements` : "le virement"} dans AccèsD Affaires (Virements Interac), puis indique-le ici.`
+        : `Un approbateur envoie les virements dans AccèsD Affaires (${restants} à envoyer).`;
+      if (moi.peut_approuver) ton = "text-amber-300";
+      break;
+    }
     case "fichier_cree":
       texte = moi.peut_approuver
         ? `Transmets le fichier n° ${String(lot.fichier_numero ?? 0).padStart(4, "0")} dans AccèsD Affaires (onglet Transmission), puis indique-le ici.`
@@ -876,7 +973,9 @@ function Consigne({ lot, moi }: { lot: LotDetail; moi: Moi }) {
       if (moi.peut_approuver) ton = "text-amber-300";
       break;
     case "transmis":
-      texte = `Transmis à Desjardins${lot.transmis_par ? ` par ${lot.transmis_par}` : ""}. Une fois les dépôts faits, inscris les paiements dans QuickBooks.`;
+      texte = interac
+        ? "Tous les virements sont envoyés. Inscris les paiements dans QuickBooks."
+        : `Transmis à Desjardins${lot.transmis_par ? ` par ${lot.transmis_par}` : ""}. Une fois les dépôts faits, inscris les paiements dans QuickBooks.`;
       break;
     case "paye":
       texte = "Payé : les paiements sont inscrits dans QuickBooks.";
@@ -931,5 +1030,203 @@ function PanneauFichier({ fichier }: { fichier: FichierDepot }) {
         ))}
       </ul>
     </section>
+  );
+}
+
+/** Lot Interac : un virement par fournisseur. L'approbateur le saisit
+ *  lui-même dans AccèsD Affaires (Desjardins n'accepte pas de fichier pour
+ *  Interac), puis l'indique ici, avec la référence d'AccèsD s'il veut. */
+function PanneauVirements({
+  lot,
+  occupe,
+  erreur,
+  onEnvoye,
+  onRetirer
+}: {
+  lot: LotDetail;
+  occupe: string | null;
+  erreur: { id: string; texte: string } | null;
+  onEnvoye: (v: Virement, reference: string) => void;
+  onRetirer: (v: Virement, motif: string) => void;
+}) {
+  const [references, setReferences] = useState<Record<string, string>>({});
+  const [retrait, setRetrait] = useState<{ id: string; motif: string } | null>(null);
+  const envoi = lot.actions.marquer_envoye;
+
+  return (
+    <section className="rounded-2xl border" style={CARTE}>
+      <header className="border-b px-4 py-3" style={{ borderColor: "var(--qg-border)" }}>
+        <p className="text-sm font-bold text-[var(--qg-text)]">Virements Interac</p>
+        <p className="text-xs text-[var(--qg-text-muted)]">
+          {envoi
+            ? "Pour chacun : dans AccèsD Affaires, Virements Interac, choisis le destinataire qui a exactement ce courriel ou ce cellulaire, saisis le montant et le message, envoie, puis indique-le ici."
+            : `Un virement par fournisseur, au destinataire approuvé (${argent(lot.limite_interac)} au plus par virement chez Desjardins). Avant d'approuver, vérifie surtout les destinataires approuvés récemment.`}
+        </p>
+      </header>
+      <ul>
+        {lot.virements.map((v) => {
+          const retire = retrait?.id === v.fournisseur_id ? retrait : null;
+          const plusApprouve = !!v.destinataire && v.destinataire_statut !== "approuve";
+          return (
+            <li
+              key={v.fournisseur_id}
+              className="space-y-2 border-b px-4 py-3 last:border-b-0"
+              style={{ borderColor: "var(--qg-border)" }}
+            >
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="w-full truncate text-sm font-semibold text-[var(--qg-text)] sm:w-auto sm:min-w-0 sm:flex-1">
+                  {v.fournisseur}
+                </span>
+                {v.envoye_le ? (
+                  <span className="badge badge-emerald">Envoyé</span>
+                ) : lot.statut === "a_envoyer" ? (
+                  <span className="badge badge-amber">À envoyer</span>
+                ) : null}
+                <span className="text-xs text-[var(--qg-text-muted)]">
+                  {v.nb_factures} facture{v.nb_factures > 1 ? "s" : ""}
+                </span>
+                <span className="ml-auto w-28 text-right text-sm font-semibold tabular-nums text-[var(--qg-text)] sm:ml-0">
+                  {argent(v.montant)}
+                </span>
+              </div>
+              <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1 text-xs">
+                <dt className="text-[var(--qg-text-muted)]">Destinataire</dt>
+                <dd className="flex min-w-0 items-center gap-1.5">
+                  {v.destinataire ? (
+                    <>
+                      <span className="min-w-0 break-all font-mono text-[var(--qg-text)]">
+                        {destinataireLisible(v.destinataire)}
+                      </span>
+                      <BoutonCopier texte={v.destinataire} quoi="le destinataire" />
+                    </>
+                  ) : (
+                    <span className="text-[var(--qg-text-muted)]">Choisi à la soumission</span>
+                  )}
+                </dd>
+                <dt className="text-[var(--qg-text-muted)]">Message</dt>
+                <dd className="flex min-w-0 items-center gap-1.5">
+                  <span className="min-w-0 break-words text-[var(--qg-text)]">{v.message}</span>
+                  <BoutonCopier texte={v.message} quoi="le message" />
+                </dd>
+              </dl>
+              {plusApprouve && !v.envoye_le ? (
+                <p className="flex items-start gap-1.5 text-xs text-rose-300">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  Ce destinataire n&apos;est plus approuvé : n&apos;envoie pas ce virement, retire-le du lot. S&apos;il
+                  est déjà parti, indique-le quand même comme envoyé.
+                </p>
+              ) : null}
+              {v.depasse_limite && !v.envoye_le ? (
+                <p className="flex items-start gap-1.5 text-xs text-rose-300">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  Au-delà de la limite de {argent(lot.limite_interac)} par virement : paie ce fournisseur par dépôt
+                  direct.
+                </p>
+              ) : null}
+              {v.envoye_le ? (
+                <p className="text-xs text-[var(--qg-text-muted)]">
+                  Envoyé le {moment(v.envoye_le)}
+                  {v.envoye_par ? ` par ${v.envoye_par}` : ""}
+                  {v.reference ? ` · référence ${v.reference}` : ""}
+                </p>
+              ) : null}
+              {envoi && !v.envoye_le ? (
+                retire ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      className="input min-w-[14rem] flex-1 text-sm"
+                      placeholder="Pourquoi retirer ce virement du lot ?"
+                      value={retire.motif}
+                      maxLength={2000}
+                      autoFocus
+                      onChange={(ev) => setRetrait({ id: v.fournisseur_id, motif: ev.target.value })}
+                    />
+                    <button type="button" className="btn-secondary btn-xs" onClick={() => setRetrait(null)}>
+                      Retour
+                    </button>
+                    <button
+                      type="button"
+                      className={ROUGE_XS}
+                      disabled={!retire.motif.trim() || occupe !== null}
+                      onClick={() => onRetirer(v, retire.motif)}
+                    >
+                      {occupe === `retirer:${v.fournisseur_id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                      Retirer du lot
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      className="input w-full text-sm sm:w-64"
+                      placeholder="Référence AccèsD (facultatif)"
+                      value={references[v.fournisseur_id] ?? ""}
+                      maxLength={64}
+                      onChange={(ev) => setReferences((r) => ({ ...r, [v.fournisseur_id]: ev.target.value }))}
+                      aria-label={`Référence du virement à ${v.fournisseur}`}
+                    />
+                    <button
+                      type="button"
+                      className="btn-accent btn-xs inline-flex items-center gap-1"
+                      disabled={occupe !== null}
+                      onClick={() => {
+                        if (
+                          !window.confirm(
+                            `Confirmer que le virement de ${argent(v.montant)} à ${v.fournisseur} (${destinataireLisible(v.destinataire)}) a été envoyé dans AccèsD Affaires ?`
+                          )
+                        )
+                          return;
+                        onEnvoye(v, references[v.fournisseur_id] ?? "");
+                      }}
+                    >
+                      {occupe === `envoye:${v.fournisseur_id}` ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Check className="h-3.5 w-3.5" />
+                      )}
+                      J&apos;ai envoyé ce virement
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost btn-xs"
+                      disabled={occupe !== null}
+                      onClick={() => setRetrait({ id: v.fournisseur_id, motif: "" })}
+                    >
+                      Retirer du lot
+                    </button>
+                  </div>
+                )
+              ) : null}
+              {erreur?.id === v.fournisseur_id ? <p className="text-xs text-rose-300">{erreur.texte}</p> : null}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+function BoutonCopier({ texte, quoi }: { texte: string; quoi: string }) {
+  const [fait, setFait] = useState(false);
+  return (
+    <button
+      type="button"
+      className="btn-ghost btn-xs inline-flex shrink-0 items-center gap-1"
+      title={`Copier ${quoi}`}
+      aria-label={`Copier ${quoi}`}
+      onClick={() => {
+        navigator.clipboard
+          ?.writeText(texte)
+          .then(() => {
+            setFait(true);
+            window.setTimeout(() => setFait(false), 1500);
+          })
+          .catch(() => {
+            /* presse-papiers refusé : le texte reste sélectionnable */
+          });
+      }}
+    >
+      {fait ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+      {fait ? "Copié" : "Copier"}
+    </button>
   );
 }

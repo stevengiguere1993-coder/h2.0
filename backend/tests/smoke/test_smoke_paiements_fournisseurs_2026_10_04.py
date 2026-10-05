@@ -498,7 +498,7 @@ def test_parcours_complet(client, run, equipe, inc, fake_qbo, auth_headers):
     r = client.put(f"{base}/reglages", headers=h["steven"], json=REGLAGES)
     assert r.status_code == 200, r.text
     assert r.json()["manque"] == [] and r.json()["nom_court"] == "HORIZON INC"
-    assert "Réglages du dépôt direct modifiés" in run(_notifs(equipe["ids"]["phil"]))
+    assert "Réglages des paiements modifiés" in run(_notifs(equipe["ids"]["phil"]))
 
     r = client.post(f"/api/v1/paiements/lots/{lot['id']}/fichier", headers=h["steven"], json={})
     assert r.status_code == 200, r.text
@@ -666,3 +666,233 @@ def test_connecteur_ia_ecarte_et_numeros_masques():
     out = serialize_entity("lot_paiement", _Lot(), level="summary")
     assert out["total"] == 1250.5 and out["statut"] == "soumis"
     assert not any("compte" in k for k in out)
+
+
+# ── Virements Interac (Steven, 2026-10-04) ────────────────────────────
+
+AUJOURDHUI = "2026-10-05"  # lundi : un virement Interac peut partir le jour même
+
+
+def test_destinataire_et_message_interac():
+    assert svc.destinataire_interac(" Comptes@Rona.CA ") == "comptes@rona.ca"
+    assert svc.destinataire_interac("1 (450) 555-1234") == "4505551234"
+    assert svc.destinataire_interac("450.555.1234") == "4505551234"
+    for invalide in ("", "450-555-123", "comptes@rona", "a b@rona.ca", "rona"):
+        with pytest.raises(ValueError):
+            svc.destinataire_interac(invalide)
+    assert svc.destinataire_lisible("4505551234") == "450 555-1234"
+    assert svc.destinataire_lisible("comptes@rona.ca") == "comptes@rona.ca"
+
+    assert svc._message_interac([]) == "Paiement de facture"
+    assert svc._message_interac(["F-1", " ", None]) == "Paiement de la facture F-1"
+    assert svc._message_interac(["F-1", "F-2", "F-1"]) == "Paiement des factures F-1, F-2"
+    long = svc._message_interac([f"FACTURE-{i:04d}" for i in range(40)])
+    assert len(long) <= 140 and long.endswith(" autres")
+
+
+def test_virements_interac(client, run, equipe, inc, fake_qbo):
+    h = equipe["h"]
+    eid = inc["id"]
+    base = f"/api/v1/paiements/entreprises/{eid}"
+    for qui in ("steven", "phil"):
+        if qui not in equipe["secrets"]:
+            _activer_2fa(client, equipe, qui)
+    fake_qbo.bills["305"] = _facture("305", "57", "Ébénisterie Côté", "EC-9", 30000.00, 30000.00)
+    fake_qbo.bills["306"] = _facture("306", "57", "Ébénisterie Côté", "EC-10", 200.00, 200.00)
+
+    # Sans entente de dépôt direct, l'entreprise règle quand même ses
+    # approbations et son compte QuickBooks : Interac n'en a pas besoin.
+    r = client.put(f"{base}/reglages", headers=h["steven"], json={"approbations_requises": 1, "qbo_compte_banque_id": "35"})
+    assert r.status_code == 200, r.text
+    assert r.json()["qbo_compte_banque_nom"] == "Desjardins" and "numéro d'organisme" in r.json()["manque"]
+
+    # La technicienne saisit le courriel Interac de Rona : à approuver.
+    r = client.post(
+        f"{base}/comptes",
+        headers=h["technicienne"],
+        json={"fournisseur_id": "56", "mode": "interac", "interac_destinataire": " Comptes@Rona.CA ", "source": "Appel"},
+    )
+    assert r.status_code == 200, r.text
+    rona = r.json()
+    assert rona["mode"] == "interac" and rona["statut"] == "en_attente"
+    assert rona["interac_destinataire"] == "comptes@rona.ca" and rona["institution"] is None
+    assert rona["alerte"] is None
+    # Un deuxième courriel en attente pour Rona est refusé ; un compte
+    # bancaire, lui, est une autre façon de payer.
+    r = client.post(
+        f"{base}/comptes",
+        headers=h["technicienne"],
+        json={"fournisseur_id": "56", "mode": "interac", "interac_destinataire": "autre@rona.ca"},
+    )
+    assert r.status_code == 409 and "Interac" in r.json()["detail"]
+    r = client.post(
+        f"{base}/comptes",
+        headers=h["technicienne"],
+        json={"fournisseur_id": "56", "institution": "815", "transit": "90001", "numero_compte": "5512345"},
+    )
+    assert r.status_code == 200 and r.json()["mode"] == "depot_direct"
+    rona_dd = r.json()
+    # Destinataire illisible, mode inconnu : refusés.
+    r = client.post(
+        f"{base}/comptes", headers=h["technicienne"],
+        json={"fournisseur_id": "57", "mode": "interac", "interac_destinataire": "450-555"},
+    )
+    assert r.status_code == 422 and "cellulaire" in r.json()["detail"]
+    r = client.post(
+        f"{base}/comptes", headers=h["technicienne"],
+        json={"fournisseur_id": "57", "mode": "cheque", "interac_destinataire": "x@y.ca"},
+    )
+    assert r.status_code == 422
+
+    # Le courriel d'un compte Kratos est signalé à qui approuve.
+    async def _courriel(user_id: int) -> str:
+        async with TestSessionLocal() as s:
+            return (await s.get(User, user_id)).email
+    courriel_tech = run(_courriel(equipe["ids"]["technicienne"]))
+    r = client.post(
+        f"{base}/comptes", headers=h["technicienne"],
+        json={"fournisseur_id": "57", "mode": "interac", "interac_destinataire": courriel_tech.upper()},
+    )
+    assert r.status_code == 200, r.text
+    assert "compte Kratos" in (r.json()["alerte"] or "")
+    assert client.post(f"/api/v1/paiements/comptes/{r.json()['id']}/retirer", headers=h["technicienne"]).status_code == 200
+    r = client.post(
+        f"{base}/comptes", headers=h["technicienne"],
+        json={"fournisseur_id": "57", "mode": "interac", "interac_destinataire": "1-450-555-1234"},
+    )
+    assert r.status_code == 200 and r.json()["interac_destinataire"] == "4505551234"
+    cote = r.json()
+
+    # Un destinataire Interac s'affiche en entier : rien à révéler.
+    r = client.post(f"/api/v1/paiements/comptes/{rona['id']}/reveler", headers=h["steven"], json={})
+    assert r.status_code == 409
+    for c in (rona, rona_dd, cote):
+        r = client.post(f"/api/v1/paiements/comptes/{c['id']}/approuver", headers=h["steven"], json={})
+        assert r.status_code == 200, r.text
+    # Approuver le courriel de Rona n'a pas remplacé son compte bancaire.
+    statuts = {c["id"]: c["statut"] for c in client.get(f"{base}/comptes", headers=h["phil"]).json()}
+    assert statuts[rona["id"]] == "approuve" and statuts[rona_dd["id"]] == "approuve"
+
+    factures = {f["qbo_bill_id"]: f for f in client.get(f"{base}/factures", headers=h["technicienne"]).json()["factures"]}
+    assert factures["300"]["interac"]["interac_destinataire"] == "comptes@rona.ca"
+    assert factures["300"]["interac"]["statut"] == "approuve" and factures["300"]["compte"]["compte_fin"] == "2345"
+    assert factures["302"]["compte"] is None and factures["302"]["interac"]["mode"] == "interac"
+
+    # Lot Interac : l'envoi peut être prévu aujourd'hui, pas hier.
+    lot_in = {
+        "mode": "interac",
+        "date_paiement": AUJOURDHUI,
+        "lignes": [
+            {"qbo_bill_id": "300", "montant": 1000},
+            {"qbo_bill_id": "301", "montant": 250.5},
+            {"qbo_bill_id": "302", "montant": 1500},
+        ],
+    }
+    r = client.post(f"{base}/lots", headers=h["technicienne"], json={**lot_in, "date_paiement": "2026-10-04"})
+    assert r.status_code == 422 and "passée" in r.json()["detail"]
+    r = client.post(f"{base}/lots", headers=h["technicienne"], json=lot_in)
+    assert r.status_code == 200, r.text
+    lot = r.json()
+    assert lot["mode"] == "interac" and lot["statut"] == "brouillon" and lot["total"] == 2750.5
+    r = client.post(f"/api/v1/paiements/lots/{lot['id']}/soumettre", headers=h["technicienne"])
+    assert r.status_code == 200, r.text
+    assert {l["compte"]["mode"] for l in r.json()["lignes"]} == {"interac"}
+
+    # Approuvé : pas de fichier pour Interac, on prépare l'envoi.
+    r = client.post(f"/api/v1/paiements/lots/{lot['id']}/approuver", headers=h["steven"], json={})
+    assert r.status_code == 200 and r.json()["statut"] == "approuve"
+    a = r.json()["actions"]
+    assert a["preparer_envoi"] is True and a["creer_fichier"] is False and a["marquer_transmis"] is False
+    assert client.post(f"/api/v1/paiements/lots/{lot['id']}/fichier", headers=h["steven"], json={}).status_code == 409
+    assert client.post(f"/api/v1/paiements/lots/{lot['id']}/transmis", headers=h["steven"]).status_code == 409
+    assert client.post(f"/api/v1/paiements/lots/{lot['id']}/envoi", headers=h["technicienne"], json={}).status_code == 403
+    _oublier_confirmation(run, equipe["ids"]["phil"])
+    r = client.post(f"/api/v1/paiements/lots/{lot['id']}/envoi", headers=h["phil"], json={})
+    assert r.status_code == 428 and r.json()["deux_facteurs"] == "requis"
+    r = client.post(f"/api/v1/paiements/lots/{lot['id']}/envoi", headers=h["steven"], json={})
+    assert r.status_code == 200, r.text
+    detail = r.json()
+    assert detail["statut"] == "a_envoyer" and detail["statut_libelle"] == "Virements à envoyer"
+    assert detail["actions"]["marquer_envoye"] is True and detail["envoi_prepare_par"]
+    virements = {v["fournisseur_id"]: v for v in detail["virements"]}
+    assert virements["56"]["destinataire"] == "comptes@rona.ca" and virements["56"]["montant"] == 1250.5
+    assert virements["56"]["message"] == "Paiement des factures F-100, F-101"
+    assert virements["57"]["destinataire"] == "4505551234" and virements["57"]["message"] == "Paiement de la facture EC-7"
+
+    # Chaque virement est indiqué envoyé par un approbateur.
+    url = f"/api/v1/paiements/lots/{lot['id']}/virements"
+    assert client.post(f"{url}/56/envoye", headers=h["technicienne"], json={}).status_code == 403
+    assert client.post(f"{url}/99/envoye", headers=h["steven"], json={}).status_code == 404
+    r = client.post(f"{url}/56/envoye", headers=h["steven"], json={"reference": " CA1234 abcd "})
+    assert r.status_code == 200 and r.json()["statut"] == "a_envoyer"
+    assert {v["fournisseur_id"]: v["reference"] for v in r.json()["virements"]}["56"] == "CA1234 abcd"
+    assert client.post(f"{url}/56/envoye", headers=h["steven"], json={}).status_code == 409
+    # Un virement parti ne s'annule plus dans Kratos.
+    r = client.post(f"/api/v1/paiements/lots/{lot['id']}/annuler", headers=h["steven"], json={"motif": "test"})
+    assert r.status_code == 409
+    r = client.post(f"{url}/57/envoye", headers=h["phil"], json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["statut"] == "transmis" and r.json()["statut_libelle"] == "Virements envoyés"
+
+    async def _notifs(user_id: int) -> List[str]:
+        async with TestSessionLocal() as s:
+            rows = (await s.execute(select(Notification).where(Notification.user_id == user_id))).scalars().all()
+            return [n.title for n in rows]
+    assert "Virements Interac envoyés" in run(_notifs(equipe["ids"]["technicienne"]))
+
+    # QuickBooks : un paiement par fournisseur, daté du jour de l'envoi.
+    avant = len(fake_qbo.paiements)
+    r = client.post(f"/api/v1/paiements/lots/{lot['id']}/quickbooks", headers=h["technicienne"])
+    assert r.status_code == 200, r.text
+    assert r.json()["statut"] == "paye"
+    nouveaux = {p["DocNumber"]: p for p in fake_qbo.paiements[avant:]}
+    assert set(nouveaux) == {f"INT-{lot['id']}-56", f"INT-{lot['id']}-57"}
+    bp = nouveaux[f"INT-{lot['id']}-56"]
+    assert bp["TxnDate"] == AUJOURDHUI and bp["TotalAmt"] == 1250.5
+    assert bp["CheckPayment"]["BankAccountRef"]["value"] == "35"
+    assert "Interac" in bp["PrivateNote"] and "CA1234 abcd" in bp["PrivateNote"]
+
+    # Un virement au-delà de 25 000 $ ne part pas.
+    r = client.post(
+        f"{base}/lots", headers=h["technicienne"],
+        json={"mode": "interac", "date_paiement": AUJOURDHUI, "lignes": [{"qbo_bill_id": "305", "montant": 30000}]},
+    )
+    assert r.status_code == 200, r.text
+    gros = r.json()["id"]
+    r = client.post(f"/api/v1/paiements/lots/{gros}/soumettre", headers=h["technicienne"])
+    assert r.status_code == 409 and "25 000,00 $" in r.json()["detail"]
+    assert client.post(f"/api/v1/paiements/lots/{gros}/annuler", headers=h["technicienne"], json={}).json()["statut"] == "annule"
+
+    # Retirer un virement pas encore envoyé : ses factures redeviennent à payer.
+    r = client.post(
+        f"{base}/lots", headers=h["technicienne"],
+        json={
+            "mode": "interac",
+            "date_paiement": AUJOURDHUI,
+            "lignes": [{"qbo_bill_id": "303", "montant": 80}, {"qbo_bill_id": "306", "montant": 200}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    lot2 = r.json()["id"]
+    # Modifier un brouillon sans préciser le mode le garde en Interac.
+    r = client.put(
+        f"/api/v1/paiements/lots/{lot2}", headers=h["technicienne"],
+        json={"date_paiement": AUJOURDHUI, "lignes": [{"qbo_bill_id": "303", "montant": 80}, {"qbo_bill_id": "306", "montant": 150}]},
+    )
+    assert r.status_code == 200 and r.json()["mode"] == "interac" and r.json()["total"] == 230
+    assert client.post(f"/api/v1/paiements/lots/{lot2}/soumettre", headers=h["technicienne"]).status_code == 200
+    assert client.post(f"/api/v1/paiements/lots/{lot2}/approuver", headers=h["steven"], json={}).status_code == 200
+    assert client.post(f"/api/v1/paiements/lots/{lot2}/envoi", headers=h["steven"], json={}).status_code == 200
+    url2 = f"/api/v1/paiements/lots/{lot2}/virements"
+    assert client.post(f"{url2}/56/envoye", headers=h["steven"], json={}).status_code == 200
+    assert client.post(f"{url2}/56/retirer", headers=h["steven"], json={"motif": "x"}).status_code == 409
+    assert client.post(f"{url2}/57/retirer", headers=h["steven"], json={}).status_code == 422
+    r = client.post(f"{url2}/57/retirer", headers=h["steven"], json={"motif": "Refusé par AccèsD"})
+    assert r.status_code == 200, r.text
+    assert r.json()["statut"] == "transmis" and r.json()["total"] == 80 and r.json()["nb_lignes"] == 1
+    factures = {f["qbo_bill_id"]: f for f in client.get(f"{base}/factures", headers=h["technicienne"]).json()["factures"]}
+    assert factures["306"]["lot_id"] is None and factures["303"]["lot_id"] == lot2
+
+    actions = [e["action"] for e in client.get(f"{base}/journal", headers=h["steven"]).json()]
+    for a in ("envoi_prepare", "interac_envoye", "virements_envoyes", "virement_retire", "qbo_enregistre"):
+        assert a in actions, a

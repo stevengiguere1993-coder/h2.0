@@ -1,4 +1,5 @@
-"""Paiements fournisseurs par dépôt direct Desjardins (Comptabilité).
+"""Paiements fournisseurs par dépôt direct Desjardins ou virement Interac
+(Comptabilité).
 
 Demande Steven (2026-10-04) : une technicienne comptable prépare les
 paiements des factures fournisseurs sans jamais pouvoir faire sortir
@@ -12,10 +13,16 @@ l'argent elle-même. Kratos reproduit ce que fait Plooto :
   Canada) que l'approbateur transmet lui-même dans AccèsD Affaires ;
 - les paiements sont ensuite inscrits dans QuickBooks.
 
-Les coordonnées bancaires des fournisseurs sont chiffrées et n'entrent
-en usage qu'une fois approuvées par une autre personne que celle qui les
-a saisies. Une ligne de compte n'est jamais modifiée : un changement crée
-une nouvelle ligne, l'ancienne passe à « remplace ».
+Un lot peut aussi se payer par virements Interac (Steven, 2026-10-04) :
+Desjardins n'accepte pas de fichier pour Interac, alors l'approbateur
+envoie chaque virement lui-même dans AccèsD Affaires et l'indique dans
+Kratos, fournisseur par fournisseur.
+
+Les coordonnées de paiement des fournisseurs (compte bancaire chiffré ou
+destinataire Interac) n'entrent en usage qu'une fois approuvées par une
+autre personne que celle qui les a saisies. Une ligne de coordonnées
+n'est jamais modifiée : un changement crée une nouvelle ligne, l'ancienne
+passe à « remplace ».
 """
 
 from __future__ import annotations
@@ -94,7 +101,9 @@ class PaiementReglage(Base):
 
 
 class FournisseurCompteBancaire(Base):
-    """Coordonnées bancaires d'un fournisseur QuickBooks, pour une entreprise."""
+    """Coordonnées de paiement d'un fournisseur QuickBooks, pour une
+    entreprise : un compte bancaire (dépôt direct) ou un destinataire
+    Interac. Un fournisseur peut avoir les deux."""
 
     __tablename__ = "paiements_comptes_fournisseurs"
 
@@ -106,13 +115,24 @@ class FournisseurCompteBancaire(Base):
     )
     qbo_vendor_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     fournisseur_nom: Mapped[str] = mapped_column(String(255), nullable=False)
-    institution: Mapped[str] = mapped_column(String(3), nullable=False)
-    transit: Mapped[str] = mapped_column(String(5), nullable=False)
+    #: « depot_direct » (institution, transit, compte) ou « interac »
+    #: (``interac_destinataire``).
+    mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="depot_direct", server_default="depot_direct"
+    )
+    #: Dépôt direct. Ces quatre colonnes sont vides pour Interac (devenues
+    #: facultatives le 2026-10-04 : ``ensure_critical_columns`` retire le
+    #: NOT NULL des bases créées avant).
+    institution: Mapped[Optional[str]] = mapped_column(String(3), nullable=True)
+    transit: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
     #: Numéro de compte chiffré (``secret_vault``) ; jamais renvoyé en clair
     #: par l'API, sauf dans le fichier de dépôt créé par un approbateur.
-    compte_chiffre: Mapped[str] = mapped_column(Text, nullable=False)
+    compte_chiffre: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     #: Quatre derniers chiffres, pour l'affichage.
-    compte_fin: Mapped[str] = mapped_column(String(4), nullable=False)
+    compte_fin: Mapped[Optional[str]] = mapped_column(String(4), nullable=True)
+    #: Virement Interac : courriel (en minuscules) ou numéro de cellulaire
+    #: (10 chiffres) du destinataire.
+    interac_destinataire: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     #: D'où viennent les coordonnées (ex. « spécimen de chèque reçu le 3 oct. »).
     source: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     #: « en_attente », « approuve », « remplace », « refuse » ou « retire ».
@@ -135,7 +155,8 @@ class FournisseurCompteBancaire(Base):
 
 
 class LotPaiement(Base):
-    """Un lot de paiements fournisseurs = un fichier de dépôt direct."""
+    """Un lot de paiements fournisseurs : un fichier de dépôt direct, ou
+    des virements Interac (un par fournisseur)."""
 
     __tablename__ = "paiements_lots"
 
@@ -145,12 +166,18 @@ class LotPaiement(Base):
         nullable=False,
         index=True,
     )
-    #: « brouillon », « soumis », « approuve », « fichier_cree »,
-    #: « transmis », « paye », « refuse » ou « annule ».
+    #: « brouillon », « soumis », « approuve », « fichier_cree » (dépôt
+    #: direct) ou « a_envoyer » (Interac), « transmis » (fichier transmis
+    #: ou tous les virements envoyés), « paye », « refuse » ou « annule ».
     statut: Mapped[str] = mapped_column(
         String(16), nullable=False, default="brouillon", index=True
     )
-    #: Date où l'argent arrive chez les fournisseurs.
+    #: « depot_direct » ou « interac ».
+    mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="depot_direct", server_default="depot_direct"
+    )
+    #: Dépôt direct : date où l'argent arrive chez les fournisseurs.
+    #: Interac : date prévue de l'envoi des virements.
     date_paiement: Mapped[date] = mapped_column(Date, nullable=False)
     total_cents: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     nb_lignes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -178,6 +205,15 @@ class LotPaiement(Base):
     fichier_cree_le: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    #: Interac : envoi préparé par un approbateur (soldes relus dans
+    #: QuickBooks, destinataires vérifiés).
+    envoi_prepare_par_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    envoi_prepare_le: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: Fichier transmis à Desjardins, ou dernier virement Interac envoyé.
     transmis_par_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -220,11 +256,20 @@ class LotPaiementLigne(Base):
     #: Solde de la facture dans QuickBooks quand elle a été ajoutée.
     solde_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
     montant_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    #: Compte bancaire approuvé figé à la soumission du lot.
+    #: Coordonnées approuvées (compte bancaire ou destinataire Interac,
+    #: selon le mode du lot) figées à la soumission du lot.
     compte_bancaire_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("paiements_comptes_fournisseurs.id", ondelete="SET NULL"),
         nullable=True,
     )
+    #: Interac : virement envoyé dans AccèsD, selon l'approbateur qui l'a
+    #: envoyé (toutes les factures d'un fournisseur partent ensemble).
+    envoye_le: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    envoye_par_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    #: Numéro de référence du virement affiché par AccèsD (facultatif).
+    reference_interac: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     qbo_bill_payment_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     erreur_qbo: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
