@@ -375,7 +375,10 @@ async def punch_stop(
         )
     now = datetime.now(timezone.utc)
     p.ended_at = now
-    delta = (now - p.started_at).total_seconds() / 3600.0
+    started = p.started_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    delta = (now - started).total_seconds() / 3600.0
     p.hours = round(delta, 2)
     # Concatène le geolocation de fin si fourni — séparateur '|' pour
     # qu'on puisse distinguer début et fin dans l'historique admin.
@@ -386,6 +389,10 @@ async def punch_stop(
         else:
             p.geolocation = end_geo[:128]
     await db.flush()
+    # Case « dîner » de la fiche : 30 min retirées si la journée dépasse 5 h.
+    from app.services.punch_diner import appliquer_diner_auto
+
+    await appliquer_diner_auto(db, p, emp)
     await db.refresh(p)
     # Journal d'activité : trace la fin du punch (clock-out mobile).
     from app.services.audit import log_action as _log_action
@@ -401,6 +408,7 @@ async def punch_stop(
             "employe": emp.full_name,
             "project_id": p.project_id,
             "hours": float(p.hours or 0),
+            "diner_minutes": p.diner_minutes,
             "ended_at": now.isoformat(),
             "source": "mobile",
         },

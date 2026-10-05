@@ -25,6 +25,7 @@ from app.core.security import get_password_hash
 from app.models.employe import Employe
 from app.models.user import User, UserRole
 from app.schemas.business import EmployeCreate, EmployeRead, EmployeUpdate
+from app.services.punch_diner import aujourd_hui_local
 
 
 log = logging.getLogger(__name__)
@@ -124,6 +125,9 @@ async def create_employe(
     data: EmployeCreate, db: DBSession, _: RequireManager
 ) -> EmployeCreatedRead:
     e = Employe(**data.model_dump(exclude_unset=True))
+    if e.diner_auto:
+        # Case « dîner » : le retrait vaut à partir d'aujourd'hui.
+        e.diner_depuis = aujourd_hui_local()
     db.add(e)
     await db.flush()
     await db.refresh(e)
@@ -199,9 +203,19 @@ async def update_employe(
     if e is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Employé introuvable.")
     was_active = bool(e.active)
+    was_diner = bool(e.diner_auto)
     patch = data.model_dump(exclude_unset=True)
+    if "diner_auto" in patch and patch["diner_auto"] is None:
+        patch.pop("diner_auto")
     for field, value in patch.items():
         setattr(e, field, value)
+    # Case « dîner » : cochée → le retrait vaut à partir d'aujourd'hui
+    # (les heures déjà punchées ne changent pas) ; décochée → plus rien.
+    if "diner_auto" in patch:
+        if not e.diner_auto:
+            e.diner_depuis = None
+        elif not was_diner and "diner_depuis" not in patch:
+            e.diner_depuis = aujourd_hui_local()
     await db.flush()
     # Détection désactivation : si on passe de actif → inactif ET que
     # l'employé avait des assignations futures (phase, tâche, agenda),

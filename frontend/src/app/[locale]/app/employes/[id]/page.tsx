@@ -34,6 +34,10 @@ type Employe = {
   // Taux horaire de base sous régime CCQ (null = même que hourly_rate).
   hourly_rate_ccq: number | string | null;
   employeur_d_url: string | null;
+  // Case « dîner » : 30 min retirées des heures de punch quand la journée
+  // dépasse 5 h, à partir de `diner_depuis` (jour où elle a été cochée).
+  diner_auto: boolean;
+  diner_depuis: string | null;
   created_at: string;
 };
 
@@ -111,6 +115,7 @@ export default function EmployeDetailPage() {
   const [ccqRate, setCcqRate] = useState("");
   const [hourlyRateCcq, setHourlyRateCcq] = useState("");
   const [employeurDUrl, setEmployeurDUrl] = useState("");
+  const [dinerAuto, setDinerAuto] = useState(false);
 
   // Historique des taux (paliers datés).
   const [rateHistory, setRateHistory] = useState<RateHistoryEntry[]>([]);
@@ -155,6 +160,7 @@ export default function EmployeDetailPage() {
         setCcqRate(pctFromDecimal(data.ccq_rate));
         setHourlyRateCcq(data.hourly_rate_ccq != null ? String(data.hourly_rate_ccq) : "");
         setEmployeurDUrl(data.employeur_d_url || "");
+        setDinerAuto(Boolean(data.diner_auto));
         const histRes = await authedFetch(
           `/api/v1/employes/${id}/rate-history`
         );
@@ -202,7 +208,8 @@ export default function EmployeDetailPage() {
       cnesstRate !== pctFromDecimal(emp.cnesst_rate) ||
       ccqRate !== pctFromDecimal(emp.ccq_rate) ||
       hourlyRateCcq !== (emp.hourly_rate_ccq != null ? String(emp.hourly_rate_ccq) : "") ||
-      employeurDUrl !== (emp.employeur_d_url || "")
+      employeurDUrl !== (emp.employeur_d_url || "") ||
+      dinerAuto !== Boolean(emp.diner_auto)
     );
   }, [
     emp,
@@ -223,7 +230,8 @@ export default function EmployeDetailPage() {
     cnesstRate,
     ccqRate,
     hourlyRateCcq,
-    employeurDUrl
+    employeurDUrl,
+    dinerAuto
   ]);
 
   // Salaire coûtant calculé : taux horaire de base + primes CNESST et
@@ -262,7 +270,8 @@ export default function EmployeDetailPage() {
         cnesst_rate: decimalFromPct(cnesstRate),
         ccq_rate: decimalFromPct(ccqRate),
         hourly_rate_ccq: hourlyRateCcq ? Number(hourlyRateCcq) : null,
-        employeur_d_url: employeurDUrl.trim() || null
+        employeur_d_url: employeurDUrl.trim() || null,
+        diner_auto: dinerAuto
       };
       const res = await authedFetch(`/api/v1/employes/${id}`, {
         method: "PATCH",
@@ -588,6 +597,27 @@ export default function EmployeDetailPage() {
                     />
                     Employé CCQ
                   </label>
+                  <div className="sm:col-span-2">
+                    <label className="flex items-center gap-2 text-sm text-white/80">
+                      <input
+                        type="checkbox"
+                        checked={dinerAuto}
+                        onChange={(e) => setDinerAuto(e.target.checked)}
+                      />
+                      Dîner non payé : retirer 30 min par jour
+                    </label>
+                    <p className="mt-1 text-xs text-white/60">
+                      Pour l&apos;employé qui reste punché pendant son dîner :
+                      30 minutes sont retirées de ses heures, une fois par
+                      jour, quand sa journée punchée dépasse 5 h. Le punch
+                      porte la note « Dîner −30 min » et la paie compte les
+                      heures sans le dîner. Les heures punchées avant que la
+                      case soit cochée ne changent pas.
+                      {emp.diner_auto && emp.diner_depuis
+                        ? ` En vigueur depuis le ${fmtRateDate(emp.diner_depuis)}.`
+                        : ""}
+                    </p>
+                  </div>
                   <div>
                     <label htmlFor="e_cnesst" className="label">
                       Prime CNESST (% — ex. 2,16 pour 2,16 %)

@@ -31,6 +31,9 @@ class EmployeCreate(BaseModel):
     ccq_rate: Optional[float] = Field(default=None, ge=0, le=1)
     hourly_rate_ccq: Optional[float] = Field(default=None, ge=0)
     employeur_d_url: Optional[str] = Field(default=None, max_length=500)
+    #: Case « dîner » : 30 min de dîner retirées des heures de punch quand
+    #: la journée dépasse 5 h (à partir du jour où elle est cochée).
+    diner_auto: bool = False
 
 
 class EmployeUpdate(BaseModel):
@@ -52,6 +55,10 @@ class EmployeUpdate(BaseModel):
     ccq_rate: Optional[float] = Field(default=None, ge=0, le=1)
     hourly_rate_ccq: Optional[float] = Field(default=None, ge=0)
     employeur_d_url: Optional[str] = None
+    #: Cocher pose ``diner_depuis`` à aujourd'hui (sauf date fournie) ;
+    #: décocher l'efface. Les punchs déjà fermés ne changent pas.
+    diner_auto: Optional[bool] = None
+    diner_depuis: Optional[date] = None
 
 
 class EmployeRead(_Base):
@@ -74,6 +81,8 @@ class EmployeRead(_Base):
     ccq_rate: Optional[float] = None
     hourly_rate_ccq: Optional[float] = None
     employeur_d_url: Optional[str] = None
+    diner_auto: bool = False
+    diner_depuis: Optional[date] = None
     created_at: datetime
 
 
@@ -409,6 +418,8 @@ class PunchRead(_Base):
     notes: Optional[str]
     #: ccq | hors_decret | None (avant la règle : suit la fiche employé).
     regime: Optional[str] = None
+    #: Minutes de dîner retirées de ce punch (``hours`` est déjà net).
+    diner_minutes: Optional[int] = None
     created_at: datetime
 
 

@@ -22,6 +22,7 @@ export default function NewEmployePage() {
   const [hourlyRate, setHourlyRate] = useState("");
   const [billingRate, setBillingRate] = useState("");
   const [isPartner, setIsPartner] = useState(false);
+  const [dinerAuto, setDinerAuto] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,7 +37,8 @@ export default function NewEmployePage() {
     try {
       const payload: Record<string, unknown> = {
         full_name: fullName.trim(),
-        is_partner: isPartner
+        is_partner: isPartner,
+        diner_auto: dinerAuto
       };
       if (email.trim()) payload.email = email.trim();
       if (phone.trim()) payload.phone = phone.trim();
@@ -216,6 +218,22 @@ export default function NewEmployePage() {
             />
             Partenaire (co-propriétaire / actionnaire)
           </label>
+
+          <div>
+            <label className="flex items-center gap-2 text-sm text-white/80">
+              <input
+                type="checkbox"
+                checked={dinerAuto}
+                onChange={(e) => setDinerAuto(e.target.checked)}
+              />
+              Dîner non payé : retirer 30 min par jour
+            </label>
+            <p className="mt-1 text-xs text-white/60">
+              Pour l&apos;employé qui reste punché pendant son dîner : 30
+              minutes sont retirées de ses heures, une fois par jour, quand sa
+              journée punchée dépasse 5 h.
+            </p>
+          </div>
 
           {error ? <p className="text-sm text-rose-400">{error}</p> : null}
 

@@ -28,6 +28,7 @@ from app.services.employe_rates import (
     resolve_base_rate,
 )
 from app.services.project_auto_status import bump_to_in_progress_if_needed
+from app.services.punch_diner import appliquer_diner_auto, heures_brutes, heures_nettes
 
 
 router = APIRouter(prefix="/punch", tags=["punch"])
@@ -58,6 +59,8 @@ class PunchRead(BaseModel):
     notes: Optional[str]
     #: ccq | hors_decret | None (avant la règle : suit la fiche employé).
     regime: Optional[str] = None
+    #: Minutes de dîner retirées de ce punch (``hours`` est déjà net).
+    diner_minutes: Optional[int] = None
 
 
 class PunchMe(BaseModel):
@@ -286,6 +289,8 @@ async def clock_out(
         else:
             open_punch.geolocation = end_geo
     await db.flush()
+    # Case « dîner » de la fiche : 30 min retirées si la journée dépasse 5 h.
+    await appliquer_diner_auto(db, open_punch, emp)
     await db.refresh(open_punch)
     await log_action(
         db,
@@ -296,6 +301,7 @@ async def clock_out(
         details={
             "employe_id": emp.id,
             "hours": float(open_punch.hours or 0),
+            "diner_minutes": open_punch.diner_minutes,
             "ended_at": open_punch.ended_at.isoformat(),
         },
     )
@@ -439,6 +445,7 @@ class PunchPending(BaseModel):
     task: Optional[str]
     notes: Optional[str]
     regime: Optional[str] = None
+    diner_minutes: Optional[int] = None
 
 
 def _exiger_admin_pour_regime(user, regime: Optional[str]) -> None:
@@ -780,6 +787,10 @@ class PayrollRow(BaseModel):
     hours_hors_decret: float = 0.0
     montant_ccq: float = 0.0
     montant_hors_decret: float = 0.0
+    #: Dîners non payés déjà retirés des heures ci-dessus (case « dîner »
+    #: de la fiche) : total en heures et nombre de dîners.
+    hours_diner: float = 0.0
+    diners: int = 0
 
 
 class PayrollReport(BaseModel):
@@ -872,6 +883,10 @@ class BiWeeklyPayrollRow(BaseModel):
     montant_ccq: float = 0.0
     montant_hors_decret: float = 0.0
     montant_total: float = 0.0
+    #: Dîners non payés déjà retirés des heures ci-dessus (case « dîner »
+    #: de la fiche) : total en heures et nombre de dîners.
+    hours_diner: float = 0.0
+    diners: int = 0
 
 
 class BiWeeklyPayrollReport(BaseModel):
@@ -891,6 +906,7 @@ class BiWeeklyPayrollReport(BaseModel):
     total_montant_ccq: float = 0.0
     total_montant_hors_decret: float = 0.0
     total_montant: float = 0.0
+    total_hours_diner: float = 0.0
 
 
 @router.get(
@@ -1006,13 +1022,16 @@ async def payroll_bi_weekly(
                 agg[emp_id].hours_hd_week_2 += h
         if approved:
             agg[emp_id].montant_total += montant
+        if p.diner_minutes:
+            agg[emp_id].hours_diner += p.diner_minutes / 60.0
+            agg[emp_id].diners += 1
 
     for row in agg.values():
         for champ in (
             "hours_week_1", "hours_week_2", "total_hours", "pending_hours",
             "hours_ccq", "hours_hors_decret", "hours_ccq_week_1", "hours_ccq_week_2",
             "hours_hd_week_1", "hours_hd_week_2",
-            "montant_ccq", "montant_hors_decret", "montant_total",
+            "montant_ccq", "montant_hors_decret", "montant_total", "hours_diner",
         ):
             setattr(row, champ, round(getattr(row, champ), 2))
 
@@ -1037,6 +1056,7 @@ async def payroll_bi_weekly(
         total_montant_ccq=round(sum(r.montant_ccq for r in sorted_rows), 2),
         total_montant_hors_decret=round(sum(r.montant_hors_decret for r in sorted_rows), 2),
         total_montant=round(sum(r.montant_total for r in sorted_rows), 2),
+        total_hours_diner=round(sum(r.hours_diner for r in sorted_rows), 2),
     )
 
 
@@ -1191,8 +1211,12 @@ async def payroll_report(
         else:
             agg[emp_id].hours_hors_decret += h
             agg[emp_id].montant_hors_decret += montant
+        if p.diner_minutes:
+            agg[emp_id].hours_diner += p.diner_minutes / 60.0
+            agg[emp_id].diners += 1
 
     for row in agg.values():
+        row.hours_diner = round(row.hours_diner, 2)
         row.approved_revenue = round(row.approved_revenue, 2)
         row.total_revenue = round(row.total_revenue, 2)
         row.hours_ccq = round(row.hours_ccq, 2)
@@ -1311,8 +1335,9 @@ async def employe_monthly_csv(
         )
     ).scalars().all()
 
+    # « diner_min » : minutes de dîner déjà retirées de « hours ».
     lines = [
-        "date,started_at,ended_at,hours,approved,regime,project_id,location,notes"
+        "date,started_at,ended_at,hours,diner_min,approved,regime,project_id,location,notes"
     ]
     total = 0.0
     approved_total = 0.0
@@ -1329,14 +1354,14 @@ async def employe_monthly_csv(
             f'{started.date().isoformat()},'
             f'{started.strftime("%Y-%m-%d %H:%M")},'
             f'{ended.strftime("%Y-%m-%d %H:%M") if ended else ""},'
-            f'{h},{"oui" if p.approved else "non"},'
+            f'{h},{p.diner_minutes or 0},{"oui" if p.approved else "non"},'
             f'{p.regime or "fiche"},'
             f'{p.project_id or ""},'
             f'"{loc}","{notes}"'
         )
     lines.append("")
-    lines.append(f",,TOTAL,{round(total, 2)},,,,,")
-    lines.append(f",,APPROUVÉES,{round(approved_total, 2)},,,,,")
+    lines.append(f",,TOTAL,{round(total, 2)},,,,,,")
+    lines.append(f",,APPROUVÉES,{round(approved_total, 2)},,,,,,")
 
     body = "\n".join(lines)
     safe_name = (emp.full_name or f"employe-{emp.id}").replace(
@@ -1370,6 +1395,11 @@ class PunchManualCreate(BaseModel):
     approved: bool = False
     #: ccq | hors_decret (admin+) ; vide = hors décret.
     regime: Optional[str] = None
+    #: Minutes de dîner retirées de ce punch (0 = aucun retrait). Absent :
+    #: décision automatique selon la case « dîner » de la fiche employé
+    #: (30 min si la journée punchée dépasse 5 h). ``hours``, s'il est
+    #: fourni avec ce champ, est déjà net du dîner.
+    diner_minutes: Optional[int] = Field(default=None, ge=0, le=240)
 
 
 class PunchManualUpdate(BaseModel):
@@ -1386,11 +1416,19 @@ class PunchManualUpdate(BaseModel):
     approved: Optional[bool] = None
     #: ccq | hors_decret (admin+ seulement).
     regime: Optional[str] = None
+    #: Minutes de dîner retirées (0 = aucun retrait) ; null = revenir à la
+    #: décision automatique de la fiche. Les heures sont recalculées.
+    diner_minutes: Optional[int] = Field(default=None, ge=0, le=240)
 
 
 def _hours_between(start, end):
     if not start or not end:
         return None
+    # Une date relue de la base sans fuseau (SQLite) est en UTC.
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
     delta = (end - start).total_seconds() / 3600.0
     return round(delta, 2) if delta > 0 else None
 
@@ -1411,6 +1449,8 @@ async def create_manual_punch(
         if data.hours is not None
         else _hours_between(data.started_at, data.ended_at)
     )
+    if data.hours is None and hours is not None and data.diner_minutes:
+        hours = heures_nettes(hours, data.diner_minutes)
     p = Punch(
         employe_id=data.employe_id,
         project_id=data.project_id,
@@ -1420,6 +1460,7 @@ async def create_manual_punch(
         started_at=data.started_at,
         ended_at=data.ended_at,
         hours=hours,
+        diner_minutes=data.diner_minutes,
         task=(data.task or None),
         notes=(data.notes or None),
         approved=bool(data.approved),
@@ -1427,6 +1468,9 @@ async def create_manual_punch(
     )
     db.add(p)
     await db.flush()
+    if data.diner_minutes is None:
+        # Pas de choix explicite : la case « dîner » de la fiche décide.
+        await appliquer_diner_auto(db, p)
     await db.refresh(p)
     if p.project_id:
         try:
@@ -1460,16 +1504,34 @@ async def update_manual_punch(
         _exiger_debut_avant_fin(
             fields.get("started_at", p.started_at), fields.get("ended_at", p.ended_at)
         )
-    avant = {k: getattr(p, k) for k in ("regime", "hours", "started_at", "ended_at", "project_id", "approved", "employe_id")}
+    avant = {k: getattr(p, k) for k in ("regime", "hours", "diner_minutes", "started_at", "ended_at", "project_id", "approved", "employe_id")}
+    brutes_avant = heures_brutes(p) if p.hours is not None else None
     for k, v in fields.items():
         if k in ("task", "notes") and v == "":
             v = None
         setattr(p, k, v)
-    if "hours" not in fields and p.started_at and p.ended_at:
-        recomputed = _hours_between(p.started_at, p.ended_at)
-        if recomputed is not None:
-            p.hours = recomputed
+    # Heures recalculées = durée punchée moins le dîner retiré (un
+    # « hours » fourni est pris tel quel : déjà net).
+    if "hours" not in fields:
+        if p.started_at and p.ended_at:
+            recomputed = _hours_between(p.started_at, p.ended_at)
+            if recomputed is not None:
+                p.hours = heures_nettes(recomputed, p.diner_minutes)
+        elif "ended_at" in fields:
+            # Fin effacée : le punch redevient ouvert, sans heures.
+            p.hours = None
+        elif "diner_minutes" in fields and brutes_avant is not None:
+            p.hours = heures_nettes(brutes_avant, p.diner_minutes)
     await db.flush()
+    # Durée, employé ou dîner « automatique » modifiés sur un punch fermé
+    # sans décision de dîner : la case « dîner » de la fiche décide (une
+    # fois par jour). Approuver ou changer le régime ne touche à rien.
+    if (
+        p.diner_minutes is None
+        and p.ended_at is not None
+        and fields.keys() & {"started_at", "ended_at", "hours", "employe_id", "diner_minutes"}
+    ):
+        await appliquer_diner_auto(db, p)
     await db.refresh(p)
     # La feuille de temps QuickBooks (coût au taux du régime) suit toute
     # modification qui change son montant ou son éligibilité — sinon un
