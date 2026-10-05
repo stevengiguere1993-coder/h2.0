@@ -101,10 +101,8 @@ export function APayer({
     void charger();
   }, [charger]);
 
-  // Dépôt direct : deux jours ouvrables d'avance. Interac, ou paiement
-  // automatique (Kratos lance le paiement ce jour-là) : dès aujourd'hui.
-  const auto = donnees?.paiement_auto ?? false;
-  const premiere = donnees ? (mode === "interac" || auto ? donnees.aujourdhui : donnees.premiere_date) : "";
+  // Dépôt direct : deux jours ouvrables d'avance. Interac : dès aujourd'hui.
+  const premiere = donnees ? (mode === "interac" ? donnees.aujourdhui : donnees.premiere_date) : "";
   useEffect(() => {
     if (premiere) setDatePaiement((avant) => (!avant || avant < premiere ? premiere : avant));
   }, [premiere]);
@@ -172,7 +170,7 @@ export function APayer({
         .filter((t) => t.total > limite + 1e-9)
         .map((t) => t.nom)
     : [];
-  const derniere = interac || auto ? undefined : ajouterJours(aujourdhui(), 14);
+  const derniere = interac ? undefined : ajouterJours(aujourdhui(), 14);
 
   function basculer(f: Facture, oui: boolean) {
     setSelection((sel) => {
@@ -228,11 +226,9 @@ export function APayer({
               {donnees?.entreprise.qbo_company_name || entreprise.name}.
               {!premiere
                 ? ""
-                : auto
-                  ? " Paiement automatique : après l'approbation, Kratos paie tout seul par VoPay à la date choisie (dès aujourd'hui)."
-                  : interac
-                    ? ` Un virement Interac peut partir dès aujourd'hui (${argent(limite)} au plus par virement).`
-                    : ` Premier dépôt possible : ${jour(premiere)} (un jour de plus si un jour férié tombe d'ici là).`}
+                : interac
+                  ? ` Un virement Interac peut partir dès aujourd'hui (${argent(limite)} au plus par virement).`
+                  : ` Premier dépôt possible : ${jour(premiere)} (un jour de plus si un jour férié tombe d'ici là).`}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -472,13 +468,12 @@ export function APayer({
               </p>
               <p className="hidden text-xs text-[var(--qg-text-muted)] sm:block">
                 {interac ? "Un virement Interac par fournisseur" : "Un dépôt direct par fournisseur"}. Le lot
-                part en brouillon : rien n&apos;est payé avant l&apos;approbation
-                {auto ? " ; ensuite, Kratos paie tout seul" : ""}.
+                part en brouillon : rien n&apos;est payé avant l&apos;approbation.
               </p>
             </div>
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-[var(--qg-text-muted)]">
-                {auto ? "Paiement le" : interac ? "Envoi prévu le" : "Date du dépôt"}
+                {interac ? "Envoi prévu le" : "Date du dépôt"}
               </span>
               <input
                 type="date"
@@ -526,12 +521,10 @@ export function APayer({
           {tropGros.length ? (
             <p className="mt-2 flex items-start gap-1.5 text-xs text-rose-300">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              {auto
-                ? `Un virement Interac est limité à ${argent(limite)}`
-                : `Desjardins limite un virement Interac à ${argent(limite)}`}{" "}
-              : paie {tropGros.join(", ")} par dépôt direct, ou réduis le montant.
+              Desjardins limite un virement Interac à {argent(limite)} : paie {tropGros.join(", ")} par dépôt
+              direct, ou réduis le montant.
             </p>
-          ) : interac && !auto && total > limite + 1e-9 ? (
+          ) : interac && total > limite + 1e-9 ? (
             <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-300">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               Desjardins limite aussi les envois Interac à {argent(limite)} par période de 24 heures : les

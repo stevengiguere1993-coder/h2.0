@@ -963,12 +963,6 @@ def serialize_lot_paiement(obj: Any, level: str = "summary") -> dict:
         "approuve_le": _iso(_get(obj, "approuve_le")),
         "transmis_le": _iso(_get(obj, "transmis_le")),
         "paye_le": _iso(_get(obj, "paye_le")),
-        # Paiement automatique par VoPay : environnement (test ou
-        # production), date du prélèvement et ce qui bloque, s'il y a lieu.
-        "envoi_auto": bool(_get(obj, "envoi_auto")) or None,
-        "auto_environnement": _str(_get(obj, "auto_environnement")),
-        "preleve_le": _iso(_get(obj, "preleve_le")),
-        "auto_erreur": _str(_get(obj, "auto_erreur")),
         "created_at": _iso(_get(obj, "created_at")),
         "updated_at": _iso(_get(obj, "updated_at")),
     }

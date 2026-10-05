@@ -1,7 +1,6 @@
 /* Comptabilité → Paiements : types et appels de l'API /api/v1/paiements
    (l'équivalent de Plooto dans Kratos, Steven 2026-10-04) : dépôt direct
-   Desjardins ou virements Interac, envoyés par un approbateur, ou payés
-   automatiquement par VoPay après l'approbation (Steven 2026-10-05). */
+   Desjardins ou virements Interac. */
 
 import { authedFetch } from "@/lib/auth";
 
@@ -21,9 +20,6 @@ export type Moi = {
   deux_facteurs: DeuxFacteurs;
 };
 
-/** Environnement VoPay : « test » = aucun argent réel. */
-export type EnvironnementVoPay = "test" | "production";
-
 export type EntreprisePaiement = {
   entreprise_id: number;
   name: string;
@@ -32,9 +28,6 @@ export type EntreprisePaiement = {
   depot_direct_pret: boolean;
   lots_a_approuver: number;
   comptes_a_approuver: number;
-  /** Paiement automatique (VoPay) actif pour l'entreprise. */
-  paiement_auto: boolean;
-  auto_environnement: EnvironnementVoPay | null;
 };
 
 /** « depot_direct » : fichier norme 005. « interac » : un virement par
@@ -76,7 +69,6 @@ export type FacturesAPayer = {
   premiere_date: string;
   aujourdhui: string;
   limite_interac: number;
-  paiement_auto: boolean;
 };
 
 export type StatutCompte = "en_attente" | "approuve" | "remplace" | "refuse" | "retire";
@@ -123,29 +115,6 @@ export type Reglages = {
   modifie_le: string | null;
   comptes_banque_qbo: { id: string; nom: string }[];
   erreur_qbo: string | null;
-  // Paiement automatique (VoPay). Les clés et la réponse Interac ne
-  // reviennent jamais : seulement si elles sont saisies.
-  auto_actif: boolean;
-  auto_environnement: EnvironnementVoPay;
-  vopay_account_id: string | null;
-  vopay_cles: boolean;
-  vopay_sous_compte: string | null;
-  adresse: string | null;
-  ville: string | null;
-  province: string | null;
-  code_postal: string | null;
-  interac_question: string | null;
-  interac_reponse: boolean;
-  /** Ce qui manque pour payer automatiquement (dépôt direct ; Interac). */
-  auto_manque: string[];
-  auto_manque_interac: string[];
-};
-
-export type TestVoPay = {
-  ok: boolean;
-  environnement: EnvironnementVoPay;
-  solde: number | null;
-  disponible: number | null;
 };
 
 export type StatutLot =
@@ -157,11 +126,7 @@ export type StatutLot =
   | "transmis"
   | "paye"
   | "refuse"
-  | "annule"
-  // Paiement automatique (VoPay).
-  | "prelevement"
-  | "envoi"
-  | "echec";
+  | "annule";
 
 export type LotResume = {
   id: number;
@@ -184,12 +149,6 @@ export type LotResume = {
   transmis_le: string | null;
   paye_le: string | null;
   annule_le: string | null;
-  /** Payé automatiquement par VoPay (décidé à l'approbation). */
-  envoi_auto: boolean;
-  auto_environnement: EnvironnementVoPay | null;
-  /** Ce qui retient le paiement automatique (Kratos réessaie). */
-  auto_erreur: string | null;
-  preleve_le: string | null;
 };
 
 export type LigneLot = {
@@ -247,64 +206,6 @@ export type ActionsLot = {
   marquer_envoye: boolean;
   enregistrer_qbo: boolean;
   annuler: boolean;
-  reessayer_auto: boolean;
-  verifier_auto: boolean;
-};
-
-export type StatutOperation =
-  | "a_envoyer"
-  | "envoi"
-  | "incertain"
-  | "a_verifier"
-  | "en_cours"
-  | "reussi"
-  | "echoue"
-  | "annule";
-
-/** Une demande à VoPay : prélèvement du total dans le compte de
- *  l'entreprise, paiement d'un fournisseur ou retour d'un montant retiré. */
-export type OperationVoPay = {
-  id: number;
-  sorte: "prelevement" | "paiement" | "retour";
-  sorte_libelle: string;
-  rail: "eft" | "interac";
-  fournisseur_id: string | null;
-  fournisseur: string | null;
-  montant: number;
-  statut: StatutOperation;
-  statut_libelle: string;
-  statut_vopay: string | null;
-  transaction_id: string | null;
-  reference: string;
-  environnement: EnvironnementVoPay;
-  erreur: string | null;
-  tentatives: number | null;
-  cree_le: string | null;
-  envoye_le: string | null;
-  termine_le: string | null;
-  prochain_essai: string | null;
-  /** Dernière opération de sa sorte pour ce fournisseur (les autres sont
-   *  l'historique). */
-  courante: boolean;
-  peut_reessayer: boolean;
-  peut_resoudre: boolean;
-};
-
-export type PaiementAuto = {
-  fournisseur_id: string;
-  fournisseur: string;
-  montant: number;
-  nb_factures: number;
-  operation: OperationVoPay | null;
-  peut_retirer: boolean;
-};
-
-export type SuiviAuto = {
-  prelevement: OperationVoPay | null;
-  paiements_auto: PaiementAuto[];
-  retours: OperationVoPay[];
-  operations: OperationVoPay[];
-  a_verifier: number;
 };
 
 export type LotDetail = LotResume & {
@@ -322,12 +223,6 @@ export type LotDetail = LotResume & {
   journal: Evenement[];
   actions: ActionsLot;
   a_prepare: boolean;
-  /** Réglage actuel de l'entreprise : un lot pas encore approuvé sera payé
-   *  automatiquement s'il est actif à l'approbation. */
-  auto_entreprise: boolean;
-  auto_environnement_entreprise: EnvironnementVoPay | null;
-  auto_prochain_essai: string | null;
-  auto: SuiviAuto | null;
 };
 
 export type FichierDepot = {
@@ -504,28 +399,8 @@ export const BADGE_LOT: Record<StatutLot, string> = {
   transmis: "badge-blue",
   paye: "badge-emerald",
   refuse: "badge-rose",
-  annule: "badge-neutral",
-  prelevement: "badge-violet",
-  envoi: "badge-violet",
-  echec: "badge-rose"
-};
-
-export const BADGE_OPERATION: Record<StatutOperation, string> = {
-  a_envoyer: "badge-neutral",
-  envoi: "badge-sky",
-  incertain: "badge-amber",
-  a_verifier: "badge-amber",
-  en_cours: "badge-sky",
-  reussi: "badge-emerald",
-  echoue: "badge-rose",
   annule: "badge-neutral"
 };
-
-/** Un lot pas encore approuvé sera-t-il payé automatiquement ? */
-export function payeAutomatiquement(lot: LotDetail): boolean {
-  if (lot.envoi_auto) return true;
-  return lot.auto_entreprise && ["brouillon", "soumis", "refuse"].includes(lot.statut);
-}
 
 export const COMPTE: Record<StatutCompte, { libelle: string; badge: string }> = {
   en_attente: { libelle: "À approuver", badge: "badge-amber" },
@@ -559,19 +434,6 @@ export const ACTIONS: Record<string, string> = {
   qbo_enregistre: "Paiements inscrits dans QuickBooks",
   qbo_partiel: "Paiements inscrits en partie dans QuickBooks",
   reglages_modifies: "Réglages des paiements modifiés",
-  vopay_teste: "Clés VoPay testées",
-  vopay_envoye: "Demande transmise à VoPay",
-  vopay_reussi: "Confirmé par VoPay",
-  vopay_refuse: "Refusé par VoPay",
-  vopay_incertain: "Réponse de VoPay perdue",
-  vopay_a_verifier: "À vérifier dans le portail VoPay",
-  vopay_verifie: "Vérifié dans le portail VoPay",
-  vopay_reessaye: "Paiement repris",
-  auto_bloque: "Paiement automatique en attente",
-  auto_reessaye: "Paiement automatique relancé",
-  paiements_termines: "Fournisseurs payés",
-  test_termine: "Lot de test terminé",
-  paiement_retire: "Paiement retiré du lot",
   "2fa_activee": "Double authentification activée",
   "2fa_desactivee": "Double authentification désactivée"
 };
