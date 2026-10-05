@@ -1,4 +1,5 @@
-"""Paiements fournisseurs par dépôt direct Desjardins (Comptabilité).
+"""Paiements fournisseurs par dépôt direct Desjardins ou virement Interac
+(Comptabilité).
 
 Demande Steven (2026-10-04) : une technicienne comptable fait les
 paiements des entreprises sans accès aux comptes bancaires et sans
@@ -16,12 +17,22 @@ pouvoir détourner de fonds. Kratos reproduit Plooto :
 4. Inscrire les paiements dans QuickBooks (un paiement de facture par
    fournisseur), une fois le fichier transmis.
 
+Virements Interac (Steven, 2026-10-04 : « parfois, nous devons faire des
+virements Interac ») : un lot peut se payer par Interac plutôt que par
+dépôt direct. Desjardins n'accepte pas de fichier pour Interac : après
+l'approbation, un approbateur prépare l'envoi (double authentification,
+soldes relus dans QuickBooks), envoie chaque virement lui-même dans
+AccèsD Affaires au destinataire approuvé, puis l'indique dans Kratos. Le
+destinataire (courriel ou cellulaire) suit la même règle qu'un compte
+bancaire : saisi par l'une, approuvé par une autre.
+
 Garde-fous : coordonnées bancaires chiffrées, jamais renvoyées en clair
 (sauf dans le fichier) ; une coordonnée n'est utilisée qu'approuvée ; si
-elle change après la soumission, le fichier est refusé ; les soldes sont
-relus dans QuickBooks avant le fichier (pas de double paiement) ; le
-connecteur IA ne peut rien faire ici (chemin bloqué dans ``mcp_server``) ;
-chaque geste est inscrit au journal des paiements.
+elle change après la soumission, le fichier (ou l'envoi Interac) est
+refusé ; les soldes sont relus dans QuickBooks avant le fichier ou
+l'envoi (pas de double paiement) ; le connecteur IA ne peut rien faire
+ici (chemin bloqué dans ``mcp_server``) ; chaque geste est inscrit au
+journal des paiements.
 """
 
 from __future__ import annotations
@@ -34,7 +45,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -74,17 +85,26 @@ JOURS_MAX_AVANCE = 14
 #: Lien des notifications (onglet Paiements de Comptabilité).
 HREF = "/entreprises/comptabilite/paiements"
 
-STATUTS_ACTIFS = ("brouillon", "soumis", "approuve", "fichier_cree", "transmis")
+#: Façons de payer : fichier de dépôt direct, ou virements Interac
+#: envoyés un à un dans AccèsD Affaires.
+MODES = ("depot_direct", "interac")
+#: Desjardins limite les virements Interac envoyés par une entreprise à
+#: 25 000 $ par virement et par période de 24 heures (AccèsD Affaires).
+LIMITE_INTERAC_CENTS = 2_500_000
+
+STATUTS_ACTIFS = ("brouillon", "soumis", "approuve", "fichier_cree", "a_envoyer", "transmis")
 LIBELLES_STATUT = {
     "brouillon": "Brouillon",
     "soumis": "À approuver",
     "approuve": "Approuvé",
     "fichier_cree": "Fichier créé",
+    "a_envoyer": "Virements à envoyer",
     "transmis": "Transmis à Desjardins",
     "paye": "Payé",
     "refuse": "Refusé",
     "annule": "Annulé",
 }
+LIBELLES_STATUT_INTERAC = {**LIBELLES_STATUT, "transmis": "Virements envoyés"}
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -191,6 +211,52 @@ def _verifier_date_depot(jour: date, *, maintenant: Optional[datetime] = None) -
             f"Le dépôt ne peut pas être prévu plus de {JOURS_MAX_AVANCE} jours après "
             f"la création du fichier (au plus tard le {_date_lisible(limite)})."
         )
+
+
+def _verifier_date(mode: str, jour: date) -> None:
+    """Dépôt direct : règles de Desjardins pour le fichier. Interac : la
+    date prévue de l'envoi ne peut pas être passée."""
+    if mode != "interac":
+        _verifier_date_depot(jour)
+    elif jour < _aujourdhui():
+        raise PaiementErreur(
+            "La date prévue de l'envoi est passée : choisis aujourd'hui ou plus tard."
+        )
+
+
+def _quand(lot: LotPaiement) -> str:
+    if lot.mode == "interac":
+        return f"virements Interac prévus le {_date_lisible(lot.date_paiement)}"
+    return f"dépôt le {_date_lisible(lot.date_paiement)}"
+
+
+_COURRIEL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+
+
+def destinataire_interac(valeur: Any) -> str:
+    """Courriel (mis en minuscules) ou numéro de cellulaire canadien
+    (10 chiffres, le 1 du début retiré)."""
+    s = str(valeur or "").strip()
+    if "@" in s:
+        s = s.lower()
+        if len(s) > 254 or not _COURRIEL.fullmatch(s):
+            raise ValueError("Courriel du destinataire Interac invalide.")
+        return s
+    chiffres = re.sub(r"\D", "", s)
+    if len(chiffres) == 11 and chiffres.startswith("1"):
+        chiffres = chiffres[1:]
+    if len(chiffres) != 10:
+        raise ValueError(
+            "Destinataire Interac : un courriel, ou un numéro de cellulaire à 10 chiffres."
+        )
+    return chiffres
+
+
+def destinataire_lisible(destinataire: Optional[str]) -> str:
+    d = destinataire or ""
+    if len(d) == 10 and d.isdigit():
+        return f"{d[:3]} {d[3:6]}-{d[6:]}"
+    return d or "—"
 
 
 async def _noms(db: AsyncSession, ids: Iterable[Optional[int]]) -> Dict[int, str]:
@@ -549,14 +615,19 @@ def _chiffres(nom: str, longueur_min: int, longueur_max: Optional[int] = None):
 
 
 class ReglagesIn(BaseModel):
-    numero_organisme: str
+    """Les champs du dépôt direct sont facultatifs : une entreprise qui ne
+    paie que par Interac règle ses approbations et son compte QuickBooks
+    sans entente de dépôt direct. ``manque`` dit ce qu'il faut pour un
+    fichier."""
+
+    numero_organisme: Optional[str] = None
     centre_traitement: str = cpa005.CENTRE_DESJARDINS
     code_transaction: str = cpa005.CODE_COMPTES_FOURNISSEURS
-    nom_court: str = Field(max_length=60)
-    nom_long: str = Field(max_length=120)
-    retour_institution: str
-    retour_transit: str
-    retour_compte: str
+    nom_court: Optional[str] = Field(default=None, max_length=60)
+    nom_long: Optional[str] = Field(default=None, max_length=120)
+    retour_institution: Optional[str] = None
+    retour_transit: Optional[str] = None
+    retour_compte: Optional[str] = None
     approbations_requises: int = Field(default=1, ge=1, le=2)
     prochain_numero_fichier: int = Field(default=1, ge=1, le=9999)
     qbo_compte_banque_id: Optional[str] = Field(default=None, max_length=64)
@@ -564,8 +635,10 @@ class ReglagesIn(BaseModel):
 
     @field_validator("numero_organisme")
     @classmethod
-    def _organisme(cls, v: str) -> str:
+    def _organisme(cls, v: Optional[str]) -> Optional[str]:
         s = re.sub(r"\s", "", v or "").upper()
+        if not s:
+            return None
         if not re.fullmatch(r"[A-Z0-9]{10}", s):
             raise ValueError("Numéro d'organisme : les 10 caractères remis par la caisse.")
         return s
@@ -582,35 +655,30 @@ class ReglagesIn(BaseModel):
 
     @field_validator("retour_institution")
     @classmethod
-    def valider_institution(cls, v: str) -> str:
-        return _chiffres("Institution", 3)(v)
+    def valider_institution(cls, v: Optional[str]) -> Optional[str]:
+        return _chiffres("Institution", 3)(v) if (v or "").strip() else None
 
     @field_validator("retour_transit")
     @classmethod
-    def valider_transit(cls, v: str) -> str:
-        return _chiffres("Transit", 5)(v)
+    def valider_transit(cls, v: Optional[str]) -> Optional[str]:
+        return _chiffres("Transit", 5)(v) if (v or "").strip() else None
 
     @field_validator("retour_compte")
     @classmethod
-    def valider_compte(cls, v: str) -> str:
-        return _chiffres("Numéro de compte", 1, 12)(v)
+    def valider_compte(cls, v: Optional[str]) -> Optional[str]:
+        return _chiffres("Numéro de compte", 1, 12)(v) if (v or "").strip() else None
 
     @field_validator("nom_court", "nom_long")
     @classmethod
-    def _nom(cls, v: str, info) -> str:
+    def _nom(cls, v: Optional[str], info) -> Optional[str]:
         longueur = 15 if info.field_name == "nom_court" else 30
-        net = cpa005.texte(v, longueur).strip()
-        if not net:
-            raise ValueError(
-                "Nom court requis (15 caractères)." if longueur == 15 else "Nom long requis (30 caractères)."
-            )
-        return net
+        return cpa005.texte(v or "", longueur).strip() or None
 
 
 async def modifier_reglages(
     db: AsyncSession, entreprise_id: int, user: User, donnees: ReglagesIn
 ) -> Dict[str, Any]:
-    """Réglages du dépôt direct : approbateur + double authentification
+    """Réglages des paiements : approbateur + double authentification
     (le compte de retour reçoit les dépôts refusés, il ne doit pas pouvoir
     être détourné). Les autres approbateurs sont prévenus."""
     e = await _entreprise(db, entreprise_id)
@@ -672,7 +740,7 @@ async def modifier_reglages(
         await _notifier(
             db,
             await _approbateurs(db, [user.id]),
-            "Réglages du dépôt direct modifiés",
+            "Réglages des paiements modifiés",
             f"{e.name} : {quoi}, par {user.display_name}.",
         )
     await db.commit()
@@ -680,7 +748,7 @@ async def modifier_reglages(
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Fournisseurs et coordonnées bancaires
+# Fournisseurs et coordonnées de paiement (compte bancaire ou Interac)
 # ──────────────────────────────────────────────────────────────────────
 
 
@@ -699,15 +767,57 @@ async def fournisseurs(db: AsyncSession, entreprise_id: int) -> List[Dict[str, A
     return sorted(out, key=lambda v: v["nom"].casefold())
 
 
-def _compte_dict(c: FournisseurCompteBancaire, noms: Dict[int, str]) -> Dict[str, Any]:
+def _libelle_compte(c: FournisseurCompteBancaire) -> str:
+    """« compte finissant par 2345 » ou « virement Interac à x@y.ca »."""
+    if c.mode == "interac":
+        return f"virement Interac à {destinataire_lisible(c.interac_destinataire)}"
+    return f"compte finissant par {c.compte_fin}"
+
+
+def _sorte(c: FournisseurCompteBancaire) -> str:
+    return "Interac" if c.mode == "interac" else "bancaires"
+
+
+def _resume_compte(
+    c: FournisseurCompteBancaire, noms: Optional[Dict[int, str]] = None
+) -> Dict[str, Any]:
+    """Coordonnées telles qu'un lot ou une facture les montre (masquées)."""
+    out: Dict[str, Any] = {
+        "mode": c.mode,
+        "statut": c.statut,
+        "institution": c.institution,
+        "transit": c.transit,
+        "compte_fin": c.compte_fin,
+        "interac_destinataire": c.interac_destinataire,
+        "approuve_le": _iso(c.decide_le),
+    }
+    if noms is not None:
+        out["approuve_par"] = noms.get(c.decide_par_user_id or 0)
+    return out
+
+
+def _compte_dict(
+    c: FournisseurCompteBancaire, noms: Dict[int, str], comptes_kratos: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
+    kratos = (comptes_kratos or {}).get(c.interac_destinataire or "") if c.mode == "interac" else None
     return {
         "id": c.id,
         "entreprise_id": c.entreprise_id,
         "fournisseur_id": c.qbo_vendor_id,
         "fournisseur": c.fournisseur_nom,
+        "mode": c.mode,
         "institution": c.institution,
         "transit": c.transit,
         "compte_fin": c.compte_fin,
+        "interac_destinataire": c.interac_destinataire,
+        # Fraude interne la plus simple : le courriel d'un employé à la
+        # place de celui du fournisseur. Signalé à qui approuve, sans
+        # bloquer (un employé peut aussi être fournisseur).
+        "alerte": (
+            f"Ce courriel est celui du compte Kratos de {kratos} : vérifie que c'est voulu."
+            if kratos
+            else None
+        ),
         "source": c.source,
         "statut": c.statut,
         "propose_par_id": c.propose_par_user_id,
@@ -717,6 +827,12 @@ def _compte_dict(c: FournisseurCompteBancaire, noms: Dict[int, str]) -> Dict[str
         "decide_le": _iso(c.decide_le),
         "motif": c.motif,
     }
+
+
+async def _courriels_kratos(db: AsyncSession) -> Dict[str, str]:
+    """Courriel (minuscules) → nom, pour tous les comptes Kratos."""
+    users = (await db.execute(select(User))).scalars().all()
+    return {(u.email or "").strip().lower(): u.display_name for u in users if u.email}
 
 
 async def comptes(db: AsyncSession, entreprise_id: int) -> List[Dict[str, Any]]:
@@ -729,37 +845,51 @@ async def comptes(db: AsyncSession, entreprise_id: int) -> List[Dict[str, Any]]:
         )
     ).scalars().all()
     noms = await _noms(db, [x for c in rows for x in (c.propose_par_user_id, c.decide_par_user_id)])
-    return [_compte_dict(c, noms) for c in rows]
+    kratos = await _courriels_kratos(db) if any(c.mode == "interac" for c in rows) else {}
+    return [_compte_dict(c, noms, kratos) for c in rows]
+
+
+def _mode(v: Optional[str]) -> Optional[str]:
+    if v is not None and v not in MODES:
+        raise ValueError("Façon de payer inconnue : dépôt direct ou virement Interac.")
+    return v
 
 
 class CompteIn(BaseModel):
+    """Un compte bancaire (dépôt direct) ou un destinataire Interac."""
+
     fournisseur_id: str = Field(min_length=1, max_length=64)
-    institution: str
-    transit: str
-    numero_compte: str
+    mode: str = "depot_direct"
+    institution: Optional[str] = None
+    transit: Optional[str] = None
+    numero_compte: Optional[str] = None
+    interac_destinataire: Optional[str] = Field(default=None, max_length=255)
     source: Optional[str] = Field(default=None, max_length=255)
 
-    @field_validator("institution")
+    @field_validator("mode")
     @classmethod
-    def valider_institution(cls, v: str) -> str:
-        return _chiffres("Institution", 3)(v)
+    def _valider_mode(cls, v: str) -> str:
+        return _mode(v) or "depot_direct"
 
-    @field_validator("transit")
-    @classmethod
-    def valider_transit(cls, v: str) -> str:
-        return _chiffres("Transit", 5)(v)
-
-    @field_validator("numero_compte")
-    @classmethod
-    def valider_compte(cls, v: str) -> str:
-        return _chiffres("Numéro de compte", 1, 12)(v)
+    @model_validator(mode="after")
+    def _selon_le_mode(self) -> "CompteIn":
+        if self.mode == "interac":
+            self.interac_destinataire = destinataire_interac(self.interac_destinataire)
+            self.institution = self.transit = self.numero_compte = None
+        else:
+            self.institution = _chiffres("Institution", 3)(self.institution)
+            self.transit = _chiffres("Transit", 5)(self.transit)
+            self.numero_compte = _chiffres("Numéro de compte", 1, 12)(self.numero_compte)
+            self.interac_destinataire = None
+        return self
 
 
 async def proposer_compte(
     db: AsyncSession, entreprise_id: int, user: User, donnees: CompteIn
 ) -> Dict[str, Any]:
-    """Nouvelles coordonnées d'un fournisseur : en attente jusqu'à ce
-    qu'une AUTRE personne les approuve. Le nom vient de QuickBooks."""
+    """Nouvelles coordonnées d'un fournisseur (compte bancaire ou
+    destinataire Interac) : en attente jusqu'à ce qu'une AUTRE personne
+    les approuve. Le nom vient de QuickBooks."""
     e, scope, _ = await _entreprise_qbo(db, entreprise_id)
     vid = donnees.fournisseur_id.strip()
     if not vid.isdigit():
@@ -771,51 +901,61 @@ async def proposer_compte(
     if not trouves:
         raise PaiementErreur("Ce fournisseur n'existe pas dans le QuickBooks de l'entreprise.", 404)
     nom = trouves[0].get("DisplayName") or "—"
+    interac = donnees.mode == "interac"
     attente = (
         await db.execute(
             select(FournisseurCompteBancaire.id).where(
                 FournisseurCompteBancaire.entreprise_id == e.id,
                 FournisseurCompteBancaire.qbo_vendor_id == vid,
+                FournisseurCompteBancaire.mode == donnees.mode,
                 FournisseurCompteBancaire.statut == "en_attente",
             )
         )
     ).first()
     if attente:
         raise PaiementErreur(
-            f"Des coordonnées de {nom} attendent déjà d'être approuvées : retire-les d'abord.", 409
+            f"Des coordonnées {'Interac' if interac else 'bancaires'} de {nom} attendent déjà "
+            "d'être approuvées : retire-les d'abord.",
+            409,
         )
-    try:
-        chiffre = encrypt_secret(donnees.numero_compte)
-    except VaultNotConfigured as exc:
-        raise PaiementErreur(
-            "Aucune clé de chiffrement n'est configurée sur le serveur : impossible "
-            "d'enregistrer des coordonnées bancaires.",
-            503,
-        ) from exc
     c = FournisseurCompteBancaire(
         entreprise_id=e.id,
         qbo_vendor_id=vid,
         fournisseur_nom=nom[:255],
-        institution=donnees.institution,
-        transit=donnees.transit,
-        compte_chiffre=chiffre,
-        compte_fin=donnees.numero_compte[-4:],
+        mode=donnees.mode,
         source=(donnees.source or "").strip() or None,
         statut="en_attente",
         propose_par_user_id=user.id,
     )
+    if interac:
+        c.interac_destinataire = donnees.interac_destinataire
+        detail = f"{nom} : virement Interac à {destinataire_lisible(c.interac_destinataire)}"
+    else:
+        assert donnees.numero_compte is not None
+        try:
+            c.compte_chiffre = encrypt_secret(donnees.numero_compte)
+        except VaultNotConfigured as exc:
+            raise PaiementErreur(
+                "Aucune clé de chiffrement n'est configurée sur le serveur : impossible "
+                "d'enregistrer des coordonnées bancaires.",
+                503,
+            ) from exc
+        c.institution = donnees.institution
+        c.transit = donnees.transit
+        c.compte_fin = donnees.numero_compte[-4:]
+        detail = f"{nom} : institution {c.institution}, transit {c.transit}, compte finissant par {c.compte_fin}"
     db.add(c)
     await db.flush()
-    detail = f"{nom} : institution {c.institution}, transit {c.transit}, compte finissant par {c.compte_fin}"
     await _evenement(db, "compte_propose", user=user, entreprise_id=e.id, compte_id=c.id, detail=detail)
     await _notifier(
         db,
         await _approbateurs(db, [user.id]),
-        "Coordonnées bancaires à approuver",
+        f"Coordonnées {_sorte(c)} à approuver",
         f"{nom} ({e.name}), saisies par {user.display_name}.",
     )
     await db.commit()
-    return _compte_dict(c, await _noms(db, [user.id]))
+    kratos = await _courriels_kratos(db) if interac else {}
+    return _compte_dict(c, await _noms(db, [user.id]), kratos)
 
 
 async def _compte(db: AsyncSession, compte_id: int) -> FournisseurCompteBancaire:
@@ -842,11 +982,14 @@ async def approuver_compte(
             "Tu as saisi ces coordonnées : une autre personne doit les approuver.", 403
         )
     await exiger_2fa(db, user, code_2fa)
+    # Les nouvelles coordonnées remplacent les anciennes du même mode : un
+    # destinataire Interac ne remplace pas un compte bancaire.
     anciens = (
         await db.execute(
             select(FournisseurCompteBancaire).where(
                 FournisseurCompteBancaire.entreprise_id == c.entreprise_id,
                 FournisseurCompteBancaire.qbo_vendor_id == c.qbo_vendor_id,
+                FournisseurCompteBancaire.mode == c.mode,
                 FournisseurCompteBancaire.statut == "approuve",
             )
         )
@@ -862,14 +1005,14 @@ async def approuver_compte(
         user=user,
         entreprise_id=c.entreprise_id,
         compte_id=c.id,
-        detail=f"{c.fournisseur_nom} : compte finissant par {c.compte_fin}"
-        + (" (remplace l'ancien compte)" if anciens else ""),
+        detail=f"{c.fournisseur_nom} : {_libelle_compte(c)}"
+        + (" (remplace les anciennes coordonnées)" if anciens else ""),
     )
     await _notifier(
         db,
         [c.propose_par_user_id],
-        "Coordonnées bancaires approuvées",
-        f"{c.fournisseur_nom} : compte finissant par {c.compte_fin}.",
+        f"Coordonnées {_sorte(c)} approuvées",
+        f"{c.fournisseur_nom} : {_libelle_compte(c)}.",
     )
     await db.commit()
     return _compte_dict(c, await _noms(db, [c.propose_par_user_id, user.id]))
@@ -890,10 +1033,10 @@ async def refuser_compte(
     c.motif = motif[:2000]
     await _evenement(
         db, "compte_refuse", user=user, entreprise_id=c.entreprise_id, compte_id=c.id,
-        detail=f"{c.fournisseur_nom} : {motif[:500]}",
+        detail=f"{c.fournisseur_nom} ({_libelle_compte(c)}) : {motif[:500]}",
     )
     await _notifier(
-        db, [c.propose_par_user_id], "Coordonnées bancaires refusées", f"{c.fournisseur_nom} : {motif[:200]}"
+        db, [c.propose_par_user_id], f"Coordonnées {_sorte(c)} refusées", f"{c.fournisseur_nom} : {motif[:200]}"
     )
     await db.commit()
     return _compte_dict(c, await _noms(db, [c.propose_par_user_id, user.id]))
@@ -915,7 +1058,7 @@ async def retirer_compte(db: AsyncSession, compte_id: int, user: User) -> Dict[s
     c.statut = "retire"
     await _evenement(
         db, "compte_retire", user=user, entreprise_id=c.entreprise_id, compte_id=c.id,
-        detail=f"{c.fournisseur_nom} : compte finissant par {c.compte_fin}",
+        detail=f"{c.fournisseur_nom} : {_libelle_compte(c)}",
     )
     await db.commit()
     return _compte_dict(c, await _noms(db, [c.propose_par_user_id, c.decide_par_user_id]))
@@ -931,6 +1074,8 @@ async def reveler_compte(
     c = await _compte(db, compte_id)
     if c.statut not in ("en_attente", "approuve"):
         raise PaiementErreur("Ces coordonnées ne sont plus utilisées.", 409)
+    if c.mode != "depot_direct" or not c.compte_chiffre:
+        raise PaiementErreur("Un destinataire Interac est déjà affiché en entier.", 409)
     await exiger_2fa(db, user, code_2fa)
     try:
         numero = decrypt_secret(c.compte_chiffre)
@@ -949,13 +1094,14 @@ async def reveler_compte(
 
 
 async def _comptes_par_fournisseur(
-    db: AsyncSession, entreprise_id: int, statuts: Sequence[str]
+    db: AsyncSession, entreprise_id: int, statuts: Sequence[str], mode: str = "depot_direct"
 ) -> Dict[str, FournisseurCompteBancaire]:
     rows = (
         await db.execute(
             select(FournisseurCompteBancaire)
             .where(
                 FournisseurCompteBancaire.entreprise_id == entreprise_id,
+                FournisseurCompteBancaire.mode == mode,
                 FournisseurCompteBancaire.statut.in_(list(statuts)),
             )
             .order_by(FournisseurCompteBancaire.id.asc())
@@ -1003,6 +1149,7 @@ async def factures_a_payer(db: AsyncSession, entreprise_id: int) -> Dict[str, An
     e, scope, etat = await _entreprise_qbo(db, entreprise_id)
     bills = await _factures_ouvertes(scope)
     comptes_f = await _comptes_par_fournisseur(db, e.id, ("approuve", "en_attente"))
+    interac_f = await _comptes_par_fournisseur(db, e.id, ("approuve", "en_attente"), "interac")
     dans_lots = await _factures_dans_lots(db, e.id)
     achats: Dict[str, int] = {}
     if scope == SCOPE_CONSTRUCTION and bills:
@@ -1019,6 +1166,7 @@ async def factures_a_payer(db: AsyncSession, entreprise_id: int) -> Dict[str, An
         vendor = b.get("VendorRef") or {}
         vid = str(vendor.get("value") or "")
         c = comptes_f.get(vid)
+        ci = interac_f.get(vid)
         devise = _devise(b)
         out.append(
             {
@@ -1032,17 +1180,8 @@ async def factures_a_payer(db: AsyncSession, entreprise_id: int) -> Dict[str, An
                 "solde": dollars(cents(b.get("Balance"))),
                 "devise": devise,
                 "lien_qbo": lien_qbo(etat.get("environment"), etat.get("realm_id"), "Bill", bid),
-                "compte": (
-                    {
-                        "statut": c.statut,
-                        "institution": c.institution,
-                        "transit": c.transit,
-                        "compte_fin": c.compte_fin,
-                        "approuve_le": _iso(c.decide_le),
-                    }
-                    if c
-                    else None
-                ),
+                "compte": _resume_compte(c) if c else None,
+                "interac": _resume_compte(ci) if ci else None,
                 "lot_id": dans_lots.get(bid),
                 "achat_construction_id": achats.get(bid),
                 "payable": bool(vid) and devise == "CAD",
@@ -1053,6 +1192,8 @@ async def factures_a_payer(db: AsyncSession, entreprise_id: int) -> Dict[str, An
         "entreprise": {"entreprise_id": e.id, "name": e.name, "qbo_company_name": etat.get("company_name")},
         "factures": out,
         "premiere_date": premiere_date_possible().isoformat(),
+        "aujourdhui": _aujourdhui().isoformat(),
+        "limite_interac": dollars(LIMITE_INTERAC_CENTS),
     }
 
 
@@ -1068,8 +1209,16 @@ class LigneIn(BaseModel):
 
 class LotIn(BaseModel):
     date_paiement: date
+    #: « depot_direct » ou « interac ». Absent : dépôt direct à la création,
+    #: mode inchangé à la modification.
+    mode: Optional[str] = None
     note: Optional[str] = Field(default=None, max_length=2000)
     lignes: List[LigneIn] = Field(min_length=1, max_length=200)
+
+    @field_validator("mode")
+    @classmethod
+    def _valider_mode(cls, v: Optional[str]) -> Optional[str]:
+        return _mode(v)
 
 
 async def _lot(db: AsyncSession, lot_id: int, *, verrou: bool = False) -> LotPaiement:
@@ -1164,12 +1313,14 @@ def _totaux(lot: LotPaiement, lignes: Sequence[LotPaiementLigne]) -> None:
 
 async def creer_lot(db: AsyncSession, entreprise_id: int, user: User, donnees: LotIn) -> Dict[str, Any]:
     e, scope, _ = await _entreprise_qbo(db, entreprise_id)
-    _verifier_date_depot(donnees.date_paiement)
+    mode = donnees.mode or "depot_direct"
+    _verifier_date(mode, donnees.date_paiement)
     lignes = await _construire_lignes(db, e.id, scope, donnees)
     r = await _reglage(db, e.id)
     lot = LotPaiement(
         entreprise_id=e.id,
         statut="brouillon",
+        mode=mode,
         date_paiement=donnees.date_paiement,
         note=(donnees.note or "").strip() or None,
         approbations_requises=r.approbations_requises if r else 1,
@@ -1183,7 +1334,7 @@ async def creer_lot(db: AsyncSession, entreprise_id: int, user: User, donnees: L
         db.add(l)
     await _evenement(
         db, "lot_cree", user=user, entreprise_id=e.id, lot_id=lot.id,
-        detail=f"{lot.nb_lignes} facture(s), {_argent(lot.total_cents)}, dépôt le {_date_lisible(lot.date_paiement)}",
+        detail=f"{lot.nb_lignes} facture(s), {_argent(lot.total_cents)}, {_quand(lot)}",
     )
     await db.commit()
     return await detail_lot(db, lot.id, user)
@@ -1194,26 +1345,52 @@ async def modifier_lot(db: AsyncSession, lot_id: int, user: User, donnees: LotIn
     if lot.statut != "brouillon":
         raise PaiementErreur("Seul un brouillon se modifie : remets d'abord le lot en brouillon.", 409)
     _, scope, _ = await _entreprise_qbo(db, lot.entreprise_id)
-    _verifier_date_depot(donnees.date_paiement)
+    mode = donnees.mode or lot.mode
+    _verifier_date(mode, donnees.date_paiement)
     lignes = await _construire_lignes(db, lot.entreprise_id, scope, donnees, sauf_lot=lot.id)
     await db.execute(delete(LotPaiementLigne).where(LotPaiementLigne.lot_id == lot.id))
     for l in lignes:
         l.lot_id = lot.id
         db.add(l)
+    lot.mode = mode
     lot.date_paiement = donnees.date_paiement
     lot.note = (donnees.note or "").strip() or None
     _totaux(lot, lignes)
     await _evenement(
         db, "lot_modifie", user=user, entreprise_id=lot.entreprise_id, lot_id=lot.id,
-        detail=f"{lot.nb_lignes} facture(s), {_argent(lot.total_cents)}, dépôt le {_date_lisible(lot.date_paiement)}",
+        detail=f"{lot.nb_lignes} facture(s), {_argent(lot.total_cents)}, {_quand(lot)}",
     )
     await db.commit()
     return await detail_lot(db, lot.id, user)
 
 
+def _par_fournisseur(lignes: Sequence[LotPaiementLigne]) -> Dict[str, List[LotPaiementLigne]]:
+    """Lignes regroupées par fournisseur, dans l'ordre du lot."""
+    groupes: Dict[str, List[LotPaiementLigne]] = {}
+    for l in lignes:
+        groupes.setdefault(l.qbo_vendor_id, []).append(l)
+    return groupes
+
+
+def _verifier_limite_interac(lignes: Sequence[LotPaiementLigne]) -> None:
+    trop = sorted(
+        g[0].fournisseur_nom
+        for g in _par_fournisseur(lignes).values()
+        if sum(int(l.montant_cents) for l in g) > LIMITE_INTERAC_CENTS
+    )
+    if trop:
+        raise PaiementErreur(
+            f"Desjardins limite un virement Interac à {_argent(LIMITE_INTERAC_CENTS)} : paie "
+            + ", ".join(trop)
+            + " par dépôt direct, ou réduis le montant.",
+            409,
+        )
+
+
 async def soumettre(db: AsyncSession, lot_id: int, user: User) -> Dict[str, Any]:
     """Le lot part aux approbateurs. Les soldes sont relus dans QuickBooks
-    et le compte bancaire approuvé de chaque fournisseur est figé."""
+    et les coordonnées approuvées de chaque fournisseur (compte bancaire ou
+    destinataire Interac, selon le lot) sont figées."""
     lot = await _lot(db, lot_id, verrou=True)
     if lot.statut != "brouillon":
         raise PaiementErreur("Ce lot a déjà été soumis.", 409)
@@ -1221,21 +1398,26 @@ async def soumettre(db: AsyncSession, lot_id: int, user: User) -> Dict[str, Any]
     lignes = await _lignes(db, lot.id)
     if not lignes:
         raise PaiementErreur("Le lot est vide.")
-    _verifier_date_depot(lot.date_paiement)
+    _verifier_date(lot.mode, lot.date_paiement)
     bills = await _factures_ouvertes(scope)
     _verifier_lignes_contre_qbo(
         [(l.qbo_bill_id, int(l.montant_cents)) for l in lignes],
         bills,
         await _factures_dans_lots(db, lot.entreprise_id, lot.id),
     )
-    approuves = await _comptes_par_fournisseur(db, lot.entreprise_id, ("approuve",))
+    interac = lot.mode == "interac"
+    approuves = await _comptes_par_fournisseur(db, lot.entreprise_id, ("approuve",), lot.mode)
     sans = sorted({l.fournisseur_nom for l in lignes if l.qbo_vendor_id not in approuves})
     if sans:
         raise PaiementErreur(
-            "Coordonnées bancaires approuvées manquantes pour : " + ", ".join(sans) + ".",
+            f"Coordonnées {'Interac' if interac else 'bancaires'} approuvées manquantes pour : "
+            + ", ".join(sans)
+            + ".",
             409,
             fournisseurs=sans,
         )
+    if interac:
+        _verifier_limite_interac(lignes)
     for l in lignes:
         l.compte_bancaire_id = approuves[l.qbo_vendor_id].id
         l.solde_cents = cents(bills[l.qbo_bill_id].get("Balance"))
@@ -1250,8 +1432,7 @@ async def soumettre(db: AsyncSession, lot_id: int, user: User) -> Dict[str, Any]
         db,
         await _approbateurs(db, [user.id, lot.cree_par_user_id]),
         "Paiements à approuver",
-        f"{e.name} : {lot.nb_lignes} facture(s), {_argent(lot.total_cents)}, "
-        f"dépôt le {_date_lisible(lot.date_paiement)}.",
+        f"{e.name} : {lot.nb_lignes} facture(s), {_argent(lot.total_cents)}, {_quand(lot)}.",
     )
     await db.commit()
     return await detail_lot(db, lot.id, user)
@@ -1469,6 +1650,8 @@ async def creer_fichier(
     authentification). Le premier appel lui donne son numéro ; les appels
     suivants redonnent exactement le même fichier."""
     lot = await _lot(db, lot_id, verrou=True)
+    if lot.mode == "interac":
+        raise PaiementErreur("Ce lot se paie par virements Interac : il n'a pas de fichier de dépôt.", 409)
     if lot.statut not in ("approuve", "fichier_cree"):
         raise PaiementErreur("Le lot doit être approuvé avant de créer le fichier.", 409)
     await exiger_2fa(db, user, code_2fa)
@@ -1528,6 +1711,8 @@ async def creer_fichier(
 
 async def marquer_transmis(db: AsyncSession, lot_id: int, user: User) -> Dict[str, Any]:
     lot = await _lot(db, lot_id, verrou=True)
+    if lot.mode == "interac":
+        raise PaiementErreur("Ce lot se paie par virements Interac : indique plutôt chaque virement envoyé.", 409)
     if lot.statut != "fichier_cree":
         raise PaiementErreur("Crée d'abord le fichier de ce lot.", 409)
     lot.statut = "transmis"
@@ -1547,13 +1732,184 @@ async def marquer_transmis(db: AsyncSession, lot_id: int, user: User) -> Dict[st
     return await detail_lot(db, lot.id, user)
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Virements Interac
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _message_interac(numeros: Sequence[Optional[str]]) -> str:
+    """Message joint au virement : ce que le fournisseur verra."""
+    nums = list(dict.fromkeys(n.strip() for n in numeros if n and n.strip()))
+    if not nums:
+        return "Paiement de facture"
+    if len(nums) == 1:
+        return f"Paiement de la facture {nums[0]}"
+    for k in range(len(nums), 0, -1):
+        reste = len(nums) - k
+        texte = "Paiement des factures " + ", ".join(nums[:k])
+        if reste:
+            texte += f" et {reste} autre{'s' if reste > 1 else ''}"
+        if len(texte) <= 140:
+            return texte
+    return f"Paiement de {len(nums)} factures"
+
+
+async def _lot_interac(db: AsyncSession, lot_id: int, statut: str, message: str) -> LotPaiement:
+    lot = await _lot(db, lot_id, verrou=True)
+    if lot.mode != "interac" or lot.statut != statut:
+        raise PaiementErreur(message, 409)
+    return lot
+
+
+async def preparer_envoi(
+    db: AsyncSession, lot_id: int, user: User, code_2fa: Optional[str]
+) -> Dict[str, Any]:
+    """Après l'approbation, un approbateur prépare l'envoi des virements
+    Interac (double authentification) : les soldes sont relus dans
+    QuickBooks (pas de double paiement) et chaque destinataire doit être
+    encore celui qui a été approuvé. Il envoie ensuite chaque virement
+    lui-même dans AccèsD Affaires : Desjardins n'accepte pas de fichier
+    pour Interac."""
+    lot = await _lot(db, lot_id, verrou=True)
+    if lot.mode != "interac":
+        raise PaiementErreur("Ce lot se paie par dépôt direct : crée plutôt son fichier.", 409)
+    if lot.statut != "approuve":
+        raise PaiementErreur("Le lot doit être approuvé avant l'envoi des virements.", 409)
+    await exiger_2fa(db, user, code_2fa)
+    _, scope, _ = await _entreprise_qbo(db, lot.entreprise_id)
+    lignes = await _lignes(db, lot.id)
+    _verifier_lignes_contre_qbo(
+        [(l.qbo_bill_id, int(l.montant_cents)) for l in lignes],
+        await _factures_ouvertes(scope),
+        await _factures_dans_lots(db, lot.entreprise_id, lot.id),
+    )
+    _verifier_limite_interac(lignes)
+    groupes = _par_fournisseur(lignes)
+    for groupe in groupes.values():
+        compte_id = groupe[0].compte_bancaire_id
+        c = await db.get(FournisseurCompteBancaire, compte_id) if compte_id else None
+        if c is None or c.mode != "interac" or c.statut != "approuve":
+            raise PaiementErreur(
+                f"Les coordonnées Interac de {groupe[0].fournisseur_nom} ont changé depuis la "
+                "soumission : remets le lot en brouillon et soumets-le de nouveau.",
+                409,
+            )
+    lot.statut = "a_envoyer"
+    lot.envoi_prepare_par_user_id = user.id
+    lot.envoi_prepare_le = _maintenant()
+    await _evenement(
+        db, "envoi_prepare", user=user, entreprise_id=lot.entreprise_id, lot_id=lot.id,
+        detail=f"{len(groupes)} virement(s), {_argent(lot.total_cents)}",
+    )
+    await db.commit()
+    return await detail_lot(db, lot.id, user)
+
+
+async def _virements_termines(db: AsyncSession, lot: LotPaiement, user: User) -> None:
+    """Tous les virements restants sont envoyés : le lot passe à « transmis »."""
+    lot.statut = "transmis"
+    lot.transmis_par_user_id = user.id
+    lot.transmis_le = _maintenant()
+    await _evenement(
+        db, "virements_envoyes", user=user, entreprise_id=lot.entreprise_id, lot_id=lot.id,
+        detail=_argent(lot.total_cents),
+    )
+    await _notifier(
+        db,
+        [lot.cree_par_user_id, lot.soumis_par_user_id],
+        "Virements Interac envoyés",
+        f"Lot n° {lot.id} : {_argent(lot.total_cents)}. Les paiements peuvent être inscrits dans QuickBooks.",
+    )
+
+
+async def marquer_envoye(
+    db: AsyncSession, lot_id: int, user: User, fournisseur_id: str, reference: Optional[str]
+) -> Dict[str, Any]:
+    """L'approbateur a envoyé le virement d'un fournisseur dans AccèsD
+    Affaires (toutes ses factures du lot, en un virement)."""
+    lot = await _lot_interac(db, lot_id, "a_envoyer", "Ce lot n'a pas de virements Interac à envoyer.")
+    lignes = await _lignes(db, lot.id)
+    groupe = _par_fournisseur(lignes).get(fournisseur_id)
+    if not groupe:
+        raise PaiementErreur("Ce fournisseur n'est pas dans le lot.", 404)
+    nom = groupe[0].fournisseur_nom
+    if all(l.envoye_le for l in groupe):
+        raise PaiementErreur(f"Le virement à {nom} est déjà indiqué comme envoyé.", 409)
+    ref = re.sub(r"\s+", " ", reference or "").strip()[:64] or None
+    maintenant = _maintenant()
+    for l in groupe:
+        l.envoye_le = maintenant
+        l.envoye_par_user_id = user.id
+        l.reference_interac = ref
+    c = await db.get(FournisseurCompteBancaire, groupe[0].compte_bancaire_id) if groupe[0].compte_bancaire_id else None
+    await _evenement(
+        db, "interac_envoye", user=user, entreprise_id=lot.entreprise_id, lot_id=lot.id,
+        detail=f"{nom} : {_argent(sum(int(l.montant_cents) for l in groupe))}"
+        + (f" à {destinataire_lisible(c.interac_destinataire)}" if c else "")
+        + (f", référence {ref}" if ref else ""),
+    )
+    if all(l.envoye_le for l in lignes):
+        await _virements_termines(db, lot, user)
+    await db.commit()
+    return await detail_lot(db, lot.id, user)
+
+
+async def retirer_virement(
+    db: AsyncSession, lot_id: int, user: User, fournisseur_id: str, motif: str
+) -> Dict[str, Any]:
+    """Retire du lot le virement d'un fournisseur qui n'est pas encore
+    envoyé (refusé par AccèsD, destinataire à corriger, montant au-delà de
+    la limite du jour…) : ses factures redeviennent à payer."""
+    lot = await _lot_interac(
+        db, lot_id, "a_envoyer", "Seul un virement d'un lot en cours d'envoi peut être retiré."
+    )
+    motif = (motif or "").strip()
+    if not motif:
+        raise PaiementErreur("Indique pourquoi tu retires ce virement.")
+    lignes = await _lignes(db, lot.id)
+    groupe = _par_fournisseur(lignes).get(fournisseur_id)
+    if not groupe:
+        raise PaiementErreur("Ce fournisseur n'est pas dans le lot.", 404)
+    if any(l.envoye_le for l in groupe):
+        raise PaiementErreur("Ce virement est indiqué comme envoyé : il ne peut plus être retiré.", 409)
+    ids = {l.id for l in groupe}
+    restantes = [l for l in lignes if l.id not in ids]
+    await db.execute(delete(LotPaiementLigne).where(LotPaiementLigne.id.in_(list(ids))))
+    _totaux(lot, restantes)
+    await _evenement(
+        db, "virement_retire", user=user, entreprise_id=lot.entreprise_id, lot_id=lot.id,
+        detail=f"{groupe[0].fournisseur_nom} : {_argent(sum(int(l.montant_cents) for l in groupe))}, "
+        f"motif : {motif[:500]}",
+    )
+    if not restantes:
+        lot.statut = "annule"
+        lot.annule_par_user_id = user.id
+        lot.annule_le = _maintenant()
+        lot.motif_annulation = motif[:2000]
+        await _evenement(
+            db, "lot_annule", user=user, entreprise_id=lot.entreprise_id, lot_id=lot.id,
+            detail="dernier virement retiré",
+        )
+    elif all(l.envoye_le for l in restantes):
+        await _virements_termines(db, lot, user)
+    await db.commit()
+    return await detail_lot(db, lot.id, user)
+
+
 async def enregistrer_qbo(db: AsyncSession, lot_id: int, user: User) -> Dict[str, Any]:
     """Un paiement de facture QuickBooks par fournisseur, depuis le compte
     bancaire choisi dans les réglages. Reprend là où il s'est arrêté : un
-    paiement déjà créé (même numéro de document) n'est pas recréé."""
+    paiement déjà créé (même numéro de document) n'est pas recréé. Un
+    virement Interac est daté du jour où il a été envoyé."""
     lot = await _lot(db, lot_id, verrou=True)
+    interac = lot.mode == "interac"
     if lot.statut != "transmis":
-        raise PaiementErreur("Le fichier doit avoir été transmis à Desjardins.", 409)
+        raise PaiementErreur(
+            "Les virements Interac doivent d'abord être envoyés."
+            if interac
+            else "Le fichier doit avoir été transmis à Desjardins.",
+            409,
+        )
     r = await _reglage(db, lot.entreprise_id)
     if r is None or not r.qbo_compte_banque_id:
         raise PaiementErreur(
@@ -1567,7 +1923,18 @@ async def enregistrer_qbo(db: AsyncSession, lot_id: int, user: User) -> Dict[str
         if not l.qbo_bill_payment_id:
             groupes.setdefault(l.qbo_vendor_id, []).append(l)
     for vid, groupe in groupes.items():
-        doc = f"DRD-{lot.id}-{vid}"[:21]
+        doc = f"{'INT' if interac else 'DRD'}-{lot.id}-{vid}"[:21]
+        if interac:
+            envoye = _utc(groupe[0].envoye_le) or _maintenant()
+            date_txn = envoye.astimezone(TZ).date()
+            ref = groupe[0].reference_interac
+            note = f"Virement Interac, lot Kratos n° {lot.id}" + (f", référence {ref}" if ref else "")
+        else:
+            date_txn = lot.date_paiement
+            note = (
+                f"Dépôt direct Desjardins, lot Kratos n° {lot.id}, "
+                f"fichier n° {int(lot.fichier_numero or 0):04d}"
+            )
         try:
             existants = await qbo.query(f"SELECT * FROM BillPayment WHERE DocNumber = '{doc}'")
             if existants:
@@ -1587,12 +1954,9 @@ async def enregistrer_qbo(db: AsyncSession, lot_id: int, user: User) -> Dict[str
                         "PayType": "Check",
                         "CheckPayment": {"BankAccountRef": {"value": r.qbo_compte_banque_id}},
                         "TotalAmt": dollars(total),
-                        "TxnDate": lot.date_paiement.isoformat(),
+                        "TxnDate": date_txn.isoformat(),
                         "DocNumber": doc,
-                        "PrivateNote": (
-                            f"Dépôt direct Desjardins, lot Kratos n° {lot.id}, "
-                            f"fichier n° {int(lot.fichier_numero or 0):04d}"
-                        ),
+                        "PrivateNote": note,
                         "Line": [
                             {
                                 "Amount": dollars(int(l.montant_cents)),
@@ -1629,13 +1993,19 @@ async def enregistrer_qbo(db: AsyncSession, lot_id: int, user: User) -> Dict[str
 
 async def annuler(db: AsyncSession, lot_id: int, user: User, motif: Optional[str]) -> Dict[str, Any]:
     lot = await _lot(db, lot_id, verrou=True)
-    if lot.statut not in ("brouillon", "soumis", "refuse", "approuve", "fichier_cree"):
+    if lot.statut not in ("brouillon", "soumis", "refuse", "approuve", "fichier_cree", "a_envoyer"):
         raise PaiementErreur("Ce lot ne peut plus être annulé dans Kratos.", 409)
-    if lot.statut in ("approuve", "fichier_cree") and not await peut_approuver(db, user):
+    if lot.statut in ("approuve", "fichier_cree", "a_envoyer") and not await peut_approuver(db, user):
         raise PaiementErreur("Seul un approbateur peut annuler un lot approuvé.", 403)
+    if lot.statut == "a_envoyer" and any(l.envoye_le for l in await _lignes(db, lot.id)):
+        raise PaiementErreur(
+            "Des virements de ce lot sont déjà envoyés : retire plutôt ceux qui ne le sont pas.", 409
+        )
     motif = (motif or "").strip()
     if lot.statut == "fichier_cree" and not motif:
         raise PaiementErreur("Indique pourquoi tu annules un lot dont le fichier est créé.")
+    if lot.statut == "a_envoyer" and not motif:
+        raise PaiementErreur("Indique pourquoi tu annules ces virements.")
     lot.statut = "annule"
     lot.annule_par_user_id = user.id
     lot.annule_le = _maintenant()
@@ -1653,11 +2023,13 @@ async def annuler(db: AsyncSession, lot_id: int, user: User, motif: Optional[str
 
 
 def _lot_resume(lot: LotPaiement, noms: Dict[int, str]) -> Dict[str, Any]:
+    libelles = LIBELLES_STATUT_INTERAC if lot.mode == "interac" else LIBELLES_STATUT
     return {
         "id": lot.id,
         "entreprise_id": lot.entreprise_id,
+        "mode": lot.mode,
         "statut": lot.statut,
-        "statut_libelle": LIBELLES_STATUT.get(lot.statut, lot.statut),
+        "statut_libelle": libelles.get(lot.statut, lot.statut),
         "date_paiement": lot.date_paiement.isoformat(),
         "total": dollars(lot.total_cents),
         "nb_lignes": lot.nb_lignes,
@@ -1669,6 +2041,7 @@ def _lot_resume(lot: LotPaiement, noms: Dict[int, str]) -> Dict[str, Any]:
         "approuve_le": _iso(lot.approuve_le),
         "fichier_numero": lot.fichier_numero,
         "fichier_cree_le": _iso(lot.fichier_cree_le),
+        "envoi_prepare_le": _iso(lot.envoi_prepare_le),
         "transmis_le": _iso(lot.transmis_le),
         "paye_le": _iso(lot.paye_le),
         "annule_le": _iso(lot.annule_le),
@@ -1724,9 +2097,10 @@ async def detail_lot(db: AsyncSession, lot_id: int, user: User) -> Dict[str, Any
         db,
         [
             lot.cree_par_user_id, lot.soumis_par_user_id, lot.fichier_cree_par_user_id,
-            lot.transmis_par_user_id, lot.annule_par_user_id,
+            lot.envoi_prepare_par_user_id, lot.transmis_par_user_id, lot.annule_par_user_id,
             *[d.user_id for d in decisions], *[ev.user_id for ev in evenements],
             *[c.decide_par_user_id for c in comptes_l.values()],
+            *[l.envoye_par_user_id for l in lignes],
         ],
     )
     etat: Dict[str, Any] = {}
@@ -1738,12 +2112,38 @@ async def detail_lot(db: AsyncSession, lot_id: int, user: User) -> Dict[str, Any
     a_prepare = _a_prepare(lot, user)
     a_decide = any(d.user_id == user.id for d in decisions)
     s = lot.statut
+    interac = lot.mode == "interac"
+    envoyes = any(l.envoye_le for l in lignes)
+    virements: List[Dict[str, Any]] = []
+    if interac:
+        # Un virement par fournisseur, vers le destinataire figé à la
+        # soumission : ce que l'approbateur saisit dans AccèsD.
+        for vid, groupe in _par_fournisseur(lignes).items():
+            premiere = groupe[0]
+            c = comptes_l.get(premiere.compte_bancaire_id or 0)
+            total = sum(int(l.montant_cents) for l in groupe)
+            virements.append(
+                {
+                    "fournisseur_id": vid,
+                    "fournisseur": premiere.fournisseur_nom,
+                    "destinataire": c.interac_destinataire if c else None,
+                    "destinataire_statut": c.statut if c else None,
+                    "montant": dollars(total),
+                    "nb_factures": len(groupe),
+                    "message": _message_interac([l.numero_facture for l in groupe]),
+                    "depasse_limite": total > LIMITE_INTERAC_CENTS,
+                    "envoye_le": _iso(premiere.envoye_le),
+                    "envoye_par": noms.get(premiere.envoye_par_user_id or 0),
+                    "reference": premiere.reference_interac,
+                }
+            )
     out = _lot_resume(lot, noms)
     out.update(
         {
             "soumis_par": noms.get(lot.soumis_par_user_id or 0),
             "fichier_date": lot.fichier_date.isoformat() if lot.fichier_date else None,
             "fichier_cree_par": noms.get(lot.fichier_cree_par_user_id or 0),
+            "envoi_prepare_par": noms.get(lot.envoi_prepare_par_user_id or 0),
             "transmis_par": noms.get(lot.transmis_par_user_id or 0),
             "annule_par": noms.get(lot.annule_par_user_id or 0),
             "motif_annulation": lot.motif_annulation,
@@ -1760,17 +2160,13 @@ async def detail_lot(db: AsyncSession, lot_id: int, user: User) -> Dict[str, Any
                     "montant": dollars(l.montant_cents),
                     "lien_qbo": lien_qbo(etat.get("environment"), etat.get("realm_id"), "Bill", l.qbo_bill_id),
                     "compte": (
-                        {
-                            "statut": comptes_l[l.compte_bancaire_id].statut,
-                            "institution": comptes_l[l.compte_bancaire_id].institution,
-                            "transit": comptes_l[l.compte_bancaire_id].transit,
-                            "compte_fin": comptes_l[l.compte_bancaire_id].compte_fin,
-                            "approuve_le": _iso(comptes_l[l.compte_bancaire_id].decide_le),
-                            "approuve_par": noms.get(comptes_l[l.compte_bancaire_id].decide_par_user_id or 0),
-                        }
+                        _resume_compte(comptes_l[l.compte_bancaire_id], noms)
                         if l.compte_bancaire_id in comptes_l
                         else None
                     ),
+                    "envoye_le": _iso(l.envoye_le),
+                    "envoye_par": noms.get(l.envoye_par_user_id or 0),
+                    "reference_interac": l.reference_interac,
                     "qbo_bill_payment_id": l.qbo_bill_payment_id,
                     "lien_paiement_qbo": _lien_paiement_qbo(etat, l.qbo_bill_payment_id),
                     "erreur_qbo": l.erreur_qbo,
@@ -1790,17 +2186,22 @@ async def detail_lot(db: AsyncSession, lot_id: int, user: User) -> Dict[str, Any
                 {"action": ev.action, "detail": ev.detail, "par": noms.get(ev.user_id or 0), "le": _iso(ev.created_at)}
                 for ev in evenements
             ],
+            "virements": virements,
+            "limite_interac": dollars(LIMITE_INTERAC_CENTS),
             "actions": {
                 "modifier": s == "brouillon",
                 "soumettre": s == "brouillon",
                 "remettre_en_brouillon": s in ("soumis", "refuse") or (s == "approuve" and approbateur),
                 "approuver": s == "soumis" and approbateur and not a_prepare and not a_decide,
                 "refuser": s == "soumis" and approbateur and not a_prepare,
-                "creer_fichier": s in ("approuve", "fichier_cree") and approbateur,
-                "marquer_transmis": s == "fichier_cree" and approbateur,
+                "creer_fichier": not interac and s in ("approuve", "fichier_cree") and approbateur,
+                "marquer_transmis": not interac and s == "fichier_cree" and approbateur,
+                "preparer_envoi": interac and s == "approuve" and approbateur,
+                "marquer_envoye": interac and s == "a_envoyer" and approbateur,
                 "enregistrer_qbo": s == "transmis",
                 "annuler": s in ("brouillon", "soumis", "refuse")
-                or (s in ("approuve", "fichier_cree") and approbateur),
+                or (s in ("approuve", "fichier_cree") and approbateur)
+                or (s == "a_envoyer" and approbateur and not envoyes),
             },
             "a_prepare": a_prepare,
         }

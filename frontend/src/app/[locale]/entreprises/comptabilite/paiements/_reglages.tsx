@@ -1,9 +1,11 @@
 "use client";
 
-/* Paiements → « Réglages » du dépôt direct de l'entreprise : ce que
-   Desjardins remet à l'ouverture du service (numéro d'organisme), les
-   noms affichés aux fournisseurs, le compte où reviennent les dépôts
-   refusés et le compte QuickBooks d'où sortent les paiements.
+/* Paiements → « Réglages » de l'entreprise. Pour tous les paiements : le
+   nombre d'approbations par lot et le compte QuickBooks d'où sortent les
+   paiements. Pour le dépôt direct seulement : ce que Desjardins remet à
+   l'ouverture du service (numéro d'organisme), les noms affichés aux
+   fournisseurs et le compte où reviennent les dépôts refusés ; une
+   entreprise qui ne paie que par Interac les laisse vides.
    Approbateurs seulement, avec leur double authentification : les autres
    approbateurs sont prévenus de tout changement. */
 
@@ -43,7 +45,7 @@ function versFormulaire(r: Reglages): Formulaire {
   };
 }
 
-export function ReglagesDepot({
+export function ReglagesPaiements({
   entreprise,
   moi,
   appeler,
@@ -135,7 +137,10 @@ export function ReglagesDepot({
       {reglages.manque.length ? (
         <section className="flex items-start gap-2 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-300">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>Pour créer un fichier de dépôt, il manque : {reglages.manque.join(", ")}.</span>
+          <span>
+            Pour créer un fichier de dépôt direct, il manque : {reglages.manque.join(", ")}. Les virements Interac
+            n&apos;en ont pas besoin.
+          </span>
         </section>
       ) : (
         <section className="flex items-start gap-2 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-300">
@@ -148,17 +153,17 @@ export function ReglagesDepot({
       )}
 
       <form className="rounded-2xl border p-4" style={CARTE} onSubmit={(ev) => void enregistrer(ev)}>
-        <p className="text-base font-bold text-[var(--qg-text)]">Dépôt direct Desjardins</p>
+        <p className="text-base font-bold text-[var(--qg-text)]">Réglages des paiements</p>
         <p className="text-xs text-[var(--qg-text-muted)]">
           {lecture
             ? "Seul un approbateur peut modifier ces réglages."
             : "Ton code de double authentification sera demandé ; les autres approbateurs seront prévenus."}
         </p>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <Champ titre="Numéro d'organisme" aide="Les 10 caractères remis par la caisse pour le dépôt direct.">
-            <input className="input font-mono text-sm uppercase" maxLength={12} {...champ("numero_organisme")} />
-          </Champ>
+        <p className="mt-4 text-xs font-bold uppercase tracking-wider text-[var(--qg-text-muted)]">
+          Tous les paiements
+        </p>
+        <div className="mt-2 grid gap-3 sm:grid-cols-2">
           <Champ titre="Approbations par lot" aide="Combien de personnes, autres que celle qui prépare, doivent approuver.">
             <div className="flex gap-2">
               {[1, 2].map((n) => (
@@ -179,6 +184,43 @@ export function ReglagesDepot({
                 </button>
               ))}
             </div>
+          </Champ>
+          <Champ
+            titre="Compte bancaire dans QuickBooks"
+            aide="Le compte d'où sortent les paiements inscrits dans QuickBooks (dépôts directs et virements Interac)."
+          >
+            {reglages.erreur_qbo ? (
+              <p className="text-sm text-rose-300">{reglages.erreur_qbo}</p>
+            ) : (
+              <select className="input text-sm" {...champ("qbo_compte_banque_id")}>
+                <option value="">Choisir un compte</option>
+                {reglages.comptes_banque_qbo.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.nom}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Champ>
+        </div>
+
+        <p className="mt-5 text-xs font-bold uppercase tracking-wider text-[var(--qg-text-muted)]">
+          Dépôt direct Desjardins (fichier)
+        </p>
+        <p className="text-xs text-[var(--qg-text-muted)]">
+          À laisser vide si l&apos;entreprise ne paie que par virement Interac.
+        </p>
+        <div className="mt-2 grid gap-3 sm:grid-cols-2">
+          <Champ titre="Numéro d'organisme" aide="Les 10 caractères remis par la caisse pour le dépôt direct.">
+            <input className="input font-mono text-sm uppercase" maxLength={12} {...champ("numero_organisme")} />
+          </Champ>
+          <Champ titre="Prochain numéro de fichier" aide="À changer seulement si Desjardins le demande.">
+            <input
+              className="input font-mono text-sm"
+              inputMode="numeric"
+              maxLength={4}
+              {...champ("prochain_numero_fichier")}
+            />
           </Champ>
           <Champ titre="Nom court" aide="15 caractères, affiché sur le relevé du fournisseur.">
             <input className="input text-sm" maxLength={15} {...champ("nom_court")} />
@@ -217,31 +259,6 @@ export function ReglagesDepot({
               />
             </div>
           </div>
-          <Champ
-            titre="Compte bancaire dans QuickBooks"
-            aide="Le compte d'où sortent les paiements inscrits dans QuickBooks."
-          >
-            {reglages.erreur_qbo ? (
-              <p className="text-sm text-rose-300">{reglages.erreur_qbo}</p>
-            ) : (
-              <select className="input text-sm" {...champ("qbo_compte_banque_id")}>
-                <option value="">Choisir un compte</option>
-                {reglages.comptes_banque_qbo.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.nom}
-                  </option>
-                ))}
-              </select>
-            )}
-          </Champ>
-          <Champ titre="Prochain numéro de fichier" aide="À changer seulement si Desjardins le demande.">
-            <input
-              className="input font-mono text-sm"
-              inputMode="numeric"
-              maxLength={4}
-              {...champ("prochain_numero_fichier")}
-            />
-          </Champ>
         </div>
 
         <button
@@ -278,19 +295,19 @@ export function ReglagesDepot({
       <section className="rounded-2xl border p-4" style={CARTE}>
         <p className="text-sm font-bold text-[var(--qg-text)]">Avant le premier paiement</p>
         <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-sm text-[var(--qg-text)]">
-          <li>
-            Demander à la caisse le service de dépôt direct par fichier (norme 005) et le numéro
-            d&apos;organisme de l&apos;entreprise.
-          </li>
-          <li>Remplir ces réglages.</li>
-          <li>
-            Desjardins demande d&apos;abord un fichier d&apos;essai : demande à ta caisse comment le transmettre
-            et attends sa confirmation avant le premier vrai lot.
-          </li>
           <li>Chaque approbateur active sa double authentification (onglet Sécurité).</li>
           <li>
-            Dans AccèsD Affaires, la technicienne ne doit jamais avoir le droit de transmettre des fichiers :
-            seuls les approbateurs transmettent.
+            Dépôt direct : demander à la caisse le service de dépôt direct par fichier (norme 005) et le numéro
+            d&apos;organisme de l&apos;entreprise, remplir ces réglages, puis transmettre le fichier
+            d&apos;essai que Desjardins demande et attendre sa confirmation avant le premier vrai lot.
+          </li>
+          <li>
+            Virements Interac : rien d&apos;autre à régler ici. Chaque approbateur envoie lui-même les virements
+            dans AccèsD Affaires (au plus 25 000 $ par virement et par période de 24 heures).
+          </li>
+          <li>
+            Dans AccèsD Affaires, la technicienne ne doit jamais avoir le droit de transmettre un fichier ni
+            d&apos;envoyer un virement : seuls les approbateurs le font.
           </li>
         </ol>
       </section>

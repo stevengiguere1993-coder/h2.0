@@ -2,37 +2,39 @@
 
 /* Comptabilité → « Paiements » : l'équivalent de Plooto dans Kratos
    (Steven 2026-10-04). Les factures fournisseurs de QuickBooks se paient
-   par dépôt direct Desjardins, sans donner à la technicienne comptable
-   l'accès aux comptes de banque :
+   par dépôt direct Desjardins ou par virement Interac, sans donner à la
+   technicienne comptable l'accès aux comptes de banque :
 
      1. elle prépare un lot de factures et le soumet ;
      2. une AUTRE personne l'approuve, avec sa double authentification ;
      3. un approbateur crée le fichier de dépôt (norme 005) et le
-        transmet lui-même dans AccèsD Affaires ;
+        transmet lui-même dans AccèsD Affaires, ou y envoie lui-même
+        chaque virement Interac ;
      4. les paiements sont inscrits dans QuickBooks.
 
-   Les coordonnées bancaires des fournisseurs suivent la même règle :
-   saisies par l'une, approuvées par une autre. Le connecteur IA n'a aucun
-   accès à ces routes. */
+   Les coordonnées de paiement des fournisseurs (compte bancaire ou
+   destinataire Interac) suivent la même règle : saisies par l'une,
+   approuvées par une autre. Le connecteur IA n'a aucun accès à ces
+   routes. */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Building2, Loader2 } from "lucide-react";
 
 import { CLE_ENTREPRISE } from "../_shared";
-import { CARTE, type EntreprisePaiement, type Moi, message, obtenir } from "./_api";
+import { CARTE, type EntreprisePaiement, type ModePaiement, type Moi, message, obtenir } from "./_api";
 import { APayer } from "./_a-payer";
 import { ChoixRecherche } from "./_choix";
 import { useDeuxFacteurs } from "./_deux-facteurs";
-import { CoordonneesBancaires } from "./_fournisseurs";
+import { CoordonneesPaiement, type Prechoix } from "./_fournisseurs";
 import { Journal } from "./_journal";
 import { DetailLot, ListeLots } from "./_lots";
-import { ReglagesDepot } from "./_reglages";
+import { ReglagesPaiements } from "./_reglages";
 import { Securite } from "./_securite";
 
 const VUES = [
   { cle: "a_payer", libelle: "À payer" },
   { cle: "lots", libelle: "Lots" },
-  { cle: "comptes", libelle: "Coordonnées bancaires" },
+  { cle: "comptes", libelle: "Coordonnées de paiement" },
   { cle: "reglages", libelle: "Réglages" },
   { cle: "securite", libelle: "Sécurité" },
   { cle: "journal", libelle: "Journal" }
@@ -63,7 +65,7 @@ export default function PaiementsPage() {
   const [entrepriseId, setEntrepriseId] = useState<number | null>(null);
   const [vue, setVue] = useState<Vue>("a_payer");
   const [lotOuvert, setLotOuvert] = useState<number | null>(null);
-  const [prechoisi, setPrechoisi] = useState<string | null>(null);
+  const [prechoisi, setPrechoisi] = useState<Prechoix | null>(null);
   const [version, setVersion] = useState(0);
   const { appeler, fenetre } = useDeuxFacteurs();
 
@@ -123,8 +125,8 @@ export default function PaiementsPage() {
     ecrireMemoire(CLE_VUE, "lots");
   }
 
-  function ajouterCompte(fournisseurId: string) {
-    setPrechoisi(fournisseurId);
+  function ajouterCompte(fournisseurId: string, mode: ModePaiement) {
+    setPrechoisi({ fournisseurId, mode });
     setVue("comptes");
     ecrireMemoire(CLE_VUE, "comptes");
   }
@@ -143,9 +145,7 @@ export default function PaiementsPage() {
               </span>
             ) : null}
             {e.comptes_a_approuver ? (
-              <span className="badge badge-amber">
-                {e.comptes_a_approuver} compte{e.comptes_a_approuver > 1 ? "s" : ""} à approuver
-              </span>
+              <span className="badge badge-amber">Coordonnées à approuver ({e.comptes_a_approuver})</span>
             ) : null}
           </>
         )
@@ -274,7 +274,7 @@ export default function PaiementsPage() {
               <ListeLots entreprise={entreprise} version={version} onOuvrir={ouvrirLot} />
             )
           ) : vue === "comptes" ? (
-            <CoordonneesBancaires
+            <CoordonneesPaiement
               key={entreprise.entreprise_id}
               entreprise={entreprise}
               moi={moi}
@@ -283,7 +283,7 @@ export default function PaiementsPage() {
               onChange={rafraichir}
             />
           ) : vue === "reglages" ? (
-            <ReglagesDepot
+            <ReglagesPaiements
               key={entreprise.entreprise_id}
               entreprise={entreprise}
               moi={moi}
@@ -310,7 +310,8 @@ export default function PaiementsPage() {
                 son propre travail.
               </li>
               <li>
-                Un approbateur crée le fichier de dépôt direct et le transmet lui-même dans AccèsD Affaires.
+                Un approbateur crée le fichier de dépôt direct et le transmet lui-même dans AccèsD Affaires,
+                ou y envoie lui-même chaque virement Interac.
               </li>
               <li>Les paiements sont ensuite inscrits dans QuickBooks.</li>
             </ol>

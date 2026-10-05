@@ -944,14 +944,16 @@ def serialize_projet_materiau(obj: Any, level: str = "summary") -> dict:
 
 
 def serialize_lot_paiement(obj: Any, level: str = "summary") -> dict:
-    """Lot de paiements fournisseurs (Comptabilité → Paiements). Jamais de
-    coordonnées bancaires ni de contenu de fichier : le connecteur lit
-    l'état des paiements, pas les comptes."""
+    """Lot de paiements fournisseurs (Comptabilité → Paiements), par dépôt
+    direct ou virements Interac (``mode``). Jamais de coordonnées de
+    paiement ni de contenu de fichier : le connecteur lit l'état des
+    paiements, pas les comptes."""
     data = {
         "entity_type": "lot_paiement",
         "id": _get(obj, "id"),
         "entreprise_id": _get(obj, "entreprise_id"),
         "statut": _str(_get(obj, "statut")),
+        "mode": _str(_get(obj, "mode")),
         "date_paiement": _iso(_get(obj, "date_paiement")),
         "total": _num((_get(obj, "total_cents") or 0) / 100),
         "nb_lignes": _get(obj, "nb_lignes"),

@@ -1,9 +1,10 @@
 "use client";
 
 /* Paiements → « À payer » : les factures fournisseurs ouvertes dans le
-   QuickBooks de l'entreprise, regroupées par fournisseur. On coche, on
-   ajuste le montant (paiement partiel), on choisit la date du dépôt et on
-   crée un lot en brouillon. Un dépôt par fournisseur dans le fichier. */
+   QuickBooks de l'entreprise, regroupées par fournisseur. On choisit la
+   façon de payer (dépôt direct ou virement Interac), on coche, on ajuste
+   le montant (paiement partiel), on choisit la date et on crée un lot en
+   brouillon. Un dépôt, ou un virement, par fournisseur. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ExternalLink, Loader2, Plus, RefreshCw, Search } from "lucide-react";
@@ -11,13 +12,16 @@ import { AlertTriangle, ExternalLink, Loader2, Plus, RefreshCw, Search } from "l
 import { sansAccents } from "../_shared";
 import {
   CARTE,
+  MODES,
   type EntreprisePaiement,
   type Facture,
   type FacturesAPayer,
   type LotDetail,
+  type ModePaiement,
   argent,
   aujourdhui,
   compteMasque,
+  destinataireLisible,
   envoyer,
   jour,
   lireMontant,
@@ -31,6 +35,7 @@ type Groupe = {
   fournisseur: string;
   factures: Facture[];
   compte: Facture["compte"];
+  interac: Facture["interac"];
 };
 
 function ajouterJours(iso: string, n: number): string {
@@ -52,12 +57,13 @@ export function APayer({
   entreprise: EntreprisePaiement;
   onLotCree: (lotId: number) => void;
   onOuvrirLot: (lotId: number) => void;
-  onAjouterCompte: (fournisseurId: string) => void;
+  onAjouterCompte: (fournisseurId: string, mode: ModePaiement) => void;
 }) {
   const [donnees, setDonnees] = useState<FacturesAPayer | null>(null);
   const [erreur, setErreur] = useState<string | null>(null);
   const [chargement, setChargement] = useState(true);
   const [selection, setSelection] = useState<Record<string, string>>({});
+  const [mode, setMode] = useState<ModePaiement>("depot_direct");
   const [datePaiement, setDatePaiement] = useState("");
   const [note, setNote] = useState("");
   const [texte, setTexte] = useState("");
@@ -73,7 +79,6 @@ export function APayer({
       const d = await obtenir<FacturesAPayer>(`/entreprises/${entreprise.entreprise_id}/factures`);
       if (n !== demande.current) return;
       setDonnees(d);
-      setDatePaiement((avant) => (!avant || avant < d.premiere_date ? d.premiere_date : avant));
       // La sélection ne garde que les factures encore payables.
       setSelection((sel) => {
         const ok = new Set(d.factures.filter(selectionnable).map((f) => f.qbo_bill_id));
@@ -96,6 +101,18 @@ export function APayer({
     void charger();
   }, [charger]);
 
+  // Dépôt direct : deux jours ouvrables d'avance. Interac : dès aujourd'hui.
+  const premiere = donnees ? (mode === "interac" ? donnees.aujourdhui : donnees.premiere_date) : "";
+  useEffect(() => {
+    if (premiere) setDatePaiement((avant) => (!avant || avant < premiere ? premiere : avant));
+  }, [premiere]);
+
+  function changerMode(m: ModePaiement) {
+    setMode(m);
+    // Chaque façon de payer repart de sa première date possible.
+    setDatePaiement("");
+  }
+
   const groupes = useMemo<Groupe[]>(() => {
     if (!donnees) return [];
     const q = sansAccents(texte.trim());
@@ -115,7 +132,8 @@ export function APayer({
           fournisseurId: f.fournisseur_id,
           fournisseur: f.fournisseur,
           factures: [f],
-          compte: f.compte
+          compte: f.compte,
+          interac: f.interac
         });
     }
     // L'ordre du serveur (échéance la plus proche d'abord) décide de
@@ -130,11 +148,29 @@ export function APayer({
   const montants = choisies.map((f) => lireMontant(selection[f.qbo_bill_id] ?? ""));
   const montantsOk = choisies.every((f, i) => montants[i] > 0 && montants[i] <= f.solde + 1e-9);
   const total = montants.reduce((s, m) => s + (Number.isFinite(m) ? m : 0), 0);
+  const interac = mode === "interac";
   const sansCompte = Array.from(
-    new Set(choisies.filter((f) => f.compte?.statut !== "approuve").map((f) => f.fournisseur))
+    new Set(
+      choisies
+        .filter((f) => (interac ? f.interac : f.compte)?.statut !== "approuve")
+        .map((f) => f.fournisseur)
+    )
   );
-  const premiere = donnees?.premiere_date ?? "";
-  const derniere = ajouterJours(aujourdhui(), 14);
+  // Desjardins : 25 000 $ par virement Interac et par période de 24 heures.
+  const limite = donnees?.limite_interac ?? 25000;
+  const parFournisseur = new Map<string, { nom: string; total: number }>();
+  choisies.forEach((f, i) => {
+    const cle = f.fournisseur_id ?? f.fournisseur;
+    const t = parFournisseur.get(cle) ?? { nom: f.fournisseur, total: 0 };
+    t.total += Number.isFinite(montants[i]) ? montants[i] : 0;
+    parFournisseur.set(cle, t);
+  });
+  const tropGros = interac
+    ? Array.from(parFournisseur.values())
+        .filter((t) => t.total > limite + 1e-9)
+        .map((t) => t.nom)
+    : [];
+  const derniere = interac ? undefined : ajouterJours(aujourdhui(), 14);
 
   function basculer(f: Facture, oui: boolean) {
     setSelection((sel) => {
@@ -162,6 +198,7 @@ export function APayer({
     setErreurEnvoi(null);
     try {
       const lot = await envoyer<LotDetail>(`/entreprises/${entreprise.entreprise_id}/lots`, {
+        mode,
         date_paiement: datePaiement,
         note: note.trim() || null,
         lignes: choisies.map((f, i) => ({ qbo_bill_id: f.qbo_bill_id, montant: montants[i] }))
@@ -187,9 +224,11 @@ export function APayer({
             <p className="text-xs text-[var(--qg-text-muted)]">
               Factures fournisseurs ouvertes dans le QuickBooks de{" "}
               {donnees?.entreprise.qbo_company_name || entreprise.name}.
-              {premiere
-                ? ` Premier dépôt possible : ${jour(premiere)} (un jour de plus si un jour férié tombe d'ici là).`
-                : ""}
+              {!premiere
+                ? ""
+                : interac
+                  ? ` Un virement Interac peut partir dès aujourd'hui (${argent(limite)} au plus par virement).`
+                  : ` Premier dépôt possible : ${jour(premiere)} (un jour de plus si un jour férié tombe d'ici là).`}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -214,6 +253,31 @@ export function APayer({
               <RefreshCw className={`h-4 w-4 ${chargement ? "animate-spin" : ""}`} />
               <span className="hidden sm:inline">Actualiser</span>
             </button>
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium text-[var(--qg-text-muted)]">Payer par</span>
+          <div
+            className="flex items-center gap-1 rounded-lg p-0.5"
+            style={{ backgroundColor: "var(--qg-bg-alt)" }}
+            role="group"
+            aria-label="Façon de payer"
+          >
+            {(Object.keys(MODES) as ModePaiement[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={`rounded-md px-3 py-1 text-xs font-semibold transition ${
+                  mode === m
+                    ? "bg-[var(--qg-bg)] text-[var(--qg-text)] shadow"
+                    : "text-[var(--qg-text-muted)] hover:text-[var(--qg-text)]"
+                }`}
+                onClick={() => changerMode(m)}
+                aria-pressed={mode === m}
+              >
+                {MODES[m]}
+              </button>
+            ))}
           </div>
         </div>
       </section>
@@ -275,7 +339,11 @@ export function APayer({
                 {payable ? (
                   <EtatCompte
                     compte={g.compte}
-                    onAjouter={g.fournisseurId ? () => onAjouterCompte(g.fournisseurId as string) : undefined}
+                    interac={g.interac}
+                    mode={mode}
+                    onAjouter={
+                      g.fournisseurId ? () => onAjouterCompte(g.fournisseurId as string, mode) : undefined
+                    }
                   />
                 ) : null}
                 <span className="text-xs text-[var(--qg-text-muted)]">Solde {solde}</span>
@@ -351,7 +419,7 @@ export function APayer({
                         ) : !f.payable ? (
                           <span className="badge badge-neutral">
                             {f.devise !== "CAD"
-                              ? `En ${f.devise} : hors dépôt direct`
+                              ? `En ${f.devise} : à payer hors Kratos`
                               : "Sans fournisseur"}
                           </span>
                         ) : null}
@@ -399,13 +467,13 @@ export function APayer({
                 {choisies.length} facture{choisies.length > 1 ? "s" : ""} · {argent(total)}
               </p>
               <p className="hidden text-xs text-[var(--qg-text-muted)] sm:block">
-                Un dépôt par fournisseur. Le lot part en brouillon : rien n&apos;est
-                payé avant l&apos;approbation.
+                {interac ? "Un virement Interac par fournisseur" : "Un dépôt direct par fournisseur"}. Le lot
+                part en brouillon : rien n&apos;est payé avant l&apos;approbation.
               </p>
             </div>
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-[var(--qg-text-muted)]">
-                Date du dépôt
+                {interac ? "Envoi prévu le" : "Date du dépôt"}
               </span>
               <input
                 type="date"
@@ -446,8 +514,21 @@ export function APayer({
           {sansCompte.length ? (
             <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-300">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              Coordonnées bancaires pas encore approuvées pour {sansCompte.join(", ")} : le
-              lot pourra être créé, mais pas soumis.
+              Coordonnées {interac ? "Interac" : "bancaires"} pas encore approuvées pour{" "}
+              {sansCompte.join(", ")} : le lot pourra être créé, mais pas soumis.
+            </p>
+          ) : null}
+          {tropGros.length ? (
+            <p className="mt-2 flex items-start gap-1.5 text-xs text-rose-300">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              Desjardins limite un virement Interac à {argent(limite)} : paie {tropGros.join(", ")} par dépôt
+              direct, ou réduis le montant.
+            </p>
+          ) : interac && total > limite + 1e-9 ? (
+            <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-300">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              Desjardins limite aussi les envois Interac à {argent(limite)} par période de 24 heures : les
+              virements de ce lot devront partir sur plus d&apos;une journée.
             </p>
           ) : null}
           {erreurEnvoi ? <p className="mt-2 text-sm text-rose-300">{erreurEnvoi}</p> : null}
@@ -457,29 +538,46 @@ export function APayer({
   );
 }
 
+/** Les coordonnées du fournisseur (compte bancaire et destinataire
+ *  Interac) ; celles de la façon de payer choisie manquent : « Ajouter ». */
 function EtatCompte({
   compte,
+  interac,
+  mode,
   onAjouter
 }: {
   compte: Facture["compte"];
+  interac: Facture["interac"];
+  mode: ModePaiement;
   onAjouter?: () => void;
 }) {
-  if (compte?.statut === "approuve")
-    return (
-      <span className="badge badge-emerald" title="Coordonnées bancaires approuvées">
-        {compteMasque(compte)}
-      </span>
-    );
-  if (compte?.statut === "en_attente")
-    return (
-      <span className="badge badge-amber" title="Une autre personne doit approuver ces coordonnées">
-        Compte à approuver
-      </span>
-    );
+  const manque = !(mode === "interac" ? interac : compte);
   return (
-    <span className="flex items-center gap-1.5">
-      <span className="badge badge-rose">Aucun compte bancaire</span>
-      {onAjouter ? (
+    <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+      {compte?.statut === "approuve" ? (
+        <span className="badge badge-emerald" title="Compte bancaire approuvé (dépôt direct)">
+          {compteMasque(compte)}
+        </span>
+      ) : compte?.statut === "en_attente" ? (
+        <span className="badge badge-amber" title="Une autre personne doit approuver ce compte">
+          Compte à approuver
+        </span>
+      ) : null}
+      {interac?.statut === "approuve" ? (
+        <span className="badge badge-emerald max-w-full" title="Destinataire Interac approuvé">
+          <span className="truncate">Interac · {destinataireLisible(interac.interac_destinataire)}</span>
+        </span>
+      ) : interac?.statut === "en_attente" ? (
+        <span className="badge badge-amber" title="Une autre personne doit approuver ce destinataire">
+          Interac à approuver
+        </span>
+      ) : null}
+      {manque ? (
+        <span className="badge badge-rose">
+          {mode === "interac" ? "Aucun destinataire Interac" : "Aucun compte bancaire"}
+        </span>
+      ) : null}
+      {manque && onAjouter ? (
         <button type="button" className="btn-ghost btn-xs" onClick={onAjouter}>
           Ajouter
         </button>

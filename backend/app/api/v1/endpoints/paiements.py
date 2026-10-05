@@ -1,4 +1,5 @@
-"""Paiements fournisseurs par dépôt direct Desjardins (Comptabilité → Paiements).
+"""Paiements fournisseurs par dépôt direct Desjardins ou virement Interac
+(Comptabilité → Paiements).
 
     GET  /api/v1/paiements/moi                              droits + double authentification
     POST /api/v1/paiements/2fa/debut                        clé à scanner (mot de passe redemandé)
@@ -7,12 +8,12 @@
     GET  /api/v1/paiements/entreprises                      entreprises, QuickBooks, en attente
     GET  /api/v1/paiements/entreprises/{id}/factures        factures ouvertes dans QuickBooks
     GET  /api/v1/paiements/entreprises/{id}/fournisseurs    fournisseurs QuickBooks
-    GET  /api/v1/paiements/entreprises/{id}/comptes         coordonnées bancaires (masquées)
-    POST /api/v1/paiements/entreprises/{id}/comptes         nouvelles coordonnées (en attente)
+    GET  /api/v1/paiements/entreprises/{id}/comptes         coordonnées de paiement (comptes masqués)
+    POST /api/v1/paiements/entreprises/{id}/comptes         compte bancaire ou destinataire Interac (en attente)
     POST /api/v1/paiements/comptes/{id}/approuver           approbateur + double authentification
     POST /api/v1/paiements/comptes/{id}/refuser             approbateur
     POST /api/v1/paiements/comptes/{id}/retirer
-    GET  /api/v1/paiements/entreprises/{id}/reglages        réglages du dépôt direct
+    GET  /api/v1/paiements/entreprises/{id}/reglages        réglages des paiements (dépôt direct, approbations)
     PUT  /api/v1/paiements/entreprises/{id}/reglages        approbateur + double authentification
     GET  /api/v1/paiements/entreprises/{id}/lots
     POST /api/v1/paiements/entreprises/{id}/lots            nouveau lot (brouillon)
@@ -24,6 +25,9 @@
     POST /api/v1/paiements/lots/{id}/refuser                approbateur
     POST /api/v1/paiements/lots/{id}/fichier                approbateur + double authentification
     POST /api/v1/paiements/lots/{id}/transmis               approbateur
+    POST /api/v1/paiements/lots/{id}/envoi                  Interac : approbateur + double authentification
+    POST /api/v1/paiements/lots/{id}/virements/{fid}/envoye Interac : virement envoyé dans AccèsD (approbateur)
+    POST /api/v1/paiements/lots/{id}/virements/{fid}/retirer Interac : retire un virement pas envoyé (approbateur)
     POST /api/v1/paiements/lots/{id}/quickbooks             inscrit les paiements dans QuickBooks
     POST /api/v1/paiements/lots/{id}/annuler
     GET  /api/v1/paiements/entreprises/{id}/journal         journal des paiements
@@ -40,7 +44,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Dict, List, Optional, Type, TypeVar
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
@@ -107,6 +111,11 @@ class MotifIn(BaseModel):
 class FichierIn(BaseModel):
     code_2fa: Optional[str] = Field(default=None, max_length=12)
     date_paiement: Optional[date] = None
+
+
+class EnvoyeIn(BaseModel):
+    #: Numéro de référence affiché par AccèsD (facultatif).
+    reference: Optional[str] = Field(default=None, max_length=64)
 
 
 # ── Moi et double authentification ───────────────────────────────────
@@ -231,10 +240,10 @@ async def reveler_compte(
         return _erreur(exc)
 
 
-# ── Réglages du dépôt direct ──────────────────────────────────────────
+# ── Réglages des paiements ────────────────────────────────────────────
 
 
-@router.get("/entreprises/{entreprise_id}/reglages", summary="Réglages du dépôt direct de l'entreprise")
+@router.get("/entreprises/{entreprise_id}/reglages", summary="Réglages des paiements de l'entreprise (dépôt direct, approbations)")
 async def reglages(entreprise_id: int, db: DBSession, _: CurrentUser) -> Any:
     try:
         return await svc.reglages(db, entreprise_id)
@@ -242,7 +251,7 @@ async def reglages(entreprise_id: int, db: DBSession, _: CurrentUser) -> Any:
         return _erreur(exc)
 
 
-@router.put("/entreprises/{entreprise_id}/reglages", summary="Modifie les réglages du dépôt direct")
+@router.put("/entreprises/{entreprise_id}/reglages", summary="Modifie les réglages des paiements")
 async def modifier_reglages(
     entreprise_id: int, db: DBSession, user: User = Approbateur, corps: Dict[str, Any] = Body(...)
 ) -> Any:
@@ -351,6 +360,53 @@ async def fichier(
 async def transmis(lot_id: int, db: DBSession, user: User = Approbateur) -> Any:
     try:
         return await svc.marquer_transmis(db, lot_id, user)
+    except svc.PaiementErreur as exc:
+        return _erreur(exc)
+
+
+@router.post("/lots/{lot_id}/envoi", summary="Prépare l'envoi des virements Interac d'un lot approuvé")
+async def preparer_envoi(
+    lot_id: int, db: DBSession, user: User = Approbateur, corps: Dict[str, Any] = Body(default={})
+) -> Any:
+    donnees = _valider(ConfirmationIn, corps)
+    try:
+        return await svc.preparer_envoi(db, lot_id, user, donnees.code_2fa)
+    except svc.PaiementErreur as exc:
+        return _erreur(exc)
+
+
+@router.post(
+    "/lots/{lot_id}/virements/{fournisseur_id}/envoye",
+    summary="Indique que le virement Interac d'un fournisseur a été envoyé dans AccèsD",
+)
+async def virement_envoye(
+    lot_id: int,
+    db: DBSession,
+    fournisseur_id: str = Path(max_length=64),
+    user: User = Approbateur,
+    corps: Dict[str, Any] = Body(default={}),
+) -> Any:
+    donnees = _valider(EnvoyeIn, corps)
+    try:
+        return await svc.marquer_envoye(db, lot_id, user, fournisseur_id, donnees.reference)
+    except svc.PaiementErreur as exc:
+        return _erreur(exc)
+
+
+@router.post(
+    "/lots/{lot_id}/virements/{fournisseur_id}/retirer",
+    summary="Retire du lot un virement Interac pas encore envoyé",
+)
+async def retirer_virement(
+    lot_id: int,
+    db: DBSession,
+    fournisseur_id: str = Path(max_length=64),
+    user: User = Approbateur,
+    corps: Dict[str, Any] = Body(default={}),
+) -> Any:
+    donnees = _valider(MotifIn, corps)
+    try:
+        return await svc.retirer_virement(db, lot_id, user, fournisseur_id, donnees.motif or "")
     except svc.PaiementErreur as exc:
         return _erreur(exc)
 

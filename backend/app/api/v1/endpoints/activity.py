@@ -1920,10 +1920,11 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         order_attr="updated_at", stage_attr="role", supports_active=False,
     ),
     # Comptabilité (2026-10-04) — lots de paiements fournisseurs par dépôt
-    # direct Desjardins ; `stage` filtre le statut (brouillon | soumis |
-    # approuve | fichier_cree | transmis | paye | refuse | annule). Lecture
-    # seule, sans coordonnées bancaires ; les écritures sont interdites au
-    # connecteur (mcp_server._ACTION_CHEMINS_INTERDITS).
+    # direct Desjardins ou virements Interac (champ `mode`) ; `stage` filtre
+    # le statut (brouillon | soumis | approuve | fichier_cree | a_envoyer |
+    # transmis | paye | refuse | annule). Lecture seule, sans coordonnées
+    # de paiement ; les écritures sont interdites au connecteur
+    # (mcp_server._ACTION_CHEMINS_INTERDITS).
     "lots_paiement": _ListSpec(
         model=LotPaiement, pole="comptabilite",
         entity_type="lot_paiement",
