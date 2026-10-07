@@ -352,7 +352,10 @@ def _bloc_unites(rl, results: dict, *, s) -> list:
     ]]
     for ul in uc.get("unites") or []:
         data.append([
-            Paragraph(f"#{ul.get('index')} {ul.get('typo') or ''}", s["small"]),
+            Paragraph(
+                f"{ul.get('numero') or '#' + str(ul.get('index'))} {ul.get('typo') or ''}",
+                s["small"],
+            ),
             Paragraph(libelles.get(ul.get("mode"), str(ul.get("mode"))), s["small"]),
             Paragraph(_money(ul.get("loyer_actuel")), s["num"]),
             Paragraph(_money(ul.get("loyer_optimise")) if ul.get("mode") != "aucune" else "—", s["num"]),

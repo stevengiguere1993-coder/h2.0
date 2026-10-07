@@ -167,19 +167,27 @@ class Settings(BaseSettings):
     # Google (ex. gemini-2.0-flash, gemini-2.5-pro en 2026) sont ignorés
     # sans qu'on ait à toucher la config. Chaque modèle a son propre
     # quota quotidien gratuit → la cascade multiplie le budget.
-    gemini_model_cascade: str = "gemini-2.5-flash,gemini-2.5-flash-lite"
+    # Vide (défaut) = ordre du catalogue Google : génération la plus
+    # récente d'abord (ex. gemini-3.8-flash avant gemini-2.5-flash).
+    gemini_model_cascade: str = ""
 
     # Groq (Llama 3.3 70B) — remplaçant gratuit de Claude pour la
     # ré-extraction manuelle. Tier gratuit : 14 400 req/jour, sans CB.
     # Générer une clé : https://console.groq.com → API Keys.
     groq_api_key: Optional[str] = None
-    groq_model: str = "llama-3.3-70b-versatile"
+    # Vide (défaut) = choisi dans le catalogue Groq par préférences
+    # (gpt-oss-120b, Llama 70B, Llama 4, Qwen…) — Groq a retiré ses
+    # Llama 3.3/4 courant 2026, une valeur codée en dur meurt vite.
+    groq_model: str = ""
     # Modèle Groq capable de LIRE des images (Llama 4 Scout, vision) —
     # relais de l'extraction Prospection quand Gemini est à court de
     # quota (tier gratuit : quelques dizaines de requêtes/jour/modèle en
     # 2026). Absent du catalogue Groq → les images ne sont lues que par
     # Gemini.
-    groq_vision_model: str = "meta-llama/llama-4-scout-17b-16e-instruct"
+    # Vide (défaut) = premier modèle du catalogue Groq qui lit des
+    # images (indices « llama-4 », « vision », « vl ») ; aucun → les
+    # images ne sont lues que par Gemini.
+    groq_vision_model: str = ""
 
     # SLA : un nouveau prospect doit être contacté dans les X heures
     # qui suivent sa création, sinon une notif rouge fan-out aux

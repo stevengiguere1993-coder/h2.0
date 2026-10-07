@@ -488,6 +488,12 @@ def _parse_unites(raw: Optional[str]) -> list[dict]:
         try:
             out.append({
                 "typo": str(u.get("typo") or ""),
+                # Étiquette du logement (rent roll) — affichage seulement.
+                "numero": (
+                    str(u.get("numero")).strip()[:32] or None
+                    if u.get("numero") not in (None, "")
+                    else None
+                ),
                 "loyer_actuel": float(u.get("loyer_actuel") or 0),
                 "loyer_cible": float(u.get("loyer_cible") or 0),
                 "optimiser": bool(u.get("optimiser", True)),
@@ -1553,6 +1559,113 @@ async def delete_analysis(
         return None
     await db.delete(rec)
     await db.commit()
+
+
+class RentRollExtractResult(BaseModel):
+    """Proposition d'unités lues dans un rent roll — le tableau de la
+    fiche n'est remplacé que quand l'utilisateur applique."""
+
+    unites: List[dict]
+    warnings: List[str]
+    model_used: str
+    source: str
+    nb_logements: Optional[int] = None
+    typology: dict = {}
+
+
+@router.post(
+    "/{analysis_id}/unites/extract",
+    response_model=RentRollExtractResult,
+    summary=(
+        "Lit un rent roll (PDF, photo, Excel, texte) et propose les "
+        "unités : loyer actuel par logement."
+    ),
+)
+async def extract_rent_roll(
+    analysis_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    text: Optional[str] = Form(default=None),
+    files: List[UploadFile] = File(default=[]),
+) -> RentRollExtractResult:
+    """Phil 2026-10-07 : même lecture que la section Infos (parser local
+    + Gemini, relais Groq) mais pour la liste des loyers, afin de remplir
+    « Unités & optimisation » unité par unité au lieu de la moyenne
+    revenus bruts ÷ logements. Les fichiers sont joints à la fiche."""
+    _require_prospection(user)
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+    file_blobs: list[tuple[str, str, bytes]] = []
+    for f in files or []:
+        if not f or not f.filename:
+            continue
+        data = await f.read()
+        if len(data) > _MAX_FILE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Fichier {f.filename} trop lourd (max 10 MB).",
+            )
+        file_blobs.append(
+            (f.filename, (f.content_type or "application/octet-stream").lower(), data)
+        )
+    if not file_blobs and not (text and text.strip()):
+        raise HTTPException(status_code=400, detail="Aucune source fournie.")
+
+    from app.services.lead_rent_roll import extraire_rent_roll
+
+    try:
+        res = await extraire_rent_roll(files=file_blobs, text=text)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Lecture du rent roll échouée")
+        raise HTTPException(
+            status_code=502, detail=f"Lecture du rent roll échouée : {exc!s}"
+        ) from exc
+
+    for filename, content_type, blob in file_blobs:
+        db.add(
+            LeadAnalysisAttachment(
+                lead_analysis_id=rec.id,
+                filename=filename[:255],
+                content_type=content_type[:64],
+                size_bytes=len(blob),
+                blob=blob,
+            )
+        )
+    try:
+        await log_action(
+            db,
+            user=user,
+            action="lead_analysis.rent_roll_extracted",
+            entity_type="lead_analysis",
+            entity_id=rec.id,
+            details={
+                "fichiers": [fn for fn, _ct, _b in file_blobs],
+                "texte": bool(text and text.strip()),
+                "unites": len(res.unites),
+                "model_used": res.model_used,
+                "source": res.source,
+            },
+        )
+    except Exception:  # noqa: BLE001 — l'audit ne doit pas bloquer
+        log.exception("Audit log rent_roll_extracted failed")
+    await db.commit()
+
+    typo: dict = {}
+    try:
+        raw = json.loads(rec.typology_json or "{}")
+        if isinstance(raw, dict):
+            typo = {str(k): int(v) for k, v in raw.items() if v is not None}
+    except (TypeError, ValueError):
+        typo = {}
+    return RentRollExtractResult(
+        unites=res.unites,
+        warnings=res.warnings,
+        model_used=res.model_used,
+        source=res.source,
+        nb_logements=rec.nb_logements,
+        typology=typo,
+    )
 
 
 @router.post(
@@ -3470,10 +3583,10 @@ def _ocr_health_payload() -> dict:
             )
     else:
         result["error"] = (
-            "tesseract binary not found on PATH — buildpack apt "
-            "non activé sur Render ou Aptfile non pris en compte. "
-            "Va dans Render Dashboard → service h2-0 → Manual Deploy "
-            "→ « Clear build cache & deploy »."
+            "Tesseract absent : le runtime natif Python de Render "
+            "n'installe pas de paquets apt (l'Aptfile n'est pas lu). Les "
+            "images et PDF scannés sont lus directement par l'IA. Un vrai "
+            "OCR serveur demanderait de passer le service en Docker."
         )
     for pkg in ("pytesseract", "pdf2image", "pillow_heif", "PIL"):
         try:
