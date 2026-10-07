@@ -1377,6 +1377,57 @@ async def list_analyses(
 
 
 @router.get(
+    "/extraction-health",
+    summary=(
+        "Diagnostic de l'extraction IA : Gemini (cascade réelle), Groq "
+        "(relais), OCR serveur."
+    ),
+)
+async def extraction_health(user: CurrentUser) -> dict:
+    """Déclaré AVANT « /{analysis_id} » : sinon FastAPI tente de lire
+    « extraction-health » comme un entier et répond 422 — c'est ce qui
+    rendait /ocr-health injoignable (2026-10-07). Affiché dans
+    Prospection → Paramètres → Outils."""
+    _require_prospection(user)
+    from app.services.lead_extraction import (
+        _gemini_list_models,
+        _gemini_model_cascade,
+        _groq_list_models,
+        _groq_modele_texte,
+        _groq_modele_vision,
+        modeles_gemini_utilisables,
+        resolve_gemini_cascade,
+    )
+
+    gemini_key = (getattr(settings, "gemini_api_key", None) or "").strip()
+    gemini: dict = {
+        "cle": bool(gemini_key),
+        "preferences": _gemini_model_cascade(),
+        "cascade": [],
+        "disponibles": [],
+        "catalogue_ok": False,
+    }
+    if gemini_key:
+        modeles = await _gemini_list_models(gemini_key)
+        gemini["catalogue_ok"] = modeles is not None
+        gemini["disponibles"] = modeles_gemini_utilisables(modeles) if modeles else []
+        gemini["cascade"] = await resolve_gemini_cascade(gemini_key)
+    groq_key = (getattr(settings, "groq_api_key", None) or "").strip()
+    groq: dict = {
+        "cle": bool(groq_key),
+        "modele_texte": None,
+        "modele_vision": None,
+        "disponibles": [],
+    }
+    if groq_key:
+        dispo = await _groq_list_models(groq_key)
+        groq["disponibles"] = dispo or []
+        groq["modele_texte"] = _groq_modele_texte(dispo)
+        groq["modele_vision"] = _groq_modele_vision(dispo)
+    return {"gemini": gemini, "groq": groq, "ocr": _ocr_health_payload()}
+
+
+@router.get(
     "/{analysis_id}",
     response_model=LeadAnalysisRead,
     summary="Détail d'une analyse (fiche complète).",
@@ -3433,33 +3484,9 @@ def _ocr_health_payload() -> dict:
     return result
 
 
-@router.get(
-    "/ocr-health",
-    summary="Diagnostic Tesseract serveur (utile si extraction d'image vide).",
-)
-async def ocr_health(user: CurrentUser) -> dict:
-    """Renvoie le statut du binaire Tesseract installé sur le serveur.
-    Format de réponse :
-      { "installed": bool, "version": str|null, "error": str|null,
-        "path": str|null, "tesseract": "OK (vX.Y.Z)" (legacy),
-        "pytesseract_installed": bool, "pdf2image_installed": bool, ... }
-    Si l'extraction d'images retourne vide, hit cet endpoint dans le
-    navigateur ou via Postman pour confirmer si Tesseract est bien là."""
-    _require_prospection(user)
-    return _ocr_health_payload()
-
-
-@router.get(
-    "/check-ocr-health",
-    summary="Alias diagnostic Tesseract (post-deploy Render).",
-)
-async def check_ocr_health(user: CurrentUser) -> dict:
-    """Alias de /ocr-health. Format documenté : {installed: bool,
-    version?: str, error?: str, path?: str}. À hit après un
-    auto-deploy Render pour confirmer que le buildpack apt a bien
-    installé tesseract/poppler."""
-    _require_prospection(user)
-    return _ocr_health_payload()
+# /ocr-health et /check-ocr-health étaient déclarés APRÈS « /{analysis_id} »
+# et donc injoignables (422) : remplacés par GET /lead-analyses/extraction-health
+# (déclaré avant), qui inclut ``_ocr_health_payload()``.
 
 
 # ── TRI investisseur ───────────────────────────────────────────────
