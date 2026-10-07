@@ -17,6 +17,8 @@ Restreint au volet `prospection`.
 from __future__ import annotations
 
 import json
+import time
+import traceback
 import logging
 import os
 import re
@@ -1596,6 +1598,7 @@ async def extract_rent_roll(
     rec = await db.get(LeadAnalysis, analysis_id)
     if rec is None:
         raise HTTPException(404, "Analyse introuvable.")
+    t0 = time.perf_counter()
     file_blobs: list[tuple[str, str, bytes]] = []
     for f in files or []:
         if not f or not f.filename:
@@ -1611,28 +1614,48 @@ async def extract_rent_roll(
         )
     if not file_blobs and not (text and text.strip()):
         raise HTTPException(status_code=400, detail="Aucune source fournie.")
+    noms = [fn for fn, _ct, _b in file_blobs]
+    nb_logements = rec.nb_logements
+    typology_json = rec.typology_json
+    # Identité capturée AVANT : après un rollback, l'objet user est expiré
+    # et le relire déclencherait un chargement hors greenlet.
+    uid = getattr(user, "id", None)
+    uemail = getattr(user, "email", None)
 
     from app.services.lead_rent_roll import extraire_rent_roll
 
+    # Tout ce qui suit est blindé : une erreur devient un 502 lisible ET
+    # une entrée d'audit « rent_roll_failed » avec la trace (lisible via
+    # le connecteur Kratos, sans accès aux logs Render) — un « HTTP 500 »
+    # muet comme celui du 2026-10-07 ne doit plus se reproduire.
     try:
         res = await extraire_rent_roll(files=file_blobs, text=text)
-    except Exception as exc:  # noqa: BLE001
-        log.exception("Lecture du rent roll échouée")
-        raise HTTPException(
-            status_code=502, detail=f"Lecture du rent roll échouée : {exc!s}"
-        ) from exc
-
-    for filename, content_type, blob in file_blobs:
-        db.add(
-            LeadAnalysisAttachment(
-                lead_analysis_id=rec.id,
-                filename=filename[:255],
-                content_type=content_type[:64],
-                size_bytes=len(blob),
-                blob=blob,
+        # Pièces jointes — une seule fois : même nom + même taille déjà
+        # attachés à la fiche = on ne duplique pas (un 2e essai sur le
+        # même PDF ne doit pas empiler des copies de 700 Ko).
+        deja = {
+            (fn, sz)
+            for fn, sz in (
+                await db.execute(
+                    select(
+                        LeadAnalysisAttachment.filename,
+                        LeadAnalysisAttachment.size_bytes,
+                    ).where(LeadAnalysisAttachment.lead_analysis_id == rec.id)
+                )
+            ).all()
+        }
+        for filename, content_type, blob in file_blobs:
+            if (filename[:255], len(blob)) in deja:
+                continue
+            db.add(
+                LeadAnalysisAttachment(
+                    lead_analysis_id=rec.id,
+                    filename=filename[:255],
+                    content_type=content_type[:64],
+                    size_bytes=len(blob),
+                    blob=blob,
+                )
             )
-        )
-    try:
         await log_action(
             db,
             user=user,
@@ -1640,32 +1663,69 @@ async def extract_rent_roll(
             entity_type="lead_analysis",
             entity_id=rec.id,
             details={
-                "fichiers": [fn for fn, _ct, _b in file_blobs],
+                "fichiers": noms,
                 "texte": bool(text and text.strip()),
                 "unites": len(res.unites),
                 "model_used": res.model_used,
                 "source": res.source,
+                "warnings": list(res.warnings)[:6],
+                "duree_s": round(time.perf_counter() - t0, 1),
             },
         )
-    except Exception:  # noqa: BLE001 — l'audit ne doit pas bloquer
-        log.exception("Audit log rent_roll_extracted failed")
-    await db.commit()
+        await db.commit()
 
-    typo: dict = {}
-    try:
-        raw = json.loads(rec.typology_json or "{}")
-        if isinstance(raw, dict):
-            typo = {str(k): int(v) for k, v in raw.items() if v is not None}
-    except (TypeError, ValueError):
-        typo = {}
-    return RentRollExtractResult(
-        unites=res.unites,
-        warnings=res.warnings,
-        model_used=res.model_used,
-        source=res.source,
-        nb_logements=rec.nb_logements,
-        typology=typo,
-    )
+        typo: dict = {}
+        try:
+            raw = json.loads(typology_json or "{}")
+            if isinstance(raw, dict):
+                typo = {str(k): int(float(v)) for k, v in raw.items() if v not in (None, "")}
+        except (TypeError, ValueError):
+            typo = {}
+        reponse = RentRollExtractResult(
+            unites=[dict(u) for u in res.unites],
+            warnings=[str(w) for w in res.warnings],
+            model_used=str(res.model_used or "none"),
+            source=str(res.source or "none"),
+            nb_logements=int(nb_logements) if nb_logements is not None else None,
+            typology=typo,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Lecture du rent roll échouée (analyse %s)", analysis_id)
+        erreur = f"{type(exc).__name__}: {str(exc)[:300]}"
+        try:
+            from app.models.audit_log import AuditLog as _AuditLog
+
+            await db.rollback()
+            db.add(
+                _AuditLog(
+                    user_id=uid,
+                    user_email=uemail,
+                    action="lead_analysis.rent_roll_failed",
+                    entity_type="lead_analysis",
+                    entity_id=analysis_id,
+                    details_json=json.dumps(
+                        {
+                            "erreur": erreur,
+                            "trace": traceback.format_exc()[-1500:],
+                            "fichiers": noms,
+                            "texte": bool(text and text.strip()),
+                            "duree_s": round(time.perf_counter() - t0, 1),
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    ),
+                )
+            )
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            log.exception("Audit rent_roll_failed impossible")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Lecture du rent roll échouée — {erreur}. Réessaie ; si ça persiste, le détail est dans le journal d'activité.",
+        ) from exc
+    return reponse
 
 
 @router.post(

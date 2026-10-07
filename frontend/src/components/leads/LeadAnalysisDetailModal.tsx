@@ -2707,6 +2707,46 @@ function UnitesOptimisationCard({
     }
   }
 
+  // Capture d'écran collée (Phil 2026-10-07) : bouton qui lit le
+  // presse-papiers, et Ctrl+V n'importe où dans la carte.
+  async function collerDepuisPressePapiers() {
+    setImportErr(null);
+    try {
+      const items = await navigator.clipboard.read();
+      const fichiers: File[] = [];
+      for (const it of items) {
+        const type = it.types.find((t) => t.startsWith("image/"));
+        if (!type) continue;
+        const blob = await it.getType(type);
+        fichiers.push(
+          new File([blob], `capture-${Date.now()}.${type.split("/")[1] || "png"}`, {
+            type
+          })
+        );
+      }
+      if (fichiers.length === 0) {
+        setImportErr(
+          "Aucune image dans le presse-papiers — copie une capture d'écran puis réessaie (ou Ctrl+V dans la carte)."
+        );
+        return;
+      }
+      await importerRentRoll(fichiers, "");
+    } catch {
+      setImportErr(
+        "Lecture du presse-papiers refusée par le navigateur — clique dans la carte et fais Ctrl+V."
+      );
+    }
+  }
+
+  function collerFichiers(e: React.ClipboardEvent<HTMLDivElement>) {
+    const fichiers = Array.from(e.clipboardData?.files ?? []).filter(
+      (f) => f.type.startsWith("image/") || f.type === "application/pdf"
+    );
+    if (fichiers.length === 0) return;
+    e.preventDefault();
+    void importerRentRoll(fichiers, "");
+  }
+
   function appliquerImport() {
     if (!importPreview) return;
     const out: UniteRow[] = importPreview.unites.map((u) => {
@@ -2766,7 +2806,12 @@ function UnitesOptimisationCard({
 
   return (
     <SubCard icon={Gauge} title="Unités & optimisation" cols={2}>
-      <div className="space-y-2 sm:col-span-2">
+      <div
+        className="space-y-2 sm:col-span-2 outline-none"
+        tabIndex={0}
+        onPaste={collerFichiers}
+        title="Tu peux coller une capture d'écran du rent roll ici (Ctrl+V)"
+      >
         <p className="text-[10px] leading-snug text-white/40">
           Un mode par unité. <b>Non optimisée</b> : loyer actuel à
           l&apos;achat, puis croissance organique de {(g * 100).toFixed(1)} %
@@ -2805,11 +2850,20 @@ function UnitesOptimisationCard({
           </button>
           <button
             type="button"
+            onClick={() => void collerDepuisPressePapiers()}
+            disabled={importBusy}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+            title="Lit la capture d'écran copiée dans le presse-papiers (ou fais Ctrl+V dans la carte)"
+          >
+            Coller une capture (Ctrl+V)
+          </button>
+          <button
+            type="button"
             onClick={() => setImportTexteOuvert((v) => !v)}
             disabled={importBusy}
             className="rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white/60 transition hover:bg-white/10 disabled:opacity-50"
           >
-            {importTexteOuvert ? "Fermer le texte" : "Coller un rent roll"}
+            {importTexteOuvert ? "Fermer le texte" : "Coller du texte"}
           </button>
           {importErr ? (
             <span className="text-[11px] text-rose-300">{importErr}</span>
