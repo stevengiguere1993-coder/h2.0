@@ -153,6 +153,7 @@ export default function AnalysesLeadsPage() {
   const [rawText, setRawText] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [extracting, setExtracting] = useState(false);
+  const [extractEtape, setExtractEtape] = useState<string | null>(null);
   const [extractResult, setExtractResult] = useState<{ count: number; warnings: string[] } | null>(null);
   const [extractErr, setExtractErr] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -273,29 +274,93 @@ export default function AnalysesLeadsPage() {
       return;
     }
     setExtracting(true);
-    try {
-      const fd = new FormData();
-      if (urlsText.trim()) fd.append("urls", urlsText.trim());
-      if (rawText.trim()) fd.append("text", rawText.trim());
-      for (const f of files) fd.append("files", f);
-      const r = await authedFetch("/api/v1/lead-analyses/extract", {
-        method: "POST",
-        body: fd
-      });
-      if (!r.ok) {
-        const t = await r.text().catch(() => "");
-        throw new Error(t.slice(0, 300) || `HTTP ${r.status}`);
-      }
-      const data = (await r.json()) as ExtractResult;
+    const t0 = Date.now();
+    const terminer = async (data: ExtractResult) => {
       setUrlsText("");
       setRawText("");
       setFiles([]);
       setExtractResult({ count: data.created.length, warnings: data.warnings || [] });
       await reload();
+    };
+    try {
+      const fd = new FormData();
+      if (urlsText.trim()) fd.append("urls", urlsText.trim());
+      if (rawText.trim()) fd.append("text", rawText.trim());
+      for (const f of files) fd.append("files", f);
+      // Tâche de fond + suivi (Phil 2026-10-07) : une extraction longue
+      // (IA, PDF, plusieurs URL) dépassait la coupure à 100 s de Render →
+      // erreur à l'écran alors que la fiche était créée, et doublon au
+      // 2e essai. Le serveur répond tout de suite, on suit l'avancement.
+      const lancement = await authedFetch("/api/v1/lead-analyses/extract-jobs", {
+        method: "POST",
+        body: fd
+      });
+      if (lancement.status === 404 || lancement.status === 405 || lancement.status === 422) {
+        // Ancien serveur : appel synchrone.
+        const r = await authedFetch("/api/v1/lead-analyses/extract", {
+          method: "POST",
+          body: fd
+        });
+        if (!r.ok) {
+          const t = await r.text().catch(() => "");
+          throw new Error(t.slice(0, 300) || `HTTP ${r.status}`);
+        }
+        await terminer((await r.json()) as ExtractResult);
+        return;
+      }
+      if (!lancement.ok) {
+        const t = await lancement.text().catch(() => "");
+        throw new Error(t.slice(0, 300) || `HTTP ${lancement.status}`);
+      }
+      const { job_id } = (await lancement.json()) as { job_id: string };
+      let echecsSuivi = 0;
+      for (;;) {
+        await new Promise((res) => setTimeout(res, 2000));
+        const sec = Math.round((Date.now() - t0) / 1000);
+        setExtractEtape(`Extraction en cours… ${sec} s (l'IA lit tes sources)`);
+        let j: Response;
+        try {
+          j = await authedFetch(`/api/v1/lead-analyses/extract-jobs/${job_id}`);
+        } catch {
+          if (++echecsSuivi > 10) {
+            throw new Error(
+              "Suivi impossible (réseau). L'extraction continue sur le serveur : rafraîchis la liste dans une minute, la fiche y sera."
+            );
+          }
+          continue;
+        }
+        if (j.status === 404) {
+          throw new Error(
+            "Le serveur a redémarré pendant l'extraction. Rafraîchis la liste : si la fiche n'y est pas, relance (aucun doublon ne sera créé)."
+          );
+        }
+        if (!j.ok) {
+          if (++echecsSuivi > 10) throw new Error(`Suivi impossible (HTTP ${j.status}).`);
+          continue;
+        }
+        const etat = (await j.json()) as {
+          status: string;
+          resultat?: ExtractResult | null;
+          erreur?: string | null;
+        };
+        if (etat.status === "termine" && etat.resultat) {
+          await terminer(etat.resultat);
+          return;
+        }
+        if (etat.status === "erreur") {
+          throw new Error(etat.erreur || "Extraction échouée.");
+        }
+        if (Date.now() - t0 > 10 * 60 * 1000) {
+          throw new Error(
+            "Extraction trop longue (10 min). Rafraîchis la liste dans quelques minutes : la fiche y sera si elle a abouti."
+          );
+        }
+      }
     } catch (e) {
       setExtractErr((e as Error).message);
     } finally {
       setExtracting(false);
+      setExtractEtape(null);
     }
   }
 
@@ -543,7 +608,7 @@ export default function AnalysesLeadsPage() {
             {extracting ? (
               <>
                 <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                Extraction en cours…
+                {extractEtape ?? "Extraction en cours…"}
               </>
             ) : (
               <>
