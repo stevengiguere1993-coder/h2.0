@@ -1205,6 +1205,9 @@ class ExtractionResult:
     per_source_values: List[Dict[str, Dict[str, Any]]] = field(
         default_factory=list
     )
+    #: PDF téléchargés derrière des liens (nom, type, octets) — joints à la
+    #: fiche par l'endpoint comme des fichiers déposés (Phil 2026-10-07).
+    fichiers_telecharges: List[Tuple[str, str, bytes]] = field(default_factory=list)
 
 
 # ── Helpers numériques ────────────────────────────────────────────
@@ -1300,7 +1303,13 @@ def _int_or_none(s: Any) -> Optional[int]:
 # ── Parser texte libre (regex + heuristiques) ─────────────────────
 
 
-_POSTAL_RE = re.compile(r"\b([A-Z]\d[A-Z])\s?(\d[A-Z]\d)\b", re.I)
+# Code postal canadien : les lettres D, F, I, O, Q, U n'existent pas (et
+# W, Z jamais en tête) — évite « I0O 3O1 » lu dans des octets de PDF.
+_POSTAL_RE = re.compile(
+    r"\b([ABCEGHJKLMNPRSTVXY]\d[ABCEGHJKLMNPRSTVWXYZ])\s?"
+    r"(\d[ABCEGHJKLMNPRSTVWXYZ]\d)\b",
+    re.I,
+)
 _PHONE_RE = re.compile(
     r"(?:\+?1[\-.\s]?)?\(?(\d{3})\)?[\-.\s]?(\d{3})[\-.\s]?(\d{4})"
 )
@@ -2622,6 +2631,63 @@ async def _fetch_html(url: str) -> Tuple[str, Optional[str]]:
         return "", f"erreur réseau : {exc!s}"
 
 
+_PDF_URL_RE = re.compile(r"\.pdf(?:$|[?#])", re.I)
+_MAX_PDF_URL_OCTETS = 15 * 1024 * 1024
+_UA_NAVIGATEUR = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+)
+
+
+def _url_semble_pdf(url: str) -> bool:
+    """Le lien pointe-t-il vers un PDF (extension, avant ? ou #) ?"""
+    try:
+        return bool(_PDF_URL_RE.search(urlparse(url).path or ""))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _nom_fichier_depuis_url(url: str) -> str:
+    from urllib.parse import unquote
+
+    nom = unquote((urlparse(url).path or "").rsplit("/", 1)[-1]).strip() or "document.pdf"
+    if not nom.lower().endswith(".pdf"):
+        nom += ".pdf"
+    return nom[:255]
+
+
+async def _sonder_pdf(url: str) -> bool:
+    """Un lien sans extension .pdf sert-il quand même un PDF (HEAD) ?"""
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            r = await client.head(url, headers={"User-Agent": _UA_NAVIGATEUR})
+        return "pdf" in (r.headers.get("content-type") or "").lower()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _telecharger_pdf(url: str) -> Tuple[Optional[bytes], Optional[str]]:
+    """Télécharge le PDF derrière un lien (sommaire d'investissement d'un
+    courtier, fiche descriptive…). Retourne ``(octets, erreur)``."""
+    headers = {"User-Agent": _UA_NAVIGATEUR, "Accept": "application/pdf,*/*;q=0.8"}
+    try:
+        async with httpx.AsyncClient(timeout=40.0, follow_redirects=True) as client:
+            r = await client.get(url, headers=headers)
+        if r.status_code >= 400:
+            return None, f"document inaccessible (HTTP {r.status_code})"
+        blob = r.content or b""
+        ct = (r.headers.get("content-type") or "").lower()
+        if blob[:5] != b"%PDF-" and "pdf" not in ct:
+            return None, "le lien ne renvoie pas un PDF"
+        if len(blob) > _MAX_PDF_URL_OCTETS:
+            return None, "PDF trop lourd (max 15 Mo)"
+        return blob, None
+    except httpx.TimeoutException:
+        return None, "timeout après 40 s"
+    except Exception as exc:  # noqa: BLE001
+        return None, f"erreur réseau : {exc!s}"
+
+
 async def _fetch_html_rendered(
     url: str, parser_kind: str
 ) -> Tuple[str, Optional[str]]:
@@ -2979,6 +3045,8 @@ async def extract_lead_info(
     # de toute façon transmis à l'IA, qui le lit nativement. On ne les
     # montre que si l'IA n'a rien pu lire non plus.
     ocr_warnings: List[str] = []
+    # PDF téléchargés derrière des liens — traités comme des fichiers.
+    fichiers_url: List[Tuple[str, str, bytes]] = []
     # Liste de tuples (parser_tag, addr_key, data_dict).
     extracted: List[Tuple[str, str, Dict[str, Any]]] = []
     # Matériel brut consolidé pour l'extraction IA en parallèle
@@ -2993,6 +3061,20 @@ async def extract_lead_info(
             continue
         domain = urlparse(u).netloc
         parser_kind = _parser_for_domain(domain)
+        # Lien vers un PDF (sommaire d'investissement d'un courtier, fiche
+        # descriptive…) : téléchargé et traité comme un fichier joint —
+        # au lieu de lire ses octets comme du HTML (Phil 2026-10-07,
+        # immeublesgloria.com : rien d'extrait, code postal fantaisiste).
+        if _url_semble_pdf(u) or (
+            parser_kind not in ("centris", "duproprio", "realtor")
+            and await _sonder_pdf(u)
+        ):
+            blob_pdf, err_pdf = await _telecharger_pdf(u)
+            if err_pdf or not blob_pdf:
+                warnings.append(f"URL {u} : {err_pdf or 'PDF vide'}")
+                continue
+            fichiers_url.append((_nom_fichier_depuis_url(u), "application/pdf", blob_pdf))
+            continue
         html, fetch_err = await _fetch_html_rendered(u, parser_kind)
         if fetch_err:
             warnings.append(f"URL {u} : {fetch_err}")
@@ -3076,8 +3158,8 @@ async def extract_lead_info(
                 "Texte libre : aucun champ reconnaissable extrait"
             )
 
-    # ── Fichiers ───
-    for filename, content_type, blob in files or []:
+    # ── Fichiers (déposés + PDF téléchargés derrière des liens) ───
+    for filename, content_type, blob in list(fichiers_url) + list(files or []):
         ct = (content_type or "").lower()
         if ct == "application/pdf" or filename.lower().endswith(".pdf"):
             # 1) Couche texte native via pypdf (PDFs descriptifs MLS,
@@ -3404,6 +3486,7 @@ async def extract_lead_info(
             model_used=model_used,
             warnings=warnings,
             per_source_values=per_source_values_out,
+            fichiers_telecharges=fichiers_url,
         )
 
     if not warnings:
@@ -3412,6 +3495,7 @@ async def extract_lead_info(
         data=[],
         model_used=_select_model_used(0, 0, gemini_skipped=False),
         warnings=warnings,
+        fichiers_telecharges=fichiers_url,
     )
 
 

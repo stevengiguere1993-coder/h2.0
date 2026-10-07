@@ -1224,6 +1224,12 @@ async def _extraire_et_creer(
             status_code=502, detail=f"Échec de l'extraction IA : {exc!s}"
         ) from exc
 
+    # PDF téléchargés derrière des liens : joints à la fiche comme des
+    # fichiers déposés.
+    fichiers_url: list[tuple[str, str, bytes]] = list(
+        getattr(res, "fichiers_telecharges", None) or []
+    )
+
     created_records: list[LeadAnalysis] = []
     # On stocke l'URL et le texte d'origine sur la 1re fiche créée
     # (la fusion intelligente côté Claude regroupe normalement).
@@ -1296,7 +1302,7 @@ async def _extraire_et_creer(
         # Attache les fichiers seulement sur la 1re fiche (sinon on
         # duplique du gros blob inutilement).
         if idx == 0:
-            for filename, content_type, blob in file_blobs:
+            for filename, content_type, blob in file_blobs + fichiers_url:
                 att = LeadAnalysisAttachment(
                     lead_analysis_id=rec.id,
                     filename=filename[:255],
@@ -1346,7 +1352,7 @@ async def _extraire_et_creer(
         rec.updated_at = now
         db.add(rec)
         await db.flush()
-        for filename, content_type, blob in file_blobs:
+        for filename, content_type, blob in file_blobs + fichiers_url:
             att = LeadAnalysisAttachment(
                 lead_analysis_id=rec.id,
                 filename=filename[:255],
@@ -1595,8 +1601,10 @@ async def extraction_health(user: CurrentUser) -> dict:
         "gemini": gemini,
         "groq": groq,
         "ocr": _ocr_health_payload(),
-        # Marqueur de version du serveur déployé (sonde post-déploiement).
-        "version": "2026-10-07e",
+        # Marqueurs du serveur déployé (sonde post-déploiement sans accès
+        # aux logs Render) : version du code + commit injecté par Render.
+        "version": "2026-10-07f",
+        "commit": (os.getenv("RENDER_GIT_COMMIT") or "")[:12] or None,
     }
 
 
