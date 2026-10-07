@@ -107,6 +107,9 @@ def test_quota_journalier_detecte():
 
 
 def test_cascade_sans_retry_sur_quota_journalier(monkeypatch):
+    # Budget court : pas de nouvel essai (3 s) sur le 503 du dernier modèle,
+    # on ne teste ici que le quota quotidien et le modèle retiré.
+    monkeypatch.setattr(ex, "_GEMINI_BUDGET_S", 1.0)
     appels: list = []
 
     async def _fake_extract(material, images, model=None, system=None, guide=None):
