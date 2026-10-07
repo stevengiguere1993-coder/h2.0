@@ -159,19 +159,27 @@ class Settings(BaseSettings):
     # (URLs, texte libre, images, PDFs). Tier gratuit : 1500 req/jour.
     # Générer une clé : https://aistudio.google.com/app/apikey
     gemini_api_key: Optional[str] = None
-    # Cascade de modèles Gemini à essayer en chaîne quand l'un d'eux
-    # tombe en quota (chaque modèle a son propre RPM). Format : liste
-    # de noms séparés par virgule. Défaut couvre les 4 modèles texte
-    # actuellement gratuits sur Google AI Studio.
-    gemini_model_cascade: str = (
-        "gemini-2.5-flash,gemini-2.5-pro,gemini-2.0-flash"
-    )
+    # PRÉFÉRENCES de modèles Gemini (liste séparée par virgules). La
+    # cascade réelle est résolue à chaud via ListModels
+    # (``lead_extraction.resolve_gemini_cascade``) : les préférences qui
+    # existent encore d'abord, puis les autres modèles texte disponibles
+    # (génération la plus récente d'abord). Les modèles retirés par
+    # Google (ex. gemini-2.0-flash, gemini-2.5-pro en 2026) sont ignorés
+    # sans qu'on ait à toucher la config. Chaque modèle a son propre
+    # quota quotidien gratuit → la cascade multiplie le budget.
+    gemini_model_cascade: str = "gemini-2.5-flash,gemini-2.5-flash-lite"
 
     # Groq (Llama 3.3 70B) — remplaçant gratuit de Claude pour la
     # ré-extraction manuelle. Tier gratuit : 14 400 req/jour, sans CB.
     # Générer une clé : https://console.groq.com → API Keys.
     groq_api_key: Optional[str] = None
     groq_model: str = "llama-3.3-70b-versatile"
+    # Modèle Groq capable de LIRE des images (Llama 4 Scout, vision) —
+    # relais de l'extraction Prospection quand Gemini est à court de
+    # quota (tier gratuit : quelques dizaines de requêtes/jour/modèle en
+    # 2026). Absent du catalogue Groq → les images ne sont lues que par
+    # Gemini.
+    groq_vision_model: str = "meta-llama/llama-4-scout-17b-16e-instruct"
 
     # SLA : un nouveau prospect doit être contacté dans les X heures
     # qui suivent sa création, sinon une notif rouge fan-out aux
