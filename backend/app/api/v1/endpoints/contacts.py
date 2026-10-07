@@ -63,17 +63,26 @@ async def list_all_contacts(
     hidden_set = {(h.source, h.source_id) for h in hidden_rows}
 
     out: List[UnifiedContact] = []
+    # Courriels déjà AFFICHÉS (toutes sources) : une personne n'apparaît
+    # qu'une fois. Un contact masqué n'y entre pas — masquer une fiche
+    # employé ne doit plus faire disparaître le compte portail au même
+    # courriel (bug trouvé 2026-10-07, « Steven Giguère n'est même pas
+    # dedans »).
+    emails_vus: set[str] = set()
 
-    def _emit(uc: UnifiedContact) -> None:
+    def _emit(uc: UnifiedContact) -> bool:
         """Ajoute le contact à `out`, sauf s'il est masqué et qu'on
         n'a pas demandé `include_hidden=true`. Marque `hidden=true`
         sur les masqués gardés (pour affichage UI grisé)."""
         key = (uc.source, uc.source_id)
         if key in hidden_set:
             if not include_hidden:
-                return
+                return False
             uc.hidden = True
         out.append(uc)
+        if uc.email:
+            emails_vus.add(uc.email.strip().lower())
+        return True
 
     # 1) Contacts purs (table contacts)
     q = select(Contact)
@@ -183,11 +192,8 @@ async def list_all_contacts(
     if only_active:
         q = q.where(Employe.active.is_(True))
     rows = (await db.execute(q)).scalars().all()
-    emails_vus: set[str] = set()
     for e in rows:
         partner = bool(getattr(e, "is_partner", False))
-        if e.email:
-            emails_vus.add(e.email.strip().lower())
         _emit(
             UnifiedContact(
                 id=f"{'employe_partner' if partner else 'employe'}:{e.id}",
@@ -215,7 +221,6 @@ async def list_all_contacts(
         em = (u.email or "").strip().lower()
         if not em or em in emails_vus:
             continue
-        emails_vus.add(em)
         nom = " ".join(p for p in ((u.first_name or "").strip(), (u.last_name or "").strip()) if p) or u.email
         _emit(
             UnifiedContact(
@@ -229,6 +234,89 @@ async def list_all_contacts(
                 specialty=(u.role or None),
                 active=bool(u.is_active),
                 detail_url=None,
+            )
+        )
+
+    # 7) Partenaires / actionnaires des entreprises (entreprise_partners)
+    # — jamais lus jusqu'ici : un propriétaire sans fiche employé ni
+    # compte actif n'apparaissait pas dans la banque (Phil 2026-10-07).
+    # Personnes physiques seulement (une compagnie actionnaire n'est pas
+    # un signataire) ; le courriel vient de la fiche partenaire, sinon du
+    # compte portail lié.
+    from app.models.entreprise import Entreprise, EntreprisePartner
+
+    rows_p = (
+        await db.execute(
+            select(
+                EntreprisePartner,
+                Entreprise.name,
+                User.email,
+                User.first_name,
+                User.last_name,
+            )
+            .join(Entreprise, Entreprise.id == EntreprisePartner.entreprise_id)
+            .outerjoin(User, User.id == EntreprisePartner.user_id)
+            .order_by(EntreprisePartner.id)
+        )
+    ).all()
+    for p, ent_name, u_email, u_first, u_last in rows_p:
+        if bool(getattr(p, "is_personne_morale", False)):
+            continue
+        em = ((p.partner_email or u_email) or "").strip().lower()
+        if not em or em in emails_vus:
+            continue
+        nom = (
+            (p.partner_name or "").strip()
+            or " ".join(x for x in ((u_first or "").strip(), (u_last or "").strip()) if x)
+            or em
+        )
+        _emit(
+            UnifiedContact(
+                id=f"entreprise_partner:{p.id}",
+                source="entreprise_partner",
+                source_id=p.id,
+                full_name=nom,
+                company=ent_name,
+                email=em,
+                phone=getattr(p, "partner_telephone", None),
+                address=getattr(p, "partner_adresse", None),
+                kind="partner",
+                specialty=(p.role or None),
+                active=True,
+                detail_url=f"/entreprises/{p.entreprise_id}",
+            )
+        )
+
+    # 8) Signataires des documents déjà envoyés à signer (esign_signers) :
+    # toute personne saisie un jour dans un document fait partie de la
+    # banque sans ressaisie (Phil 2026-10-07) — le plus récent par
+    # courriel, sauf si la personne est déjà là par une autre source.
+    from app.models.esign import EsignSigner
+
+    vus_sig: set[str] = set()
+    rows_s = (
+        await db.execute(select(EsignSigner).order_by(EsignSigner.id.desc()))
+    ).scalars().all()
+    for sg in rows_s:
+        em = (sg.email or "").strip().lower()
+        if not em or em in emails_vus or em in vus_sig:
+            continue
+        vus_sig.add(em)
+        nom = " ".join(
+            x for x in ((sg.first_name or "").strip(), (sg.last_name or "").strip()) if x
+        ) or em
+        _emit(
+            UnifiedContact(
+                id=f"esign_signer:{sg.id}",
+                source="esign_signer",
+                source_id=sg.id,
+                full_name=nom,
+                email=em,
+                phone=sg.phone,
+                kind="signer",
+                specialty="Signataire d'un document",
+                active=True,
+                detail_url=f"/entreprises/signature/{sg.document_id}",
             )
         )
 
