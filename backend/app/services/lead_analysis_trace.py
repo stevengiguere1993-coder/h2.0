@@ -331,7 +331,12 @@ def _section_typologie(res: FinanceResults) -> Optional[Dict[str, Any]]:
                 ligne(
                     f"Unité {ul.get('numero') or '#' + str(ul['index'])} ({ul.get('typo') or '—'}) — {LIBELLES_MODE.get(ul['mode'], ul['mode'])} — au refi ($/mois)",
                     f"actuel {_m(ul['loyer_actuel'])}"
-                    + (f", optimisé {_m(ul['loyer_optimise'])}" if ul["mode"] != "aucune" else "")
+                    + (
+                        f", optimisé {_m(ul['loyer_optimise'])}"
+                        + (" (loyer projeté de la typologie)" if ul.get("suit_typologie") else "")
+                        if ul["mode"] != "aucune"
+                        else ""
+                    )
                     + f" ; à l'achat {_m(ul['achat'])}",
                     ul["refi"],
                 )
@@ -726,6 +731,66 @@ def _section_mdf(res: FinanceResults) -> Dict[str, Any]:
     return section("6 · Mise de fonds et prêt du prêteur B", L)
 
 
+def _section_cout_projet(res: FinanceResults) -> Optional[Dict[str, Any]]:
+    """Coût du projet (Phil 2026-10-07) : coût total = prix de revente pour
+    revenir à 0 $ ; cash total nécessaire = mise de fonds nette + frais
+    payés cash. Montants déjà établis dans les sections précédentes."""
+    c = getattr(res, "cout_projet", None)
+    if not c:
+        return None
+    L = [ligne("Prix d'achat", None, c["prix_achat"], source="fiche")]
+    if c["cashback"] > 0:
+        L.append(ligne("− Cashback reçu au notaire", None, -c["cashback"], source="fiche"))
+    L.append(ligne("= Coût réel", f"{_m(c['prix_achat'])} − {_m(c['cashback'])}", c["prix_reel"]))
+    L.append(
+        ligne(
+            "+ Frais de démarrage (tous)",
+            f"payés cash {_m(c['frais_cash'])} + financés {_m(c['frais_finances'])}",
+            c["frais_total"],
+        )
+    )
+    if c.get("prime_assurance", 0) > 0:
+        L.append(ligne("+ Prime d'assurance prêt (financée)", "section 8", c["prime_assurance"]))
+    L.append(
+        ligne(
+            "= Coût total du projet (prix de revente pour revenir à 0 $)",
+            f"{_m(c['prix_reel'])} + {_m(c['frais_total'])}"
+            + (f" + {_m(c['prime_assurance'])}" if c.get("prime_assurance", 0) > 0 else ""),
+            c["cout_total"],
+            gras=True,
+            note="Avant les frais de vente (courtier, notaire, pénalité hypothécaire).",
+        )
+    )
+    L.append(ligne("Prêt accordé", None, c["pret"]))
+    if c["balance_vente"] > 0:
+        L.append(ligne("+ Balance de vente", None, c["balance_vente"], source="fiche"))
+    if c["frais_finances_hors_pret"] > 0:
+        L.append(
+            ligne(
+                "+ Frais financés hors prêt (remboursés au refinancement)",
+                None,
+                c["frais_finances_hors_pret"],
+            )
+        )
+    L.append(
+        ligne(
+            "+ Cash total nécessaire (mise de fonds nette + frais payés cash)",
+            f"{_m(c['mdf_nette'])} + {_m(c['frais_cash'])}",
+            c["cash_total"],
+            gras=True,
+        )
+    )
+    L.append(
+        ligne(
+            "Vérification : dette + cash − coût total",
+            f"{_m(c['dette_totale'])} + {_m(c['cash_total'])} − {_m(c['cout_total'])}",
+            c["verification"],
+            note="Vaut 0 (aux arrondis près) : tout le coût est couvert par le prêt, la balance de vente et le cash.",
+        )
+    )
+    return section("6b · Coût du projet", L)
+
+
 def _section_verdict(res: FinanceResults) -> Dict[str, Any]:
     i = res.inputs
     L: List[Dict[str, Any]] = []
@@ -930,6 +995,9 @@ def construire_trace(res: FinanceResults) -> List[Dict[str, Any]]:
         sections.append(_section_scenario(res, res.refi_aph_100, "4d", "aph100"))
     sections.append(_section_frais(res))
     sections.append(_section_mdf(res))
+    cout = _section_cout_projet(res)
+    if cout:
+        sections.append(cout)
     sections.append(_section_verdict(res))
     trad = _section_traditionnel(res)
     if trad:

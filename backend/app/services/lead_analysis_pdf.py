@@ -385,6 +385,52 @@ def _bloc_unites(rl, results: dict, *, s) -> list:
     return out
 
 
+def _bloc_cout_projet(rl, results: dict, *, s) -> list:
+    """Coût du projet (Phil 2026-10-07) — reflet de la carte de la fiche :
+    coût total (revente pour revenir à 0 $) et cash total nécessaire."""
+    Paragraph = rl["Paragraph"]
+    c = (results or {}).get("cout_projet")
+    if not c:
+        return []
+    rows = [("Prix d'achat", _money(c.get("prix_achat")))]
+    if (c.get("cashback") or 0) > 0:
+        rows.append(("− Cashback reçu au notaire", _money(-(c.get("cashback") or 0))))
+        rows.append(("= Coût réel", _money(c.get("prix_reel"))))
+    rows.append((
+        "+ Frais de démarrage (tous)",
+        f"{_money(c.get('frais_total'))} — cash {_money(c.get('frais_cash'))}, "
+        f"financés {_money(c.get('frais_finances'))}",
+    ))
+    if (c.get("prime_assurance") or 0) > 0:
+        rows.append(("+ Prime d'assurance prêt (financée)", _money(c.get("prime_assurance"))))
+    rows.append((
+        "<b>= Coût total du projet — prix de revente pour revenir à 0 $</b>",
+        f"<b>{_money(c.get('cout_total'))}</b>",
+    ))
+    rows.append(("Prêt accordé", _money(c.get("pret"))))
+    if (c.get("balance_vente") or 0) > 0:
+        rows.append(("+ Balance de vente", _money(c.get("balance_vente"))))
+    if (c.get("frais_finances_hors_pret") or 0) > 0:
+        rows.append(("+ Frais financés hors prêt (remboursés au refi)", _money(c.get("frais_finances_hors_pret"))))
+    rows.append((
+        "<b>+ Cash total nécessaire (mise de fonds nette + frais payés cash)</b>",
+        f"<b>{_money(c.get('cash_total'))}</b> — MDF nette {_money(c.get('mdf_nette'))} + frais {_money(c.get('frais_cash'))}",
+    ))
+    out = [
+        Paragraph("<b>Coût du projet</b>", s["small"]),
+        Paragraph(
+            "Coût total = ce qu'il faudrait revendre pour revenir à 0 $ "
+            "(avant frais de vente) ; cash total = ce qu'il faut sortir "
+            "de sa poche.",
+            s["small_muted"],
+        ),
+    ]
+    t = _table_two_col(rl, rows, s=s)
+    if t is not None:
+        out.append(t)
+    return out
+
+
 def _table_two_col(rl, rows, *, s):
     """Tableau 2 colonnes (libellé / valeur) avec style cohérent. La
     valeur est alignée à droite. Accepte du markup reportlab (<b>…</b>)
@@ -2308,6 +2354,7 @@ def _render_bytes(
         ))
         story.extend(_residentiel_section(rl, _res_pdf, s=s))
         story.extend(_bloc_unites(rl, results, s=s))
+        story.extend(_bloc_cout_projet(rl, results, s=s))
     elif _mode_direct:
         _est_as_pdf = (_direct or {}).get("mode") == "assumation"
         story.append(Paragraph(
@@ -2327,6 +2374,7 @@ def _render_bytes(
             "avec croissance organique ; refinancement comparé à "
             "l'horizon choisi.", s["small_muted"]))
         story.extend(_bloc_unites(rl, results, s=s))
+        story.extend(_bloc_cout_projet(rl, results, s=s))
     elif results:
         story.append(Paragraph(
             "SCÉNARIOS DE FINANCEMENT", s["section"]
@@ -2346,6 +2394,7 @@ def _render_bytes(
             "La colonne surlignée en vert est le scénario gagnant "
             "(meilleure équité au refinancement).", s["small_muted"]))
         story.extend(_bloc_unites(rl, results, s=s))
+        story.extend(_bloc_cout_projet(rl, results, s=s))
     else:
         story.append(Paragraph(
             "Aucun scénario calculé — lance l'analyse financière "
