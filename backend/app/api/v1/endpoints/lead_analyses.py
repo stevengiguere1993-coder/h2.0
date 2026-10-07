@@ -491,6 +491,18 @@ def _parse_unites(raw: Optional[str]) -> list[dict]:
                 "loyer_actuel": float(u.get("loyer_actuel") or 0),
                 "loyer_cible": float(u.get("loyer_cible") or 0),
                 "optimiser": bool(u.get("optimiser", True)),
+                # Format v2 (Phil 2026-10-07) : mode par unité + loyer
+                # optimisé ; absent = ancien format (converti au calcul).
+                "loyer_optimise": (
+                    float(u.get("loyer_optimise"))
+                    if u.get("loyer_optimise") is not None
+                    else float(u.get("loyer_cible") or 0)
+                ),
+                "mode": (
+                    u.get("mode")
+                    if u.get("mode") in ("aucune", "pre_achat", "post_achat")
+                    else None
+                ),
             })
         except (TypeError, ValueError):
             continue

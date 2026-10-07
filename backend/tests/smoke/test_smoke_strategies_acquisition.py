@@ -460,10 +460,11 @@ def test_optimisation_pre_achat():
         tq["achat"]["conventionnel"]["valeur_eco_rcd"]
         > tp["achat"]["conventionnel"]["valeur_eco_rcd"]
     )
-    # Refi an 5 : pré = toutes les unités × 1,03^5 ; post = cibles ×
-    # 1,03^4 + actuels × 1,03^5.
+    # Refi an 5 : pré = toutes les unités × 1,03^5 ; post = loyer
+    # optimisé ATTEINT à l'an du refi (Phil 2026-10-07, GO — avant : cible
+    # à l'an 1 puis × 1,03^4) + actuels × 1,03^5.
     attendu_pre = (6 * 1_200.0 + 4 * actuel) * 1.03 ** 5 * 12.0
-    attendu_post = (6 * 1_200.0 * 1.03 ** 4 + 4 * actuel * 1.03 ** 5) * 12.0
+    attendu_post = (6 * 1_200.0 + 4 * actuel * 1.03 ** 5) * 12.0
     assert abs(tq["refi"]["conventionnel"]["revenus_totaux"] - attendu_pre) < 0.01
     assert abs(tp["refi"]["conventionnel"]["revenus_totaux"] - attendu_post) < 0.01
     assert abs(tq["projection"][0]["revenus"] - rev_opt) < 0.01
@@ -566,11 +567,16 @@ def test_residentiel_cashflow():
     assert abs(
         res["rendement_cash_optimise"] - res["cashflow_optimise"] / res["mdf_cash"]
     ) < 1e-3  # arrondi à 4 décimales
-    # Projection : an 0 = actuel (post-achat), an 1 = optimisé (+ dépenses
-    # supp.) avec croissance, hypothèque fixe, capital remboursé qui monte.
+    # Projection : an 0 = actuel (post-achat) ; an 1 = en route vers le
+    # loyer optimisé ATTEINT à l'an 5 du refi (Phil 2026-10-07, GO — avant :
+    # cible dès l'an 1) + dépenses supp. avec croissance, hypothèque fixe,
+    # capital remboursé qui monte.
     p0, p1 = res["projection"][0], res["projection"][1]
     assert abs(p0["cashflow"] - res["cashflow_actuel"]) < 0.01
-    assert abs(p1["revenus"] - (6 * 1_200.0 + 4 * actuel * 1.03) * 12.0) < 0.01
+    assert abs(
+        p1["revenus"] - (6 * 1_200.0 / 1.03 ** 4 + 4 * actuel * 1.03) * 12.0
+    ) < 0.01
+    assert abs(res["projection"][5]["revenus"] - (6 * 1_200.0 + 4 * actuel * 1.03 ** 5) * 12.0) < 0.01
     assert abs(p1["depenses"] - 18_800 * 1.03) < 0.01
     assert p1["hypotheque"] == p0["hypotheque"]
     assert p1["capital_rembourse"] > p0["capital_rembourse"] == 0.0

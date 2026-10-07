@@ -127,6 +127,14 @@ def _bareme_effectif(res: FinanceResults) -> Dict[str, float]:
     return b
 
 
+#: Libellés des modes d'optimisation par unité (Phil 2026-10-07).
+LIBELLES_MODE = {
+    "aucune": "non optimisée",
+    "pre_achat": "optimisée pré-achat",
+    "post_achat": "optimisée post-achat",
+}
+
+
 def _section_fiche(res: FinanceResults) -> Dict[str, Any]:
     i = res.inputs
     nb = int(i.nombre_logements or 0)
@@ -185,14 +193,16 @@ def _section_fiche(res: FinanceResults) -> Dict[str, Any]:
     if (i.balance_vente_montant or 0) > 0:
         L.append(ligne("Balance de vente (montant)", None, i.balance_vente_montant, source="fiche"))
         L.append(ligne("Balance de vente (taux)", None, i.balance_vente_taux_pct, source="fiche", unite="%"))
-    if i.unites:
-        opt = sum(1 for u in i.unites if isinstance(u, dict) and u.get("optimiser", True))
+    uc = getattr(res, "unites_calcul", None)
+    if uc:
+        m = uc["modes"]
         L.append(
             ligne(
                 "Unités détaillées",
                 None,
-                f"{len(i.unites)} unité(s), {opt} à optimiser — "
-                + ("optimisation PRÉ-achat" if i.optimisation_pre_achat else "optimisation POST-achat (au refi)"),
+                f"{len(uc['unites'])} unité(s) : {m['aucune']} non optimisée(s), "
+                f"{m['pre_achat']} pré-achat, {m['post_achat']} post-achat "
+                f"(refi à l'an {uc['h']}, croissance {_p(uc['g'])})",
                 source="fiche",
                 unite="txt",
             )
@@ -298,26 +308,34 @@ def _section_typologie(res: FinanceResults) -> Optional[Dict[str, Any]]:
                 t.nouveau_loyer_moyen_pdm,
             )
         )
-    if i.unites:
-        cl = float(i.croissance_loyers or 0.0) if i.chantier_actif else 0.0
-        fac = (1 + cl) ** max(0, int(i.duree_projet_annees or 0))
-        actuel = sum(float(u.get("loyer_actuel") or 0) for u in i.unites if isinstance(u, dict))
-        au_refi = 0.0
-        for u in i.unites:
-            if not isinstance(u, dict):
-                continue
-            if u.get("optimiser", True):
-                au_refi += float(u.get("loyer_cible") or 0) * (fac if i.optimisation_pre_achat else 1.0)
-            else:
-                au_refi += float(u.get("loyer_actuel") or 0) * fac
-        L.append(ligne("Unités — somme des loyers actuels ($/mois)", None, actuel, source="fiche"))
+    uc = getattr(res, "unites_calcul", None)
+    if uc:
+        fac = (1 + float(uc["g"])) ** int(uc["h"])
+        L.append(ligne("Unités — somme des loyers actuels ($/mois)", None, uc["total_actuel_mois"], source="fiche"))
         L.append(
             ligne(
-                "Unités — somme des loyers au refi ($/mois)",
-                f"cible si optimisée, sinon actuel × {_f(fac)} (croissance {_p(cl)} sur {i.duree_projet_annees} an(s))",
-                au_refi,
+                "Unités — somme des loyers à l'achat ($/mois)",
+                "optimisé si pré-achat, sinon actuel",
+                uc["total_achat_mois"],
             )
         )
+        L.append(
+            ligne(
+                f"Unités — somme des loyers au refi, an {uc['h']} ($/mois)",
+                f"non optimisée : actuel × {_f(fac)} ; pré-achat : optimisé × {_f(fac)} ; post-achat : optimisé tel que saisi (croissance {_p(uc['g'])} sur {uc['h']} an(s))",
+                uc["total_refi_mois"],
+            )
+        )
+        for ul in uc["unites"]:
+            L.append(
+                ligne(
+                    f"Unité #{ul['index']} ({ul.get('typo') or '—'}) — {LIBELLES_MODE.get(ul['mode'], ul['mode'])} — au refi ($/mois)",
+                    f"actuel {_m(ul['loyer_actuel'])}"
+                    + (f", optimisé {_m(ul['loyer_optimise'])}" if ul["mode"] != "aucune" else "")
+                    + f" ; à l'achat {_m(ul['achat'])}",
+                    ul["refi"],
+                )
+            )
         if i.nb_logements_ajoutes > 0:
             L.append(
                 ligne(
@@ -458,8 +476,8 @@ def _revenus_lignes(res: FinanceResults, s: ScenarioResult, quel: str) -> List[D
     t = res.typology
     nb = int(s.nb_log)
     if quel == "achat":
-        if i.optimisation_pre_achat and i.unites:
-            form = "somme des unités (cible si optimisée, sinon actuel) × 12"
+        if getattr(res, "unites_calcul", None):
+            form = "somme de la colonne « À l'achat » des unités (optimisé si pré-achat, sinon actuel) × 12"
         else:
             form = "revenus bruts de la fiche"
         L = [ligne("Revenus totaux", form, s.revenus_totaux, source="fiche" if form.startswith("revenus") else "calcul", gras=True)]

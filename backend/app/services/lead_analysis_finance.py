@@ -384,6 +384,109 @@ def pret_origine_canadien(
     return solde / frac if frac > 0 else solde
 
 
+
+# ─── Unités : un mode d'optimisation PAR UNITÉ (Phil 2026-10-07, GO) ──
+#
+# Remplace le « moment de l'optimisation » global de la fiche :
+#   « aucune »     : loyer actuel à l'achat ; actuel × (1 + g)^H au refi ;
+#   « pre_achat »  : loyer optimisé dès l'achat ; optimisé × (1 + g)^H au refi ;
+#   « post_achat » : loyer actuel à l'achat ; loyer optimisé, tel que saisi,
+#                    atteint exactement à l'an H du refinancement (croît
+#                    avec g avant et après).
+# g = croissance organique des loyers, H = année du refinancement (durée du
+# projet en prêteur B, horizon de détention sinon). L'ancien format
+# ({loyer_cible, optimiser} + moment global) est converti à la lecture.
+MODES_UNITE: tuple = ("aucune", "pre_achat", "post_achat")
+
+
+def normaliser_unites(unites, optimisation_pre_achat: bool = False) -> List[dict]:
+    """Unités au format v2 ``{typo, loyer_actuel, loyer_optimise, mode}``
+    — l'ancien ``{…, loyer_cible, optimiser}`` + moment global devient
+    pré-achat / post-achat / aucune."""
+    out: List[dict] = []
+    for u in unites or []:
+        if not isinstance(u, dict):
+            continue
+        mode = u.get("mode")
+        if mode not in MODES_UNITE:
+            if u.get("optimiser", True):
+                mode = "pre_achat" if optimisation_pre_achat else "post_achat"
+            else:
+                mode = "aucune"
+        optimise = u.get("loyer_optimise")
+        if optimise is None:
+            optimise = u.get("loyer_cible")
+        try:
+            actuel_f = float(u.get("loyer_actuel") or 0)
+        except (TypeError, ValueError):
+            actuel_f = 0.0
+        try:
+            optimise_f = float(optimise or 0)
+        except (TypeError, ValueError):
+            optimise_f = 0.0
+        out.append({
+            "typo": u.get("typo"),
+            "loyer_actuel": actuel_f,
+            "loyer_optimise": optimise_f,
+            "mode": mode,
+        })
+    return out
+
+
+def loyer_unite_achat(u: dict) -> float:
+    """Loyer mensuel de l'unité à l'achat : optimisé si pré-achat, sinon actuel."""
+    return u["loyer_optimise"] if u["mode"] == "pre_achat" else u["loyer_actuel"]
+
+
+def loyer_unite_annee(u: dict, annee: int, h: int, g: float) -> float:
+    """Loyer mensuel de l'unité à l'an ``annee`` (0 = achat), refinancement
+    à l'an ``h``, croissance organique ``g`` (fraction)."""
+    mode = u["mode"]
+    if mode == "aucune":
+        return u["loyer_actuel"] * (1 + g) ** annee
+    if mode == "pre_achat":
+        return u["loyer_optimise"] * (1 + g) ** annee
+    if annee <= 0:
+        return u["loyer_actuel"]
+    return u["loyer_optimise"] * (1 + g) ** (annee - h)
+
+
+def detail_unites(
+    unites: List[dict], h: int, g: float, revenus_fiche: float
+) -> Optional[dict]:
+    """Colonnes « À l'achat » / « Au refi » de chaque unité + totaux : ce
+    que les scénarios utilisent (affiché sur la fiche, la trace, le PDF)."""
+    if not unites:
+        return None
+    lignes = []
+    for idx, u in enumerate(unites):
+        lignes.append({
+            "index": idx + 1,
+            "typo": u.get("typo"),
+            "mode": u["mode"],
+            "loyer_actuel": round(u["loyer_actuel"], 2),
+            "loyer_optimise": round(u["loyer_optimise"], 2),
+            "achat": round(loyer_unite_achat(u), 2),
+            "refi": round(loyer_unite_annee(u, h, h, g), 2),
+        })
+    total_actuel = sum(u["loyer_actuel"] for u in unites)
+    total_achat = sum(loyer_unite_achat(u) for u in unites)
+    total_refi = sum(loyer_unite_annee(u, h, h, g) for u in unites)
+    return {
+        "h": int(h),
+        "g": float(g),
+        "modes": {m: sum(1 for u in unites if u["mode"] == m) for m in MODES_UNITE},
+        "unites": lignes,
+        "total_actuel_mois": round(total_actuel, 2),
+        "total_achat_mois": round(total_achat, 2),
+        "total_refi_mois": round(total_refi, 2),
+        "revenus_achat": round(total_achat * 12.0, 2),
+        "revenus_refi": round(total_refi * 12.0, 2),
+        "revenus_fiche": round(float(revenus_fiche or 0), 2),
+        "ecart_achat_vs_fiche": round(total_achat * 12.0 - float(revenus_fiche or 0), 2),
+    }
+
+
 # ─── Agrégats de typologie ─────────────────────────────────────────
 
 
@@ -1007,12 +1110,11 @@ class FinanceInputs:
     croissance_depenses: float = 0.03
 
     # Sept. 2026 — Phase 3 : optimisation PAR UNITÉ. Liste de dicts
-    # ``{typo, loyer_actuel, loyer_cible, optimiser}``. Vide →
-    # comportement historique (toutes les unités au loyer cible
-    # pondéré H13). Règle affinée (retour Phil 2026-09-02) : une unité
-    # NON optimisée = loyer actuel × (1 + croissance_loyers)^durée
-    # (croissance organique pendant le projet/la détention) ; une
-    # unité optimisée = loyer cible.
+    # ``{typo, loyer_actuel, loyer_optimise, mode}`` (format v2, Phil
+    # 2026-10-07 : mode = aucune / pre_achat / post_achat ; voir
+    # ``normaliser_unites`` — l'ancien ``{loyer_cible, optimiser}`` +
+    # ``optimisation_pre_achat`` est converti). Vide → comportement
+    # historique (toutes les unités au loyer cible pondéré H13).
     unites: List[dict] = field(default_factory=list)
 
     # Sept. 2026 — retour Phil : la stratégie « institution
@@ -1211,6 +1313,9 @@ class FinanceResults:
     #: {pret_batisse, frais_financables, part_financee, frais_finances}
     #: — None si le poste est saisi à la main ou masqué.
     frais_dossier_preteur_base: Optional[dict] = None
+    #: Unités : modes, colonnes « À l'achat » / « Au refi » et totaux
+    #: (Phil 2026-10-07) — None sans unités détaillées.
+    unites_calcul: Optional[dict] = None
 
     def to_dict(self) -> dict:
         """Pour persistance JSON dans `LeadAnalysis.analysis_results_json`."""
@@ -1269,17 +1374,17 @@ class FinanceResults:
             # fiche n'a pas détaillé ses unités).
             "unites": (
                 {
-                    "total": len(self.inputs.unites),
-                    "optimisees": sum(
-                        1
-                        for u in self.inputs.unites
-                        if isinstance(u, dict)
-                        and u.get("optimiser", True)
-                    ),
+                    "total": len(self.unites_calcul["unites"]),
+                    "optimisees": self.unites_calcul["modes"]["pre_achat"]
+                    + self.unites_calcul["modes"]["post_achat"],
+                    **self.unites_calcul["modes"],
                 }
-                if self.inputs.unites
+                if self.unites_calcul
                 else None
             ),
+            #: Modes par unité, colonnes « À l'achat » / « Au refi » et
+            #: totaux (Phil 2026-10-07) — ce que les scénarios utilisent.
+            "unites_calcul": self.unites_calcul,
             "typology": {
                 "h13_loyer_pondere": self.typology.h13_loyer_pondere,
                 "nb_abordables": self.typology.nb_abordables,
@@ -1376,20 +1481,17 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         ratio_abordabilite=inputs.ratio_abordabilite_aph,
     )
 
-    # ── Unités détaillées (phase 3) + moment de l'optimisation ────
-    unites_valides = [
-        u for u in (inputs.unites or []) if isinstance(u, dict)
-    ]
-    _pre_achat = bool(inputs.optimisation_pre_achat) and bool(unites_valides)
-    # Revenus servant à l'ACHAT : ceux de la fiche (post-achat) ou la
-    # somme des unités — cible si optimisée, sinon actuel (pré-achat).
-    if _pre_achat:
-        revenus_achat_eff = sum(
-            float(u.get("loyer_cible") or 0)
-            if u.get("optimiser", True)
-            else float(u.get("loyer_actuel") or 0)
-            for u in unites_valides
-        ) * 12.0
+    # ── Unités détaillées : un mode PAR UNITÉ (Phil 2026-10-07, GO) ──
+    # aucune / pre_achat / post_achat — l'ancien format (optimiser +
+    # moment global) est converti ici.
+    unites_valides = normaliser_unites(inputs.unites, inputs.optimisation_pre_achat)
+    # « Pré-achat » (affichage, PDF) = au moins une unité en pré-achat.
+    _pre_achat = any(u["mode"] == "pre_achat" for u in unites_valides)
+    # Revenus servant à l'ACHAT : dès que les unités sont détaillées, la
+    # somme de leur colonne « À l'achat » (optimisé si pré-achat, sinon
+    # actuel) ; sinon les revenus bruts de la fiche.
+    if unites_valides:
+        revenus_achat_eff = sum(loyer_unite_achat(u) for u in unites_valides) * 12.0
     else:
         revenus_achat_eff = inputs.revenus_annuels
 
@@ -1448,35 +1550,38 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         if inputs.chantier_actif
         else 0.0
     )
-    facteur_loyer_projet = (1 + cl_organique) ** max(
-        0, inputs.duree_projet_annees
-    )
     # Dépenses réelles au refi = dépenses ACTUELLES indexées pendant la
     # durée du projet (ex. ×1,03² pour 2 ans à 3 %).
     facteur_dep_projet = (1 + cd_organique) ** max(
         0, inputs.duree_projet_annees
     )
 
-    # Phase 3 — optimisation PAR UNITÉ : loyers mensuels effectifs au
-    # refi = cible pour les unités cochées ; une unité NON optimisée
-    # suit la croissance ORGANIQUE pendant la durée du projet
-    # (actuel × (1+cl)^durée). Les unités AJOUTÉES au refi sont
-    # neuves → loyer cible pondéré H13.
+    # Phase 3 — optimisation PAR UNITÉ (modes, Phil 2026-10-07) : loyer
+    # de chaque unité à l'an du refi (durée du projet) selon son mode —
+    # aucune : actuel × (1+g)^D ; pré-achat : optimisé × (1+g)^D ;
+    # post-achat : optimisé tel que saisi. Les unités AJOUTÉES au refi
+    # sont neuves → loyer cible pondéré H13.
+    _d_projet = max(0, int(inputs.duree_projet_annees or 0))
+    _alias_trad_u = {"traditionnel", "assumation", "residentiel",
+                     "conventionnel", "schl_std", "aph_50", "aph_100"}
+    # Année du refi et croissance servant aux colonnes des unités : durée
+    # du projet (prêteur B, croissance gatée par le chantier) ou horizon
+    # de détention (autres stratégies).
+    if inputs.strategie in _alias_trad_u:
+        _h_unites = max(1, int(inputs.projection_horizon_annees or 5))
+        _g_unites = float(inputs.croissance_loyers or 0.0)
+    else:
+        _h_unites = _d_projet
+        _g_unites = cl_organique
+    unites_calcul = detail_unites(
+        unites_valides, _h_unites, _g_unites, inputs.revenus_annuels
+    )
     loyers_refi_unites: List[float] = []
     if unites_valides:
         for u in unites_valides:
-            if u.get("optimiser", True):
-                # Pré-achat : la cible est en place dès l'an 0 et
-                # croît organiquement jusqu'au refi.
-                loyers_refi_unites.append(
-                    float(u.get("loyer_cible") or 0)
-                    * (facteur_loyer_projet if _pre_achat else 1.0)
-                )
-            else:
-                loyers_refi_unites.append(
-                    float(u.get("loyer_actuel") or 0)
-                    * facteur_loyer_projet
-                )
+            loyers_refi_unites.append(
+                loyer_unite_annee(u, _d_projet, _d_projet, cl_organique)
+            )
         loyers_refi_unites.extend(
             [nouveau_loyer_moyen] * max(0, inputs.nb_logements_ajoutes)
         )
@@ -2158,17 +2263,10 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
                 return inputs.revenus_annuels * (1 + cl) ** a
             total_mois = 0.0
             for u in unites_valides:
-                if u.get("optimiser", False):
-                    # Post-achat : cible atteinte à l'an 1 puis croît ;
-                    # pré-achat : cible dès l'an 0, croît depuis.
-                    total_mois += (
-                        float(u.get("loyer_cible") or 0)
-                        * (1 + cl) ** (a if _pre_achat else max(0, a - 1))
-                    )
-                else:
-                    total_mois += (
-                        float(u.get("loyer_actuel") or 0) * (1 + cl) ** a
-                    )
+                # Mode par unité (Phil 2026-10-07) : aucune = actuel ×
+                # (1+g)^a ; pré-achat = optimisé × (1+g)^a ; post-achat =
+                # optimisé atteint exactement à l'an H (croît avant/après).
+                total_mois += loyer_unite_annee(u, a, h_annees, cl)
             return total_mois * 12.0
 
         rev_h = _rev_trad(h_annees)
@@ -2316,6 +2414,8 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             #: « traditionnel » ou « assumation » (Phil 2026-09-29) : même
             #: structure, l'assumation n'a qu'une colonne d'achat.
             "mode": "assumation" if _est_assume else "traditionnel",
+            #: Modes des unités (Phil 2026-10-07) — None sans unités.
+            "unites_modes": (unites_calcul or {}).get("modes"),
             "assumation": assume_detail,
             "programme_retenu": programme,
             "labels": _labels_prog,
@@ -2436,17 +2536,21 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         supp_r = max(0.0, float(inputs.depenses_optimisation_supp or 0.0))
         dep_r_opt = dep_r + supp_r
 
-        rev_actuel_r = inputs.revenus_annuels
+        # Modes par unité (Phil 2026-10-07) : « actuel » = somme des
+        # loyers actuels ; « optimisé » = loyer optimisé des unités
+        # pré/post-achat, actuel pour les autres ; « à l'achat » = la
+        # colonne À l'achat (optimisé si pré-achat, sinon actuel).
         if unites_valides:
+            rev_actuel_r = sum(u["loyer_actuel"] for u in unites_valides) * 12.0
             rev_opt_r = sum(
-                float(u.get("loyer_cible") or 0)
-                if u.get("optimiser", True)
-                else float(u.get("loyer_actuel") or 0)
+                u["loyer_optimise"] if u["mode"] != "aucune" else u["loyer_actuel"]
                 for u in unites_valides
             ) * 12.0
+            rev_achat_r = revenus_achat_eff
         else:
+            rev_actuel_r = inputs.revenus_annuels
             rev_opt_r = rev_actuel_r
-        rev_achat_r = rev_opt_r if _pre_achat else rev_actuel_r
+            rev_achat_r = rev_actuel_r
         rno_actuel_r = rev_actuel_r - dep_r
         rno_opt_r = rev_opt_r - dep_r_opt
         cf_actuel_r = rno_actuel_r - hyp_r
@@ -2517,15 +2621,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
                 return rev_actuel_r * (1 + cl_r) ** a
             total_mois = 0.0
             for u in unites_valides:
-                if u.get("optimiser", False):
-                    total_mois += (
-                        float(u.get("loyer_cible") or 0)
-                        * (1 + cl_r) ** (a if _pre_achat else max(0, a - 1))
-                    )
-                else:
-                    total_mois += (
-                        float(u.get("loyer_actuel") or 0) * (1 + cl_r) ** a
-                    )
+                total_mois += loyer_unite_annee(u, a, h_r, cl_r)
             return total_mois * 12.0
 
         proj_r: list = []
@@ -2562,6 +2658,8 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             })
 
         residentiel = {
+            #: Modes des unités (Phil 2026-10-07) — None sans unités.
+            "unites_modes": (unites_calcul or {}).get("modes"),
             "labels": {
                 "residentiel": f"Résidentiel (prêt {ltv_r * 100:.0f} %)"
             },
@@ -2706,4 +2804,5 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         projection_preteur_b=projection_preteur_b,
         residentiel=residentiel,
         frais_dossier_preteur_base=frais_dossier_preteur_base,
+        unites_calcul=unites_calcul,
     )
