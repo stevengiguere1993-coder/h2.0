@@ -1591,7 +1591,13 @@ async def extraction_health(user: CurrentUser) -> dict:
         groq["disponibles"] = dispo or []
         groq["modele_texte"] = _groq_modele_texte(dispo)
         groq["modele_vision"] = _groq_modele_vision(dispo)
-    return {"gemini": gemini, "groq": groq, "ocr": _ocr_health_payload()}
+    return {
+        "gemini": gemini,
+        "groq": groq,
+        "ocr": _ocr_health_payload(),
+        # Marqueur de version du serveur déployé (sonde post-déploiement).
+        "version": "2026-10-07e",
+    }
 
 
 @router.post(
