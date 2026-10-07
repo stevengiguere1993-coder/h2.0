@@ -200,3 +200,43 @@ def test_endpoint_rent_roll_puis_analyse(client, auth_headers, run, monkeypatch)
         assert "Unité 101 (3.5)" in texte
     r = client.get(f"{base}/pdf", headers=auth_headers)
     assert r.status_code == 200, r.text
+
+    # Deuxième envoi du MÊME fichier : pas de pièce jointe en double.
+    r = client.post(f"{base}/unites/extract", headers=auth_headers, files={"files": ("rentroll.png", _png(), "image/png")})
+    assert r.status_code == 200, r.text
+    d = client.get(base, headers=auth_headers).json()
+    assert [a["filename"] for a in d["attachments"]] == ["rentroll.png"]
+
+
+def test_endpoint_rent_roll_erreur_lisible_et_auditee(client, auth_headers, run, monkeypatch):
+    """Le « HTTP 500 » muet de Phil (2026-10-07) : toute erreur de lecture
+    devient un 502 avec le détail ET une entrée d'audit rent_roll_failed."""
+    from sqlalchemy import select
+
+    from app.models.audit_log import AuditLog
+    import app.services.lead_rent_roll as rr_mod
+
+    async def _boom(**kw):
+        raise RuntimeError("réponse IA inattendue")
+
+    monkeypatch.setattr(rr_mod, "extraire_rent_roll", _boom)
+    fid = _mk_fiche(run)
+    r = client.post(f"/api/v1/lead-analyses/{fid}/unites/extract", headers=auth_headers, data={"text": "App. 1 4½ 950 $"})
+    assert r.status_code == 502, r.text
+    assert "RuntimeError: réponse IA inattendue" in r.json()["detail"]
+
+    async def _audit():
+        async with TestSessionLocal() as s:
+            return (
+                await s.execute(
+                    select(AuditLog).where(
+                        AuditLog.action == "lead_analysis.rent_roll_failed",
+                        AuditLog.entity_id == fid,
+                    )
+                )
+            ).scalars().all()
+
+    rows = run(_audit())
+    assert len(rows) == 1
+    assert "RuntimeError" in (rows[0].details_json or "")
+    assert "trace" in (rows[0].details_json or "")
