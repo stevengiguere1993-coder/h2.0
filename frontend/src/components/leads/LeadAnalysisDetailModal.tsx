@@ -5996,7 +5996,12 @@ function AnalysisResultsTable({
         </div>
       ) : null}
 
-      {onPatchField && data.projection_preteur_b ? (
+      {/* Choix de la référence de refinancement (prêteur B) — visible dès
+          qu'il y a des scénarios, projection ou pas : une fiche sans
+          stratégie explicite n'a pas de projection, et le sélecteur
+          disparaissait avec elle (Phil 2026-10-07 : « je ne peux plus
+          choisir le SCHL 50 pts même s'il est moins avantageux »). */}
+      {onPatchField && data.scenarios ? (
         <RefiReferenceSelect
           options={REFI_LABELS_B.filter(
             ([k]) =>
