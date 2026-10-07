@@ -424,8 +424,14 @@ def normaliser_unites(unites, optimisation_pre_achat: bool = False) -> List[dict
             optimise_f = float(optimise or 0)
         except (TypeError, ValueError):
             optimise_f = 0.0
+        numero = u.get("numero")
         out.append({
             "typo": u.get("typo"),
+            # Étiquette du logement (rent roll : « 101 », « App. 3 ») —
+            # affichage seulement, aucun effet sur le calcul.
+            "numero": (
+                str(numero).strip()[:32] if numero not in (None, "") else None
+            ),
             "loyer_actuel": actuel_f,
             "loyer_optimise": optimise_f,
             "mode": mode,
@@ -462,6 +468,7 @@ def detail_unites(
     for idx, u in enumerate(unites):
         lignes.append({
             "index": idx + 1,
+            "numero": u.get("numero"),
             "typo": u.get("typo"),
             "mode": u["mode"],
             "loyer_actuel": round(u["loyer_actuel"], 2),

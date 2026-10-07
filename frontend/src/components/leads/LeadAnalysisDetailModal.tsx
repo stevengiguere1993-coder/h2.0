@@ -2462,6 +2462,23 @@ type UniteRow = {
   loyer_actuel: string;
   loyer_optimise: string;
   mode: ModeUnite;
+  /** Étiquette du logement (rent roll : « 101 », « App. 3 »). */
+  numero?: string;
+};
+
+type RentRollPreview = {
+  unites: Array<{
+    numero: string | null;
+    typo: string | null;
+    loyer_actuel: number;
+    loyer_optimise: number | null;
+    notes: string | null;
+  }>;
+  warnings: string[];
+  model_used: string;
+  source: string;
+  nb_logements: number | null;
+  typology: Record<string, number>;
 };
 
 const LIBELLES_MODE: Record<ModeUnite, string> = {
@@ -2511,7 +2528,8 @@ function parseUnites(
         typo: String(u.typo || ""),
         loyer_actuel: u.loyer_actuel != null ? String(u.loyer_actuel) : "",
         loyer_optimise: opt != null ? String(opt) : "",
-        mode
+        mode,
+        numero: u.numero ? String(u.numero) : undefined
       };
     });
   } catch {
@@ -2540,6 +2558,7 @@ function serialiserUnites(rows: UniteRow[]): string {
   return JSON.stringify(
     rows.map((r) => ({
       typo: r.typo,
+      numero: r.numero || null,
       loyer_actuel: Number(r.loyer_actuel) || 0,
       loyer_optimise: Number(r.loyer_optimise) || 0,
       mode: r.mode,
@@ -2555,6 +2574,7 @@ function serialiserUnites(rows: UniteRow[]): string {
  *  calculées, « À l'achat » et « Au refi », dont les totaux sont
  *  exactement les revenus que les scénarios utilisent. */
 function UnitesOptimisationCard({
+  analysisId,
   unitesJson,
   typology,
   prixLoyers,
@@ -2566,6 +2586,7 @@ function UnitesOptimisationCard({
   anneesRefi,
   onSave
 }: {
+  analysisId: number;
   unitesJson: string | null | undefined;
   typology: Record<string, number>;
   prixLoyers: Record<string, string>;
@@ -2642,6 +2663,91 @@ function UnitesOptimisationCard({
     setDirty(true);
   }
 
+  // Rent roll (Phil 2026-10-07) : un PDF, une photo ou un texte collé est
+  // lu comme la section Infos (IA + parser local) et propose le loyer
+  // actuel unité par unité ; le tableau n'est remplacé qu'à « Appliquer ».
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importErr, setImportErr] = useState<string | null>(null);
+  const [importTexteOuvert, setImportTexteOuvert] = useState(false);
+  const [importTexte, setImportTexte] = useState("");
+  const [importPreview, setImportPreview] = useState<RentRollPreview | null>(
+    null
+  );
+
+  async function importerRentRoll(files: File[], texte: string) {
+    if (files.length === 0 && !texte.trim()) return;
+    setImportBusy(true);
+    setImportErr(null);
+    try {
+      const fd = new FormData();
+      for (const f of files) fd.append("files", f);
+      if (texte.trim()) fd.append("text", texte.trim());
+      const r = await authedFetch(
+        `/api/v1/lead-analyses/${analysisId}/unites/extract`,
+        { method: "POST", body: fd }
+      );
+      const body = (await r.json().catch(() => null)) as
+        | (RentRollPreview & { detail?: string })
+        | null;
+      if (!r.ok) {
+        throw new Error(
+          typeof body?.detail === "string"
+            ? body.detail
+            : `Lecture échouée (HTTP ${r.status}).`
+        );
+      }
+      setImportPreview(body as RentRollPreview);
+      setImportTexteOuvert(false);
+    } catch (e) {
+      setImportErr(e instanceof Error ? e.message : "Lecture échouée.");
+    } finally {
+      setImportBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  function appliquerImport() {
+    if (!importPreview) return;
+    const out: UniteRow[] = importPreview.unites.map((u) => {
+      const typo = u.typo || "";
+      const opt =
+        u.loyer_optimise != null
+          ? String(u.loyer_optimise)
+          : prixLoyers[typo] ?? "";
+      return {
+        typo,
+        numero: u.numero || undefined,
+        loyer_actuel: u.loyer_actuel != null ? String(u.loyer_actuel) : "",
+        loyer_optimise: opt,
+        mode: modeDefaut
+      };
+    });
+    setRows(out);
+    setDirty(false);
+    setImportPreview(null);
+    onSave(serialiserUnites(out));
+  }
+
+  const importTotalMois = (importPreview?.unites ?? []).reduce(
+    (acc, u) => acc + (Number(u.loyer_actuel) || 0),
+    0
+  );
+  const importTyposDiff = (() => {
+    if (!importPreview) return [] as string[];
+    const comptes: Record<string, number> = {};
+    for (const u of importPreview.unites) {
+      if (u.typo) comptes[u.typo] = (comptes[u.typo] || 0) + 1;
+    }
+    const diffs: string[] = [];
+    for (const k of Object.keys({ ...typology, ...comptes })) {
+      const fiche = Number(typology[k]) || 0;
+      const lu = comptes[k] || 0;
+      if (fiche !== lu) diffs.push(`${k} : fiche ${fiche}, rent roll ${lu}`);
+    }
+    return diffs;
+  })();
+
   const h = Math.max(0, Math.round(anneesRefi || 0));
   const g = croissance || 0;
   const calc = (rows ?? []).map((r) => loyersUnite(r, h, g));
@@ -2672,6 +2778,156 @@ function UnitesOptimisationCard({
           utilisent. Le loyer actuel par défaut = revenus bruts ÷ nombre
           d&apos;unités.
         </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            accept="image/*,application/pdf,.xlsx,.xls"
+            className="hidden"
+            onChange={(e) =>
+              void importerRentRoll(Array.from(e.target.files ?? []), "")
+            }
+          />
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            disabled={importBusy}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+            title="Lit la liste des loyers (PDF, photo, capture d'écran, Excel) avec la même IA que la section Infos et propose le loyer actuel de chaque unité"
+          >
+            {importBusy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <FileText className="h-3.5 w-3.5" />
+            )}
+            Importer un rent roll (PDF / photo)
+          </button>
+          <button
+            type="button"
+            onClick={() => setImportTexteOuvert((v) => !v)}
+            disabled={importBusy}
+            className="rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white/60 transition hover:bg-white/10 disabled:opacity-50"
+          >
+            {importTexteOuvert ? "Fermer le texte" : "Coller un rent roll"}
+          </button>
+          {importErr ? (
+            <span className="text-[11px] text-rose-300">{importErr}</span>
+          ) : null}
+        </div>
+        {importTexteOuvert ? (
+          <div className="space-y-1.5">
+            <textarea
+              value={importTexte}
+              onChange={(e) => setImportTexte(e.target.value)}
+              rows={5}
+              placeholder={"App. 1 — 4½ — 950 $\nApp. 2 — 3½ — 825 $\n…"}
+              className="input w-full text-xs"
+            />
+            <button
+              type="button"
+              onClick={() => void importerRentRoll([], importTexte)}
+              disabled={importBusy || !importTexte.trim()}
+              className="btn-accent px-3 py-1.5 text-xs disabled:opacity-50"
+            >
+              Lire le texte
+            </button>
+          </div>
+        ) : null}
+        {importPreview ? (
+          <div className="space-y-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+            <p className="text-xs font-semibold text-emerald-200">
+              Rent roll lu : {importPreview.unites.length} unité(s)
+              {importPreview.unites.length > 0
+                ? ` · ${fmtMoney(importTotalMois)}/mois (${fmtMoney(
+                    importTotalMois * 12
+                  )}/an)`
+                : ""}{" "}
+              <span className="font-normal text-white/40">
+                — {importPreview.model_used}
+              </span>
+            </p>
+            {importPreview.nb_logements != null &&
+            importPreview.unites.length > 0 &&
+            importPreview.unites.length !== importPreview.nb_logements ? (
+              <p className="text-[11px] text-amber-200/90">
+                La fiche compte {importPreview.nb_logements} logement(s), le
+                rent roll en donne {importPreview.unites.length}. Vérifie
+                avant d&apos;appliquer.
+              </p>
+            ) : null}
+            {importTyposDiff.length > 0 ? (
+              <p className="text-[11px] text-amber-200/90">
+                Typologie différente de l&apos;onglet Infos :{" "}
+                {importTyposDiff.join(" · ")}.
+              </p>
+            ) : null}
+            {importPreview.warnings.map((w, i) => (
+              <p key={i} className="text-[11px] text-white/50">
+                {w}
+              </p>
+            ))}
+            {importPreview.unites.length > 0 ? (
+              <div className="overflow-x-auto rounded-md border border-brand-800">
+                <table className="w-full text-[11px]">
+                  <thead className="bg-brand-900 text-[9px] uppercase tracking-wider text-white/40">
+                    <tr>
+                      <th className="px-2 py-1 text-left">Unité</th>
+                      <th className="px-2 py-1 text-left">Typo</th>
+                      <th className="px-2 py-1 text-right">Loyer actuel</th>
+                      <th className="px-2 py-1 text-right">
+                        Loyer optimisé proposé
+                      </th>
+                      <th className="px-2 py-1 text-left">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-brand-800">
+                    {importPreview.unites.map((u, i) => (
+                      <tr key={i}>
+                        <td className="px-2 py-1 text-white/70">
+                          {u.numero || `#${i + 1}`}
+                        </td>
+                        <td className="px-2 py-1 text-white/70">
+                          {u.typo || "—"}
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono tabular-nums text-white">
+                          {fmtMoney(u.loyer_actuel)}
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono tabular-nums text-white/70">
+                          {u.loyer_optimise != null
+                            ? fmtMoney(u.loyer_optimise)
+                            : u.typo && prixLoyers[u.typo]
+                            ? `${fmtMoney(Number(prixLoyers[u.typo]) || 0)} (typologie)`
+                            : "—"}
+                        </td>
+                        <td className="px-2 py-1 text-white/50">
+                          {u.notes || ""}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={appliquerImport}
+                disabled={importPreview.unites.length === 0}
+                className="btn-accent px-3 py-1.5 text-xs disabled:opacity-50"
+              >
+                Appliquer au tableau (remplace les unités)
+              </button>
+              <button
+                type="button"
+                onClick={() => setImportPreview(null)}
+                className="rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white/60 transition hover:bg-white/10"
+              >
+                Annuler
+              </button>
+            </div>
+          </div>
+        ) : null}
         {rows === null ? (
           <button
             type="button"
@@ -2704,7 +2960,7 @@ function UnitesOptimisationCard({
                   {rows.map((r, i) => (
                     <tr key={i}>
                       <td className="px-2 py-1 text-white/70">
-                        {r.typo || "—"} · #{i + 1}
+                        {r.numero || `#${i + 1}`} · {r.typo || "—"}
                       </td>
                       <td className="px-2 py-1 text-right">
                         <input
@@ -3455,6 +3711,7 @@ function ManualAnalysisSection({
             traditionnel. */}
         {stratChantier ? (
           <UnitesOptimisationCard
+            analysisId={data.id}
             unitesJson={data.unites_json}
             typology={typology}
             prixLoyers={prixLoyers}
@@ -3821,6 +4078,7 @@ type AnalysisResults = {
     modes: { aucune: number; pre_achat: number; post_achat: number };
     unites: Array<{
       index: number;
+      numero?: string | null;
       typo: string | null;
       mode: string;
       loyer_actuel: number;
@@ -7515,7 +7773,7 @@ function StrategieDetailSubsection({
               {data.unites_calcul.unites.map((u) => (
                 <tr key={u.index} className="border-t border-brand-800/60">
                   <td className="px-2 py-1 text-white/60">
-                    {u.typo || "—"} · #{u.index} ·{" "}
+                    {u.numero || `#${u.index}`} · {u.typo || "—"} ·{" "}
                     {u.mode === "aucune"
                       ? "non optimisée"
                       : u.mode === "pre_achat"

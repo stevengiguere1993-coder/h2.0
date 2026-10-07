@@ -392,12 +392,12 @@ def _gemini_model_cascade() -> List[str]:
     """PRÉFÉRENCES de modèles Gemini (env GEMINI_MODEL_CASCADE, liste
     séparée par virgules). La cascade réellement essayée est résolue
     par ``resolve_gemini_cascade`` à partir du catalogue Google."""
-    raw = (
-        getattr(settings, "gemini_model_cascade", None)
-        or "gemini-2.5-flash,gemini-2.5-flash-lite"
-    )
-    models = [m.strip() for m in raw.split(",") if m.strip()]
-    return models or ["gemini-2.5-flash"]
+    raw = getattr(settings, "gemini_model_cascade", None) or ""
+    return [m.strip() for m in raw.split(",") if m.strip()]
+
+
+#: Dernier recours quand ni préférences ni catalogue (clé absente, réseau).
+_GEMINI_SECOURS = ("gemini-2.5-flash", "gemini-2.5-flash-lite")
 
 
 # ── Catalogue Gemini à chaud (2026-10-07) ─────────────────────────
@@ -508,15 +508,16 @@ async def resolve_gemini_cascade(api_key: Optional[str] = None) -> List[str]:
     puis les autres modèles texte disponibles (max 6). Sans catalogue
     (clé absente, réseau) → les préférences telles quelles."""
     prefs = _gemini_model_cascade()
+    secours = prefs or list(_GEMINI_SECOURS)
     key = (api_key or getattr(settings, "gemini_api_key", None) or "").strip()
     if not key:
-        return prefs
+        return secours
     modeles = await _gemini_list_models(key)
     if modeles is None:
-        return prefs
+        return secours
     disponibles = modeles_gemini_utilisables(modeles)
     if not disponibles:
-        return prefs
+        return secours
     cascade = [p for p in prefs if p in disponibles]
     for nom in disponibles:
         if len(cascade) >= _GEMINI_CASCADE_MAX:
@@ -576,32 +577,80 @@ async def _groq_list_models(api_key: str) -> Optional[List[str]]:
     return ids
 
 
+# Modèles Groq qui ne sont pas des modèles de chat (audio, TTS, garde-fous,
+# modération…) — jamais choisis pour l'extraction.
+_GROQ_EXCLURE = (
+    "guard", "whisper", "orpheus", "tts", "safeguard", "embedding", "allam",
+    "moderation", "compound",
+)
+# Préférences pour le texte, dans l'ordre (sous-chaînes d'identifiants).
+# Observé en prod le 2026-10-07 : plus aucun Llama chez Groq, mais
+# openai/gpt-oss-120b, gpt-oss-20b et qwen.
+_GROQ_TEXTE_PREFERENCES = (
+    "gpt-oss-120b", "llama-3.3-70b", "llama-4-maverick", "llama-4-scout",
+    "llama-3.1-70b", "qwen", "gpt-oss-20b", "llama", "mixtral", "gemma",
+)
+_GROQ_VISION_INDICES = ("llama-4", "vision", "-vl", "vl-")
+
+
+def _groq_candidats(disponibles: Optional[List[str]]) -> List[str]:
+    return [
+        m for m in (disponibles or [])
+        if not any(x in m.lower() for x in _GROQ_EXCLURE)
+    ]
+
+
 def _groq_modele_texte(disponibles: Optional[List[str]]) -> Optional[str]:
-    """Modèle Groq texte : celui configuré s'il existe, sinon le premier
-    Llama 70B / « versatile » du catalogue."""
-    voulu = (getattr(settings, "groq_model", None) or "llama-3.3-70b-versatile").strip()
-    if disponibles is None or voulu in disponibles:
+    """Modèle Groq texte : celui configuré s'il existe encore, sinon le
+    meilleur du catalogue selon ``_GROQ_TEXTE_PREFERENCES``."""
+    voulu = (getattr(settings, "groq_model", None) or "").strip()
+    if voulu and (disponibles is None or voulu in disponibles):
         return voulu
-    for mid in disponibles:
-        low = mid.lower()
-        if "llama" in low and ("70b" in low or "versatile" in low):
-            return mid
-    for mid in disponibles:
-        if "llama" in mid.lower() and "guard" not in mid.lower():
-            return mid
-    return None
+    if disponibles is None:
+        return None
+    cands = _groq_candidats(disponibles)
+    for pref in _GROQ_TEXTE_PREFERENCES:
+        for mid in cands:
+            if pref in mid.lower():
+                return mid
+    return cands[0] if cands else None
 
 
 def _groq_modele_vision(disponibles: Optional[List[str]]) -> Optional[str]:
     """Modèle Groq capable de lire des images : celui configuré s'il
-    existe, sinon un Llama 4 (scout/maverick) du catalogue."""
+    existe encore, sinon le premier du catalogue qui s'annonce vision."""
     voulu = (getattr(settings, "groq_vision_model", None) or "").strip()
     if voulu and (disponibles is None or voulu in disponibles):
         return voulu
-    for mid in disponibles or []:
-        if "llama-4" in mid.lower():
+    for mid in _groq_candidats(disponibles):
+        if any(x in mid.lower() for x in _GROQ_VISION_INDICES):
             return mid
     return None
+
+
+def _json_lenient(texte: str) -> Any:
+    """JSON strict, sinon sans clôtures ``` ```, sinon le premier bloc
+    { … } ou [ … ] du texte (les modèles sans mode JSON bavardent)."""
+    t = (texte or "").strip()
+    try:
+        return json.loads(t)
+    except ValueError:
+        pass
+    if t.startswith("```"):
+        t = re.sub(r"^```[a-zA-Z]*\s*", "", t)
+        t = re.sub(r"\s*```$", "", t).strip()
+        try:
+            return json.loads(t)
+        except ValueError:
+            pass
+    debuts = [i for i in (t.find("{"), t.find("[")) if i >= 0]
+    if not debuts:
+        raise ValueError("aucun JSON dans la réponse")
+    d = min(debuts)
+    f = max(t.rfind("}"), t.rfind("]"))
+    if f <= d:
+        raise ValueError("JSON incomplet dans la réponse")
+    return json.loads(t[d:f + 1])
 
 
 def _normaliser_sortie_groq(parsed: Any) -> List[Dict[str, Any]]:
@@ -639,6 +688,9 @@ def _normaliser_sortie_groq(parsed: Any) -> List[Dict[str, Any]]:
 async def _groq_extract(
     material: str,
     images: List[Tuple[str, bytes]],
+    *,
+    system: Optional[str] = None,
+    guide: Optional[str] = None,
 ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], Optional[str]]:
     """Extraction par Groq (mode JSON) — texte via Llama 3.3 70B, images
     via un modèle vision (Llama 4 Scout). Retourne ``(data, raison,
@@ -681,7 +733,7 @@ async def _groq_extract(
         "messages": [
             {
                 "role": "system",
-                "content": SYSTEM_PROMPT + "\n\n" + SCHEMA_GUIDE
+                "content": (system or SYSTEM_PROMPT) + "\n\n" + (guide or SCHEMA_GUIDE)
                 + "\nRéponds avec un objet JSON (ou un tableau JSON si plusieurs immeubles).",
             },
             {"role": "user", "content": contenu},
@@ -697,6 +749,16 @@ async def _groq_extract(
                 json=payload,
                 headers={"Authorization": f"Bearer {api_key}"},
             )
+            if resp.status_code == 400 and "response_format" in payload:
+                # Modèle sans mode JSON → on redemande sans contrainte et
+                # on lit le JSON dans le texte.
+                log.info("Groq[%s] refuse le mode JSON — relance sans", model)
+                payload.pop("response_format", None)
+                resp = await client.post(
+                    f"{_GROQ_BASE_URL}/chat/completions",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
         if resp.status_code == 429:
             return None, "quota Groq atteint", model
         if resp.status_code >= 400:
@@ -705,7 +767,7 @@ async def _groq_extract(
         texte = (((resp.json().get("choices") or [{}])[0].get("message") or {}).get("content") or "")
         if not texte.strip():
             return None, "réponse Groq vide", model
-        parsed = json.loads(texte)
+        parsed = _json_lenient(texte)
     except Exception as exc:  # noqa: BLE001
         log.warning("Groq[%s] extraction échouée : %s", model, exc)
         return None, f"Groq injoignable ({type(exc).__name__})", model
@@ -716,10 +778,14 @@ async def _groq_extract(
 
 
 async def _run_groq_safely(
-    material: str, images: List[Tuple[str, bytes]]
+    material: str,
+    images: List[Tuple[str, bytes]],
+    *,
+    system: Optional[str] = None,
+    guide: Optional[str] = None,
 ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], Optional[str]]:
     try:
-        return await _groq_extract(material, images)
+        return await _groq_extract(material, images, system=system, guide=guide)
     except Exception as exc:  # noqa: BLE001
         log.warning("Groq extraction a levé : %s (%s)", type(exc).__name__, exc)
         return None, f"Groq injoignable ({type(exc).__name__})", None
@@ -773,6 +839,8 @@ async def _gemini_extract(
     material: str,
     images: List[Tuple[str, bytes]],
     model: Optional[str] = None,
+    system: Optional[str] = None,
+    guide: Optional[str] = None,
 ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], bool, bool]:
     """Extrait les champs immeuble via Gemini.
 
@@ -791,7 +859,7 @@ async def _gemini_extract(
     if not material.strip() and not images:
         return None, None, False, False
 
-    user_parts: List[Dict[str, Any]] = [{"text": SCHEMA_GUIDE}]
+    user_parts: List[Dict[str, Any]] = [{"text": guide or SCHEMA_GUIDE}]
     if material.strip():
         user_parts.append(
             {"text": "Sources à analyser :\n\n" + material[:60_000]}
@@ -809,7 +877,7 @@ async def _gemini_extract(
         )
 
     payload = {
-        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "systemInstruction": {"parts": [{"text": system or SYSTEM_PROMPT}]},
         "contents": [{"role": "user", "parts": user_parts}],
         "generationConfig": {
             "temperature": 0,
@@ -907,6 +975,9 @@ async def _gemini_extract(
 async def _gemini_extract_cascade(
     material: str,
     images: List[Tuple[str, bytes]],
+    *,
+    system: Optional[str] = None,
+    guide: Optional[str] = None,
 ) -> Tuple[
     Optional[List[Dict[str, Any]]], Optional[str], Optional[str]
 ]:
@@ -949,7 +1020,7 @@ async def _gemini_extract_cascade(
     for idx, model in enumerate(cascade):
         for attempt, backoff in enumerate(_GEMINI_RETRY_BACKOFFS):
             data, err, is_quota, is_not_found = await _gemini_extract(
-                material, images, model=model
+                material, images, model=model, system=system, guide=guide
             )
             if data is not None:
                 # Succès — ajoute « (cascade) » si on n'est pas
@@ -2771,6 +2842,9 @@ def _select_model_used(
 async def _run_gemini_safely(
     material: str,
     images: List[Tuple[str, bytes]],
+    *,
+    system: Optional[str] = None,
+    guide: Optional[str] = None,
 ) -> Tuple[
     Optional[List[Dict[str, Any]]], Optional[str], Optional[str]
 ]:
@@ -2787,7 +2861,9 @@ async def _run_gemini_safely(
     Le caller émet alors un warning visible à l'utilisateur et on
     poursuit avec le résultat du parser local seul."""
     try:
-        return await _gemini_extract_cascade(material, images)
+        return await _gemini_extract_cascade(
+            material, images, system=system, guide=guide
+        )
     except Exception as exc:  # noqa: BLE001
         log.warning(
             "Gemini extraction a levé inattenduement : %s (%s)",
