@@ -386,6 +386,10 @@ _GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 # saturé. Si encore en quota après 3 tentatives, on bascule au
 # modèle suivant de la cascade (cf. _gemini_extract_cascade).
 _GEMINI_RETRY_BACKOFFS = (1.0, 5.0, 30.0)
+#: Budget de temps d'une cascade complète (s) : au-delà, on n'essaie
+#: pas un modèle de plus (Render coupe les requêtes à 100 s ; la tâche
+#: de fond n'a pas cette contrainte mais l'utilisateur attend).
+_GEMINI_BUDGET_S = 50.0
 
 
 def _gemini_model_cascade() -> List[str]:
@@ -1017,7 +1021,11 @@ async def _gemini_extract_cascade(
     # ne cachait que la DERNIÈRE erreur (ex. « gemini-2.0-flash
     # déprécié ») alors que la vraie cause était le quota du premier.
     echecs: List[str] = []
+    _deadline = time.monotonic() + _GEMINI_BUDGET_S
     for idx, model in enumerate(cascade):
+        if time.monotonic() > _deadline:
+            echecs.append(f"{model} : non essayé (budget de temps épuisé)")
+            continue
         for attempt, backoff in enumerate(_GEMINI_RETRY_BACKOFFS):
             data, err, is_quota, is_not_found = await _gemini_extract(
                 material, images, model=model, system=system, guide=guide
@@ -1050,7 +1058,10 @@ async def _gemini_extract_cascade(
                 break
             # Quota / 429 — on attend et on retente sur le même
             # modèle, sauf si c'est la dernière tentative.
-            if attempt < len(_GEMINI_RETRY_BACKOFFS) - 1:
+            if (
+                attempt < len(_GEMINI_RETRY_BACKOFFS) - 1
+                and time.monotonic() + backoff <= _deadline
+            ):
                 log.info(
                     "Gemini[%s] quota — retry dans %.0fs "
                     "(tentative %d/%d)",
@@ -1062,13 +1073,13 @@ async def _gemini_extract_cascade(
                 await asyncio.sleep(backoff)
             else:
                 log.warning(
-                    "Gemini[%s] quota persistant après %d retries — "
+                    "Gemini[%s] quota persistant (ou budget de temps) — "
                     "cascade au modèle suivant",
                     model,
-                    len(_GEMINI_RETRY_BACKOFFS),
                 )
                 quota_models.append(model)
                 echecs.append(f"{model} : {err}")
+                break
 
     # Cascade épuisée — message diagnostic explicite, UNE raison par
     # modèle (utile pour Phil qui voit le warning côté UI).
