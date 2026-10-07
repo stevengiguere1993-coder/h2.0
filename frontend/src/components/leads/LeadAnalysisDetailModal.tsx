@@ -2706,6 +2706,70 @@ function UnitesOptimisationCard({
     setDirty(true);
   }
 
+  // La typologie de l'onglet Infos commande le nombre d'unités (Phil
+  // 2026-10-07 : « 91 × 4.5 » extrait par erreur, corrigé dans Infos, mais
+  // les 91 unités restaient et faussaient tout le calcul). Unités
+  // générées (sans numéro de rent roll) → réalignées automatiquement en
+  // gardant les loyers déjà saisis ; unités d'un rent roll →
+  // avertissement et bouton, jamais de suppression silencieuse.
+  const comptesTypo = (rs: UniteRow[]) => {
+    const c: Record<string, number> = {};
+    for (const r of rs) c[r.typo] = (c[r.typo] || 0) + 1;
+    return c;
+  };
+  const typoCible: Record<string, number> = {};
+  for (const k of Object.keys(typology)) {
+    const n = Number(typology[k]) || 0;
+    if (n > 0) typoCible[k] = n;
+  }
+  const typoDesalignee = (() => {
+    if (!rows || rows.length === 0 || Object.keys(typoCible).length === 0) {
+      return false;
+    }
+    const c = comptesTypo(rows);
+    for (const k of new Set([...Object.keys(c), ...Object.keys(typoCible)])) {
+      if ((c[k] || 0) !== (typoCible[k] || 0)) return true;
+    }
+    return false;
+  })();
+  const issuRentRoll = (rows ?? []).some((r) => !!r.numero);
+
+  function realigner(base: UniteRow[]): UniteRow[] {
+    const actuelDefaut =
+      revenusBruts && nbLogements
+        ? (revenusBruts / 12 / nbLogements).toFixed(0)
+        : "";
+    const out: UniteRow[] = [];
+    for (const k of Object.keys(typoCible).sort()) {
+      const existantes = base.filter((r) => r.typo === k);
+      for (let i = 0; i < typoCible[k]; i++) {
+        out.push(
+          existantes[i] ?? {
+            typo: k,
+            loyer_actuel: actuelDefaut,
+            loyer_optimise: "",
+            mode: modeDefaut
+          }
+        );
+      }
+    }
+    return out;
+  }
+
+  function appliquerRealignement() {
+    if (!rows) return;
+    const out = realigner(rows);
+    setRows(out);
+    setDirty(false);
+    onSave(serialiserUnites(out));
+  }
+
+  useEffect(() => {
+    if (!typoDesalignee || issuRentRoll || !rows) return;
+    appliquerRealignement();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [typoDesalignee, issuRentRoll]);
+
   function maj(i: number, patch: Partial<UniteRow>) {
     setRows((rs) =>
       rs ? rs.map((r, j) => (j === i ? { ...r, ...patch } : r)) : rs
@@ -3195,6 +3259,27 @@ function UnitesOptimisationCard({
                 {fmtMoney(ecartFiche)}/an. Les scénarios d&apos;achat
                 utilisent le total des unités — ajuste les loyers actuels
                 ou les revenus de la fiche pour les faire concorder.
+              </p>
+            ) : null}
+            {typoDesalignee && issuRentRoll ? (
+              <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1 text-[10px] text-amber-200/90">
+                La typologie de l&apos;onglet Infos (
+                {Object.entries(typoCible)
+                  .map(([k, n]) => `${n} × ${k}`)
+                  .join(", ")}
+                ) ne correspond pas aux unités du rent roll (
+                {Object.entries(comptesTypo(rows))
+                  .map(([k, n]) => `${n} × ${k || "sans typologie"}`)
+                  .join(", ")}
+                ). Corrige la typologie dans Infos, ou{" "}
+                <button
+                  type="button"
+                  onClick={appliquerRealignement}
+                  className="underline decoration-dotted hover:text-amber-100"
+                >
+                  réaligne les unités sur la typologie
+                </button>{" "}
+                (les numéros du rent roll seront perdus).
               </p>
             ) : null}
             <div className="flex flex-wrap gap-2">

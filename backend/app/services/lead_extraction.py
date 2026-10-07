@@ -1407,6 +1407,15 @@ def parse_text(text: str) -> Dict[str, Any]:
             typology[key] = max(typology.get(key, 0), qty)
         except ValueError:
             pass
+    # Plausibilité (Phil 2026-10-07, PDF de courtier : « 91 × 4.5 » lu dans
+    # un tableau pour un 12 logements) : une typologie ne peut pas dépasser
+    # le nombre de logements connu.
+    nb_connu = out.get("nb_logements")
+    if typology and isinstance(nb_connu, int) and nb_connu > 0:
+        if not _typologie_plausible(typology, nb_connu):
+            typology = {k: v for k, v in typology.items() if v <= nb_connu}
+            if not _typologie_plausible(typology, nb_connu):
+                typology = {}
     if typology:
         out["typology"] = typology
         # Si nb_logements absent, déduit de la typologie.
@@ -2808,6 +2817,25 @@ def _looks_like_valid_address(s: Any) -> bool:
     return bool(re.search(r"[A-Za-zÀ-ÿ]{3,}", raw))
 
 
+def _typologie_plausible(typ: Dict[str, Any], nb_logements: int) -> bool:
+    """Une typologie est plausible quand aucun poste ne dépasse le nombre
+    de logements et que la somme ne le dépasse pas non plus."""
+    try:
+        valeurs = [int(v) for v in typ.values()]
+    except (TypeError, ValueError):
+        return False
+    if not valeurs or any(v < 0 for v in valeurs):
+        return False
+    return max(valeurs) <= nb_logements and sum(valeurs) <= nb_logements
+
+
+def _entier(val: Any) -> int:
+    try:
+        return int(float(val))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _merge_local_gemini(
     local: Dict[str, Any],
     gemini: Dict[str, Any],
@@ -2896,6 +2924,25 @@ def _merge_local_gemini(
         elif has_gem:
             merged[k] = v_gem
         # else : aucun n'a la valeur, on n'écrit rien.
+
+    # Garde-fou typologie (Phil 2026-10-07) : jamais plus d'unités que de
+    # logements. Si la fusion (MAX par typologie) est incohérente, on
+    # garde la source plausible ; sinon on retire la typologie plutôt que
+    # de fausser tout le calcul (la fiche l'affiche vide, à saisir).
+    nb_ref = _entier(merged.get("nb_logements"))
+    typ = merged.get("typology")
+    if nb_ref > 0 and isinstance(typ, dict) and typ and not _typologie_plausible(typ, nb_ref):
+        for src in (gemini, local):
+            t2 = src.get("typology")
+            if isinstance(t2, dict) and t2 and _typologie_plausible(t2, nb_ref):
+                merged["typology"] = dict(t2)
+                break
+        else:
+            merged.pop("typology", None)
+        divergence_warnings.append(
+            f"Typologie lue ({typ}) incohérente avec {nb_ref} logement(s) — "
+            + ("source plausible conservée." if merged.get("typology") else "ignorée, à saisir dans la fiche.")
+        )
 
     return merged, divergence_warnings, divergences
 
