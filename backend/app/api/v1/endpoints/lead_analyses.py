@@ -16,7 +16,9 @@ Restreint au volet `prospection`.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import secrets
 import time
 import traceback
 import logging
@@ -1130,49 +1132,86 @@ async def _load_frais_registry(db) -> tuple[list[str], list[dict]]:
     return [], []
 
 
-@router.post(
-    "/extract",
-    response_model=ExtractResult,
-    status_code=status.HTTP_201_CREATED,
-    summary="Extraire et créer une ou plusieurs fiches depuis sources.",
-)
-async def extract_and_create(
-    db: DBSession,
-    user: CurrentUser,
-    urls: Optional[str] = Form(default=None),
-    text: Optional[str] = Form(default=None),
-    files: List[UploadFile] = File(default=[]),
+#: Même source ré-extraite dans cette fenêtre → fiche existante renvoyée.
+_FENETRE_DOUBLON_MIN = 10
+
+
+async def _fiche_recente_identique(
+    db,
+    user_id: Optional[int],
+    src_url_str: Optional[str],
+    src_text: Optional[str],
+    file_blobs: list[tuple[str, str, bytes]],
+) -> Optional[LeadAnalysis]:
+    """Même source (URL, texte, fichiers) extraite par le même utilisateur
+    dans les dernières minutes → on renvoie la fiche existante au lieu
+    d'en créer une deuxième (Phil 2026-10-07 : « si je l'extrais à
+    nouveau, elle est là en double »)."""
+    from datetime import timedelta
+
+    depuis = datetime.now(timezone.utc) - timedelta(minutes=_FENETRE_DOUBLON_MIN)
+    stmt = select(LeadAnalysis).where(LeadAnalysis.created_at >= depuis)
+    if user_id is not None:
+        stmt = stmt.where(LeadAnalysis.created_by_user_id == user_id)
+    stmt = (
+        stmt.where(LeadAnalysis.source_urls == src_url_str)
+        if src_url_str
+        else stmt.where(LeadAnalysis.source_urls.is_(None))
+    )
+    stmt = (
+        stmt.where(LeadAnalysis.source_text == src_text)
+        if src_text
+        else stmt.where(LeadAnalysis.source_text.is_(None))
+    )
+    stmt = stmt.order_by(LeadAnalysis.created_at.desc()).limit(5)
+    attendus = sorted((fn[:255], len(b)) for fn, _ct, b in file_blobs)
+    for rec in (await db.execute(stmt)).scalars().all():
+        atts = (
+            await db.execute(
+                select(
+                    LeadAnalysisAttachment.filename,
+                    LeadAnalysisAttachment.size_bytes,
+                ).where(LeadAnalysisAttachment.lead_analysis_id == rec.id)
+            )
+        ).all()
+        if sorted((fn, int(sz)) for fn, sz in atts) == attendus:
+            return rec
+    return None
+
+
+async def _extraire_et_creer(
+    db,
+    user,
+    url_list: list[str],
+    text: Optional[str],
+    file_blobs: list[tuple[str, str, bytes]],
 ) -> ExtractResult:
-    """Reçoit un mix d'URLs (séparées par newline), de texte brut et
-    de fichiers. Lance l'extraction Claude. Crée une `LeadAnalysis`
-    par immeuble distinct détecté (en pratique presque toujours 1)
-    + une `LeadAnalysisAttachment` par fichier."""
-    _require_prospection(user)
-
-    url_list = [u.strip() for u in (urls or "").splitlines() if u.strip()]
-
-    # Lit les fichiers en bytes (limite 10 MB chacun).
-    file_blobs: list[tuple[str, str, bytes]] = []
-    for f in files or []:
-        if not f or not f.filename:
-            continue
-        data = await f.read()
-        if len(data) > _MAX_FILE_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Fichier {f.filename} trop lourd (max 10 MB).",
+    """Cœur de l'extraction — partagé par l'endpoint synchrone et la tâche
+    de fond. Idempotent sur une fenêtre de quelques minutes."""
+    src_url_str_0 = "\n".join(url_list) if url_list else None
+    src_text_0 = (text or "").strip() or None
+    deja = await _fiche_recente_identique(
+        db, getattr(user, "id", None), src_url_str_0, src_text_0, file_blobs
+    )
+    if deja is not None:
+        cnt_deja = (
+            await db.execute(
+                select(func.count(LeadAnalysisAttachment.id)).where(
+                    LeadAnalysisAttachment.lead_analysis_id == deja.id
+                )
             )
-        file_blobs.append(
-            (
-                f.filename,
-                (f.content_type or "application/octet-stream").lower(),
-                data,
-            )
-        )
-
-    if not url_list and not (text and text.strip()) and not file_blobs:
-        raise HTTPException(
-            status_code=400, detail="Aucune source fournie."
+        ).scalar_one()
+        cree = deja.created_at
+        if cree is not None and cree.tzinfo is None:
+            cree = cree.replace(tzinfo=timezone.utc)
+        age = int((datetime.now(timezone.utc) - cree).total_seconds()) if cree else 0
+        return ExtractResult(
+            created=[_to_list_item(deja, int(cnt_deja or 0))],
+            warnings=[
+                f"Cette source a déjà été extraite il y a {age} s — la fiche "
+                "existante est renvoyée (pas de doublon)."
+            ],
+            model_used=deja.model_used,
         )
 
     try:
@@ -1340,6 +1379,120 @@ async def extract_and_create(
     )
 
 
+# ─── Extraction en tâche de fond (Phil 2026-10-07) ───────────────────
+#
+# Render coupe les requêtes HTTP à 100 s : une extraction longue (IA,
+# PDF, plusieurs URL) aboutissait côté serveur mais le navigateur
+# recevait une erreur, et le 2e essai créait un doublon. La page lance
+# donc une tâche et la suit. État en mémoire (un seul processus) : un
+# redémarrage pendant l'extraction → 404 au suivi, la page le dit.
+_EXTRACT_JOBS: Dict[str, dict] = {}
+_EXTRACT_JOBS_MAX = 100
+_EXTRACT_JOBS_TTL_S = 3600.0
+
+
+def _session_factory_jobs():
+    """Fabrique de session pour la tâche de fond (indirection pour les
+    tests, qui la remplacent par la base de test)."""
+    from app.db.session import AsyncSessionLocal
+
+    return AsyncSessionLocal
+
+
+def _purger_jobs() -> None:
+    now = time.monotonic()
+    for k in [
+        k for k, j in _EXTRACT_JOBS.items()
+        if now - j["_t0"] > _EXTRACT_JOBS_TTL_S and j.get("status") != "en_cours"
+    ]:
+        _EXTRACT_JOBS.pop(k, None)
+    while len(_EXTRACT_JOBS) > _EXTRACT_JOBS_MAX:
+        _EXTRACT_JOBS.pop(next(iter(_EXTRACT_JOBS)), None)
+
+
+async def _extract_job_worker(
+    job_id: str,
+    user_id: Optional[int],
+    url_list: list[str],
+    text: Optional[str],
+    file_blobs: list[tuple[str, str, bytes]],
+) -> None:
+    job = _EXTRACT_JOBS.get(job_id)
+    if job is None:
+        return
+    try:
+        from app.models.user import User
+
+        factory = _session_factory_jobs()
+        async with factory() as s:
+            user = await s.get(User, user_id) if user_id is not None else None
+            res = await _extraire_et_creer(s, user, url_list, text, file_blobs)
+        job["resultat"] = res.model_dump(mode="json")
+        job["status"] = "termine"
+    except HTTPException as exc:
+        job["erreur"] = str(exc.detail)
+        job["status"] = "erreur"
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Extraction en tâche de fond échouée (%s)", job_id)
+        job["erreur"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        job["status"] = "erreur"
+    finally:
+        job["termine_a"] = datetime.now(timezone.utc).isoformat()
+
+
+class ExtractJobStart(BaseModel):
+    job_id: str
+    status: str
+
+
+@router.post(
+    "/extract",
+    response_model=ExtractResult,
+    status_code=status.HTTP_201_CREATED,
+    summary="Extraire et créer une ou plusieurs fiches depuis sources.",
+)
+async def extract_and_create(
+    db: DBSession,
+    user: CurrentUser,
+    urls: Optional[str] = Form(default=None),
+    text: Optional[str] = Form(default=None),
+    files: List[UploadFile] = File(default=[]),
+) -> ExtractResult:
+    """Reçoit un mix d'URLs (séparées par newline), de texte brut et
+    de fichiers. Lance l'extraction Claude. Crée une `LeadAnalysis`
+    par immeuble distinct détecté (en pratique presque toujours 1)
+    + une `LeadAnalysisAttachment` par fichier."""
+    _require_prospection(user)
+
+    url_list = [u.strip() for u in (urls or "").splitlines() if u.strip()]
+
+    # Lit les fichiers en bytes (limite 10 MB chacun).
+    file_blobs: list[tuple[str, str, bytes]] = []
+    for f in files or []:
+        if not f or not f.filename:
+            continue
+        data = await f.read()
+        if len(data) > _MAX_FILE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Fichier {f.filename} trop lourd (max 10 MB).",
+            )
+        file_blobs.append(
+            (
+                f.filename,
+                (f.content_type or "application/octet-stream").lower(),
+                data,
+            )
+        )
+
+    if not url_list and not (text and text.strip()) and not file_blobs:
+        raise HTTPException(
+            status_code=400, detail="Aucune source fournie."
+        )
+
+    return await _extraire_et_creer(db, user, url_list, text, file_blobs)
+
+
 @router.get(
     "",
     response_model=List[LeadAnalysisListItem],
@@ -1439,6 +1592,77 @@ async def extraction_health(user: CurrentUser) -> dict:
         groq["modele_texte"] = _groq_modele_texte(dispo)
         groq["modele_vision"] = _groq_modele_vision(dispo)
     return {"gemini": gemini, "groq": groq, "ocr": _ocr_health_payload()}
+
+
+@router.post(
+    "/extract-jobs",
+    response_model=ExtractJobStart,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary=(
+        "Lance une extraction en tâche de fond (évite la coupure à 100 s "
+        "de Render) ; suivre avec GET /extract-jobs/{job_id}."
+    ),
+)
+async def start_extract_job(
+    user: CurrentUser,
+    urls: Optional[str] = Form(default=None),
+    text: Optional[str] = Form(default=None),
+    files: List[UploadFile] = File(default=[]),
+) -> ExtractJobStart:
+    _require_prospection(user)
+    url_list = [u.strip() for u in (urls or "").splitlines() if u.strip()]
+    file_blobs: list[tuple[str, str, bytes]] = []
+    for f in files or []:
+        if not f or not f.filename:
+            continue
+        data = await f.read()
+        if len(data) > _MAX_FILE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Fichier {f.filename} trop lourd (max 10 MB).",
+            )
+        file_blobs.append(
+            (f.filename, (f.content_type or "application/octet-stream").lower(), data)
+        )
+    if not url_list and not (text and text.strip()) and not file_blobs:
+        raise HTTPException(status_code=400, detail="Aucune source fournie.")
+    _purger_jobs()
+    job_id = secrets.token_urlsafe(12)
+    uid = getattr(user, "id", None)
+    _EXTRACT_JOBS[job_id] = {
+        "job_id": job_id,
+        "status": "en_cours",
+        "user_id": uid,
+        "demarre_a": datetime.now(timezone.utc).isoformat(),
+        "termine_a": None,
+        "resultat": None,
+        "erreur": None,
+        "_t0": time.monotonic(),
+    }
+    # Fire-and-forget : la coroutine survit à la requête HTTP ; on garde
+    # la tâche pour que le ramasse-miettes ne la réclame pas.
+    _EXTRACT_JOBS[job_id]["_task"] = asyncio.create_task(
+        _extract_job_worker(job_id, uid, url_list, text, file_blobs)
+    )
+    return ExtractJobStart(job_id=job_id, status="en_cours")
+
+
+@router.get(
+    "/extract-jobs/{job_id}",
+    summary="État d'une extraction en tâche de fond (en_cours / termine / erreur).",
+)
+async def get_extract_job(job_id: str, user: CurrentUser) -> dict:
+    _require_prospection(user)
+    job = _EXTRACT_JOBS.get(job_id)
+    if job is None or job.get("user_id") != getattr(user, "id", None):
+        raise HTTPException(
+            404,
+            "Extraction introuvable (le serveur a peut-être redémarré). "
+            "Rafraîchis la liste : si la fiche n'y est pas, relance.",
+        )
+    out = {k: v for k, v in job.items() if not k.startswith("_")}
+    out["duree_s"] = round(time.monotonic() - job["_t0"], 1)
+    return out
 
 
 @router.get(
