@@ -743,6 +743,19 @@ export function LeadAnalysisDetailModal({
   }
 
   // ── Hero metrics : chiffres clés dérivés du dernier calcul ──────
+  // Résultats enregistrés mais illisibles (JSON invalide — ex. tronqué
+  // côté serveur, bug du 2026-10-07) : on le DIT au lieu d'afficher des
+  // tuiles vides et un bouton sans effet.
+  const resultatsIllisibles = useMemo(() => {
+    if (!data?.analysis_results_json) return false;
+    try {
+      JSON.parse(data.analysis_results_json);
+      return false;
+    } catch {
+      return true;
+    }
+  }, [data?.analysis_results_json]);
+
   const hero = useMemo(() => {
     if (!data) return null;
     let results: AnalysisResults | null = null;
@@ -967,6 +980,15 @@ export function LeadAnalysisDetailModal({
                   ⚠ Le recalcul automatique a échoué — les chiffres affichés
                   sont périmés. Clique « Lancer l&apos;analyse » et, si ça
                   persiste, transmets ce message : {recalcError}
+                </div>
+              ) : null}
+              {resultatsIllisibles ? (
+                <div className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                  ⚠ Les résultats enregistrés de cette fiche sont illisibles
+                  (données tronquées ou invalides) : les tuiles et les
+                  onglets de résultats sont vides. Clique « Lancer
+                  l&apos;analyse » pour les recalculer ; si ça persiste,
+                  transmets ce message.
                 </div>
               ) : null}
               {/* Bande de hero metrics */}
