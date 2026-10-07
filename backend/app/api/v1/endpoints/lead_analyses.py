@@ -2464,6 +2464,40 @@ async def _completer_depuis_parametres(rec, db) -> list[str]:
     return completes
 
 
+def _nettoyer_json(obj: Any, chemin: str = "", trouves: Optional[list] = None) -> Any:
+    """Remplace NaN / ±Infinity par ``None`` (le JSON standard — et donc le
+    navigateur — ne les accepte pas) en notant leur chemin."""
+    if isinstance(obj, float):
+        if obj != obj or obj in (float("inf"), float("-inf")):
+            if trouves is not None:
+                trouves.append(chemin or "racine")
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _nettoyer_json(v, f"{chemin}.{k}" if chemin else str(k), trouves) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_nettoyer_json(v, f"{chemin}[{i}]", trouves) for i, v in enumerate(obj)]
+    return obj
+
+
+def _serialiser_resultats(results_dict: dict, analysis_id: Optional[int] = None) -> str:
+    """JSON des résultats, ENTIER et toujours valide.
+
+    Bug trouvé le 2026-10-07 (fiche 35-Plateau, 35 unités détaillées) : le
+    JSON était tronqué à 80 000 caractères → invalide → la fiche
+    n'affichait plus rien (tuiles à « — », « Lancer l'analyse » sans
+    effet). La colonne est un Text sans limite : on n'ampute plus. Les
+    valeurs non finies sont remplacées par null (JSON strict)."""
+    non_finis: list = []
+    propre = _nettoyer_json(results_dict, trouves=non_finis)
+    if non_finis:
+        log.warning(
+            "Résultats de l'analyse %s : %d valeur(s) non finie(s) remplacée(s) "
+            "par null (%s)", analysis_id, len(non_finis), ", ".join(non_finis[:12]),
+        )
+    return json.dumps(propre, allow_nan=False)
+
+
 async def _compute_and_store(rec, db) -> dict:
     """Construit les intrants depuis ``rec`` (+ overrides globaux),
     lance ``compute_all`` et PERSISTE les champs dérivés sur ``rec``
@@ -2708,7 +2742,7 @@ async def _compute_and_store(rec, db) -> dict:
     # la fiche) — visibles dans les résultats pour ne rien cacher.
     results_dict["intrants_completes_depuis_parametres"] = champs_completes
 
-    rec.analysis_results_json = json.dumps(results_dict)[:80_000]
+    rec.analysis_results_json = _serialiser_resultats(results_dict, rec.id)
     rec.best_refi_amount = results.best_refi_amount
     rec.best_refi_program = results.best_refi_program
     rec.mdf_preteur_b = results.mdf_preteur_b
