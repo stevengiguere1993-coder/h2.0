@@ -190,6 +190,49 @@ def _normalize_ocr_text(text: str) -> str:
     return out
 
 
+#: Photo au-delà de ces bornes → réduite avant l'envoi à l'IA. Une photo
+#: iPhone (12 Mpx, 4-8 Mo) devenait 10 Mo en base64 : envoi très long
+#: (budget de temps Gemini épuisé) et refus Groq (HTTP 413).
+_IMAGE_MAX_PX = 2000
+_IMAGE_MAX_OCTETS = 1_500_000
+
+
+def preparer_image_pour_ia(mime: str, blob: bytes) -> Tuple[str, bytes]:
+    """Réduit une image lourde (≤ 2000 px sur le grand côté, JPEG 85) —
+    parfaitement lisible pour l'IA, envoi ~10× plus court. Une image
+    déjà petite est renvoyée telle quelle ; en cas d'erreur, l'originale."""
+    if not blob:
+        return mime, blob
+    try:
+        from PIL import Image  # type: ignore
+
+        img = Image.open(io.BytesIO(blob))
+        w, h = img.size
+        if len(blob) <= _IMAGE_MAX_OCTETS and max(w, h) <= _IMAGE_MAX_PX:
+            return mime, blob
+        img.load()
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        ratio = min(1.0, _IMAGE_MAX_PX / float(max(w, h)))
+        if ratio < 1.0:
+            img = img.resize(
+                (max(1, int(w * ratio)), max(1, int(h * ratio))), Image.LANCZOS
+            )
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=85, optimize=True)
+        data = out.getvalue()
+        if len(data) < len(blob):
+            log.info(
+                "Image réduite pour l'IA : %d → %d octets (%dx%d → %dx%d)",
+                len(blob), len(data), w, h, img.size[0], img.size[1],
+            )
+            return "image/jpeg", data
+        return mime, blob
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Réduction d'image impossible (%s) — originale envoyée", exc)
+        return mime, blob
+
+
 def _check_tesseract_status() -> str:
     """Vérifie si Tesseract est installé et lit la version. Pour
     diagnostic dans les warnings utilisateur quand l'OCR retourne
@@ -389,7 +432,11 @@ _GEMINI_RETRY_BACKOFFS = (1.0, 5.0, 30.0)
 #: Budget de temps d'une cascade complète (s) : au-delà, on n'essaie
 #: pas un modèle de plus (Render coupe les requêtes à 100 s ; la tâche
 #: de fond n'a pas cette contrainte mais l'utilisateur attend).
-_GEMINI_BUDGET_S = 50.0
+_GEMINI_BUDGET_S = 120.0
+#: Modèles toujours essayés, budget ou pas (un premier modèle lent en
+#: erreur ne doit pas priver les autres de leur chance).
+_GEMINI_MODELES_MIN = 2
+_GEMINI_ERREURS_TRANSITOIRES = ("HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504", "injoignable")
 
 
 def _gemini_model_cascade() -> List[str]:
@@ -1023,7 +1070,7 @@ async def _gemini_extract_cascade(
     echecs: List[str] = []
     _deadline = time.monotonic() + _GEMINI_BUDGET_S
     for idx, model in enumerate(cascade):
-        if time.monotonic() > _deadline:
+        if idx >= _GEMINI_MODELES_MIN and time.monotonic() > _deadline:
             echecs.append(f"{model} : non essayé (budget de temps épuisé)")
             continue
         for attempt, backoff in enumerate(_GEMINI_RETRY_BACKOFFS):
@@ -1052,8 +1099,21 @@ async def _gemini_extract_cascade(
                 echecs.append(f"{model} : {err}")
                 break
             if not is_quota:
-                # Autre erreur (5xx, réseau, réponse vide…) → pas de
-                # retry, passe au modèle suivant.
+                # Erreur transitoire (modèle saturé 503, réseau) : UN nouvel
+                # essai après 3 s si le budget le permet ; sinon (ou autre
+                # erreur) → modèle suivant.
+                transitoire = any(x in (err or "") for x in _GEMINI_ERREURS_TRANSITOIRES)
+                if (
+                    transitoire
+                    and attempt == 0
+                    and time.monotonic() + 3.0 <= _deadline
+                ):
+                    log.info(
+                        "Gemini[%s] erreur transitoire (%s) — nouvel essai dans 3 s",
+                        model, err,
+                    )
+                    await asyncio.sleep(3.0)
+                    continue
                 echecs.append(f"{model} : {err or 'erreur inconnue'}")
                 break
             # Quota / 429 — on attend et on retente sur le même
@@ -3069,10 +3129,10 @@ async def extract_lead_info(
         elif ct.startswith("image/") or filename.lower().endswith(
             (".png", ".jpg", ".jpeg", ".heic", ".heif", ".webp", ".tiff", ".bmp")
         ):
-            # Image transmise telle quelle à Gemini (lecture native,
-            # bien meilleure que l'OCR). L'OCR reste calculé comme
-            # filet de secours du parser local.
-            gemini_images.append((ct or "image/png", blob))
+            # Image transmise à l'IA (lecture native, bien meilleure que
+            # l'OCR), RÉDUITE si elle est lourde. L'OCR reste calculé sur
+            # l'originale comme filet de secours du parser local.
+            gemini_images.append(preparer_image_pour_ia(ct or "image/png", blob))
             # Screenshot de tableau Excel, photo de fiche MLS, capture
             # de courriel, photo HEIC iPhone, etc. → OCR Tesseract.
             ocr_text = parse_image_ocr(blob, filename=filename)

@@ -232,7 +232,7 @@ async def extraire_rent_roll(
         elif ct.startswith("image/") or bas.endswith(
             (".png", ".jpg", ".jpeg", ".heic", ".heif", ".webp", ".tiff", ".bmp")
         ):
-            images.append((ct or "image/png", blob))
+            images.append(_ex.preparer_image_pour_ia(ct or "image/png", blob))
             ocr = _ex.parse_image_ocr(blob, filename=filename)
             if ocr.strip():
                 textes_locaux.append(_ex._normalize_ocr_text(ocr))
