@@ -2455,43 +2455,115 @@ function TypologyEditor({
 
 // ─── Phase 3 — Unités & optimisation (chantier stratégies) ───────
 
+type ModeUnite = "aucune" | "pre_achat" | "post_achat";
+
 type UniteRow = {
   typo: string;
   loyer_actuel: string;
-  loyer_cible: string;
-  optimiser: boolean;
+  loyer_optimise: string;
+  mode: ModeUnite;
 };
 
-function parseUnites(raw: string | null | undefined): UniteRow[] | null {
+const LIBELLES_MODE: Record<ModeUnite, string> = {
+  aucune: "Non optimisée",
+  pre_achat: "Pré-achat",
+  post_achat: "Post-achat"
+};
+
+/** Lit la liste enregistrée — format v2 (mode par unité, Phil 2026-10-07)
+ *  ou ancien format (optimiser + moment global de la fiche). */
+/** Modes des unités en une phrase (résumé des panneaux) ; repli sur
+ *  l'ancien « moment » pour les analyses calculées avant. */
+function libelleModesUnites(
+  modes: Record<string, number> | null | undefined,
+  preAchat?: boolean
+): string {
+  if (modes)
+    return `Unités : ${modes.aucune ?? 0} non optimisée(s), ${
+      modes.pre_achat ?? 0
+    } pré-achat (loyer optimisé dès l'achat), ${
+      modes.post_achat ?? 0
+    } post-achat (loyer optimisé au refi).`;
+  return preAchat
+    ? "Pré-achat : les revenus optimisés servent déjà à l'achat."
+    : "Post-achat : l'optimisation joue après l'achat.";
+}
+
+function parseUnites(
+  raw: string | null | undefined,
+  momentPreAchat: boolean
+): UniteRow[] | null {
   if (!raw) return null;
   try {
     const j = JSON.parse(raw);
     if (!Array.isArray(j)) return null;
-    return j.map((u) => ({
-      typo: String(u.typo || ""),
-      loyer_actuel:
-        u.loyer_actuel != null ? String(u.loyer_actuel) : "",
-      loyer_cible: u.loyer_cible != null ? String(u.loyer_cible) : "",
-      optimiser: u.optimiser !== false
-    }));
+    return j.map((u) => {
+      const mode: ModeUnite =
+        u.mode === "aucune" || u.mode === "pre_achat" || u.mode === "post_achat"
+          ? u.mode
+          : u.optimiser === false
+          ? "aucune"
+          : momentPreAchat
+          ? "pre_achat"
+          : "post_achat";
+      const opt = u.loyer_optimise ?? u.loyer_cible;
+      return {
+        typo: String(u.typo || ""),
+        loyer_actuel: u.loyer_actuel != null ? String(u.loyer_actuel) : "",
+        loyer_optimise: opt != null ? String(opt) : "",
+        mode
+      };
+    });
   } catch {
     return null;
   }
 }
 
-/** Choix des unités à optimiser (retour Phil 2026-08-31 : « cocher
- *  par unité »). Mode prêteur B : les non-cochées gardent leur loyer
- *  ACTUEL au refi. Mode direct : les cochées passent au loyer cible
- *  dès l'an 1, puis tout croît. */
+/** Loyer de l'unité à l'achat et au refi (an H) selon son mode — mêmes
+ *  règles que le moteur : non optimisée = actuel × (1+g)^H ; pré-achat =
+ *  optimisé dès l'achat, × (1+g)^H ; post-achat = actuel à l'achat,
+ *  optimisé tel que saisi à l'an H. */
+function loyersUnite(
+  r: UniteRow,
+  h: number,
+  g: number
+): { achat: number; refi: number } {
+  const actuel = Number(r.loyer_actuel) || 0;
+  const opt = Number(r.loyer_optimise) || 0;
+  const fac = Math.pow(1 + g, h);
+  if (r.mode === "pre_achat") return { achat: opt, refi: opt * fac };
+  if (r.mode === "post_achat") return { achat: actuel, refi: opt };
+  return { achat: actuel, refi: actuel * fac };
+}
+
+function serialiserUnites(rows: UniteRow[]): string {
+  return JSON.stringify(
+    rows.map((r) => ({
+      typo: r.typo,
+      loyer_actuel: Number(r.loyer_actuel) || 0,
+      loyer_optimise: Number(r.loyer_optimise) || 0,
+      mode: r.mode,
+      // Compat lecteurs v1.
+      loyer_cible: Number(r.loyer_optimise) || 0,
+      optimiser: r.mode !== "aucune"
+    }))
+  );
+}
+
+/** Unités & optimisation (Phil 2026-10-07, GO) : un mode PAR UNITÉ —
+ *  non optimisée (défaut) / pré-achat / post-achat — et deux colonnes
+ *  calculées, « À l'achat » et « Au refi », dont les totaux sont
+ *  exactement les revenus que les scénarios utilisent. */
 function UnitesOptimisationCard({
   unitesJson,
   typology,
   prixLoyers,
   revenusBruts,
   nbLogements,
-  defautOptimiser,
-  moment,
-  onMomentChange,
+  modeDefaut,
+  momentPreAchat,
+  croissance,
+  anneesRefi,
   onSave
 }: {
   unitesJson: string | null | undefined;
@@ -2499,22 +2571,25 @@ function UnitesOptimisationCard({
   prixLoyers: Record<string, string>;
   revenusBruts: number | null;
   nbLogements: number | null;
-  /** true en prêteur B (tout coché), false en traditionnel. */
-  defautOptimiser: boolean;
-  /** Moment de l'optimisation (retour Phil 2026-09-08). */
-  moment?: "post_achat" | "pre_achat";
-  onMomentChange?: (v: "post_achat" | "pre_achat") => void;
+  /** Mode des unités générées : post-achat en prêteur B, sinon aucune. */
+  modeDefaut: ModeUnite;
+  /** Ancien « moment » global de la fiche (conversion du format v1). */
+  momentPreAchat: boolean;
+  /** Croissance organique des loyers (fraction, ex. 0,03). */
+  croissance: number;
+  /** Année du refinancement (durée du projet ou horizon de détention). */
+  anneesRefi: number;
   onSave: (json: string | null) => void;
 }) {
   const [rows, setRows] = useState<UniteRow[] | null>(() =>
-    parseUnites(unitesJson)
+    parseUnites(unitesJson, momentPreAchat)
   );
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
-    setRows(parseUnites(unitesJson));
+    setRows(parseUnites(unitesJson, momentPreAchat));
     setDirty(false);
-  }, [unitesJson]);
+  }, [unitesJson, momentPreAchat]);
 
   const construire = useCallback((): UniteRow[] => {
     const actuelDefaut =
@@ -2528,13 +2603,13 @@ function UnitesOptimisationCard({
         out.push({
           typo: k,
           loyer_actuel: actuelDefaut,
-          loyer_cible: prixLoyers[k] ?? "",
-          optimiser: defautOptimiser
+          loyer_optimise: prixLoyers[k] ?? "",
+          mode: modeDefaut
         });
       }
     }
     return out;
-  }, [typology, prixLoyers, revenusBruts, nbLogements, defautOptimiser]);
+  }, [typology, prixLoyers, revenusBruts, nbLogements, modeDefaut]);
 
   // Détail visible DIRECT, sans clic (retour Phil 2026-09-02) : dès
   // que la typologie existe et qu'aucune liste n'est enregistrée, on
@@ -2546,16 +2621,7 @@ function UnitesOptimisationCard({
     const out = construire();
     if (out.length === 0) return;
     autoFait.current = true;
-    onSave(
-      JSON.stringify(
-        out.map((r) => ({
-          typo: r.typo,
-          loyer_actuel: Number(r.loyer_actuel) || 0,
-          loyer_cible: Number(r.loyer_cible) || 0,
-          optimiser: r.optimiser
-        }))
-      )
-    );
+    onSave(serialiserUnites(out));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unitesJson, construire]);
 
@@ -2571,60 +2637,40 @@ function UnitesOptimisationCard({
     setDirty(true);
   }
 
+  function toutMode(mode: ModeUnite) {
+    setRows((rs) => (rs ? rs.map((r) => ({ ...r, mode })) : rs));
+    setDirty(true);
+  }
+
+  const h = Math.max(0, Math.round(anneesRefi || 0));
+  const g = croissance || 0;
+  const calc = (rows ?? []).map((r) => loyersUnite(r, h, g));
   const totalActuel = (rows ?? []).reduce(
     (s, r) => s + (Number(r.loyer_actuel) || 0),
     0
   );
-  const totalEffectif = (rows ?? []).reduce(
-    (s, r) =>
-      s +
-      (r.optimiser
-        ? Number(r.loyer_cible) || 0
-        : Number(r.loyer_actuel) || 0),
-    0
-  );
-  const nbOpt = (rows ?? []).filter((r) => r.optimiser).length;
+  const totalAchat = calc.reduce((s, c) => s + c.achat, 0);
+  const totalRefi = calc.reduce((s, c) => s + c.refi, 0);
+  const ecartFiche =
+    revenusBruts != null ? totalAchat * 12 - revenusBruts : null;
+  const nbParMode = (m: ModeUnite) =>
+    (rows ?? []).filter((r) => r.mode === m).length;
+  const champ =
+    "input w-24 py-0.5 text-right font-mono text-[11px] disabled:opacity-40";
 
   return (
     <SubCard icon={Gauge} title="Unités & optimisation" cols={2}>
       <div className="space-y-2 sm:col-span-2">
-        {onMomentChange ? (
-          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-brand-800 bg-brand-950/40 px-3 py-2">
-            <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
-              Moment de l&apos;optimisation
-            </label>
-            <select
-              value={moment ?? "post_achat"}
-              onChange={(e) =>
-                onMomentChange(
-                  e.target.value === "pre_achat" ? "pre_achat" : "post_achat"
-                )
-              }
-              className="input py-1 text-xs"
-            >
-              <option value="post_achat">
-                Post-achat (défaut) — achat sur les revenus de la fiche,
-                optimisation au refi
-              </option>
-              <option value="pre_achat">
-                Pré-achat — financement initial déjà sur les loyers
-                optimisés ci-dessous
-              </option>
-            </select>
-            <span className="basis-full text-[10px] text-white/40">
-              {moment === "pre_achat"
-                ? "Pré-achat : les scénarios d'achat utilisent la somme des loyers ci-dessous (cible si optimisée, sinon actuel) ; au refi, ces loyers ont crû organiquement depuis l'an 0."
-                : "Post-achat : les scénarios d'achat utilisent les revenus de l'onglet Infos ; les loyers cibles s'appliquent au refi."}
-            </span>
-          </div>
-        ) : null}
         <p className="text-[10px] leading-snug text-white/40">
-          Coche les unités que tu optimises (loyer CIBLE au refi). Une
-          unité décochée suit la croissance ORGANIQUE des revenus :
-          loyer actuel × (1 + % par an) sur la durée du projet ou de
-          la détention. Le loyer actuel par défaut = revenus bruts ÷
-          nombre d&apos;unités — ajuste-le si tu connais le vrai prix
-          de l&apos;unité.
+          Un mode par unité. <b>Non optimisée</b> : loyer actuel à
+          l&apos;achat, puis croissance organique de {(g * 100).toFixed(1)} %
+          par an jusqu&apos;au refi (an {h}). <b>Pré-achat</b> : le loyer
+          optimisé s&apos;applique dès l&apos;achat, puis croît.{" "}
+          <b>Post-achat</b> : loyer actuel à l&apos;achat, loyer optimisé
+          atteint à l&apos;an {h}. Les colonnes « À l&apos;achat » et
+          « Au refi » sont exactement les revenus que les scénarios
+          utilisent. Le loyer actuel par défaut = revenus bruts ÷ nombre
+          d&apos;unités.
         </p>
         {rows === null ? (
           <button
@@ -2640,32 +2686,23 @@ function UnitesOptimisationCard({
               <table className="w-full border-collapse text-[11px]">
                 <thead>
                   <tr className="bg-brand-900 text-[9px] uppercase tracking-wider text-white/40">
-                    <th className="px-2 py-1.5 text-left">Optimiser</th>
                     <th className="px-2 py-1.5 text-left">Unité</th>
-                    <th className="px-2 py-1.5 text-right">
-                      Loyer actuel ($/mois)
+                    <th className="px-2 py-1.5 text-right">Loyer actuel</th>
+                    <th className="px-2 py-1.5 text-right">Loyer optimisé</th>
+                    <th className="px-2 py-1.5 text-center">Non optimisée</th>
+                    <th className="px-2 py-1.5 text-center">Pré-achat</th>
+                    <th className="px-2 py-1.5 text-center">Post-achat</th>
+                    <th className="px-2 py-1.5 text-right text-emerald-300/80">
+                      À l&apos;achat
                     </th>
-                    <th className="px-2 py-1.5 text-right">
-                      Loyer cible ($/mois)
+                    <th className="px-2 py-1.5 text-right text-emerald-300/80">
+                      Au refi (an {h})
                     </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-brand-800">
                   {rows.map((r, i) => (
-                    <tr
-                      key={i}
-                      className={r.optimiser ? "" : "opacity-60"}
-                    >
-                      <td className="px-2 py-1">
-                        <input
-                          type="checkbox"
-                          checked={r.optimiser}
-                          onChange={(e) =>
-                            maj(i, { optimiser: e.target.checked })
-                          }
-                          className="h-3.5 w-3.5 accent-emerald-500"
-                        />
-                      </td>
+                    <tr key={i}>
                       <td className="px-2 py-1 text-white/70">
                         {r.typo || "—"} · #{i + 1}
                       </td>
@@ -2677,46 +2714,97 @@ function UnitesOptimisationCard({
                           onChange={(e) =>
                             maj(i, { loyer_actuel: e.target.value })
                           }
-                          className="input w-24 py-0.5 text-right font-mono text-[11px]"
+                          className={champ}
+                          title="Loyer actuel (vrai loyer d'aujourd'hui)"
                         />
                       </td>
                       <td className="px-2 py-1 text-right">
                         <input
                           type="number"
                           step="any"
-                          value={r.loyer_cible}
+                          value={r.loyer_optimise}
                           onChange={(e) =>
-                            maj(i, { loyer_cible: e.target.value })
+                            maj(i, { loyer_optimise: e.target.value })
                           }
-                          disabled={!r.optimiser}
-                          className="input w-24 py-0.5 text-right font-mono text-[11px] disabled:opacity-40"
+                          disabled={r.mode === "aucune"}
+                          className={champ}
+                          title={
+                            r.mode === "pre_achat"
+                              ? "Loyer en place dès l'achat"
+                              : r.mode === "post_achat"
+                              ? `Loyer atteint à l'an ${h} (refinancement)`
+                              : "Choisis pré-achat ou post-achat pour saisir un loyer optimisé"
+                          }
                         />
+                      </td>
+                      {(["aucune", "pre_achat", "post_achat"] as ModeUnite[]).map(
+                        (m) => (
+                          <td key={m} className="px-2 py-1 text-center">
+                            <input
+                              type="radio"
+                              name={`mode-unite-${i}`}
+                              checked={r.mode === m}
+                              onChange={() => maj(i, { mode: m })}
+                              className="h-3.5 w-3.5 accent-emerald-500"
+                              title={LIBELLES_MODE[m]}
+                            />
+                          </td>
+                        )
+                      )}
+                      <td className="px-2 py-1 text-right font-mono tabular-nums text-emerald-200">
+                        {fmtMoney(calc[i]?.achat ?? 0)}
+                      </td>
+                      <td className="px-2 py-1 text-right font-mono tabular-nums text-emerald-200">
+                        {fmtMoney(calc[i]?.refi ?? 0)}
                       </td>
                     </tr>
                   ))}
                 </tbody>
+                <tfoot>
+                  <tr className="bg-brand-900/60 text-[11px] font-semibold text-white">
+                    <td className="px-2 py-1.5">Total / mois</td>
+                    <td className="px-2 py-1.5 text-right font-mono tabular-nums">
+                      {fmtMoney(totalActuel)}
+                    </td>
+                    <td className="px-2 py-1.5" />
+                    <td className="px-2 py-1.5 text-center text-white/50">
+                      {nbParMode("aucune")}
+                    </td>
+                    <td className="px-2 py-1.5 text-center text-white/50">
+                      {nbParMode("pre_achat")}
+                    </td>
+                    <td className="px-2 py-1.5 text-center text-white/50">
+                      {nbParMode("post_achat")}
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-mono tabular-nums text-emerald-300">
+                      {fmtMoney(totalAchat)}
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-mono tabular-nums text-emerald-300">
+                      {fmtMoney(totalRefi)}
+                    </td>
+                  </tr>
+                </tfoot>
               </table>
             </div>
             <p className="text-[10px] text-white/50">
-              {nbOpt}/{rows.length} unités optimisées · actuel{" "}
-              {fmtMoney(totalActuel)}/mois → effectif au refi{" "}
-              {fmtMoney(totalEffectif)}/mois
+              Revenus à l&apos;achat {fmtMoney(totalAchat * 12)}/an · au
+              refi (an {h}) {fmtMoney(totalRefi * 12)}/an
+              {dirty ? " — modifications non enregistrées" : ""}
             </p>
+            {ecartFiche != null && Math.abs(ecartFiche) > rows.length ? (
+              <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1 text-[10px] text-amber-200/90">
+                Écart avec les revenus bruts de l&apos;onglet Infos (
+                {fmtMoney(revenusBruts ?? 0)}/an) :{" "}
+                {ecartFiche > 0 ? "+" : ""}
+                {fmtMoney(ecartFiche)}/an. Les scénarios d&apos;achat
+                utilisent le total des unités — ajuste les loyers actuels
+                ou les revenus de la fiche pour les faire concorder.
+              </p>
+            ) : null}
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={() =>
-                  onSave(
-                    JSON.stringify(
-                      rows.map((r) => ({
-                        typo: r.typo,
-                        loyer_actuel: Number(r.loyer_actuel) || 0,
-                        loyer_cible: Number(r.loyer_cible) || 0,
-                        optimiser: r.optimiser
-                      }))
-                    )
-                  )
-                }
+                onClick={() => onSave(serialiserUnites(rows))}
                 disabled={!dirty}
                 className="btn-accent px-3 py-1.5 text-xs disabled:opacity-50"
               >
@@ -2724,29 +2812,27 @@ function UnitesOptimisationCard({
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setRows((rs) =>
-                    rs ? rs.map((r) => ({ ...r, optimiser: true })) : rs
-                  );
-                  setDirty(true);
-                }}
-                className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20"
-                title="Optimiser toutes les unités"
+                onClick={() => toutMode("aucune")}
+                className="rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white/60 transition hover:bg-white/10"
+                title="Aucune unité optimisée : loyers actuels + croissance organique"
               >
-                Tout cocher
+                Tout non optimisé
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setRows((rs) =>
-                    rs ? rs.map((r) => ({ ...r, optimiser: false })) : rs
-                  );
-                  setDirty(true);
-                }}
-                className="rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white/60 transition hover:bg-white/10"
-                title="Aucune unité optimisée"
+                onClick={() => toutMode("pre_achat")}
+                className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20"
+                title="Toutes les unités au loyer optimisé dès l'achat"
               >
-                Tout décocher
+                Tout pré-achat
+              </button>
+              <button
+                type="button"
+                onClick={() => toutMode("post_achat")}
+                className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20"
+                title="Toutes les unités optimisées après l'achat, loyer optimisé atteint au refi"
+              >
+                Tout post-achat
               </button>
               <button
                 type="button"
@@ -3374,13 +3460,14 @@ function ManualAnalysisSection({
             prixLoyers={prixLoyers}
             revenusBruts={data.revenus_bruts}
             nbLogements={data.nb_logements}
-            defautOptimiser={strategie === "preteur_b"}
-            moment={
-              data.optimisation_moment === "pre_achat"
-                ? "pre_achat"
-                : "post_achat"
+            modeDefaut={strategie === "preteur_b" ? "post_achat" : "aucune"}
+            momentPreAchat={data.optimisation_moment === "pre_achat"}
+            croissance={data.tri_croissance_loyers ?? 0.03}
+            anneesRefi={
+              strategie === "preteur_b"
+                ? data.duree_projet_annees ?? 2
+                : data.projection_horizon_annees ?? 5
             }
-            onMomentChange={(v) => onPatch("optimisation_moment", v)}
             onSave={(json) => onPatch("unites_json", json)}
           />
         ) : null}
@@ -3695,6 +3782,7 @@ type ResidentielResult = {
   croissance_loyers: number;
   croissance_depenses: number;
   optimisation_pre_achat: boolean;
+  unites_modes?: Record<string, number> | null;
   projection: ResProjPoint[];
 };
 
@@ -3719,6 +3807,35 @@ type AnalysisResults = {
   balance_vente?: { montant: number; taux_pct: number };
   cashback?: { montant: number; prix_reel: number };
   optimisation_pre_achat?: boolean;
+  unites?: {
+    total: number;
+    optimisees: number;
+    aucune?: number;
+    pre_achat?: number;
+    post_achat?: number;
+  } | null;
+  /** Modes par unité + colonnes « À l'achat » / « Au refi » (Phil 2026-10-07). */
+  unites_calcul?: {
+    h: number;
+    g: number;
+    modes: { aucune: number; pre_achat: number; post_achat: number };
+    unites: Array<{
+      index: number;
+      typo: string | null;
+      mode: string;
+      loyer_actuel: number;
+      loyer_optimise: number;
+      achat: number;
+      refi: number;
+    }>;
+    total_actuel_mois: number;
+    total_achat_mois: number;
+    total_refi_mois: number;
+    revenus_achat: number;
+    revenus_refi: number;
+    revenus_fiche: number;
+    ecart_achat_vs_fiche: number;
+  } | null;
   traditionnel?: {
     /** « traditionnel » | « assumation » (Phil 2026-09-29). */
     mode?: string;
@@ -3745,6 +3862,7 @@ type AnalysisResults = {
     prix_achat?: number;
     prix_reel?: number;
     optimisation_pre_achat?: boolean;
+    unites_modes?: Record<string, number> | null;
     revenus_achat?: number;
     detail_mdf_par_programme?: Record<
       string,
@@ -4520,9 +4638,7 @@ function ResidentielAchatPanel({
           . Pas de valeur économique ni de TGA ici.
           Dépenses RÉELLES (rien de normalisé) ; cashflow = revenus −
           dépenses − hypothèque.{" "}
-          {r.optimisation_pre_achat
-            ? "Pré-achat : les revenus optimisés servent déjà à l'achat."
-            : "Post-achat : l'optimisation joue après l'achat."}
+          {libelleModesUnites(r.unites_modes, r.optimisation_pre_achat)}
         </>
       }
       action={
@@ -4967,7 +5083,11 @@ function TraditionnelAchatPanel({
           </>
         ) : (
         <>
-          {t.optimisation_pre_achat
+          {t.unites_modes
+            ? `Financé sur la colonne « À l'achat » des unités (${
+                t.unites_modes.pre_achat ?? 0
+              } en pré-achat) et les dépenses actuelles`
+            : t.optimisation_pre_achat
             ? "Financé sur les loyers OPTIMISÉS des unités (pré-achat) et les dépenses actuelles"
             : "Financé sur les loyers et dépenses ACTUELS"}{" "}
           (plafonné au prix demandé). Le programme RETENU pilote la
@@ -7370,7 +7490,63 @@ function StrategieDetailSubsection({
         </tbody>
       </table>
 
-      {unites.length > 0 ? (
+      {data.unites_calcul ? (
+        <>
+          <p className="mt-3 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+            Unités ({data.unites_calcul.unites.length}) — non optimisée :
+            actuel × (1 + {(data.unites_calcul.g * 100).toFixed(1)} %)^
+            {data.unites_calcul.h} · pré-achat : optimisé dès l&apos;achat ×
+            (1 + g)^{data.unites_calcul.h} · post-achat : optimisé atteint à
+            l&apos;an {data.unites_calcul.h}
+          </p>
+          <table className="mt-1 w-full text-[11px]">
+            <thead className="text-[9px] uppercase tracking-wider text-white/40">
+              <tr>
+                <th className="px-2 py-1 text-left">Unité</th>
+                <th className="px-2 py-1 text-right">Actuel</th>
+                <th className="px-2 py-1 text-right">Optimisé</th>
+                <th className="px-2 py-1 text-right">À l&apos;achat</th>
+                <th className="px-2 py-1 text-right">
+                  Au refi (an {data.unites_calcul.h})
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.unites_calcul.unites.map((u) => (
+                <tr key={u.index} className="border-t border-brand-800/60">
+                  <td className="px-2 py-1 text-white/60">
+                    {u.typo || "—"} · #{u.index} ·{" "}
+                    {u.mode === "aucune"
+                      ? "non optimisée"
+                      : u.mode === "pre_achat"
+                      ? "pré-achat"
+                      : "post-achat"}
+                  </td>
+                  <td className="px-2 py-1 text-right font-mono tabular-nums text-white/70">
+                    {_fmtMoneyDetail(u.loyer_actuel)}
+                  </td>
+                  <td className="px-2 py-1 text-right font-mono tabular-nums text-white/70">
+                    {u.mode === "aucune" ? "—" : _fmtMoneyDetail(u.loyer_optimise)}
+                  </td>
+                  <td className="px-2 py-1 text-right font-mono tabular-nums text-white">
+                    {_fmtMoneyDetail(u.achat)}
+                  </td>
+                  <td className="px-2 py-1 text-right font-mono tabular-nums text-white">
+                    {_fmtMoneyDetail(u.refi)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="mt-1 px-2 text-[10px] text-white/40">
+            Somme à l&apos;achat {_fmtMoneyDetail(data.unites_calcul.total_achat_mois)}
+            /mois ({_fmtMoneyDetail(data.unites_calcul.revenus_achat)}/an) ·
+            au refi {_fmtMoneyDetail(data.unites_calcul.total_refi_mois)}/mois (
+            {_fmtMoneyDetail(data.unites_calcul.revenus_refi)}/an, avant unités
+            ajoutées).
+          </p>
+        </>
+      ) : unites.length > 0 ? (
         <>
           <p className="mt-3 text-[10px] font-semibold uppercase tracking-wider text-white/40">
             Unités ({unites.length}) — cochée = loyer cible au refi,

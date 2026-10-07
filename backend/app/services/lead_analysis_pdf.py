@@ -305,6 +305,83 @@ def _styles(rl: Dict[str, Any]):
     }
 
 
+def _libelle_modes(modes: Optional[dict], pre_achat: Optional[bool]) -> str:
+    """Modes d'optimisation par unité (Phil 2026-10-07) ; repli sur l'ancien
+    « moment » global pour les analyses calculées avant."""
+    if modes:
+        return (
+            f"{modes.get('aucune', 0)} non optimisée(s) · "
+            f"{modes.get('pre_achat', 0)} pré-achat (loyer optimisé dès l'achat) · "
+            f"{modes.get('post_achat', 0)} post-achat (loyer optimisé au refi)"
+        )
+    return (
+        "Pré-achat — financement sur les loyers optimisés"
+        if pre_achat
+        else "Post-achat — loyers actuels à l'achat, optimisation au refi"
+    )
+
+
+def _bloc_unites(rl, results: dict, *, s) -> list:
+    """Unités & optimisation — reflet de la fiche (Phil 2026-10-07) : mode
+    de chaque unité, loyer à l'achat et au refi, totaux."""
+    Paragraph = rl["Paragraph"]
+    Table = rl["Table"]
+    TableStyle = rl["TableStyle"]
+    mm = rl["mm"]
+    colors = rl["colors"]
+    uc = (results or {}).get("unites_calcul")
+    out: list = []
+    if not uc:
+        _un = (results or {}).get("unites")
+        if _un:
+            out.append(Paragraph(
+                f"Optimisation par unité : {_un.get('optimisees')} unité(s) "
+                f"optimisée(s) sur {_un.get('total')}.", s["small_muted"]))
+        return out
+    m = uc.get("modes") or {}
+    out.append(Paragraph(
+        f"Unités : {m.get('aucune', 0)} non optimisée(s), "
+        f"{m.get('pre_achat', 0)} pré-achat, {m.get('post_achat', 0)} post-achat — "
+        f"revenus à l'achat {_money(uc.get('revenus_achat'))}/an, au refi (an "
+        f"{uc.get('h')}) {_money(uc.get('revenus_refi'))}/an (croissance organique "
+        f"{float(uc.get('g') or 0) * 100:.1f} %).", s["small_muted"]))
+    libelles = {"aucune": "Non optimisée", "pre_achat": "Pré-achat", "post_achat": "Post-achat"}
+    data = [[
+        Paragraph(h, s["small"])
+        for h in ("Unité", "Mode", "Actuel", "Optimisé", "À l'achat", f"Au refi (an {uc.get('h')})")
+    ]]
+    for ul in uc.get("unites") or []:
+        data.append([
+            Paragraph(f"#{ul.get('index')} {ul.get('typo') or ''}", s["small"]),
+            Paragraph(libelles.get(ul.get("mode"), str(ul.get("mode"))), s["small"]),
+            Paragraph(_money(ul.get("loyer_actuel")), s["num"]),
+            Paragraph(_money(ul.get("loyer_optimise")) if ul.get("mode") != "aucune" else "—", s["num"]),
+            Paragraph(_money(ul.get("achat")), s["num"]),
+            Paragraph(_money(ul.get("refi")), s["num"]),
+        ])
+    data.append([
+        Paragraph("<b>Total / mois</b>", s["small"]),
+        "",
+        Paragraph(f"<b>{_money(uc.get('total_actuel_mois'))}</b>", s["num"]),
+        "",
+        Paragraph(f"<b>{_money(uc.get('total_achat_mois'))}</b>", s["num"]),
+        Paragraph(f"<b>{_money(uc.get('total_refi_mois'))}</b>", s["num"]),
+    ])
+    t = Table(data, colWidths=[28 * mm, 26 * mm, "*", "*", "*", "*"], repeatRows=1)
+    t.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor(_C_LINE)),
+        ("LINEBELOW", (0, 1), (-1, -2), 0.25, colors.HexColor(_C_LINE)),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#fafafa")]),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    out.append(t)
+    return out
+
+
 def _table_two_col(rl, rows, *, s):
     """Tableau 2 colonnes (libellé / valeur) avec style cohérent. La
     valeur est alignée à droite. Accepte du markup reportlab (<b>…</b>)
@@ -695,10 +772,8 @@ def _residentiel_section(rl, r: dict, *, s):
         ("Cash à sortir (MDF nette + frais)", _money(r.get("mdf_cash"))),
         ("Total dépensé (coût réel + frais)", _money(r.get("total_depense"))),
         (
-            "Moment de l'optimisation",
-            "Pré-achat — financement sur les loyers optimisés"
-            if r.get("optimisation_pre_achat")
-            else "Post-achat — loyers actuels à l'achat",
+            "Optimisation des unités",
+            _libelle_modes(r.get("unites_modes"), r.get("optimisation_pre_achat")),
         ),
     ]
     rc = r.get("rendement_cash_optimise")
@@ -879,10 +954,8 @@ def _traditionnel_section(rl, trad: dict, *, s):
         ("Prêt accordé à l'achat", _money(trad.get("pret_retenu"))),
         ("Cash à sortir (MDF nette + frais)", _money(trad.get("mdf_cash"))),
         (
-            "Moment de l'optimisation",
-            "Pré-achat — financement initial sur les loyers optimisés"
-            if trad.get("optimisation_pre_achat")
-            else "Post-achat — achat sur les loyers actuels, optimisation au refi",
+            "Optimisation des unités",
+            _libelle_modes(trad.get("unites_modes"), trad.get("optimisation_pre_achat")),
         ),
         ("Frais d'acquisition", _money(trad.get("frais_demarrage_total"))),
         ("Dette à rembourser à l'an H (solde + BV + frais roulés)",
@@ -2231,6 +2304,7 @@ def _render_bytes(
             "RÉSIDENTIEL — ACHAT POUR LE CASHFLOW", s["section"]
         ))
         story.extend(_residentiel_section(rl, _res_pdf, s=s))
+        story.extend(_bloc_unites(rl, results, s=s))
     elif _mode_direct:
         _est_as_pdf = (_direct or {}).get("mode") == "assumation"
         story.append(Paragraph(
@@ -2249,12 +2323,7 @@ def _render_bytes(
             "comparés, le retenu pilote la mise de fonds) ; détention "
             "avec croissance organique ; refinancement comparé à "
             "l'horizon choisi.", s["small_muted"]))
-        _un = results.get("unites")
-        if _un:
-            story.append(Paragraph(
-                f"Optimisation par unité : {_un.get('optimisees')} unité(s) "
-                f"optimisée(s) sur {_un.get('total')} — les autres "
-                "croissent depuis leur loyer actuel.", s["small_muted"]))
+        story.extend(_bloc_unites(rl, results, s=s))
     elif results:
         story.append(Paragraph(
             "SCÉNARIOS DE FINANCEMENT", s["section"]
@@ -2273,13 +2342,7 @@ def _render_bytes(
         story.append(Paragraph(
             "La colonne surlignée en vert est le scénario gagnant "
             "(meilleure équité au refinancement).", s["small_muted"]))
-        _un = results.get("unites")
-        if _un:
-            story.append(Paragraph(
-                f"Optimisation par unité : {_un.get('optimisees')} unité(s) "
-                f"optimisée(s) sur {_un.get('total')} — les unités non "
-                "optimisées gardent leur loyer actuel au refinancement.",
-                s["small_muted"]))
+        story.extend(_bloc_unites(rl, results, s=s))
     else:
         story.append(Paragraph(
             "Aucun scénario calculé — lance l'analyse financière "
