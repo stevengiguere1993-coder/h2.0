@@ -1218,6 +1218,55 @@
   "source": "calcul"
  },
  {
+  "section": "6b · Coût du projet",
+  "label": "Prix d'achat",
+  "formule": null,
+  "valeur": "4 750 000 $",
+  "source": "fiche"
+ },
+ {
+  "section": "6b · Coût du projet",
+  "label": "= Coût réel",
+  "formule": "4 750 000 $ − 0 $",
+  "valeur": "4 750 000 $",
+  "source": "calcul"
+ },
+ {
+  "section": "6b · Coût du projet",
+  "label": "+ Frais de démarrage (tous)",
+  "formule": "payés cash 668 172 $ + financés 195 600 $",
+  "valeur": "863 772 $",
+  "source": "calcul"
+ },
+ {
+  "section": "6b · Coût du projet",
+  "label": "= Coût total du projet (prix de revente pour revenir à 0 $)",
+  "formule": "4 750 000 $ + 863 772 $",
+  "valeur": "5 613 772 $",
+  "source": "calcul"
+ },
+ {
+  "section": "6b · Coût du projet",
+  "label": "Prêt accordé",
+  "formule": null,
+  "valeur": "3 995 600 $",
+  "source": "calcul"
+ },
+ {
+  "section": "6b · Coût du projet",
+  "label": "+ Cash total nécessaire (mise de fonds nette + frais payés cash)",
+  "formule": "950 000 $ + 668 172 $",
+  "valeur": "1 618 172 $",
+  "source": "calcul"
+ },
+ {
+  "section": "6b · Coût du projet",
+  "label": "Vérification : dette + cash − coût total",
+  "formule": "3 995 600 $ + 1 618 172 $ − 5 613 772 $",
+  "valeur": "0 $",
+  "source": "calcul"
+ },
+ {
   "section": "7 · Refinancement et verdict",
   "label": "SCHL standard — équité à la fin",
   "formule": "prêt refi 3 982 520 $ − prix d'acquisition 5 613 772 $",

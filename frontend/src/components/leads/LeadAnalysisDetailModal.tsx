@@ -2508,7 +2508,8 @@ function libelleModesUnites(
 
 function parseUnites(
   raw: string | null | undefined,
-  momentPreAchat: boolean
+  momentPreAchat: boolean,
+  prixLoyers: Record<string, string> = {}
 ): UniteRow[] | null {
   if (!raw) return null;
   try {
@@ -2523,11 +2524,19 @@ function parseUnites(
           : momentPreAchat
           ? "pre_achat"
           : "post_achat";
+      const typo = String(u.typo || "");
       const opt = u.loyer_optimise ?? u.loyer_cible;
+      const optNum = Number(opt);
+      // Vide (ou égal au loyer projeté de la typologie) = l'unité SUIT la
+      // typologie : changer le loyer projeté dans Infos la met à jour.
+      const prixTypo = Number(prixLoyers[typo]);
+      const suit =
+        !(optNum > 0) ||
+        (prixTypo > 0 && Math.abs(optNum - prixTypo) < 0.005);
       return {
-        typo: String(u.typo || ""),
+        typo,
         loyer_actuel: u.loyer_actuel != null ? String(u.loyer_actuel) : "",
-        loyer_optimise: opt != null ? String(opt) : "",
+        loyer_optimise: suit ? "" : String(opt),
         mode,
         numero: u.numero ? String(u.numero) : undefined
       };
@@ -2537,6 +2546,17 @@ function parseUnites(
   }
 }
 
+/** Loyer optimisé effectif : le montant saisi, sinon le loyer projeté
+ *  de la typologie (onglet Infos) — même règle que le moteur. */
+function loyerOptimiseEffectif(
+  r: UniteRow,
+  prixLoyers: Record<string, string>
+): number {
+  const saisi = Number(r.loyer_optimise);
+  if (r.loyer_optimise !== "" && saisi > 0) return saisi;
+  return Number(prixLoyers[r.typo]) || 0;
+}
+
 /** Loyer de l'unité à l'achat et au refi (an H) selon son mode — mêmes
  *  règles que le moteur : non optimisée = actuel × (1+g)^H ; pré-achat =
  *  optimisé dès l'achat, × (1+g)^H ; post-achat = actuel à l'achat,
@@ -2544,10 +2564,11 @@ function parseUnites(
 function loyersUnite(
   r: UniteRow,
   h: number,
-  g: number
+  g: number,
+  prixLoyers: Record<string, string>
 ): { achat: number; refi: number } {
   const actuel = Number(r.loyer_actuel) || 0;
-  const opt = Number(r.loyer_optimise) || 0;
+  const opt = loyerOptimiseEffectif(r, prixLoyers);
   const fac = Math.pow(1 + g, h);
   if (r.mode === "pre_achat") return { achat: opt, refi: opt * fac };
   if (r.mode === "post_achat") return { achat: actuel, refi: opt };
@@ -2560,10 +2581,17 @@ function serialiserUnites(rows: UniteRow[]): string {
       typo: r.typo,
       numero: r.numero || null,
       loyer_actuel: Number(r.loyer_actuel) || 0,
-      loyer_optimise: Number(r.loyer_optimise) || 0,
+      // null = suit le loyer projeté de la typologie (résolu par le moteur).
+      loyer_optimise:
+        r.loyer_optimise !== "" && Number(r.loyer_optimise) > 0
+          ? Number(r.loyer_optimise)
+          : null,
       mode: r.mode,
       // Compat lecteurs v1.
-      loyer_cible: Number(r.loyer_optimise) || 0,
+      loyer_cible:
+        r.loyer_optimise !== "" && Number(r.loyer_optimise) > 0
+          ? Number(r.loyer_optimise)
+          : null,
       optimiser: r.mode !== "aucune"
     }))
   );
@@ -2603,13 +2631,17 @@ function UnitesOptimisationCard({
   onSave: (json: string | null) => void;
 }) {
   const [rows, setRows] = useState<UniteRow[] | null>(() =>
-    parseUnites(unitesJson, momentPreAchat)
+    parseUnites(unitesJson, momentPreAchat, prixLoyers)
   );
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
-    setRows(parseUnites(unitesJson, momentPreAchat));
+    setRows(parseUnites(unitesJson, momentPreAchat, prixLoyers));
     setDirty(false);
+    // prixLoyers volontairement hors dépendances : une unité qui suit sa
+    // typologie est stockée vide, les colonnes calculées lisent le prix
+    // courant en direct.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unitesJson, momentPreAchat]);
 
   const construire = useCallback((): UniteRow[] => {
@@ -2624,13 +2656,14 @@ function UnitesOptimisationCard({
         out.push({
           typo: k,
           loyer_actuel: actuelDefaut,
-          loyer_optimise: prixLoyers[k] ?? "",
+          // Vide = suit le loyer projeté de la typologie.
+          loyer_optimise: "",
           mode: modeDefaut
         });
       }
     }
     return out;
-  }, [typology, prixLoyers, revenusBruts, nbLogements, modeDefaut]);
+  }, [typology, revenusBruts, nbLogements, modeDefaut]);
 
   // Détail visible DIRECT, sans clic (retour Phil 2026-09-02) : dès
   // que la typologie existe et qu'aucune liste n'est enregistrée, on
@@ -2751,10 +2784,8 @@ function UnitesOptimisationCard({
     if (!importPreview) return;
     const out: UniteRow[] = importPreview.unites.map((u) => {
       const typo = u.typo || "";
-      const opt =
-        u.loyer_optimise != null
-          ? String(u.loyer_optimise)
-          : prixLoyers[typo] ?? "";
+      // Loyer optimisé lu dans le document ; sinon l'unité suit la typologie.
+      const opt = u.loyer_optimise != null ? String(u.loyer_optimise) : "";
       return {
         typo,
         numero: u.numero || undefined,
@@ -2790,7 +2821,7 @@ function UnitesOptimisationCard({
 
   const h = Math.max(0, Math.round(anneesRefi || 0));
   const g = croissance || 0;
-  const calc = (rows ?? []).map((r) => loyersUnite(r, h, g));
+  const calc = (rows ?? []).map((r) => loyersUnite(r, h, g, prixLoyers));
   const totalActuel = (rows ?? []).reduce(
     (s, r) => s + (Number(r.loyer_actuel) || 0),
     0
@@ -2821,7 +2852,9 @@ function UnitesOptimisationCard({
           atteint à l&apos;an {h}. Les colonnes « À l&apos;achat » et
           « Au refi » sont exactement les revenus que les scénarios
           utilisent. Le loyer actuel par défaut = revenus bruts ÷ nombre
-          d&apos;unités.
+          d&apos;unités. Un loyer optimisé laissé vide suit le loyer projeté
+          de sa typologie (onglet Infos) : le changer là-bas met les unités
+          à jour ; saisis un montant pour fixer une unité.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <input
@@ -3029,23 +3062,42 @@ function UnitesOptimisationCard({
                         />
                       </td>
                       <td className="px-2 py-1 text-right">
-                        <input
-                          type="number"
-                          step="any"
-                          value={r.loyer_optimise}
-                          onChange={(e) =>
-                            maj(i, { loyer_optimise: e.target.value })
-                          }
-                          disabled={r.mode === "aucune"}
-                          className={champ}
-                          title={
-                            r.mode === "pre_achat"
-                              ? "Loyer en place dès l'achat"
-                              : r.mode === "post_achat"
-                              ? `Loyer atteint à l'an ${h} (refinancement)`
-                              : "Choisis pré-achat ou post-achat pour saisir un loyer optimisé"
-                          }
-                        />
+                        <span className="inline-flex items-center gap-1">
+                          <input
+                            type="number"
+                            step="any"
+                            value={r.loyer_optimise}
+                            placeholder={
+                              prixLoyers[r.typo] ? String(prixLoyers[r.typo]) : ""
+                            }
+                            onChange={(e) =>
+                              maj(i, { loyer_optimise: e.target.value })
+                            }
+                            disabled={r.mode === "aucune"}
+                            className={champ}
+                            title={
+                              (r.mode === "pre_achat"
+                                ? "Loyer en place dès l'achat. "
+                                : r.mode === "post_achat"
+                                ? `Loyer atteint à l'an ${h} (refinancement). `
+                                : "Choisis pré-achat ou post-achat pour un loyer optimisé. ") +
+                              (r.loyer_optimise === ""
+                                ? "Vide = suit le loyer projeté de la typologie (onglet Infos)."
+                                : "Montant fixé pour cette unité — « ↺ » pour suivre à nouveau la typologie.")
+                            }
+                          />
+                          {r.loyer_optimise !== "" && r.mode !== "aucune" ? (
+                            <button
+                              type="button"
+                              onClick={() => maj(i, { loyer_optimise: "" })}
+                              className="text-[11px] text-white/40 hover:text-emerald-300"
+                              title="Revenir au loyer projeté de la typologie"
+                              aria-label="Suivre la typologie"
+                            >
+                              ↺
+                            </button>
+                          ) : null}
+                        </span>
                       </td>
                       {(["aucune", "pre_achat", "post_achat"] as ModeUnite[]).map(
                         (m) => (
@@ -3077,15 +3129,27 @@ function UnitesOptimisationCard({
                       {fmtMoney(totalActuel)}
                     </td>
                     <td className="px-2 py-1.5" />
-                    <td className="px-2 py-1.5 text-center text-white/50">
-                      {nbParMode("aucune")}
-                    </td>
-                    <td className="px-2 py-1.5 text-center text-white/50">
-                      {nbParMode("pre_achat")}
-                    </td>
-                    <td className="px-2 py-1.5 text-center text-white/50">
-                      {nbParMode("post_achat")}
-                    </td>
+                    {(["aucune", "pre_achat", "post_achat"] as ModeUnite[]).map(
+                      (m) => (
+                        <td key={m} className="px-2 py-1.5 text-center">
+                          <div className="flex flex-col items-center gap-1">
+                            <span className="text-white/50">{nbParMode(m)}</span>
+                            <button
+                              type="button"
+                              onClick={() => toutMode(m)}
+                              className={`rounded-md border px-2 py-0.5 text-[10px] font-semibold transition ${
+                                m === "aucune"
+                                  ? "border-white/15 bg-white/5 text-white/60 hover:bg-white/10"
+                                  : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
+                              }`}
+                              title={`Cocher « ${LIBELLES_MODE[m]} » pour toutes les unités`}
+                            >
+                              Tout
+                            </button>
+                          </div>
+                        </td>
+                      )
+                    )}
                     <td className="px-2 py-1.5 text-right font-mono tabular-nums text-emerald-300">
                       {fmtMoney(totalAchat)}
                     </td>
@@ -3120,54 +3184,105 @@ function UnitesOptimisationCard({
               >
                 Enregistrer les unités
               </button>
-              <button
-                type="button"
-                onClick={() => toutMode("aucune")}
-                className="rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white/60 transition hover:bg-white/10"
-                title="Aucune unité optimisée : loyers actuels + croissance organique"
-              >
-                Tout non optimisé
-              </button>
-              <button
-                type="button"
-                onClick={() => toutMode("pre_achat")}
-                className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20"
-                title="Toutes les unités au loyer optimisé dès l'achat"
-              >
-                Tout pré-achat
-              </button>
-              <button
-                type="button"
-                onClick={() => toutMode("post_achat")}
-                className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20"
-                title="Toutes les unités optimisées après l'achat, loyer optimisé atteint au refi"
-              >
-                Tout post-achat
-              </button>
-              <button
-                type="button"
-                onClick={generer}
-                className="rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white/60 transition hover:bg-white/10"
-              >
-                Régénérer depuis la typologie
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      "Retirer le détail des unités ? L'analyse reviendra au comportement historique (tout au loyer cible pondéré)."
-                    )
-                  )
-                    onSave(null);
-                }}
-                className="rounded-lg border border-rose-500/30 bg-rose-500/5 px-3 py-1.5 text-xs font-semibold text-rose-300/80 transition hover:bg-rose-500/10"
-              >
-                Retirer le détail
-              </button>
+              <span className="self-center text-[10px] text-white/40">
+                Les boutons « Tout » sous chaque colonne cochent toutes les
+                unités d&apos;un coup.
+              </span>
             </div>
           </>
         )}
+      </div>
+    </SubCard>
+  );
+}
+
+/** Coût du projet (Phil 2026-10-07) : « le coût total — prêt accordé,
+ *  tous les frais, mise de fonds — bref si on vendait on reviendrait à
+ *  0 $ ; à côté, le montant total nécessaire en cash ». */
+function CoutProjetCard({
+  cout
+}: {
+  cout: NonNullable<AnalysisResults["cout_projet"]>;
+}) {
+  const libelleStrat: Record<string, string> = {
+    preteur_b: "prêteur B",
+    traditionnel: "institution traditionnelle",
+    assumation: "assumation hypothécaire",
+    residentiel: "résidentiel"
+  };
+  const ligne = (label: string, val: number, opts?: { gras?: boolean; muted?: boolean }) => (
+    <div
+      className={`flex items-center justify-between gap-3 px-2 py-1 ${
+        opts?.gras ? "font-semibold text-white" : opts?.muted ? "text-white/45" : "text-white/70"
+      }`}
+    >
+      <span>{label}</span>
+      <span className="font-mono tabular-nums">{fmtMoney(val)}</span>
+    </div>
+  );
+  return (
+    <SubCard icon={Banknote} title="Coût du projet" cols={2}>
+      <div className="space-y-3 sm:col-span-2">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300/80">
+              Coût total du projet
+            </p>
+            <p className="mt-1 font-mono text-xl font-bold tabular-nums text-emerald-200">
+              {fmtMoney(cout.cout_total)}
+            </p>
+            <p className="mt-1 text-[10px] leading-snug text-white/45">
+              Prix réel + tous les frais : le prix de revente pour revenir
+              à 0 $ (avant frais de vente).
+            </p>
+          </div>
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-300/80">
+              Cash total nécessaire
+            </p>
+            <p className="mt-1 font-mono text-xl font-bold tabular-nums text-amber-200">
+              {fmtMoney(cout.cash_total)}
+            </p>
+            <p className="mt-1 text-[10px] leading-snug text-white/45">
+              Mise de fonds nette {fmtMoney(cout.mdf_nette)} + frais payés
+              cash {fmtMoney(cout.frais_cash)}.
+            </p>
+          </div>
+        </div>
+        <div className="grid gap-x-6 gap-y-0.5 text-[11px] sm:grid-cols-2">
+          <div className="rounded-lg border border-brand-800 bg-brand-950/40 py-1">
+            <p className="px-2 pb-1 text-[9px] font-semibold uppercase tracking-wider text-white/40">
+              Ce que ça coûte
+            </p>
+            {ligne("Prix d'achat", cout.prix_achat)}
+            {cout.cashback > 0 ? ligne("− Cashback reçu au notaire", -cout.cashback) : null}
+            {cout.cashback > 0 ? ligne("= Coût réel", cout.prix_reel) : null}
+            {ligne(
+              `+ Frais de démarrage (cash ${fmtMoney(cout.frais_cash)}, financés ${fmtMoney(
+                cout.frais_finances
+              )})`,
+              cout.frais_total
+            )}
+            {cout.prime_assurance > 0
+              ? ligne("+ Prime d'assurance prêt (financée)", cout.prime_assurance)
+              : null}
+            {ligne("= Coût total", cout.cout_total, { gras: true })}
+          </div>
+          <div className="rounded-lg border border-brand-800 bg-brand-950/40 py-1">
+            <p className="px-2 pb-1 text-[9px] font-semibold uppercase tracking-wider text-white/40">
+              Comment c&apos;est financé ({libelleStrat[cout.strategie] ?? cout.strategie})
+            </p>
+            {ligne("Prêt accordé", cout.pret)}
+            {cout.balance_vente > 0 ? ligne("+ Balance de vente", cout.balance_vente) : null}
+            {cout.frais_finances_hors_pret > 0
+              ? ligne("+ Frais financés hors prêt (au refi)", cout.frais_finances_hors_pret)
+              : null}
+            {ligne("+ Cash total nécessaire", cout.cash_total, { gras: true })}
+            {Math.abs(cout.verification) > 1
+              ? ligne("Écart (devrait être 0)", cout.verification, { muted: true })
+              : null}
+          </div>
+        </div>
       </div>
     </SubCard>
   );
@@ -3841,6 +3956,21 @@ function ManualAnalysisSection({
             />
           );
         })()}
+
+        {/* Coût du projet (Phil 2026-10-07) — même carte pour les quatre
+            stratégies, sous la composition de la mise de fonds. */}
+        {(() => {
+          if (!data.analysis_results_json) return null;
+          let cout: AnalysisResults["cout_projet"] = null;
+          try {
+            cout =
+              (JSON.parse(data.analysis_results_json) as AnalysisResults)
+                .cout_projet ?? null;
+          } catch {
+            cout = null;
+          }
+          return cout ? <CoutProjetCard cout={cout} /> : null;
+        })()}
       </div>
 
       {err ? (
@@ -4125,6 +4255,26 @@ type AnalysisResults = {
     pre_achat?: number;
     post_achat?: number;
   } | null;
+  /** Coût du projet (Phil 2026-10-07) : coût total = revente pour
+   *  revenir à 0 $ ; cash total nécessaire. */
+  cout_projet?: {
+    strategie: string;
+    prix_achat: number;
+    cashback: number;
+    prix_reel: number;
+    frais_total: number;
+    frais_cash: number;
+    frais_finances: number;
+    frais_finances_hors_pret: number;
+    prime_assurance: number;
+    pret: number;
+    balance_vente: number;
+    mdf_nette: number;
+    cash_total: number;
+    dette_totale: number;
+    cout_total: number;
+    verification: number;
+  } | null;
   /** Modes par unité + colonnes « À l'achat » / « Au refi » (Phil 2026-10-07). */
   unites_calcul?: {
     h: number;
@@ -4135,6 +4285,7 @@ type AnalysisResults = {
       numero?: string | null;
       typo: string | null;
       mode: string;
+      suit_typologie?: boolean;
       loyer_actuel: number;
       loyer_optimise: number;
       achat: number;
@@ -7839,6 +7990,9 @@ function StrategieDetailSubsection({
                   </td>
                   <td className="px-2 py-1 text-right font-mono tabular-nums text-white/70">
                     {u.mode === "aucune" ? "—" : _fmtMoneyDetail(u.loyer_optimise)}
+                    {u.mode !== "aucune" && u.suit_typologie ? (
+                      <span className="ml-1 text-[9px] text-white/40">typo</span>
+                    ) : null}
                   </td>
                   <td className="px-2 py-1 text-right font-mono tabular-nums text-white">
                     {_fmtMoneyDetail(u.achat)}

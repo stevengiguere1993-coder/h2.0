@@ -399,11 +399,30 @@ def pret_origine_canadien(
 MODES_UNITE: tuple = ("aucune", "pre_achat", "post_achat")
 
 
-def normaliser_unites(unites, optimisation_pre_achat: bool = False) -> List[dict]:
+def _nombre_positif(val) -> Optional[float]:
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return None
+    return f if f > 0 else None
+
+
+def normaliser_unites(
+    unites,
+    optimisation_pre_achat: bool = False,
+    typologie_prix: Optional[Dict[str, float]] = None,
+) -> List[dict]:
     """Unités au format v2 ``{typo, loyer_actuel, loyer_optimise, mode}``
     — l'ancien ``{…, loyer_cible, optimiser}`` + moment global devient
-    pré-achat / post-achat / aucune."""
+    pré-achat / post-achat / aucune.
+
+    Loyer optimisé (Phil 2026-10-07) : une unité SUIT le loyer projeté de
+    sa typologie (``typologie_prix``, onglet Infos) tant qu'aucun montant
+    ne lui est saisi (``loyer_optimise`` absent, vide ou ≤ 0) — changer le
+    loyer projeté par typologie met donc à jour les unités concernées.
+    Ancien format : ``loyer_cible`` explicite respecté."""
     out: List[dict] = []
+    prix_typo = typologie_prix or {}
     for u in unites or []:
         if not isinstance(u, dict):
             continue
@@ -413,17 +432,24 @@ def normaliser_unites(unites, optimisation_pre_achat: bool = False) -> List[dict
                 mode = "pre_achat" if optimisation_pre_achat else "post_achat"
             else:
                 mode = "aucune"
-        optimise = u.get("loyer_optimise")
-        if optimise is None:
-            optimise = u.get("loyer_cible")
+        suit_typologie = False
+        explicite = _nombre_positif(u.get("loyer_optimise"))
+        if explicite is None and "loyer_optimise" not in u:
+            # Ancien format : la cible saisie fait foi.
+            explicite = _nombre_positif(u.get("loyer_cible"))
+        if explicite is not None:
+            optimise_f = explicite
+        else:
+            du_typo = _nombre_positif(prix_typo.get(str(u.get("typo") or "")))
+            if du_typo is not None:
+                optimise_f = du_typo
+                suit_typologie = True
+            else:
+                optimise_f = _nombre_positif(u.get("loyer_cible")) or 0.0
         try:
             actuel_f = float(u.get("loyer_actuel") or 0)
         except (TypeError, ValueError):
             actuel_f = 0.0
-        try:
-            optimise_f = float(optimise or 0)
-        except (TypeError, ValueError):
-            optimise_f = 0.0
         numero = u.get("numero")
         out.append({
             "typo": u.get("typo"),
@@ -434,6 +460,8 @@ def normaliser_unites(unites, optimisation_pre_achat: bool = False) -> List[dict
             ),
             "loyer_actuel": actuel_f,
             "loyer_optimise": optimise_f,
+            #: True = loyer optimisé repris du loyer projeté de la typologie.
+            "suit_typologie": suit_typologie,
             "mode": mode,
         })
     return out
@@ -473,6 +501,7 @@ def detail_unites(
             "mode": u["mode"],
             "loyer_actuel": round(u["loyer_actuel"], 2),
             "loyer_optimise": round(u["loyer_optimise"], 2),
+            "suit_typologie": bool(u.get("suit_typologie")),
             "achat": round(loyer_unite_achat(u), 2),
             "refi": round(loyer_unite_annee(u, h, h, g), 2),
         })
@@ -1323,6 +1352,10 @@ class FinanceResults:
     #: Unités : modes, colonnes « À l'achat » / « Au refi » et totaux
     #: (Phil 2026-10-07) — None sans unités détaillées.
     unites_calcul: Optional[dict] = None
+    #: Coût du projet (Phil 2026-10-07) : coût total = prix de revente
+    #: pour revenir à 0 $, cash total nécessaire — pour la stratégie
+    #: active. Montants déjà établis, assemblés ; aucun nouveau calcul.
+    cout_projet: Optional[dict] = None
 
     def to_dict(self) -> dict:
         """Pour persistance JSON dans `LeadAnalysis.analysis_results_json`."""
@@ -1392,6 +1425,7 @@ class FinanceResults:
             #: Modes par unité, colonnes « À l'achat » / « Au refi » et
             #: totaux (Phil 2026-10-07) — ce que les scénarios utilisent.
             "unites_calcul": self.unites_calcul,
+            "cout_projet": self.cout_projet,
             "typology": {
                 "h13_loyer_pondere": self.typology.h13_loyer_pondere,
                 "nb_abordables": self.typology.nb_abordables,
@@ -1491,7 +1525,9 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
     # ── Unités détaillées : un mode PAR UNITÉ (Phil 2026-10-07, GO) ──
     # aucune / pre_achat / post_achat — l'ancien format (optimiser +
     # moment global) est converti ici.
-    unites_valides = normaliser_unites(inputs.unites, inputs.optimisation_pre_achat)
+    unites_valides = normaliser_unites(
+        inputs.unites, inputs.optimisation_pre_achat, inputs.typologie_prix
+    )
     # « Pré-achat » (affichage, PDF) = au moins une unité en pré-achat.
     _pre_achat = any(u["mode"] == "pre_achat" for u in unites_valides)
     # Revenus servant à l'ACHAT : dès que les unités sont détaillées, la
@@ -2789,6 +2825,68 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
                 ),
             })
 
+    # ── Coût du projet (Phil 2026-10-07) ─────────────────────────
+    # « Le coût total — prêt accordé, tous les frais, mise de fonds —
+    # bref si on vendait on reviendrait à 0 $ ; à côté, le cash total
+    # nécessaire (MDF + frais payés comptant). » Même structure pour les
+    # quatre stratégies, à partir des montants déjà établis plus haut.
+    _prime_c = 0.0
+    if residentiel is not None:
+        _src_c = residentiel
+        _strat_cout = "residentiel"
+        _prime_c = float(_src_c.get("prime_assurance") or 0.0)
+        _pret_c = float(_src_c.get("pret_total") or _src_c["pret_retenu"])
+        _frais_tot_c = float(_src_c["frais_demarrage_total"])
+        _frais_cash_c = float(_src_c["frais_demarrage_cash"])
+        _cash_c = float(_src_c["mdf_cash"])
+        _bv_c = float(_src_c.get("balance_vente") or 0.0)
+        _frais_fin_hors_pret = _frais_tot_c - _frais_cash_c
+        # Prime d'assurance prêt financée : remboursée avec le prêt, donc
+        # dans le coût total.
+        _cout_c = float(_src_c["total_depense"]) + _prime_c
+    elif traditionnel is not None:
+        _src_c = traditionnel
+        _strat_cout = str(traditionnel.get("mode") or "traditionnel")
+        _pret_c = float(_src_c["pret_retenu"])
+        _frais_tot_c = float(_src_c["frais_demarrage_total"])
+        _frais_cash_c = float(_src_c["frais_demarrage_cash"])
+        _cash_c = float(_src_c["mdf_cash"])
+        _bv_c = float(_src_c.get("balance_vente") or 0.0)
+        _frais_fin_hors_pret = float(_src_c.get("frais_finances") or 0.0)
+        _cout_c = float(_src_c["total_depense"])
+    else:
+        _strat_cout = "preteur_b"
+        _pret_c = float(pret_preteur_b_total)
+        _frais_tot_c = float(frais.total)
+        _frais_cash_c = float(frais_cash_total)
+        _cash_c = float(mdf_preteur_b)
+        _bv_c = float(balance_vente)
+        _frais_fin_hors_pret = 0.0  # les frais financés sont DANS le prêt B
+        _cout_c = float(prix_acquisition)
+    cout_projet = {
+        "strategie": _strat_cout,
+        "prix_achat": round(inputs.prix_achat, 2),
+        "cashback": round(_cashback, 2),
+        "prix_reel": round(prix_reel, 2),
+        "frais_total": round(_frais_tot_c, 2),
+        "frais_cash": round(_frais_cash_c, 2),
+        "frais_finances": round(_frais_tot_c - _frais_cash_c, 2),
+        #: Frais financés qui ne sont PAS dans le prêt accordé (institution
+        #: traditionnelle / résidentiel : remboursés au refinancement).
+        "frais_finances_hors_pret": round(_frais_fin_hors_pret, 2),
+        "prime_assurance": round(_prime_c, 2),
+        "pret": round(_pret_c, 2),
+        "balance_vente": round(_bv_c, 2),
+        "mdf_nette": round(_cash_c - _frais_cash_c, 2),
+        "cash_total": round(_cash_c, 2),
+        "dette_totale": round(_pret_c + _bv_c + _frais_fin_hors_pret, 2),
+        "cout_total": round(_cout_c, 2),
+        #: dette + cash − coût total : 0 aux arrondis près.
+        "verification": round(
+            _pret_c + _bv_c + _frais_fin_hors_pret + _cash_c - _cout_c, 2
+        ),
+    }
+
     return FinanceResults(
         inputs=inputs,
         typology=typo,
@@ -2812,4 +2910,5 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         residentiel=residentiel,
         frais_dossier_preteur_base=frais_dossier_preteur_base,
         unites_calcul=unites_calcul,
+        cout_projet=cout_projet,
     )

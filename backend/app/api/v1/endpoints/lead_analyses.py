@@ -497,14 +497,20 @@ def _parse_unites(raw: Optional[str]) -> list[dict]:
                     else None
                 ),
                 "loyer_actuel": float(u.get("loyer_actuel") or 0),
-                "loyer_cible": float(u.get("loyer_cible") or 0),
+                # None = l'unité SUIT le loyer projeté de sa typologie
+                # (résolu par le moteur) — Phil 2026-10-07.
+                "loyer_cible": (
+                    float(u["loyer_cible"])
+                    if u.get("loyer_cible") not in (None, "")
+                    else None
+                ),
                 "optimiser": bool(u.get("optimiser", True)),
                 # Format v2 (Phil 2026-10-07) : mode par unité + loyer
                 # optimisé ; absent = ancien format (converti au calcul).
                 "loyer_optimise": (
-                    float(u.get("loyer_optimise"))
-                    if u.get("loyer_optimise") is not None
-                    else float(u.get("loyer_cible") or 0)
+                    float(u["loyer_optimise"])
+                    if u.get("loyer_optimise") not in (None, "")
+                    else None
                 ),
                 "mode": (
                     u.get("mode")
