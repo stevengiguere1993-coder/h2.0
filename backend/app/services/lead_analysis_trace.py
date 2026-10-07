@@ -329,7 +329,7 @@ def _section_typologie(res: FinanceResults) -> Optional[Dict[str, Any]]:
         for ul in uc["unites"]:
             L.append(
                 ligne(
-                    f"Unité #{ul['index']} ({ul.get('typo') or '—'}) — {LIBELLES_MODE.get(ul['mode'], ul['mode'])} — au refi ($/mois)",
+                    f"Unité {ul.get('numero') or '#' + str(ul['index'])} ({ul.get('typo') or '—'}) — {LIBELLES_MODE.get(ul['mode'], ul['mode'])} — au refi ($/mois)",
                     f"actuel {_m(ul['loyer_actuel'])}"
                     + (f", optimisé {_m(ul['loyer_optimise'])}" if ul["mode"] != "aucune" else "")
                     + f" ; à l'achat {_m(ul['achat'])}",

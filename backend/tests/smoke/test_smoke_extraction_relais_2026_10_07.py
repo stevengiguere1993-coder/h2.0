@@ -79,6 +79,21 @@ def test_cascade_resolue_ignore_les_modeles_retires(monkeypatch):
     monkeypatch.setattr(ex, "_gemini_list_models", _fake_none)
     assert asyncio.run(ex.resolve_gemini_cascade()) == ["gemini-2.5-flash", "gemini-2.0-flash"]
 
+    # Préférences vides (défaut) → ordre du catalogue, génération la plus
+    # récente d'abord (en prod : gemini-3.8-flash avant 2.5-flash).
+    monkeypatch.setattr(settings, "gemini_model_cascade", "")
+    monkeypatch.setattr(ex, "_gemini_list_models", _fake_list)
+    assert asyncio.run(ex.resolve_gemini_cascade()) == [
+        "gemini-3.1-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-pro",
+        "gemini-3-flash-preview",
+    ]
+    # Ni préférences ni catalogue → liste de secours.
+    monkeypatch.setattr(ex, "_gemini_list_models", _fake_none)
+    assert asyncio.run(ex.resolve_gemini_cascade()) == ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+
 
 def test_quota_journalier_detecte():
     corps_jour = (
@@ -94,7 +109,7 @@ def test_quota_journalier_detecte():
 def test_cascade_sans_retry_sur_quota_journalier(monkeypatch):
     appels: list = []
 
-    async def _fake_extract(material, images, model=None):
+    async def _fake_extract(material, images, model=None, system=None, guide=None):
         appels.append(model)
         if model == "gemini-2.5-flash":
             return None, "quota quotidien gratuit atteint", True, False
@@ -138,12 +153,42 @@ def test_modeles_groq_choisis(monkeypatch):
     # Catalogue inconnu → modèles configurés.
     assert ex._groq_modele_texte(None) == "llama-3.3-70b-versatile"
 
+    # Catalogue Groq tel qu'observé en prod le 2026-10-07 : plus aucun
+    # Llama. Défauts vides → gpt-oss-120b pour le texte, rien pour la vision.
+    monkeypatch.setattr(settings, "groq_model", "")
+    monkeypatch.setattr(settings, "groq_vision_model", "")
+    prod = [
+        "openai/gpt-oss-120b", "openai/gpt-oss-20b", "canopylabs/orpheus-arabic-saudi",
+        "allam-2-7b", "meta-llama/llama-prompt-guard-2-86m", "qwen/qwen3.8-27b",
+        "openai/gpt-oss-safeguard-20b", "whisper-large-v3", "whisper-large-v3-turbo",
+    ]
+    assert ex._groq_modele_texte(prod) == "openai/gpt-oss-120b"
+    assert ex._groq_modele_vision(prod) is None
+    # Modèle configuré disparu du catalogue → préférences.
+    monkeypatch.setattr(settings, "groq_model", "llama-3.3-70b-versatile")
+    assert ex._groq_modele_texte(prod) == "openai/gpt-oss-120b"
+    assert ex._groq_modele_texte(None) == "llama-3.3-70b-versatile"
+    # Un modèle vision apparaît → pris.
+    assert ex._groq_modele_vision(prod + ["qwen/qwen3-vl-32b"]) == "qwen/qwen3-vl-32b"
+
+
+def test_json_lenient():
+    assert ex._json_lenient('{"a": 1}') == {"a": 1}
+    assert ex._json_lenient('```json\n{"a": 1}\n```') == {"a": 1}
+    assert ex._json_lenient('Voici : {"unites": [{"loyer_actuel": 900}]} merci') == {"unites": [{"loyer_actuel": 900}]}
+    try:
+        ex._json_lenient("rien")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("ValueError attendue")
+
 
 def test_relais_groq_quand_gemini_a_sec(monkeypatch):
-    async def _gemini_ko(material, images):
+    async def _gemini_ko(material, images, *, system=None, guide=None):
         return None, "cascade épuisée — gemini-2.5-flash : quota quotidien gratuit atteint", None
 
-    async def _groq_ok(material, images):
+    async def _groq_ok(material, images, *, system=None, guide=None):
         return (
             [{"address": "123 rue Test", "city": "Montréal", "asking_price": 1500000,
               "nb_logements": 8, "typology": {"4.5": 8}}],
@@ -163,7 +208,7 @@ def test_relais_groq_quand_gemini_a_sec(monkeypatch):
 
 
 def test_image_lue_par_ia_sans_alerte_ocr(monkeypatch):
-    async def _gemini_ok(material, images):
+    async def _gemini_ok(material, images, *, system=None, guide=None):
         assert images and images[0][0] == "image/png"
         return [{"address": "456 rue Photo", "asking_price": 2000000}], None, "gemini-2.5-flash"
 
@@ -176,10 +221,10 @@ def test_image_lue_par_ia_sans_alerte_ocr(monkeypatch):
 
 
 def test_ia_muette_alerte_quota_et_ocr(monkeypatch):
-    async def _gemini_ko(material, images):
+    async def _gemini_ko(material, images, *, system=None, guide=None):
         return None, "cascade épuisée — gemini-2.5-flash : quota quotidien gratuit atteint", None
 
-    async def _groq_ko(material, images):
+    async def _groq_ko(material, images, *, system=None, guide=None):
         return None, "quota Groq atteint", "llama-3.3-70b-versatile"
 
     monkeypatch.setattr(ex, "_gemini_extract_cascade", _gemini_ko)
@@ -197,7 +242,7 @@ def test_ia_muette_alerte_quota_et_ocr(monkeypatch):
 def test_pdf_scanne_transmis_a_l_ia(monkeypatch):
     recu: dict = {}
 
-    async def _gemini_ok(material, images):
+    async def _gemini_ok(material, images, *, system=None, guide=None):
         recu["images"] = images
         return [{"asking_price": 900000}], None, "gemini-2.5-flash"
 
