@@ -47,7 +47,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.orm import undefer
 
 from app.api.deps import CurrentUser, DBSession
@@ -559,26 +559,36 @@ async def patch_document(
     if "reminder_days" in data.model_fields_set:
         doc.reminder_days = data.reminder_days or None
     await db.flush()
+    # ``updated_at`` (onupdate côté serveur) est expiré après le flush :
+    # relecture explicite, sinon chargement paresseux hors greenlet.
+    await db.refresh(doc)
     return await _doc_to_detail(db, doc)
 
 
 @router.delete(
     "/documents/{doc_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Supprime un document (brouillon ou annulé seulement)",
+    summary="Supprime un document (tout sauf un document signé)",
 )
 async def delete_document(
     doc_id: int, db: DBSession, user: CurrentUser
 ) -> Response:
     doc = await _load_doc(db, doc_id)
-    if doc.status not in (
-        EsignDocumentStatus.BROUILLON.value,
-        EsignDocumentStatus.ANNULE.value,
-    ):
+    # Un document SIGNÉ est une pièce probante : il ne se supprime pas
+    # (il reste sous « Documents signés »). Tout autre statut — brouillon,
+    # en cours, refusé, expiré, annulé — se supprime en un geste (Phil
+    # 2026-10-07) : les liens de signature meurent avec lui.
+    if doc.status == EsignDocumentStatus.COMPLETE.value:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "Annulez d'abord le document avant de le supprimer.",
+            "Un document signé est une pièce probante — il ne se supprime "
+            "pas.",
         )
+    # Enfants supprimés explicitement (zones, événements, observateurs,
+    # pièces jointes, signataires) : ne dépend pas des cascades de la base
+    # — un lien de signature ne doit jamais survivre à son document.
+    for modele in (EsignField, EsignEvent, EsignObserver, EsignAttachment, EsignSigner):
+        await db.execute(sa_delete(modele).where(modele.document_id == doc.id))
     await db.delete(doc)
     await db.flush()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -658,6 +668,42 @@ async def document_page_png(
 # --------------------------- Signataires ---------------------------
 
 
+async def _memoriser_contact(
+    db,
+    first_name: str,
+    last_name: str,
+    email: str,
+    phone: Optional[str],
+) -> str:
+    """Signataire saisi à la main → banque de contacts (table contacts)
+    s'il n'y existe pas déjà au même courriel, pour ne pas le ressaisir
+    (Phil 2026-10-03 ; étendu aux documents créés depuis un modèle,
+    Phil 2026-10-07). Retourne le ``contact_ref`` « contact:<id> »."""
+    from sqlalchemy import func as _func
+
+    from app.models.contact import Contact as _Contact
+
+    em = (email or "").strip().lower()
+    existant = (
+        await db.execute(
+            select(_Contact).where(_func.lower(_Contact.email) == em).limit(1)
+        )
+    ).scalar_one_or_none()
+    if existant is None:
+        existant = _Contact(
+            full_name=f"{(first_name or '').strip()} {(last_name or '').strip()}".strip()[:255]
+            or em,
+            email=em[:320],
+            phone=((phone or "").strip()[:50] or None),
+            kind="signer",
+            specialty="Signataire (ajouté depuis un document à signer)",
+            active=True,
+        )
+        db.add(existant)
+        await db.flush()
+    return f"contact:{existant.id}"
+
+
 @router.post(
     "/documents/{doc_id}/signers",
     response_model=SignerRead,
@@ -674,33 +720,10 @@ async def add_signer(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Numéro de téléphone requis pour l'authentification SMS.",
         )
-    # Signataire saisi à la main → enregistré dans la banque de contacts
-    # (table contacts) s'il n'y existe pas déjà au même courriel, pour ne
-    # pas le ressaisir la prochaine fois (Phil 2026-10-03).
-    contact_ref = (data.contact_ref or None)
-    if not contact_ref:
-        from sqlalchemy import func as _func
-
-        from app.models.contact import Contact as _Contact
-
-        em = str(data.email).strip().lower()
-        existant = (
-            await db.execute(
-                select(_Contact).where(_func.lower(_Contact.email) == em).limit(1)
-            )
-        ).scalar_one_or_none()
-        if existant is None:
-            existant = _Contact(
-                full_name=f"{data.first_name.strip()} {data.last_name.strip()}"[:255],
-                email=em[:320],
-                phone=((data.phone or "").strip()[:50] or None),
-                kind="signer",
-                specialty="Signataire (ajouté depuis un document à signer)",
-                active=True,
-            )
-            db.add(existant)
-            await db.flush()
-        contact_ref = f"contact:{existant.id}"
+    # Signataire saisi à la main → banque de contacts (Phil 2026-10-03).
+    contact_ref = (data.contact_ref or None) or await _memoriser_contact(
+        db, data.first_name, data.last_name, str(data.email), data.phone
+    )
     signer = EsignSigner(
         document_id=doc.id,
         contact_ref=contact_ref,
@@ -720,7 +743,8 @@ async def add_signer(
 @router.patch(
     "/signers/{signer_id}",
     response_model=SignerRead,
-    summary="Modifie un signataire (brouillon)",
+    summary="Modifie un signataire (brouillon ; courriel, nom et téléphone "
+    "aussi sur un document en cours)",
 )
 async def patch_signer(
     signer_id: int, data: SignerPatch, db: DBSession, user: CurrentUser
@@ -738,8 +762,19 @@ async def patch_signer(
     # faute de courriel n'oblige plus à refaire tout le processus
     # (retour 2026-09-12, point 8). Un signataire qui a DÉJÀ signé est
     # verrouillé. L'ordre et l'auth SMS restent réservés au brouillon.
-    is_draft = doc.status == EsignDocumentStatus.DRAFT.value
+    # Bug corrigé 2026-10-07 : ``EsignDocumentStatus.DRAFT`` n'existait
+    # pas (BROUILLON) → chaque PATCH plantait en 500, la correction de
+    # courriel après envoi n'a donc jamais fonctionné.
+    is_draft = doc.status == EsignDocumentStatus.BROUILLON.value
     if not is_draft:
+        # Hors brouillon, seul un document EN COURS se corrige : annulé,
+        # expiré, refusé ou signé, on ne renvoie plus rien.
+        if doc.status != EsignDocumentStatus.ENVOYE.value:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Ce document n'est plus en cours — ses signataires ne se "
+                "modifient plus.",
+            )
         if signer.signed_at is not None:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
@@ -771,35 +806,101 @@ async def patch_signer(
             "Numéro de téléphone requis pour l'authentification SMS.",
         )
     await db.flush()
-    # Document déjà ENVOYÉ + courriel changé → on renvoie l'invitation
-    # (même jeton, l'ancien lien reste le sien) à la nouvelle adresse.
+    # Document déjà ENVOYÉ + courriel changé → NOUVEAU jeton (le lien
+    # parti à la mauvaise adresse cesse de fonctionner), suivi
+    # d'ouverture et vérification SMS remis à zéro, invitation renvoyée
+    # à la nouvelle adresse. Si l'envoi échoue, RIEN n'est modifié
+    # (rollback) : l'ancien lien reste valide et l'erreur est explicite.
     if (
         not is_draft
         and data.email is not None
         and (signer.email or "").strip().lower() != old_email
         and signer.sent_at is not None
     ):
+        signer.signature_token = None
+        signer.opened_at = None
+        signer.last_opened_at = None
+        signer.open_count = 0
+        signer.sms_verified_at = None
+        signer.sms_code_hash = None
+        signer.sms_code_expires_at = None
+        signer.sms_code_attempts = 0
+        await db.flush()
+        ent_name = await _entreprise_name(db, doc.entreprise_id)
         try:
-            ent_name = await _entreprise_name(db, doc.entreprise_id)
             await send_signer_invitation(db, doc, signer, ent_name)
-            await _add_event(
-                db,
-                doc,
-                "signer_email_change",
-                signer=signer,
-                detail=(
-                    f"Courriel corrigé : {old_email} → {signer.email} — "
-                    "invitation renvoyée."
-                ),
-            )
-        except Exception:  # noqa: BLE001 — la correction reste enregistrée
-            log.exception(
-                "Renvoi d'invitation après changement de courriel échoué "
-                "(signer %s)", signer.id,
-            )
+        except EsignSendError as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                f"Courriel NON modifié : l'envoi de l'invitation à "
+                f"{signer.email} a échoué ({exc}).",
+            ) from exc
+        await _add_event(
+            db,
+            doc,
+            "signer_email_change",
+            signer=signer,
+            detail=(
+                f"Courriel corrigé : {old_email} → {signer.email} — "
+                "nouveau lien envoyé, l'ancien est désactivé."
+            ),
+        )
     await db.flush()
     await db.refresh(signer)
     return SignerRead.model_validate(signer)
+
+
+@router.post(
+    "/signers/{signer_id}/resend",
+    response_model=SendResult,
+    summary="Renvoie l'invitation à UN signataire (document en cours)",
+)
+async def resend_signer(
+    signer_id: int, db: DBSession, user: CurrentUser
+) -> SendResult:
+    """Renvoi à un seul signataire — la relance du document relance TOUS
+    les signataires en attente (Phil 2026-10-07 : « changer le courriel
+    d'un utilisateur et lui renvoyer »)."""
+    signer = (
+        await db.execute(
+            select(EsignSigner).where(EsignSigner.id == signer_id)
+        )
+    ).scalar_one_or_none()
+    if signer is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Signataire introuvable.")
+    doc = await _load_doc(db, signer.document_id)
+    if doc.status != EsignDocumentStatus.ENVOYE.value:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Renvoi possible uniquement pour un document en cours.",
+        )
+    if signer.signed_at is not None or signer.declined_at is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Ce signataire a déjà répondu (signé ou refusé).",
+        )
+    signers = await _load_signers(db, doc.id)
+    if signer.id not in {s.id for s in signers_to_invite(doc, signers)}:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Ce n'est pas encore le tour de ce signataire (ordre de "
+            "signature) — il recevra son invitation quand le précédent "
+            "aura signé.",
+        )
+    ent_name = await _entreprise_name(db, doc.entreprise_id)
+    try:
+        await send_signer_invitation(
+            db, doc, signer, ent_name, reminder=signer.sent_at is not None
+        )
+    except EsignSendError as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, f"Renvoi échoué : {exc}"
+        ) from exc
+    signer.last_reminder_at = datetime.now(timezone.utc)
+    await _add_event(
+        db, doc, "relance", signer=signer, detail=f"{signer.email} (renvoi individuel)"
+    )
+    return SendResult(sent=1, errors=[])
 
 
 @router.delete(
@@ -1465,7 +1566,12 @@ async def create_from_template(
     for i, sc in enumerate(data.signers):
         signer = EsignSigner(
             document_id=doc.id,
-            contact_ref=(sc.contact_ref or None),
+            # Banque de contacts alimentée aussi depuis un modèle
+            # (Phil 2026-10-07 : « quand j'ai rentré un contact par le
+            # passé, il devrait s'être rajouté automatiquement »).
+            contact_ref=(sc.contact_ref or None) or await _memoriser_contact(
+                db, sc.first_name, sc.last_name, str(sc.email), sc.phone
+            ),
             order_index=i,
             first_name=sc.first_name.strip()[:100],
             last_name=sc.last_name.strip()[:100],
