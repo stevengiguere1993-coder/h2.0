@@ -1607,7 +1607,7 @@ async def extraction_health(user: CurrentUser) -> dict:
         "ocr": _ocr_health_payload(),
         # Marqueurs du serveur déployé (sonde post-déploiement sans accès
         # aux logs Render) : version du code + commit injecté par Render.
-        "version": "2026-10-08e",
+        "version": "2026-10-08f",
         "commit": (os.getenv("RENDER_GIT_COMMIT") or "")[:12] or None,
     }
 
@@ -4469,7 +4469,6 @@ async def _load_tri_defaults(db) -> dict:
         "tri_pct_investisseur_defaut": "pct",
         "tri_croissance_loyers_defaut": "cr_loyers",
         "tri_croissance_depenses_defaut": "cr_dep",
-        "tri_taux_actualisation_defaut": "taux_actualisation",
     }
     try:
         rows = (
@@ -4588,7 +4587,7 @@ async def get_tri_inputs(
             "taux_achat", "amort_achat", "amortissement_initial",
             "taux_refi", "amort_refi",
         ],
-        manual_fields=["capital", "pct", "cr_loyers", "cr_dep", "taux_actualisation"],
+        manual_fields=["capital", "pct", "cr_loyers", "cr_dep"],
     )
 
 

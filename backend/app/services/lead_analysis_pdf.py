@@ -1690,8 +1690,7 @@ def _tri_section(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
         f"Capital injecté <b>{_money(manual['capital'])}</b> · "
         f"parts investisseur <b>{_pct_fraction(manual['pct'], 0)}</b> · "
         f"croissance loyers <b>{_pct_fraction(manual['cr_loyers'])}</b> · "
-        f"croissance dépenses <b>{_pct_fraction(manual['cr_dep'])}</b> · "
-        f"taux d'actualisation (VAN) <b>{_pct_fraction(manual['taux_actualisation'])}</b>",
+        f"croissance dépenses <b>{_pct_fraction(manual['cr_dep'])}</b>",
         s["small_muted"]))
     out.append(Spacer(1, 6))
 
@@ -1796,12 +1795,15 @@ def _tri_section(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
         f"Total cash encaissé (hors vente) sur {hz[-1]} ans : "
         f"<b>{_money(sommaire.get('total_cash_sans_vente'))}</b>",
         s["small"]))
-    van_inv = tri_data.get("van") or {}
-    if van_inv:
+    mult_inv = tri_data.get("multiple") or {}
+    if mult_inv:
+        # Performance sans taux promis (Phil 2026-10-08) : multiple du
+        # capital = tout ce qui ressort ÷ mise initiale.
         out.append(Paragraph(
-            "VAN au taux du fonds (" + _pct_fraction(manual["taux_actualisation"]) + ") : "
+            "Multiple du capital : "
             + " · ".join(
-                f"sortie an {h} <b>{_money(van_inv.get(f'an{h}'))}</b>" for h in hz
+                f"sortie an {h} <b>{(mult_inv.get(f'an{h}') or 0):.2f} ×</b>".replace(".", ",")
+                for h in hz
             ),
             s["small"]))
 
@@ -1919,12 +1921,13 @@ def _tri_section(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
             f"Total sorti du projet (hors vente) sur {hz[-1]} ans : "
             f"<b>{_money(sommaire.get('total_cash_projet_sans_vente'))}</b>",
             s["small"]))
-        van_p = tri_data.get("van_projet") or {}
-        if van_p:
+        mult_p = tri_data.get("multiple_projet") or {}
+        if mult_p:
             out.append(Paragraph(
-                "VAN du projet au taux du fonds : "
+                "Multiple du capital (projet) : "
                 + " · ".join(
-                    f"sortie an {h} <b>{_money(van_p.get(f'an{h}'))}</b>" for h in hz
+                    f"sortie an {h} <b>{(mult_p.get(f'an{h}') or 0):.2f} ×</b>".replace(".", ",")
+                    for h in hz
                 ),
                 s["small"]))
 

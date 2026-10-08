@@ -45,6 +45,7 @@ import { AssignerBailButton } from "@/components/immobilier/assigner-bail";
 import { BoutonExportZip } from "@/components/immobilier/bouton-export";
 import {
   echeanceLabel,
+  FinBailModal,
   JOUR_ECHEANCE_DEFAUT,
   JOURS_ECHEANCE,
   RelocationStatutPastille
@@ -593,9 +594,27 @@ export default function LocataireDetailPage({
   // confirmation explicite (force=true supprime baux + paiements +
   // documents en cascade). Retour Phil 2026-07-20.
   const [deleting, setDeleting] = useState(false);
+  // Bail encore ACTIF : on n'affiche pas « impossible », on amène à la
+  // solution — la même fenêtre « Mettre fin au bail » qu'ailleurs, puis
+  // la suppression reprend (Phil 2026-10-08).
+  const [finBailAvantSuppression, setFinBailAvantSuppression] =
+    useState<DossierBail | null>(null);
 
   async function supprimerLocataire() {
     if (!loc) return;
+    const bailActif = (dossier?.baux || []).find((b) => b.status === "actif");
+    if (bailActif) {
+      if (
+        window.confirm(
+          `« ${loc.full_name} » a encore un bail ACTIF (${bailActif.immeuble_name}${
+            bailActif.logement_numero ? ` · Log. ${bailActif.logement_numero}` : ""
+          }).\n\nIl faut d'abord y mettre fin (fin immédiate ou entente signée). Ouvrir « Mettre fin au bail » maintenant ?`
+        )
+      ) {
+        setFinBailAvantSuppression(bailActif);
+      }
+      return;
+    }
     if (!window.confirm(`Supprimer le locataire « ${loc.full_name} » ?`))
       return;
     setDeleting(true);
@@ -671,6 +690,23 @@ export default function LocataireDetailPage({
 
   return (
     <>
+      {finBailAvantSuppression ? (
+        <FinBailModal
+          bailId={finBailAvantSuppression.id}
+          locataireNom={loc?.full_name}
+          immeubleName={finBailAvantSuppression.immeuble_name}
+          logementNumero={finBailAvantSuppression.logement_numero}
+          onClose={() => setFinBailAvantSuppression(null)}
+          onDone={(msg) => {
+            setFinBailAvantSuppression(null);
+            setError(null);
+            void loadDossier();
+            window.alert(
+              `${msg}\n\nLe bail est réglé : tu peux maintenant supprimer le locataire (bouton Supprimer) — ou le garder dans l'historique.`
+            );
+          }}
+        />
+      ) : null}
       <ImmobilierTopbar
         breadcrumbs={[
           { label: "Immobilier", href: "/immobilier" },
