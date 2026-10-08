@@ -1607,7 +1607,7 @@ async def extraction_health(user: CurrentUser) -> dict:
         "ocr": _ocr_health_payload(),
         # Marqueurs du serveur déployé (sonde post-déploiement sans accès
         # aux logs Render) : version du code + commit injecté par Render.
-        "version": "2026-10-08c",
+        "version": "2026-10-08d",
         "commit": (os.getenv("RENDER_GIT_COMMIT") or "")[:12] or None,
     }
 
@@ -1777,6 +1777,11 @@ async def update_analysis(
     # décocher un poste « finançable prêteur B » sur une analyse déjà
     # faite ne mettait rien à jour.
     patched = set(payload.model_dump(exclude_unset=True).keys())
+    # Un override saisi dans le tableau des frais sur un poste de la
+    # fiche (travaux, développement, négociation) devient le champ de la
+    # fiche — même donnée, même valeur partout.
+    if _normaliser_overrides_fiche(rec, patched) and "frais_demarrage_overrides_json" in patched:
+        patched |= set(_POSTES_DE_LA_FICHE.values())
     recalc_error: Optional[str] = None
     if (patched & RECALC_INPUT_FIELDS) and rec.analysis_results_json:
         try:
@@ -2697,6 +2702,54 @@ def _serialiser_resultats(results_dict: dict, analysis_id: Optional[int] = None)
     return json.dumps(propre, allow_nan=False)
 
 
+#: Postes de frais de démarrage qui ont LEUR champ sur la fiche (onglet
+#: Infos / Analyse). Phil 2026-10-08 (3451 Adam : « je passe de 200k à
+#: 230k de travaux, ça change rien ») : une valeur forcée dans le tableau
+#: des frais masquait le champ de la fiche. Règle : la fiche est la seule
+#: source — un override sur ces clés est reporté dans le champ puis
+#: retiré, et jamais appliqué au calcul.
+_POSTES_DE_LA_FICHE: dict = {
+    "frais_travaux": "travaux_estimes",
+    "frais_developpement": "frais_developpement",
+    "frais_negociations": "frais_negociations",
+}
+
+
+def _normaliser_overrides_fiche(rec, champs_patches: set) -> bool:
+    """Retire du JSON d'overrides toute clé portant sur un poste de la
+    fiche. La valeur n'est reportée dans le champ de la fiche QUE si
+    l'utilisateur vient de saisir l'override (le JSON est dans la
+    requête) sans toucher le champ lui-même — sinon le champ de la
+    fiche, qu'il vient d'éditer ou pas, reste la vérité. Retourne True
+    si le JSON a changé."""
+    raw = getattr(rec, "frais_demarrage_overrides_json", None)
+    if not raw:
+        return False
+    try:
+        j = json.loads(raw)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(j, dict):
+        return False
+    reporter = "frais_demarrage_overrides_json" in champs_patches
+    change = False
+    for cle, champ in _POSTES_DE_LA_FICHE.items():
+        if cle not in j:
+            continue
+        v = j.pop(cle)
+        change = True
+        if not reporter or champ in champs_patches:
+            continue
+        try:
+            if v is not None and str(v).strip() != "":
+                setattr(rec, champ, float(v))
+        except (TypeError, ValueError):
+            pass
+    if change:
+        rec.frais_demarrage_overrides_json = json.dumps(j) if j else None
+    return change
+
+
 async def _compute_and_store(rec, db) -> dict:
     """Construit les intrants depuis ``rec`` (+ overrides globaux),
     lance ``compute_all`` et PERSISTE les champs dérivés sur ``rec``
@@ -2747,6 +2800,9 @@ async def _compute_and_store(rec, db) -> dict:
                     for k, v in j.items()
                     if v is not None and isinstance(v, (int, float, str))
                     and str(v).replace(".", "", 1).replace("-", "", 1).isdigit()
+                    # Travaux / développement / négociation : la fiche
+                    # est la seule source (jamais masquée par un override).
+                    and k not in _POSTES_DE_LA_FICHE
                 }
         except Exception:  # noqa: BLE001
             frais_overrides = {}
