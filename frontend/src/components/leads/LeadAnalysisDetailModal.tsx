@@ -1746,14 +1746,6 @@ function LeadTriTab({ analysisId }: { analysisId: number }) {
             onSave={(v) => setField("cr_dep", v == null ? null : v / 100)}
             format="percent"
           />
-          <FieldNumber
-            label="Taux d'actualisation du fonds (VAN)"
-            value={(inputs.taux_actualisation ?? 0) * 100}
-            onSave={(v) =>
-              setField("taux_actualisation", v == null ? null : v / 100)
-            }
-            format="percent"
-          />
         </SubCard>
 
         {/* Intrants repris de l'analyse (8) — repliable */}
@@ -1917,27 +1909,25 @@ function TriResults({ result }: { result: TriResult }) {
             />
           ))}
         </div>
-        {/* VAN au taux du fonds (Phil 2026-10-08 : « je dois savoir la VAN
-            pour calculer le rendement de notre fonds ») + multiple. */}
-        {(projet ? result.van_projet : result.van) ? (
+        {/* Performance sans taux à entrer (Phil 2026-10-08 : « je fais pas
+            de promesse, fais juste me dire à combien il performe ») :
+            multiple du capital (tout ce qui ressort ÷ mise) et gain net. */}
+        {(projet ? result.multiple_projet : result.multiple) ? (
           <div className="mt-3 grid gap-3 sm:grid-cols-3">
             {TRI_HORIZONS.map((h) => {
-              const vanMap = (projet ? result.van_projet : result.van) ?? {};
               const multMap = (projet ? result.multiple_projet : result.multiple) ?? {};
-              const van = vanMap[h.tri];
+              const fluxMap = (projet ? result.flux_projet : result.flux) ?? {};
               const mult = multMap[h.tri];
+              const flux = fluxMap[h.key] ?? [];
+              const gain = flux.length ? flux.reduce((s, f) => s + f, 0) : null;
               return (
                 <StatTile
-                  key={`van-${h.key}`}
+                  key={`perf-${h.key}`}
                   icon={TrendingUp}
-                  label={`VAN à ${_fmtPctFraction(result.intrants.taux_actualisation ?? 0, 1)} — sortie ${h.label}`}
-                  value={fmtMoney(van ?? null)}
-                  hint={
-                    mult != null
-                      ? `Multiple du capital : ${mult.toFixed(2).replace(".", ",")} ×`
-                      : undefined
-                  }
-                  tone={van != null && van < 0 ? "rose" : "neutral"}
+                  label={`Multiple du capital — sortie ${h.label}`}
+                  value={mult != null ? `${mult.toFixed(2).replace(".", ",")} ×` : "n/d"}
+                  hint={gain != null ? `Gain net : ${fmtMoney(gain)}` : undefined}
+                  tone={gain != null && gain < 0 ? "rose" : "neutral"}
                 />
               );
             })}
