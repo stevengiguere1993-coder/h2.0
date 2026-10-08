@@ -213,7 +213,11 @@ def test_tri_taux_actualisation_et_van(client, auth_headers, run):
     base = f"/api/v1/lead-analyses/{fid}"
     assert client.post(f"{base}/run-financial-analysis", headers=auth_headers).status_code == 200
     inp = client.get(f"{base}/tri-inputs", headers=auth_headers).json()
-    assert "taux_actualisation" in inp["manual_fields"] and inp["inputs"]["taux_actualisation"] == 0.10
+    # Pas de taux à entrer dans l'UI (Phil 2026-10-08 : « je fais pas de
+    # promesse ») : le moteur garde un défaut interne pour la VAN, et
+    # affiche le multiple du capital.
+    assert "taux_actualisation" not in inp["manual_fields"]
+    assert inp["inputs"]["taux_actualisation"] == 0.10
     body = {**inp["inputs"], "capital": 300_000.0, "taux_actualisation": 0.08}
     d = client.post(f"{base}/tri", headers=auth_headers, json=body).json()
     assert set(d["van"].keys()) == set(d["tri"].keys()) == set(d["van_projet"].keys())

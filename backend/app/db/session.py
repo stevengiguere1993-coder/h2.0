@@ -4304,19 +4304,6 @@ async def init_db() -> None:
                     0.1,
                     "tri_defaults",
                 ),
-                (
-                    "tri_taux_actualisation_defaut",
-                    10.0,
-                    "TRI — taux d'actualisation du fonds (VAN, défaut)",
-                    "Taux de rendement exigé du fonds, utilisé pour la "
-                    "VAN des flux du projet (vues investisseur et "
-                    "projet) quand la fiche n'a pas de valeur saisie. "
-                    "Défaut 10 %.",
-                    0.0,
-                    50.0,
-                    0.5,
-                    "tri_defaults",
-                ),
         ):
             try:
                 # UPSERT : on insère si la clé n'existe pas, sinon on
@@ -4356,6 +4343,18 @@ async def init_db() -> None:
                 # Table absente au tout premier boot (create_all n'a
                 # pas encore tourné) — retentera au prochain démarrage.
                 log.warning("init_db: upsert prospection_analysis_defaults (%s) échouée: %s", key, exc)
+
+        # Clés RETIRÉES (Phil 2026-10-08 : « je fais pas de promesse,
+        # enlève le fait de rentrer le % ») — supprimées si présentes.
+        try:
+            await conn.execute(
+                text(
+                    "DELETE FROM prospection_analysis_defaults "
+                    "WHERE key IN ('tri_taux_actualisation_defaut')"
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("init_db: retrait des défauts retirés échoué: %s", exc)
 
         # ── Seed du barème des taxes de bienvenue (juin 2026) ────────
         # Défaut à valeur structurée (``value_json``) : barème progressif
