@@ -1607,7 +1607,7 @@ async def extraction_health(user: CurrentUser) -> dict:
         "ocr": _ocr_health_payload(),
         # Marqueurs du serveur déployé (sonde post-déploiement sans accès
         # aux logs Render) : version du code + commit injecté par Render.
-        "version": "2026-10-08a",
+        "version": "2026-10-08b",
         "commit": (os.getenv("RENDER_GIT_COMMIT") or "")[:12] or None,
     }
 
@@ -2343,53 +2343,144 @@ async def export_pdf(
 
 
 class OffreInvestissementPhotoIn(BaseModel):
-    """Photo brute pour l'offre (base64 ou ID d'attachment existant)."""
+    """Photo d'un emplacement du deck : base64 (sans préfixe data:) ou
+    pièce jointe existante de la fiche."""
     model_config = ConfigDict(extra="forbid")
 
-    base64_data: Optional[str] = Field(
-        default=None,
-        description=(
-            "Photo encodée base64 (sans préfixe data:image/...). "
-            "Alternative : `attachment_id`."
-        ),
-    )
-    attachment_id: Optional[int] = Field(
-        default=None,
-        description=(
-            "Si fourni, on utilise le blob d'un `LeadAnalysisAttachment` "
-            "déjà uploadé sur cette fiche."
-        ),
-    )
+    base64_data: Optional[str] = None
+    attachment_id: Optional[int] = None
 
 
 class OffreInvestissementRequest(BaseModel):
-    """Inputs du wizard frontend."""
+    """Intrants de l'assistant (schéma ``DeckInputs`` du service
+    ``offre_investissement_deck`` — tout est pré-rempli par l'endpoint
+    ``defaults``) + photos par emplacement (clés de ``PHOTO_SLOTS``)."""
     model_config = ConfigDict(extra="forbid")
 
-    value_add_strategy: Dict[str, Any] = Field(
-        default_factory=dict,
-        description=(
-            "Inputs humains : tagline, bullets, flags value-add, programme "
-            "SCHL, etc. Schéma libre — interprété par "
-            "`offre_investissement_pptx.ValueAddStrategy.from_dict`."
-        ),
+    inputs: Dict[str, Any] = Field(default_factory=dict)
+    photos: Dict[str, OffreInvestissementPhotoIn] = Field(default_factory=dict)
+
+
+async def _photos_du_deck(
+    db, rec: LeadAnalysis, photos: Dict[str, OffreInvestissementPhotoIn]
+) -> dict[str, bytes]:
+    """Résout les photos par emplacement (base64 ou pièce jointe de LA
+    fiche). Une image illisible est ignorée (la pastille neutre du
+    gabarit reste visible)."""
+    import base64 as _b64
+
+    from app.services.offre_investissement_deck import PHOTO_SLOTS
+
+    cles = {k for k, _i, _n, _l in PHOTO_SLOTS}
+    out: dict[str, bytes] = {}
+    ids = {
+        p.attachment_id for k, p in photos.items()
+        if k in cles and p.attachment_id is not None
+    }
+    blobs: dict[int, bytes] = {}
+    if ids:
+        rows = (
+            await db.execute(
+                select(LeadAnalysisAttachment).where(
+                    LeadAnalysisAttachment.id.in_(ids),
+                    LeadAnalysisAttachment.lead_analysis_id == rec.id,
+                )
+            )
+        ).scalars().all()
+        blobs = {a.id: a.blob for a in rows}
+    for k, p in photos.items():
+        if k not in cles:
+            raise HTTPException(400, f"Emplacement de photo inconnu : {k}")
+        if p.base64_data:
+            try:
+                out[k] = _b64.b64decode(p.base64_data)
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(400, f"Photo « {k} » : base64 invalide ({exc})") from exc
+        elif p.attachment_id is not None:
+            if p.attachment_id not in blobs:
+                raise HTTPException(400, f"Photo « {k} » : pièce jointe {p.attachment_id} introuvable sur cette fiche.")
+            out[k] = blobs[p.attachment_id]
+    return out
+
+
+@router.get(
+    "/{analysis_id}/offre-investissement/defaults",
+    summary=(
+        "Intrants proposés, aperçu des chiffres et emplacements de photos "
+        "pour l'assistant du pitch deck (offre d'investissement .pptx)."
+    ),
+)
+async def get_offre_investissement_defaults(
+    analysis_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    investissement_requis: Optional[float] = None,
+    pct_parts: Optional[float] = None,
+) -> dict:
+    """Phil 2026-10-08 : l'assistant est pré-rempli à partir de la fiche,
+    de ses résultats d'analyse et du TRI investisseur ; l'utilisateur
+    n'ajuste que ce qui ne se déduit pas des chiffres. Si l'analyse n'a
+    pas tourné, ``analysis_ready`` est faux avec la raison.
+    ``investissement_requis`` / ``pct_parts`` (fraction) recalculent
+    l'aperçu du TRI avec les valeurs saisies dans l'assistant."""
+    _require_prospection(user)
+    partiels: Dict[str, Any] = {}
+    if investissement_requis is not None and investissement_requis > 0:
+        partiels["investissement_requis"] = investissement_requis
+    if pct_parts is not None and pct_parts > 0:
+        partiels["pct_parts"] = pct_parts
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+    from app.services.offre_investissement_deck import (
+        SERVICE_VERSION,
+        TEMPLATE_VERSION,
+        apercu,
+        get_renovations_catalogue,
+        photo_slots,
+        preparer_deck,
     )
-    photos: Optional[List[OffreInvestissementPhotoIn]] = Field(
-        default=None,
-        description=(
-            "Liste ordonnée des photos (cover, exterieur, carte). MVP : "
-            "3 photos max. Si vide, les photos par défaut du template sont "
-            "conservées."
-        ),
-    )
+
+    atts = (
+        await db.execute(
+            select(
+                LeadAnalysisAttachment.id,
+                LeadAnalysisAttachment.filename,
+                LeadAnalysisAttachment.content_type,
+                LeadAnalysisAttachment.size_bytes,
+            )
+            .where(LeadAnalysisAttachment.lead_analysis_id == analysis_id)
+            .order_by(LeadAnalysisAttachment.id.asc())
+        )
+    ).all()
+    images = [
+        {"id": a.id, "filename": a.filename, "content_type": a.content_type, "size_bytes": a.size_bytes}
+        for a in atts
+        if (a.content_type or "").lower().startswith("image/")
+        or (a.filename or "").lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"))
+    ]
+    base = {
+        "template_version": TEMPLATE_VERSION,
+        "service_version": SERVICE_VERSION,
+        "photos": {"slots": photo_slots(), "attachments": images},
+        "renovations_catalogue": get_renovations_catalogue(),
+    }
+    try:
+        prep = await preparer_deck(db, rec, partiels)
+    except ValueError as exc:
+        return {**base, "analysis_ready": False, "raison": str(exc), "inputs": None, "apercu": None}
+    return {
+        **base,
+        "analysis_ready": True,
+        "raison": None,
+        "inputs": prep["inputs"].to_dict(),
+        "apercu": apercu(prep["donnees"]),
+    }
 
 
 @router.post(
     "/{analysis_id}/offre-investissement",
-    summary=(
-        "Génère un .pptx d'offre d'investissement Horizon "
-        "(template horizon_v1)."
-    ),
+    summary="Génère le pitch deck .pptx (offre d'investissement, gabarit horizon_v3).",
 )
 async def export_offre_investissement(
     analysis_id: int,
@@ -2397,71 +2488,31 @@ async def export_offre_investissement(
     db: DBSession,
     user: CurrentUser,
 ):
-    """Génère à la volée le `.pptx` d'offre d'investissement pour la fiche.
-
-    Combine :
-      * Variables auto (~30 champs depuis la `LeadAnalysis`)
-      * Variables hybrides (résultats du moteur d'analyse financière le
-        plus récent)
-      * Inputs humains du wizard (tagline, bullets, flags value-add)
-      * Jusqu'à 3 photos (uploadées ou choisies parmi les attachments)
-
-    Aucune persistance. Audit log : `lead_analysis.offre_investissement_generated`.
-    """
-    import base64 as _b64
-
+    """Remplit le gabarit par nom de forme à partir de la fiche, de ses
+    résultats d'analyse, du TRI investisseur et des intrants de
+    l'assistant. En-tête ``X-Deck-Misses`` = nombre de cibles du gabarit
+    non trouvées (0 attendu) ; le détail est dans l'audit
+    ``lead_analysis.offre_investissement_generated``."""
     _require_prospection(user)
     rec = await db.get(LeadAnalysis, analysis_id)
     if rec is None:
         raise HTTPException(404, "Analyse introuvable.")
 
-    from app.services.offre_investissement_pptx import (
-        generate_offre_investissement_pptx,
+    from app.services.offre_investissement_deck import (
+        generer_deck,
         offre_investissement_pptx_filename,
     )
 
-    # Resolve photos
-    photo_bytes: list[bytes] = []
-    photo_attachment_ids: list[int] = []
-    if body.photos:
-        for p in body.photos[:3]:  # MVP : max 3 photos
-            if p.base64_data:
-                try:
-                    photo_bytes.append(_b64.b64decode(p.base64_data))
-                except Exception as exc:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Photo base64 invalide : {exc}",
-                    ) from exc
-            elif p.attachment_id is not None:
-                photo_attachment_ids.append(p.attachment_id)
-
+    photos = await _photos_du_deck(db, rec, body.photos or {})
     try:
-        pptx_bytes, template_version = await generate_offre_investissement_pptx(
-            db=db,
-            analysis_id=analysis_id,
-            value_add_strategy=body.value_add_strategy,
-            photos=photo_bytes if photo_bytes else None,
-            photo_attachment_ids=(
-                photo_attachment_ids if photo_attachment_ids else None
-            ),
-        )
+        pptx_bytes, meta = await generer_deck(db, rec, body.inputs, photos)
     except ValueError as exc:
-        log.exception(
-            "Génération offre PPTX fiche %s échouée", analysis_id
-        )
-        raise HTTPException(502, f"Génération PPTX échouée : {exc}") from exc
+        raise HTTPException(409, str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
-        log.exception(
-            "Erreur inattendue lors de la génération de l'offre PPTX %s",
-            analysis_id,
-        )
-        raise HTTPException(
-            500, f"Erreur inattendue : {exc}"
-        ) from exc
+        log.exception("Génération du deck échouée (fiche %s)", analysis_id)
+        raise HTTPException(500, f"Génération du deck échouée : {type(exc).__name__}: {str(exc)[:200]}") from exc
 
     filename = offre_investissement_pptx_filename(rec)
-
     try:
         await log_action(
             db,
@@ -2472,37 +2523,19 @@ async def export_offre_investissement(
             details={
                 "filename": filename,
                 "size_bytes": len(pptx_bytes),
-                "template_version": template_version,
-                # Version logique du service de génération. Bump à
-                # chaque PR qui change la sémantique de substitution
-                # (charts, dates auto-calculées, nouveaux champs
-                # wizard, etc.). v3 = corrections slide-par-slide
-                # (présentation projet, charts dynamiques slides 4/12/13,
-                # dates échéancier auto, totaux rénos depuis fiche,
-                # titre/chart Tendances dynamiques, estimation ROI).
-                # v4 = perfectionnements slides 3-6 (PR #544).
-                # v5a = fixes slides 8/9/10 : nb logements dynamique,
-                # frais autres réels (overrides + total recalculé),
-                # condensation tableau rénos, format équité unifié et
-                # cohérence cellule/callout en équité négative.
-                "service_version": "v5a",
-                "value_add_keys": sorted(
-                    body.value_add_strategy.keys()
-                )
-                if body.value_add_strategy
-                else [],
-                "n_photos": len(photo_bytes) + len(photo_attachment_ids),
+                "template_version": meta.get("template_version"),
+                "service_version": meta.get("service_version"),
+                "misses": list(meta.get("misses") or [])[:20],
+                "remplis": meta.get("remplis"),
+                "photos": list(meta.get("photos") or []),
             },
         )
         await db.commit()
     except Exception:  # noqa: BLE001
-        log.exception(
-            "Audit log lead_analysis.offre_investissement_generated échoué"
-        )
+        log.exception("Audit log lead_analysis.offre_investissement_generated échoué")
 
-    # Phase 6 — auto-classement Drive (best-effort, NON bloquant). Dépose
-    # l'offre PPTX dans le sous-dossier « Dossier investisseur » du deal
-    # lié, si une règle est active. N'altère jamais la réponse.
+    # Auto-classement Drive (best-effort, NON bloquant) : dépose le deck
+    # dans le sous-dossier « Dossier investisseur » du deal lié.
     try:
         from app.services.drive_auto_upload_dispatcher import (
             dispatch_auto_upload,
@@ -2532,30 +2565,22 @@ async def export_offre_investissement(
             "presentationml.presentation"
         ),
         headers={
-            "Content-Disposition": (
-                f'attachment; filename="{filename}"'
-            ),
+            "Content-Disposition": f'attachment; filename="{filename}"',
             "Content-Length": str(len(pptx_bytes)),
-            "X-Template-Version": template_version,
+            "X-Template-Version": str(meta.get("template_version") or ""),
+            "X-Deck-Misses": str(len(meta.get("misses") or [])),
         },
     )
 
 
 @router.get(
     "/offre-investissement/catalogue-renovations",
-    summary=(
-        "Retourne le catalogue de rénovations cochables pour la slide 9 "
-        "du template v2 (utilisé par le wizard frontend)."
-    ),
+    summary="Catalogue de rénovations cochables pour la diapo 9 du deck.",
 )
 async def get_offre_renovations_catalogue(user: CurrentUser) -> dict:
-    """Endpoint statique : expose la liste ``RENOVATIONS_CATALOGUE`` du
-    service ``offre_investissement_pptx``. Le wizard l'appelle au mount
-    pour afficher les checkboxes de la section value-add."""
     _require_prospection(user)
-    from app.services.offre_investissement_pptx import (
-        get_renovations_catalogue,
-    )
+    from app.services.offre_investissement_deck import get_renovations_catalogue
+
     return {"items": get_renovations_catalogue()}
 
 
