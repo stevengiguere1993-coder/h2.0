@@ -161,6 +161,13 @@ type LoyerMoisLigne = {
   loyer_mensuel: number;
   montant_paye: number | null;
   solde_total?: number;
+  //: Versements du mois (paiements partiels distincts).
+  paiements?: {
+    id: number;
+    montant: number;
+    paye_le: string | null;
+    methode: string | null;
+  }[];
 };
 
 function moisCourant(): string {
@@ -1058,6 +1065,7 @@ export default function LogementDetailPage({
                           recu={loyerMois.montant_paye}
                           solde={loyerMois.solde_total}
                           fmt={money}
+                          paiements={loyerMois.paiements}
                         />
                       </div>
                     ) : null}

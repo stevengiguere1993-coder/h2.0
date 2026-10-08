@@ -368,6 +368,11 @@ async def ensure_critical_columns() -> None:
         # Dépôts de garantie opérationnels 2026-07 : date de remise du
         # dépôt au locataire (page Dépôts → « Marquer rendu »).
         ("imm_baux", "depot_rendu_le", "DATE"),
+        # Dépôt gardé (Phil 2026-10-08) — sans ces colonnes, la page
+        # Dépôts et la fin de bail plantent.
+        ("imm_baux", "depot_saisi_le", "DATE"),
+        ("imm_baux", "depot_saisi_montant", "NUMERIC(10, 2)"),
+        ("imm_baux", "depot_saisi_motif", "VARCHAR(255)"),
         # Bail AU MOIS (chambres) : reconduction auto, jamais d'avis de
         # renouvellement, loyers qui courent sans egard a date_fin.
         ("imm_baux", "au_mois", "BOOLEAN"),
@@ -2628,6 +2633,8 @@ async def init_db() -> None:
             # l'endpoint /tri-inputs renvoie des defauts raisonnables.
             ("lead_analyses", "tri_capital_injecte", "NUMERIC(14, 2)"),
             ("lead_analyses", "tri_pct_investisseur", "NUMERIC(6, 4)"),
+            # Taux d'actualisation du fonds (VAN) — 2026-10-08.
+            ("lead_analyses", "tri_taux_actualisation", "NUMERIC(6, 4)"),
             ("lead_analyses", "tri_croissance_loyers", "NUMERIC(6, 4)"),
             ("lead_analyses", "tri_croissance_depenses", "NUMERIC(6, 4)"),
             # Motif de perte d'un lead construction (juin 2026) : renseigné
@@ -4295,6 +4302,19 @@ async def init_db() -> None:
                     0.0,
                     20.0,
                     0.1,
+                    "tri_defaults",
+                ),
+                (
+                    "tri_taux_actualisation_defaut",
+                    10.0,
+                    "TRI — taux d'actualisation du fonds (VAN, défaut)",
+                    "Taux de rendement exigé du fonds, utilisé pour la "
+                    "VAN des flux du projet (vues investisseur et "
+                    "projet) quand la fiche n'a pas de valeur saisie. "
+                    "Défaut 10 %.",
+                    0.0,
+                    50.0,
+                    0.5,
                     "tri_defaults",
                 ),
         ):

@@ -49,6 +49,26 @@ router = APIRouter(
 
 DEFAULT_PCT = 10.0
 
+#: Frais de relocation au contrat (Phil 2026-10-08 : « pour une chambre
+#: on charge 400 $ et un logement 600 $ ») — défauts globaux, modifiables
+#: dans les Réglages de la page, surchargés par immeuble.
+_DEFAUTS_RELOCATION_KEY = "frais_gestion_defauts"
+_DEFAUTS_RELOCATION = {"logement": 600.0, "chambre": 400.0}
+
+
+async def _defauts_relocation(db) -> Dict[str, float]:
+    out = dict(_DEFAUTS_RELOCATION)
+    setting = await db.get(AutomationSetting, _DEFAUTS_RELOCATION_KEY)
+    if setting and setting.config_json:
+        try:
+            cfg = json.loads(setting.config_json) or {}
+            for k in ("logement", "chambre"):
+                if cfg.get(k) is not None:
+                    out[k] = max(0.0, float(cfg[k]))
+        except Exception:  # noqa: BLE001
+            pass
+    return out
+
 MOIS_FR = [
     "janvier", "février", "mars", "avril", "mai", "juin", "juillet",
     "août", "septembre", "octobre", "novembre", "décembre",
@@ -200,11 +220,27 @@ class HistoriqueOut(BaseModel):
     complement: bool = False
     #: 'gestion' | 'relocation' | 'manuel'.
     type_ligne: str = "gestion"
+    #: Relocation IGNORÉE (frais jugé non approprié — Phil 2026-10-08) :
+    #: ligne à 0 $ qui empêche la facturation ; la poubelle la rétablit.
+    ignoree: bool = False
+
+
+class DefautsRelocation(BaseModel):
+    logement: float = 600.0
+    chambre: float = 400.0
+
+
+class DefautsRelocationPatch(BaseModel):
+    logement: Optional[float] = Field(default=None, ge=0)
+    chambre: Optional[float] = Field(default=None, ge=0)
 
 
 class OverviewOut(BaseModel):
     mois: str
     mois_label: str
+    #: Frais de relocation par défaut (chambre / logement) quand
+    #: l'immeuble n'a pas sa propre valeur.
+    defauts_relocation: DefautsRelocation = DefautsRelocation()
     rows: List[ImmeubleRow]
     nb_factures: int
     nb_a_facturer: int
@@ -348,6 +384,7 @@ async def overview(
         manuels_par_immeuble.setdefault(
             int(fm_row.immeuble_id), []
         ).append(fm_row)
+    defauts_reloc = await _defauts_relocation(db)
     premier_mois_courant = datetime.now(timezone.utc).date().replace(day=1)
     if premier_mois_courant.month == 12:
         prochain_mois = premier_mois_courant.replace(
@@ -425,12 +462,17 @@ async def overview(
                     }
                 )
             # Frais de relocation : dossiers « reloué » pas encore
-            # facturés, au tarif du contrat (chambre vs logement).
-            frais_log = float(
-                getattr(imm, "frais_relocation_logement", None) or 0.0
+            # facturés, au tarif du contrat (chambre vs logement) —
+            # valeur de l'immeuble, sinon défaut global (400 / 600).
+            frais_log = (
+                float(imm.frais_relocation_logement)
+                if getattr(imm, "frais_relocation_logement", None) is not None
+                else defauts_reloc["logement"]
             )
-            frais_ch = float(
-                getattr(imm, "frais_relocation_chambre", None) or 0.0
+            frais_ch = (
+                float(imm.frais_relocation_chambre)
+                if getattr(imm, "frais_relocation_chambre", None) is not None
+                else defauts_reloc["chambre"]
             )
             for dossier, logement in reloc_par_immeuble.get(imm.id, []):
                 if dossier.id in dossiers_factures:
@@ -571,6 +613,10 @@ async def overview(
             created_at=(f.created_at.isoformat() if f.created_at else None),
             complement=bool(getattr(f, "est_complement", False)),
             type_ligne=getattr(f, "type_ligne", None) or "gestion",
+            ignoree=(
+                (getattr(f, "type_ligne", None) or "gestion") == "relocation"
+                and float(f.montant or 0.0) <= 0.005
+            ),
         )
         for f in (
             await db.execute(
@@ -582,6 +628,7 @@ async def overview(
     ]
 
     return OverviewOut(
+        defauts_relocation=DefautsRelocation(**defauts_reloc),
         mois=m.isoformat(),
         mois_label=f"{MOIS_FR[m.month - 1]} {m.year}",
         rows=rows,
@@ -589,6 +636,73 @@ async def overview(
         nb_a_facturer=nb_a,
         historique=historique,
     )
+
+
+@router.patch("/defauts", response_model=DefautsRelocation)
+async def patch_defauts_relocation(
+    payload: DefautsRelocationPatch, db: DBSession, user: CurrentUser
+) -> DefautsRelocation:
+    """Défauts globaux des frais de relocation (chambre / logement) —
+    Réglages de la page Frais de gestion. Surchargés par immeuble."""
+    if not _is_manager(user):
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
+    cur = await _defauts_relocation(db)
+    if payload.logement is not None:
+        cur["logement"] = float(payload.logement)
+    if payload.chambre is not None:
+        cur["chambre"] = float(payload.chambre)
+    setting = await db.get(AutomationSetting, _DEFAUTS_RELOCATION_KEY)
+    if setting is None:
+        setting = AutomationSetting(key=_DEFAUTS_RELOCATION_KEY, enabled=True)
+        db.add(setting)
+    setting.config_json = json.dumps(cur)
+    setting.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    return DefautsRelocation(**cur)
+
+
+@router.post("/relocations/{dossier_id}/ignorer")
+async def ignorer_relocation(
+    dossier_id: int, db: DBSession, user: CurrentUser
+) -> dict:
+    """Frais de relocation jugé non approprié (Phil 2026-10-08) : une
+    ligne à 0 $ est consignée pour ce dossier — il disparaît des
+    transactions à facturer ; la poubelle de l'historique la rétablit."""
+    if not await user_has_capability(db, user, "frais_gestion.facturer"):
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
+    dossier = await db.get(LocationDossier, dossier_id)
+    if not dossier or dossier.statut != "reloue":
+        raise HTTPException(status_code=404, detail="Dossier de relocation introuvable ou pas abouti.")
+    deja = (
+        await db.execute(
+            select(FactureGestion.id).where(
+                FactureGestion.relocation_dossier_id == dossier_id
+            )
+        )
+    ).first()
+    if deja:
+        raise HTTPException(status_code=409, detail="Cette relocation est déjà facturée ou ignorée.")
+    logement = await db.get(Logement, dossier.logement_id)
+    quand = dossier.reloue_le or datetime.now(timezone.utc).date()
+    ligne = FactureGestion(
+        immeuble_id=int(logement.immeuble_id) if logement else 0,
+        mois_couvert=quand.replace(day=1),
+        revenus=0.0,
+        pct=0.0,
+        montant=0.0,
+        est_complement=False,
+        type_ligne="relocation",
+        relocation_dossier_id=dossier_id,
+        libelle=(
+            f"Relocation ignorée — {('ch. ' if getattr(logement, 'location_en_chambres', False) else 'log. ')}"
+            f"{getattr(logement, 'numero', '')}"
+        ),
+        created_by_user_id=getattr(user, "id", None),
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(ligne)
+    await db.commit()
+    return {"ok": True, "facture_id": ligne.id}
 
 
 @router.patch("/immeubles/{immeuble_id}")

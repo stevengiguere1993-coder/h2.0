@@ -82,6 +82,7 @@ _C_RED = "#b91c1c"           # négatif (cashflow < 0)
 # persisté — dupliqués de `lead_analyses._TRI_DEFAULTS` pour garder ce
 # service autonome (cf. RÈGLE « réutilise/duplique la dérivation »).
 _TRI_DEFAULTS = {
+    "taux_actualisation": 0.10,
     "capital": None,
     "pct": 0.5,
     "cr_loyers": 0.03,
@@ -1602,7 +1603,15 @@ def _persisted_manual_inputs(rec: LeadAnalysis) -> dict:
         if rec.tri_croissance_depenses is not None
         else _TRI_DEFAULTS["cr_dep"]
     )
-    return {"capital": cap, "pct": pct, "cr_loyers": cr_l, "cr_dep": cr_d}
+    taux_act = (
+        float(getattr(rec, "tri_taux_actualisation", None))
+        if getattr(rec, "tri_taux_actualisation", None) is not None
+        else _TRI_DEFAULTS["taux_actualisation"]
+    )
+    return {
+        "capital": cap, "pct": pct, "cr_loyers": cr_l, "cr_dep": cr_d,
+        "taux_actualisation": taux_act,
+    }
 
 
 def _tri_section(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
@@ -1656,6 +1665,7 @@ def _tri_section(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
             rpv_refi=auto["rpv_refi"],
             cr_loyers=manual["cr_loyers"],
             cr_dep=manual["cr_dep"],
+            taux_actualisation=manual["taux_actualisation"],
             annee_refi=_annee_refi_de(rec),
             taux_achat=amort.get("taux_achat") or None,
             amort_achat=amort.get("amort_achat") or None,
@@ -1680,7 +1690,8 @@ def _tri_section(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
         f"Capital injecté <b>{_money(manual['capital'])}</b> · "
         f"parts investisseur <b>{_pct_fraction(manual['pct'], 0)}</b> · "
         f"croissance loyers <b>{_pct_fraction(manual['cr_loyers'])}</b> · "
-        f"croissance dépenses <b>{_pct_fraction(manual['cr_dep'])}</b>",
+        f"croissance dépenses <b>{_pct_fraction(manual['cr_dep'])}</b> · "
+        f"taux d'actualisation (VAN) <b>{_pct_fraction(manual['taux_actualisation'])}</b>",
         s["small_muted"]))
     out.append(Spacer(1, 6))
 
@@ -1785,6 +1796,14 @@ def _tri_section(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
         f"Total cash encaissé (hors vente) sur {hz[-1]} ans : "
         f"<b>{_money(sommaire.get('total_cash_sans_vente'))}</b>",
         s["small"]))
+    van_inv = tri_data.get("van") or {}
+    if van_inv:
+        out.append(Paragraph(
+            "VAN au taux du fonds (" + _pct_fraction(manual["taux_actualisation"]) + ") : "
+            + " · ".join(
+                f"sortie an {h} <b>{_money(van_inv.get(f'an{h}'))}</b>" for h in hz
+            ),
+            s["small"]))
 
     # ── Ligne de temps des flux (scénario de sortie an 12) ───────────
     flux12 = flux.get(str(hz[-1]))
@@ -1900,6 +1919,14 @@ def _tri_section(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
             f"Total sorti du projet (hors vente) sur {hz[-1]} ans : "
             f"<b>{_money(sommaire.get('total_cash_projet_sans_vente'))}</b>",
             s["small"]))
+        van_p = tri_data.get("van_projet") or {}
+        if van_p:
+            out.append(Paragraph(
+                "VAN du projet au taux du fonds : "
+                + " · ".join(
+                    f"sortie an {h} <b>{_money(van_p.get(f'an{h}'))}</b>" for h in hz
+                ),
+                s["small"]))
 
     return out
 
