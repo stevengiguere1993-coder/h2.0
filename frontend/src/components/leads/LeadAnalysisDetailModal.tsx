@@ -1520,7 +1520,14 @@ type TriHorizon = {
   surplus: number;
   cash_investisseur: number;
   valeur_parts: number;
+  /** Vue projet (2026-10-08) : argent sorti du projet à ce refi
+   *  (négatif = injection) et patrimoine du projet (cash cumulé + équité). */
+  cash_projet?: number;
+  patrimoine_projet?: number;
 };
+
+/** Vue du TRI : rendement de l'investisseur (parts) ou du projet entier. */
+type TriVue = "investisseur" | "projet";
 
 /** Dict riche renvoyé par POST /tri (clés exactes du backend). */
 type TriResult = {
@@ -1539,6 +1546,9 @@ type TriResult = {
   sommaire: Record<string, number>;
   flux: Record<string, number[]>;
   tri: Record<string, number | null>;
+  /** Vue projet (2026-10-08) — mêmes horizons, mêmes intrants. */
+  flux_projet?: Record<string, number[]>;
+  tri_projet?: Record<string, number | null>;
   annee_refi?: number;
   horizons_list?: number[];
 };
@@ -1690,7 +1700,7 @@ function LeadTriTab({ analysisId }: { analysisId: number }) {
         icon={Percent}
         title="TRI investisseur"
         tone="emerald"
-        subtitle="Rendement de l'investisseur selon l'horizon de sortie — année du refi de l'analyse, puis +5 et +10 ans, basé sur la référence de refinancement."
+        subtitle="Rendement selon l'horizon de sortie — année du refi de l'analyse, puis +5 et +10 ans, basé sur la référence de refinancement. Les résultats se lisent en vue investisseur (parts) ou en vue projet (rendement du projet entier)."
       >
         {!analysisReady ? (
           <div className="mb-4 flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2 text-xs text-amber-200">
@@ -1827,7 +1837,14 @@ function LeadTriTab({ analysisId }: { analysisId: number }) {
 /** Bloc de résultats du TRI (vedette + métriques + tableaux). */
 function TriResults({ result }: { result: TriResult }) {
   const [detailOpen, setDetailOpen] = useState(false);
+  // Vue investisseur (parts, cascade de retour de capital) ou vue projet
+  // (Phil 2026-10-08 : rendement du projet entier — tout l'argent
+  // disponible ressort à chaque refi, équité entière à la sortie).
+  const [vue, setVue] = useState<TriVue>("investisseur");
   const TRI_HORIZONS = triHorizons(result);
+  const projet = vue === "projet";
+  const triParHorizon = projet ? result.tri_projet ?? {} : result.tri;
+  const projetDisponible = !!result.tri_projet;
 
   return (
     <div className="space-y-5">
@@ -1836,15 +1853,51 @@ function TriResults({ result }: { result: TriResult }) {
         icon={TrendingUp}
         title="Taux de rendement interne (TRI)"
         tone="emerald"
-        subtitle="Rendement annualisé de l'investisseur selon l'année de sortie du deal."
+        subtitle={
+          projet
+            ? "Rendement annualisé du projet lui-même selon l'année de sortie : tout l'argent disponible ressort à chaque refinancement (un manque est une injection), l'équité entière est liquidée à la sortie — sans partage de parts."
+            : "Rendement annualisé de l'investisseur selon l'année de sortie du deal (retour de capital prioritaire, surplus et équité au prorata de ses parts)."
+        }
       >
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span className="text-[10px] uppercase tracking-wider text-white/40">
+            Vue
+          </span>
+          <div className="inline-flex overflow-hidden rounded-lg border border-brand-800">
+            {(
+              [
+                { v: "investisseur", label: "TRI investisseur" },
+                { v: "projet", label: "TRI projet" }
+              ] as Array<{ v: TriVue; label: string }>
+            ).map((o) => (
+              <button
+                key={o.v}
+                type="button"
+                onClick={() => setVue(o.v)}
+                disabled={o.v === "projet" && !projetDisponible}
+                className={`px-3 py-1.5 text-[11px] font-semibold transition ${
+                  vue === o.v
+                    ? "bg-emerald-500/20 text-emerald-300"
+                    : "text-white/60 hover:bg-brand-900 hover:text-white"
+                } disabled:cursor-not-allowed disabled:opacity-40`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+          {projet ? (
+            <span className="text-[10px] text-white/40">
+              Le % détenu par l&apos;investisseur n&apos;intervient pas dans cette vue.
+            </span>
+          ) : null}
+        </div>
         <div className="grid gap-3 sm:grid-cols-3">
           {TRI_HORIZONS.map((h) => (
             <StatTile
               key={h.key}
               icon={Percent}
-              label={`TRI — sortie ${h.label}`}
-              value={_fmtTri(result.tri[h.tri])}
+              label={`TRI ${projet ? "projet" : "investisseur"} — sortie ${h.label}`}
+              value={_fmtTri(triParHorizon[h.tri])}
               tone="emerald"
             />
           ))}
@@ -1856,7 +1909,11 @@ function TriResults({ result }: { result: TriResult }) {
         icon={TrendingUp}
         title="Par horizon de sortie"
         tone="neutral"
-        subtitle="Cash retourné à l'investisseur et valeur de ses parts à chaque horizon."
+        subtitle={
+          projet
+            ? "Argent sorti du projet à chaque refinancement et équité du projet à chaque horizon."
+            : "Cash retourné à l'investisseur et valeur de ses parts à chaque horizon."
+        }
       >
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
@@ -1876,38 +1933,61 @@ function TriResults({ result }: { result: TriResult }) {
             <tbody>
               <tr className="border-t border-brand-800/60">
                 <td className="px-2 py-2 text-white/60">
-                  Cash retourné à l&apos;investisseur
+                  {projet
+                    ? "Argent sorti du projet (négatif = injection)"
+                    : "Cash retourné à l'investisseur"}
                 </td>
-                {TRI_HORIZONS.map((h) => (
-                  <td
-                    key={h.key}
-                    className="px-2 py-2 text-right font-mono tabular-nums text-emerald-300"
-                  >
-                    {fmtMoney(result.horizons[h.key].cash_investisseur)}
-                  </td>
-                ))}
-              </tr>
-              <tr className="border-t border-brand-800/60">
-                <td className="px-2 py-2 text-white/60">Valeur des parts</td>
-                {TRI_HORIZONS.map((h) => (
-                  <td
-                    key={h.key}
-                    className="px-2 py-2 text-right font-mono tabular-nums text-white/90"
-                  >
-                    {fmtMoney(result.horizons[h.key].valeur_parts)}
-                  </td>
-                ))}
-              </tr>
-              {/* Patrimoine de l'investisseur à cet horizon = cash retourné
-                  + valeur des parts. Mis en relief (gras). None-safe. */}
-              <tr className="border-t-2 border-brand-700">
-                <td className="px-2 py-2 font-bold text-white">Patrimoine</td>
                 {TRI_HORIZONS.map((h) => {
                   const horizon = result.horizons[h.key];
-                  const cash = horizon?.cash_investisseur;
-                  const parts = horizon?.valeur_parts;
-                  const patrimoine =
-                    cash == null || parts == null ? null : cash + parts;
+                  const v = projet
+                    ? horizon?.cash_projet ?? null
+                    : horizon?.cash_investisseur;
+                  return (
+                    <td
+                      key={h.key}
+                      className={`px-2 py-2 text-right font-mono tabular-nums ${
+                        v != null && v < 0 ? "text-rose-300" : "text-emerald-300"
+                      }`}
+                    >
+                      {fmtMoney(v)}
+                    </td>
+                  );
+                })}
+              </tr>
+              <tr className="border-t border-brand-800/60">
+                <td className="px-2 py-2 text-white/60">
+                  {projet ? "Équité du projet (valeur − prêt)" : "Valeur des parts"}
+                </td>
+                {TRI_HORIZONS.map((h) => {
+                  const horizon = result.horizons[h.key];
+                  return (
+                    <td
+                      key={h.key}
+                      className="px-2 py-2 text-right font-mono tabular-nums text-white/90"
+                    >
+                      {fmtMoney(projet ? horizon?.equite : horizon?.valeur_parts)}
+                    </td>
+                  );
+                })}
+              </tr>
+              {/* Patrimoine à cet horizon. Investisseur : cash retourné +
+                  valeur des parts. Projet : cash sorti cumulé + équité
+                  (calculé par le moteur). Mis en relief (gras). None-safe. */}
+              <tr className="border-t-2 border-brand-700">
+                <td className="px-2 py-2 font-bold text-white">
+                  {projet ? "Patrimoine du projet" : "Patrimoine"}
+                </td>
+                {TRI_HORIZONS.map((h) => {
+                  const horizon = result.horizons[h.key];
+                  let patrimoine: number | null;
+                  if (projet) {
+                    patrimoine = horizon?.patrimoine_projet ?? null;
+                  } else {
+                    const cash = horizon?.cash_investisseur;
+                    const parts = horizon?.valeur_parts;
+                    patrimoine =
+                      cash == null || parts == null ? null : cash + parts;
+                  }
                   return (
                     <td
                       key={h.key}
@@ -1951,7 +2031,7 @@ function TriResults({ result }: { result: TriResult }) {
         {detailOpen ? (
           <div className="space-y-5 px-5 pb-5">
             <TriDetailTable result={result} />
-            <TriFluxTable result={result} />
+            <TriFluxTable result={result} vue={vue} />
           </div>
         ) : null}
       </div>
@@ -2079,15 +2159,17 @@ function TriDetailTable({ result }: { result: TriResult }) {
   );
 }
 
-/** Lignes de temps des flux (3 séries an 0 → 12). */
-function TriFluxTable({ result }: { result: TriResult }) {
+/** Lignes de temps des flux (3 séries an 0 → 12), selon la vue. */
+function TriFluxTable({ result, vue }: { result: TriResult; vue: TriVue }) {
   const TRI_HORIZONS = triHorizons(result);
   const dernier = Number(TRI_HORIZONS[TRI_HORIZONS.length - 1].key) || 12;
   const years = Array.from({ length: dernier + 1 }, (_, i) => i);
+  const flux = vue === "projet" ? result.flux_projet ?? result.flux : result.flux;
   return (
     <div className="mt-1">
       <h4 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
-        Lignes de temps des flux (scénario de sortie)
+        Lignes de temps des flux (scénario de sortie —{" "}
+        {vue === "projet" ? "vue projet" : "vue investisseur"})
       </h4>
       <div className="mt-2 overflow-x-auto">
         <table className="w-full text-[11px]">
@@ -2112,7 +2194,7 @@ function TriFluxTable({ result }: { result: TriResult }) {
                 <td className="px-2 py-1 whitespace-nowrap text-white/70">
                   {h.label}
                 </td>
-                {result.flux[h.key].map((f, i) => (
+                {(flux[h.key] ?? []).map((f, i) => (
                   <td
                     key={i}
                     className={`px-2 py-1 text-right font-mono tabular-nums ${

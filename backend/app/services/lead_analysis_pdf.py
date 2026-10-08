@@ -1824,6 +1824,83 @@ def _tri_section(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
             "suivantes = cash encaissé + liquidation des parts à la "
             "sortie.", s["small_muted"]))
 
+    # ── Vue PROJET (Phil 2026-10-08) — miroir de l'onglet TRI ────────
+    # Rendement du projet lui-même : tout l'argent disponible ressort à
+    # chaque refinancement, l'équité entière est liquidée à la sortie,
+    # sans partage de parts. Mêmes intrants (capital, croissances).
+    tri_p = tri_data.get("tri_projet") or {}
+    if tri_p:
+        out.append(Spacer(1, 10))
+        out.append(Paragraph("RENDEMENT DU PROJET (TRI PROJET)", s["section"]))
+        out.append(Paragraph(
+            "Même capital injecté et mêmes croissances, mais rendement du "
+            "projet lui-même : tout l'argent disponible ressort à chaque "
+            "refinancement (un manque est une injection) et l'équité "
+            "entière est liquidée à la sortie — sans partage de parts.",
+            s["small_muted"]))
+        out.append(Spacer(1, 6))
+        cp2, cp7, cp12 = [
+            _tri_cell(f"Sortie an {h}", tri_p.get(f"an{h}")) for h in hz
+        ]
+        vedette_p = Table(
+            [[cp2, "", cp7, "", cp12]],
+            colWidths=[col_w, gap, col_w, gap, col_w])
+        vedette_p.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        out.append(vedette_p)
+        out.append(Spacer(1, 8))
+        out.append(Paragraph(
+            "Argent sorti du projet et équité par horizon", s["subsection"]))
+        rows_p = [[
+            Paragraph("Horizon", s["th_left"]),
+            Paragraph("Valeur immeuble", s["th"]),
+            Paragraph("Prêt max refi", s["th"]),
+            Paragraph("Argent sorti du projet", s["th"]),
+            Paragraph("Équité", s["th"]),
+            Paragraph("Patrimoine du projet", s["th"]),
+        ]]
+        for h in [str(x) for x in hz]:
+            hd = horizons.get(h) or {}
+            rows_p.append([
+                Paragraph(f"An {h}", s["small"]),
+                Paragraph(_money(hd.get("valeur_immeuble")), s["num"]),
+                Paragraph(_money(hd.get("pret_max_refi")), s["num"]),
+                Paragraph(_money(hd.get("cash_projet")), s["num"]),
+                Paragraph(_money(hd.get("equite")), s["num"]),
+                Paragraph(
+                    f"<b>{_money(hd.get('patrimoine_projet'))}</b>",
+                    s["num_b"]),
+            ])
+        tp = Table(
+            rows_p, colWidths=[20 * mm, "*", "*", "*", "*", "*"],
+            repeatRows=1)
+        tp.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(_C_AMBER_SOFT)),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.75,
+             colors.HexColor(_C_AMBER_LINE)),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+             [colors.white, colors.HexColor("#fafafa")]),
+            ("BACKGROUND", (-1, 1), (-1, -1), colors.HexColor(_C_GREEN_SOFT)),
+            ("BOX", (0, 0), (-1, -1), 0.25, colors.HexColor(_C_LINE)),
+            ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor(_C_LINE)),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        out.append(tp)
+        out.append(Spacer(1, 4))
+        out.append(Paragraph(
+            f"Total sorti du projet (hors vente) sur {hz[-1]} ans : "
+            f"<b>{_money(sommaire.get('total_cash_projet_sans_vente'))}</b>",
+            s["small"]))
+
     return out
 
 

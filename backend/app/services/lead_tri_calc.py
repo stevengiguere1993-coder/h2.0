@@ -16,6 +16,14 @@ Logique (cf. ``lead_tri_spec.md``, sections ①-⑤ + IRR) :
                   capital injecté, surplus partagé au prorata des parts.
   ⑤ Flux + TRI  : 3 lignes de temps de flux (sortie an 2 / an 7 / an 12),
                   chacune actualisée par bissection (``irr``).
+  ⑥ Vue PROJET  : (Phil 2026-10-08) même capital injecté et mêmes
+                  croissances, mais rendement du projet lui-même : tout
+                  l'argent disponible à chaque refinancement ressort (un
+                  manque est une injection, flux négatif) et l'équité
+                  entière est liquidée à la sortie — aucun partage de
+                  parts. Exposé sous ``tri_projet`` / ``flux_projet`` /
+                  ``horizons[h].cash_projet`` à côté de la vue
+                  investisseur, qui reste inchangée.
 
 Tous les calculs sont défensifs contre ``None`` et les divisions par zéro :
 un intrant manquant est traité comme ``0.0`` et un dénominateur nul renvoie
@@ -261,6 +269,31 @@ def compute_tri(
         flows_by_exit[exit_year] = f
         tri[exit_year] = irr(f)
 
+    # ── ⑥ Vue PROJET (Phil 2026-10-08) ───────────────────────────────
+    # Le projet injecte ``capital`` à l'an 0, ressort TOUT l'argent
+    # disponible à chaque refinancement (négatif = le projet remet de
+    # l'argent pour fermer le refi) et liquide l'équité entière à la
+    # sortie. Le % de parts n'intervient pas.
+    cash_projet: Dict[int, float] = {h: dispo[h] for h in horizons}
+    patrimoine_projet: Dict[int, float] = {}
+    cumul = 0.0
+    for h in horizons:
+        cumul += cash_projet[h]
+        patrimoine_projet[h] = cumul + equite[h]
+    tri_projet: Dict[int, Optional[float]] = {}
+    flows_projet: Dict[int, List[float]] = {}
+    for exit_year in horizons:
+        fp = [0.0] * (h2 + 1)
+        fp[0] = -capital
+        fp[h0] += cash_projet[h0]
+        if exit_year >= h1:
+            fp[h1] += cash_projet[h1]
+        if exit_year >= h2:
+            fp[h2] += cash_projet[h2]
+        fp[exit_year] += equite[exit_year]
+        flows_projet[exit_year] = fp
+        tri_projet[exit_year] = irr(fp)
+
     # ── Assemblage du dict riche ─────────────────────────────────────
     horizons_out = {
         str(h): {
@@ -277,6 +310,10 @@ def compute_tri(
             "surplus": surplus[h],
             "cash_investisseur": cash[h],
             "valeur_parts": valeur_parts[h],
+            # Vue projet : argent sorti du projet à ce refi (négatif =
+            # injection) et patrimoine du projet (cash cumulé + équité).
+            "cash_projet": cash_projet[h],
+            "patrimoine_projet": patrimoine_projet[h],
         }
         for h in horizons
     }
@@ -321,9 +358,17 @@ def compute_tri(
             f"cash_an{h2}": cash[h2],
             f"valeur_parts_an{h2}": valeur_parts[h2],
             "total_cash_sans_vente": total_cash_sans_vente,
+            "total_cash_projet_sans_vente": (
+                cash_projet[h0] + cash_projet[h1] + cash_projet[h2]
+            ),
         },
         "flux": {
             str(exit_year): flows_by_exit[exit_year] for exit_year in horizons
         },
         "tri": {f"an{h}": tri[h] for h in horizons},
+        # Vue projet (Phil 2026-10-08) — mêmes horizons, mêmes intrants.
+        "flux_projet": {
+            str(exit_year): flows_projet[exit_year] for exit_year in horizons
+        },
+        "tri_projet": {f"an{h}": tri_projet[h] for h in horizons},
     }
