@@ -1495,6 +1495,8 @@ type TriInputs = {
   rpv_refi: number;
   cr_loyers: number;
   cr_dep: number;
+  /** Taux d'actualisation du fonds (fraction) — VAN des flux. */
+  taux_actualisation?: number;
 };
 
 type TriInputsResponse = {
@@ -1549,6 +1551,11 @@ type TriResult = {
   /** Vue projet (2026-10-08) — mêmes horizons, mêmes intrants. */
   flux_projet?: Record<string, number[]>;
   tri_projet?: Record<string, number | null>;
+  /** VAN au taux du fonds + multiple du capital, par horizon de sortie. */
+  van?: Record<string, number>;
+  van_projet?: Record<string, number>;
+  multiple?: Record<string, number | null>;
+  multiple_projet?: Record<string, number | null>;
   annee_refi?: number;
   horizons_list?: number[];
 };
@@ -1739,6 +1746,14 @@ function LeadTriTab({ analysisId }: { analysisId: number }) {
             onSave={(v) => setField("cr_dep", v == null ? null : v / 100)}
             format="percent"
           />
+          <FieldNumber
+            label="Taux d'actualisation du fonds (VAN)"
+            value={(inputs.taux_actualisation ?? 0) * 100}
+            onSave={(v) =>
+              setField("taux_actualisation", v == null ? null : v / 100)
+            }
+            format="percent"
+          />
         </SubCard>
 
         {/* Intrants repris de l'analyse (8) — repliable */}
@@ -1902,6 +1917,32 @@ function TriResults({ result }: { result: TriResult }) {
             />
           ))}
         </div>
+        {/* VAN au taux du fonds (Phil 2026-10-08 : « je dois savoir la VAN
+            pour calculer le rendement de notre fonds ») + multiple. */}
+        {(projet ? result.van_projet : result.van) ? (
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            {TRI_HORIZONS.map((h) => {
+              const vanMap = (projet ? result.van_projet : result.van) ?? {};
+              const multMap = (projet ? result.multiple_projet : result.multiple) ?? {};
+              const van = vanMap[h.tri];
+              const mult = multMap[h.tri];
+              return (
+                <StatTile
+                  key={`van-${h.key}`}
+                  icon={TrendingUp}
+                  label={`VAN à ${_fmtPctFraction(result.intrants.taux_actualisation ?? 0, 1)} — sortie ${h.label}`}
+                  value={fmtMoney(van ?? null)}
+                  hint={
+                    mult != null
+                      ? `Multiple du capital : ${mult.toFixed(2).replace(".", ",")} ×`
+                      : undefined
+                  }
+                  tone={van != null && van < 0 ? "rose" : "neutral"}
+                />
+              );
+            })}
+          </div>
+        ) : null}
       </SectionCard>
 
       {/* Tableau « Par horizon de sortie » */}

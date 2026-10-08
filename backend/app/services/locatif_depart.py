@@ -1202,6 +1202,9 @@ async def activer_bail_propose(
         )
     ).scalars().first()
     if dossier is not None:
+        # L'activation est un geste humain (bail signé déposé, exception
+        # motivée) : un dossier auto-créé devient facturable (2026-10-08).
+        marquer_prise_en_charge_humaine(dossier)
         dossier.statut = LocationDossierStatut.RELOUE.value
         if dossier.reloue_le is None:
             dossier.reloue_le = date.today()

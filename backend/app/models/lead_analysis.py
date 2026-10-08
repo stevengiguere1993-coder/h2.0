@@ -412,6 +412,13 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
         Numeric(6, 4), nullable=True
     )
     # Croissance annuelle des dépenses (0.03 = 3 %).
+    #: Taux d'actualisation du fonds (VAN des flux du TRI — Phil
+    #: 2026-10-08 : « je dois savoir la VAN pour calculer le rendement de
+    #: notre fonds »). Fraction (0.10 = 10 %). Colonne additive →
+    #: ``ensure_critical_columns``.
+    tri_taux_actualisation: Mapped[Optional[float]] = mapped_column(
+        Numeric(6, 4), nullable=True
+    )
     tri_croissance_depenses: Mapped[Optional[float]] = mapped_column(
         Numeric(6, 4), nullable=True
     )

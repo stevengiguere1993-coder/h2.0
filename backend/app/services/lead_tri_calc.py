@@ -113,6 +113,7 @@ def compute_tri(
     amortissement_initial: bool = False,
     taux_refi: Optional[float] = None,
     amort_refi: Optional[int] = None,
+    taux_actualisation: Optional[float] = None,
 ) -> dict:
     """Calcule le TRI investisseur et toutes les métriques d'affichage.
 
@@ -294,6 +295,27 @@ def compute_tri(
         flows_projet[exit_year] = fp
         tri_projet[exit_year] = irr(fp)
 
+    # ── ⑦ VAN et multiple du capital (Phil 2026-10-08 : « la VAN pour
+    # calculer le rendement de notre fonds ») : chaque ligne de flux est
+    # actualisée au taux exigé du fonds (fraction) ; multiple = tout ce
+    # qui ressort ÷ capital, sans actualisation.
+    r_act = _f(taux_actualisation)
+
+    def _van(flux: List[float]) -> float:
+        return sum(cf / (1.0 + r_act) ** t for t, cf in enumerate(flux))
+
+    def _multiple(flux: List[float]) -> Optional[float]:
+        if capital <= 0:
+            return None
+        return sum(cf for cf in flux[1:]) / capital
+
+    van: Dict[int, float] = {h: _van(flows_by_exit[h]) for h in horizons}
+    van_projet: Dict[int, float] = {h: _van(flows_projet[h]) for h in horizons}
+    multiple: Dict[int, Optional[float]] = {h: _multiple(flows_by_exit[h]) for h in horizons}
+    multiple_projet: Dict[int, Optional[float]] = {
+        h: _multiple(flows_projet[h]) for h in horizons
+    }
+
     # ── Assemblage du dict riche ─────────────────────────────────────
     horizons_out = {
         str(h): {
@@ -336,6 +358,7 @@ def compute_tri(
             "rpv_refi": rpv_refi,
             "cr_loyers": cr_loyers,
             "cr_dep": cr_dep,
+            "taux_actualisation": r_act,
         },
         "bases": {
             "hypotheque": hypotheque,
@@ -371,4 +394,9 @@ def compute_tri(
             str(exit_year): flows_projet[exit_year] for exit_year in horizons
         },
         "tri_projet": {f"an{h}": tri_projet[h] for h in horizons},
+        # VAN au taux du fonds + multiple du capital, par horizon de sortie.
+        "van": {f"an{h}": van[h] for h in horizons},
+        "van_projet": {f"an{h}": van_projet[h] for h in horizons},
+        "multiple": {f"an{h}": multiple[h] for h in horizons},
+        "multiple_projet": {f"an{h}": multiple_projet[h] for h in horizons},
     }

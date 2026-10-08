@@ -364,12 +364,43 @@ export function FinBailModal({
   const [mode, setMode] = useState<"avis" | "immediat">("avis");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Dépôt de garantie (Phil 2026-10-08, messages de Kyle : « il perd son
+  // dépôt » / « il reçoit son dépôt ») : décision prise AU DÉPART, en fin
+  // immédiate. Le montant vient du bail.
+  const [depot, setDepot] = useState<number | null>(null);
+  const [depotDecision, setDepotDecision] = useState<
+    "" | "rendre" | "garder" | "deja_rendu"
+  >("");
+  const [depotMotif, setDepotMotif] = useState("");
+  const [depotMontant, setDepotMontant] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authedFetch(`/api/v1/immobilier/baux/${bailId}`);
+        if (!r.ok) return;
+        const b = (await r.json()) as { depot_garantie?: number | null };
+        if (!cancelled) setDepot(b.depot_garantie ?? null);
+      } catch {
+        /* dépôt inconnu : la section ne s'affiche pas */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bailId]);
 
   async function confirmer() {
     if (!dateFin) return;
     setBusy(true);
     setErr(null);
     try {
+      const decision = mode === "immediat" && (depot ?? 0) > 0 ? depotDecision : "";
+      const montantGarde =
+        decision === "garder" && depotMontant.trim()
+          ? Number(depotMontant.replace(/\s/g, "").replace(",", "."))
+          : null;
       const res = await authedFetch(
         `/api/v1/immobilier/baux/${bailId}/resilier`,
         {
@@ -377,7 +408,11 @@ export function FinBailModal({
           body: JSON.stringify({
             date_fin: dateFin,
             ouvrir_relocation: true,
-            envoyer_avis: mode === "avis"
+            envoyer_avis: mode === "avis",
+            depot_decision: decision || null,
+            depot_motif: decision === "garder" ? depotMotif.trim() || null : null,
+            depot_montant_garde:
+              montantGarde != null && Number.isFinite(montantGarde) ? montantGarde : null
           })
         }
       );
@@ -476,6 +511,62 @@ export function FinBailModal({
                elle part et où atterrit sa réponse, comme partout
                ailleurs (retour Phil 2026-08-19). */
             <ExpediteurResume note="L'envoi sera tracé dans Communications et sur la fiche du locataire." />
+          ) : null}
+          {mode === "immediat" && (depot ?? 0) > 0 ? (
+            <div className="rounded-lg border border-violet-500/30 bg-violet-500/5 px-3 py-2">
+              <p className="text-[11px] font-semibold text-violet-200">
+                Dépôt de garantie : {(depot ?? 0).toLocaleString("fr-CA")} $
+              </p>
+              <div className="mt-1.5 grid gap-1">
+                {(
+                  [
+                    { v: "rendre", label: "À rendre au locataire", aide: "la page Dépôts le signale « à rendre »" },
+                    { v: "garder", label: "Gardé (en tout ou en partie)", aide: "préavis insuffisant, dommages, loyers impayés…" },
+                    { v: "deja_rendu", label: "Déjà rendu", aide: "rien à suivre" },
+                    { v: "", label: "Décider plus tard", aide: "reste « détenu » sur la page Dépôts" }
+                  ] as Array<{ v: "" | "rendre" | "garder" | "deja_rendu"; label: string; aide: string }>
+                ).map((o) => (
+                  <label
+                    key={o.v || "plus_tard"}
+                    className="flex cursor-pointer items-start gap-2 text-xs text-white/75"
+                  >
+                    <input
+                      type="radio"
+                      checked={depotDecision === o.v}
+                      onChange={() => setDepotDecision(o.v)}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      <span className="font-semibold text-white">{o.label}</span>{" "}
+                      <span className="text-white/50">— {o.aide}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {depotDecision === "garder" ? (
+                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <label className="text-[11px] font-semibold text-white/60">
+                    Montant gardé ($)
+                    <input
+                      inputMode="decimal"
+                      value={depotMontant}
+                      onChange={(e) => setDepotMontant(e.target.value)}
+                      placeholder={`${depot ?? 0} (tout)`}
+                      className={`${INPUT_CLS} mt-0.5 block w-full`}
+                    />
+                  </label>
+                  <label className="text-[11px] font-semibold text-white/60">
+                    Motif
+                    <input
+                      value={depotMotif}
+                      onChange={(e) => setDepotMotif(e.target.value)}
+                      placeholder="ex. parti sans préavis"
+                      className={`${INPUT_CLS} mt-0.5 block w-full`}
+                    />
+                  </label>
+                </div>
+              ) : null}
+            </div>
           ) : null}
           <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
             ⚠️ Un dossier de relocation s&apos;ouvrira AUTOMATIQUEMENT
@@ -847,10 +938,12 @@ export function CreerBailModal({
               />
               <span>
                 <span className="font-semibold text-white">
-                  Ce bail est déjà en vigueur (signé)
+                  Ce bail est déjà en vigueur (signé ou entente verbale)
                 </span>{" "}
                 — créé directement ACTIF, sans passer par le kanban
-                Locations (le logement passe « occupé »).
+                Locations (le logement passe « occupé »). Sans bail
+                papier, déclare ensuite le motif dans le bandeau « bail
+                sans document » pour que rien ne le réclame.
               </span>
             </label>
           </div>
