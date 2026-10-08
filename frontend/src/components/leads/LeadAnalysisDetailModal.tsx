@@ -4216,6 +4216,7 @@ function ManualAnalysisSection({
               onPatchFinancables={(j) =>
                 onPatch("frais_demarrage_financables_json", j)
               }
+              onPatchFiche={(field, v) => onPatch(field, v)}
               mode={trad ? "traditionnel" : "preteur_b"}
               chantier={stratChantier}
               dureeProjet={data.duree_projet_annees}
@@ -6577,6 +6578,18 @@ const DEFAULT_FINANCABLES = [
   "frais_travaux"
 ];
 
+/** Postes de frais de démarrage portés par un champ de la fiche (onglet
+ *  Analyse) : clé moteur → champ de la fiche. Même donnée, une seule
+ *  source — jamais d'override qui la masque (Phil 2026-10-08). */
+const POSTES_DE_LA_FICHE: Record<
+  string,
+  "travaux_estimes" | "frais_developpement" | "frais_negociations"
+> = {
+  frais_travaux: "travaux_estimes",
+  frais_developpement: "frais_developpement",
+  frais_negociations: "frais_negociations"
+};
+
 function FraisDemarrageBreakdownPanel({
   data,
   overridesJson,
@@ -6586,6 +6599,7 @@ function FraisDemarrageBreakdownPanel({
   mdfPreteurBDb,
   onPatchOverrides,
   onPatchFinancables,
+  onPatchFiche,
   mode = "preteur_b",
   pretRetenu,
   programmeLabel,
@@ -6598,6 +6612,13 @@ function FraisDemarrageBreakdownPanel({
   mdfPct?: number;
   prixAchat?: number;
   mdfPreteurBDb?: number | null;
+  /** Travaux / développement / négociation : la ligne du tableau édite
+   *  le CHAMP de la fiche (jamais un override qui le masquerait — Phil
+   *  2026-10-08, 3451 Adam). */
+  onPatchFiche?: (
+    field: "travaux_estimes" | "frais_developpement" | "frais_negociations",
+    value: number | null
+  ) => void;
   onPatchOverrides?: (json: string) => void;
   onPatchFinancables?: (json: string) => void;
   /** traditionnel : assise = prix − prêt retenu, finançable = payé
@@ -6673,6 +6694,17 @@ function FraisDemarrageBreakdownPanel({
   }
 
   function setOverride(key: string, val: number | null) {
+    // Postes qui ont leur champ sur la fiche : on écrit le champ, et on
+    // retire tout ancien override qui le masquerait.
+    const champFiche = POSTES_DE_LA_FICHE[key];
+    if (champFiche) {
+      const next = { ...overrides };
+      const avaitOverride = next[key] != null;
+      delete next[key];
+      if (avaitOverride) onPatchOverrides?.(JSON.stringify(next));
+      if (val != null && Number.isFinite(val)) onPatchFiche?.(champFiche, val);
+      return;
+    }
     const next = { ...overrides };
     if (val == null || !Number.isFinite(val)) {
       delete next[key];
@@ -6837,7 +6869,10 @@ function FraisDemarrageBreakdownPanel({
   // les perso s'affichent même à 0.
   function lineMetrics(row: FraisLineRow) {
     const { key } = row;
-    const overridden = key !== "" && overrides[key] != null;
+    // Un poste de la fiche n'est jamais « forcé » : sa valeur est celle
+    // du champ de la fiche (le moteur ignore l'override).
+    const overridden =
+      key !== "" && !POSTES_DE_LA_FICHE[key] && overrides[key] != null;
     const displayVal = overridden ? Number(overrides[key]) : row.computed;
     const isFin = key !== "" && financables.has(key);
     // Prêteur B : un poste finançable coûte pct en cash ; institution
