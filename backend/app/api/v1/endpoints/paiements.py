@@ -1,5 +1,5 @@
-"""Paiements fournisseurs par dépôt direct Desjardins ou virement Interac
-(Comptabilité → Paiements).
+"""Paiements fournisseurs par dépôt direct Desjardins, virement Interac ou
+paiement automatique par VoPay (Comptabilité → Paiements).
 
     GET  /api/v1/paiements/moi                              droits + double authentification
     POST /api/v1/paiements/2fa/debut                        clé à scanner (mot de passe redemandé)
@@ -15,6 +15,7 @@
     POST /api/v1/paiements/comptes/{id}/retirer
     GET  /api/v1/paiements/entreprises/{id}/reglages        réglages des paiements (dépôt direct, approbations)
     PUT  /api/v1/paiements/entreprises/{id}/reglages        approbateur + double authentification
+    POST /api/v1/paiements/entreprises/{id}/vopay/tester    vérifie les clés VoPay (approbateur)
     GET  /api/v1/paiements/entreprises/{id}/lots
     POST /api/v1/paiements/entreprises/{id}/lots            nouveau lot (brouillon)
     GET  /api/v1/paiements/lots/{id}
@@ -28,6 +29,10 @@
     POST /api/v1/paiements/lots/{id}/envoi                  Interac : approbateur + double authentification
     POST /api/v1/paiements/lots/{id}/virements/{fid}/envoye Interac : virement envoyé dans AccèsD (approbateur)
     POST /api/v1/paiements/lots/{id}/virements/{fid}/retirer Interac : retire un virement pas envoyé (approbateur)
+    POST /api/v1/paiements/lots/{id}/auto/verifier          paiement automatique : suivi immédiat chez VoPay
+    POST /api/v1/paiements/lots/{id}/auto/reessayer         relance un lot ou une opération refusée (approbateur + 2FA)
+    POST /api/v1/paiements/lots/{id}/operations/{oid}/resoudre  opération à vérifier : partie ou non (approbateur + 2FA)
+    POST /api/v1/paiements/lots/{id}/paiements/{fid}/retirer    retire un paiement refusé ; l'argent revient à l'entreprise (approbateur + 2FA)
     POST /api/v1/paiements/lots/{id}/quickbooks             inscrit les paiements dans QuickBooks
     POST /api/v1/paiements/lots/{id}/annuler
     GET  /api/v1/paiements/entreprises/{id}/journal         journal des paiements
@@ -50,6 +55,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.user import User
+from app.services import paiements_auto as auto
 from app.services import paiements_fournisseurs as svc
 from app.services.permissions_service import require_capability
 
@@ -116,6 +122,24 @@ class FichierIn(BaseModel):
 class EnvoyeIn(BaseModel):
     #: Numéro de référence affiché par AccèsD (facultatif).
     reference: Optional[str] = Field(default=None, max_length=64)
+
+
+class ReessayerIn(BaseModel):
+    code_2fa: Optional[str] = Field(default=None, max_length=12)
+    #: Opération refusée à reprendre ; absente : le lot entier.
+    operation_id: Optional[int] = None
+
+
+class ResoudreIn(BaseModel):
+    code_2fa: Optional[str] = Field(default=None, max_length=12)
+    #: L'approbateur a trouvé la demande dans le portail VoPay.
+    parti: bool
+    transaction_id: Optional[str] = Field(default=None, max_length=64)
+
+
+class RetraitIn(BaseModel):
+    code_2fa: Optional[str] = Field(default=None, max_length=12)
+    motif: Optional[str] = Field(default=None, max_length=2000)
 
 
 # ── Moi et double authentification ───────────────────────────────────
@@ -258,6 +282,14 @@ async def modifier_reglages(
     donnees = _valider(svc.ReglagesIn, corps)
     try:
         return await svc.modifier_reglages(db, entreprise_id, user, donnees)
+    except svc.PaiementErreur as exc:
+        return _erreur(exc)
+
+
+@router.post("/entreprises/{entreprise_id}/vopay/tester", summary="Vérifie les clés VoPay enregistrées (solde du compte)")
+async def tester_vopay(entreprise_id: int, db: DBSession, user: User = Approbateur) -> Any:
+    try:
+        return await auto.tester(db, entreprise_id, user)
     except svc.PaiementErreur as exc:
         return _erreur(exc)
 
@@ -407,6 +439,62 @@ async def retirer_virement(
     donnees = _valider(MotifIn, corps)
     try:
         return await svc.retirer_virement(db, lot_id, user, fournisseur_id, donnees.motif or "")
+    except svc.PaiementErreur as exc:
+        return _erreur(exc)
+
+
+# ── Paiement automatique (VoPay) ──────────────────────────────────────
+
+
+@router.post("/lots/{lot_id}/auto/verifier", summary="Paiement automatique : suivi immédiat du lot chez VoPay")
+async def verifier_auto(lot_id: int, db: DBSession, user: CurrentUser) -> Any:
+    try:
+        return await auto.verifier(db, lot_id, user)
+    except svc.PaiementErreur as exc:
+        return _erreur(exc)
+
+
+@router.post("/lots/{lot_id}/auto/reessayer", summary="Paiement automatique : relance un lot ou une opération refusée")
+async def reessayer_auto(
+    lot_id: int, db: DBSession, user: User = Approbateur, corps: Dict[str, Any] = Body(default={})
+) -> Any:
+    donnees = _valider(ReessayerIn, corps)
+    try:
+        return await auto.reessayer(db, lot_id, user, donnees.code_2fa, donnees.operation_id)
+    except svc.PaiementErreur as exc:
+        return _erreur(exc)
+
+
+@router.post(
+    "/lots/{lot_id}/operations/{operation_id}/resoudre",
+    summary="Paiement automatique : indique si une opération à vérifier est partie chez VoPay",
+)
+async def resoudre_operation(
+    lot_id: int, operation_id: int, db: DBSession, user: User = Approbateur, corps: Dict[str, Any] = Body(default={})
+) -> Any:
+    donnees = _valider(ResoudreIn, corps)
+    try:
+        return await auto.resoudre(
+            db, lot_id, operation_id, user, donnees.code_2fa, donnees.parti, donnees.transaction_id
+        )
+    except svc.PaiementErreur as exc:
+        return _erreur(exc)
+
+
+@router.post(
+    "/lots/{lot_id}/paiements/{fournisseur_id}/retirer",
+    summary="Paiement automatique : retire un paiement refusé ; l'argent revient au compte de l'entreprise",
+)
+async def retirer_paiement(
+    lot_id: int,
+    db: DBSession,
+    fournisseur_id: str = Path(max_length=64),
+    user: User = Approbateur,
+    corps: Dict[str, Any] = Body(default={}),
+) -> Any:
+    donnees = _valider(RetraitIn, corps)
+    try:
+        return await auto.retirer_paiement(db, lot_id, user, fournisseur_id, donnees.motif or "", donnees.code_2fa)
     except svc.PaiementErreur as exc:
         return _erreur(exc)
 

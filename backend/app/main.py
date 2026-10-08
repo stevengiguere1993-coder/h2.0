@@ -498,6 +498,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.services.qbo_nets import qbo_nets_loop
 
     qbo_nets_task = asyncio.create_task(qbo_nets_loop())
+    # Paiement automatique des fournisseurs (VoPay) : prélèvements, paiements
+    # et suivi, toutes les 5 minutes (aucun webhook exposé).
+    from app.services.paiements_auto import boucle as paiements_auto_loop
+
+    paiements_auto_task = asyncio.create_task(paiements_auto_loop())
     try:
         yield
     finally:
@@ -505,6 +510,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             startup_task.cancel()
         if not qbo_nets_task.done():
             qbo_nets_task.cancel()
+        if not paiements_auto_task.done():
+            paiements_auto_task.cancel()
         await close_db()
 
 
