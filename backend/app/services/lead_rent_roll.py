@@ -107,6 +107,110 @@ def _montant_mensuel(ligne: str) -> Optional[float]:
     return None
 
 
+#: Budget de la cascade Gemini pour un rent roll (tâche simple) — au-delà,
+#: relais Groq puis parser local. Phil 2026-10-08 : « 115 s d'IA, pas
+#: normal ».
+BUDGET_IA_RENT_ROLL_S = 60.0
+
+_COL_LOYER_RE = re.compile(r"loyer|rent|rental|montant|prix|mensuel|monthly|\$", re.I)
+_COL_UNITE_RE = re.compile(r"unit|logement|app|porte|n[o°]|#|num[ée]ro|suite|local", re.I)
+_COL_TYPO_RE = re.compile(r"typo|type|pi[èe]ces|format|genre|chambre|bedroom|taille", re.I)
+_COL_EXCLURE_RE = re.compile(r"annuel|annual|year|total|d[ée]p[ôo]t|deposit|taxe|surface|pi2|sq", re.I)
+
+
+def _cellule_texte(v: Any) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v).strip()
+
+
+def _detecter_entetes(ligne: List[Any]) -> Optional[Dict[str, int]]:
+    """Colonnes d'une ligne d'en-têtes : au minimum une colonne de loyer
+    (mensuel) ; numéro d'unité et typologie si présents."""
+    cols: Dict[str, int] = {}
+    for i, v in enumerate(ligne):
+        s = _cellule_texte(v)
+        if not s or len(s) > 40:
+            continue
+        if "loyer" not in cols and _COL_LOYER_RE.search(s) and not _COL_EXCLURE_RE.search(s):
+            cols["loyer"] = i
+        elif "typo" not in cols and _COL_TYPO_RE.search(s):
+            cols["typo"] = i
+        elif "unite" not in cols and _COL_UNITE_RE.search(s):
+            cols["unite"] = i
+    return cols if "loyer" in cols else None
+
+
+def parse_rent_roll_excel(blob: bytes) -> List[Dict[str, Any]]:
+    """Lecture DIRECTE d'un rent roll Excel (sans IA) : la première ligne
+    qui ressemble à des en-têtes (colonne loyer + unité/typologie) fixe
+    les colonnes, chaque ligne suivante avec un loyer mensuel plausible
+    donne une unité. Lignes de total ignorées. Moins de deux unités →
+    liste vide (on laisse la place au texte + IA)."""
+    try:
+        import io
+
+        from openpyxl import load_workbook  # type: ignore
+
+        wb = load_workbook(filename=io.BytesIO(blob), data_only=True, read_only=True)
+    except Exception as exc:  # noqa: BLE001
+        log.info("Rent roll Excel : lecture directe impossible (%s)", exc)
+        return []
+    out: List[Dict[str, Any]] = []
+    try:
+        for ws in wb.worksheets:
+            cols: Optional[Dict[str, int]] = None
+            for row in ws.iter_rows(values_only=True):
+                ligne = list(row)
+                if not any(c not in (None, "") for c in ligne):
+                    continue
+                if cols is None:
+                    cols = _detecter_entetes(ligne)
+                    continue
+                texte_ligne = " ".join(_cellule_texte(c) for c in ligne)
+                if _TOTAL_RE.search(texte_ligne):
+                    continue
+                brut = ligne[cols["loyer"]] if cols["loyer"] < len(ligne) else None
+                loyer: Optional[float] = None
+                if isinstance(brut, (int, float)):
+                    loyer = float(brut)
+                else:
+                    loyer = _montant_mensuel(_cellule_texte(brut))
+                if loyer is None:
+                    continue
+                if loyer > LOYER_MENSUEL_MAX and loyer <= LOYER_MENSUEL_MAX * 12:
+                    loyer = round(loyer / 12.0, 2)
+                if not (LOYER_MENSUEL_MIN <= loyer <= LOYER_MENSUEL_MAX):
+                    continue
+                numero = None
+                if "unite" in cols and cols["unite"] < len(ligne):
+                    numero = _cellule_texte(ligne[cols["unite"]])[:32] or None
+                typo = None
+                if "typo" in cols and cols["typo"] < len(ligne):
+                    typo = normaliser_typo(_cellule_texte(ligne[cols["typo"]]))
+                if typo is None:
+                    typo = normaliser_typo(texte_ligne) if _TYPO_RE.search(texte_ligne) else None
+                out.append(
+                    {
+                        "numero": numero,
+                        "typo": typo,
+                        "loyer_actuel": round(loyer, 2),
+                        "loyer_optimise": None,
+                        "notes": None,
+                    }
+                )
+            if len(out) >= 2:
+                break
+    finally:
+        try:
+            wb.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return out if len(out) >= 2 else []
+
+
 def parse_rent_roll_text(texte: str) -> List[Dict[str, Any]]:
     """Parser local (regex) : une unité par ligne portant un loyer
     plausible ; numéro et typologie quand ils sont lisibles. Moins de
@@ -242,6 +346,21 @@ async def extraire_rent_roll(
                     "confiée à l'IA."
                 )
         elif "excel" in ct or "spreadsheetml" in ct or bas.endswith((".xlsx", ".xls")):
+            # Excel : lecture directe des colonnes, sans IA (instantané).
+            # Phil 2026-10-08 : un Excel de 21 Ko attendait 115 s de
+            # cascade IA alors que ses colonnes se lisent telles quelles.
+            directes = parse_rent_roll_excel(blob) if bas.endswith(".xlsx") or "spreadsheetml" in ct else []
+            if directes:
+                log.info("Rent roll : %d unité(s) lues directement dans « %s »", len(directes), filename)
+                return RentRollResult(
+                    unites=directes,
+                    warnings=[
+                        f"{len(directes)} unité(s) lues directement dans « {filename} » "
+                        "(colonnes du fichier, sans IA) — vérifie avant d'appliquer."
+                    ],
+                    model_used="excel",
+                    source="local",
+                )
             xl = _ex.parse_excel(blob, filename=filename)
             if xl.strip():
                 material_parts.append(f"[Excel : {filename}]\n{xl[:60_000]}")
@@ -262,7 +381,8 @@ async def extraire_rent_roll(
     model_used = "none"
     if material.strip() or images:
         data, gemini_err, gmodel = await _ex._run_gemini_safely(
-            material, images, system=SYSTEM_PROMPT_RENT_ROLL, guide=SCHEMA_RENT_ROLL
+            material, images, system=SYSTEM_PROMPT_RENT_ROLL, guide=SCHEMA_RENT_ROLL,
+            budget_s=BUDGET_IA_RENT_ROLL_S, preferer_lite=True,
         )
         if data is not None:
             ia = normaliser_unites_extraites(data)
