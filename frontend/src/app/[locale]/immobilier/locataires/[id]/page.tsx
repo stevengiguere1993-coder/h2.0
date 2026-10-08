@@ -15,6 +15,7 @@ import {
   MoreHorizontal,
   Pencil,
   Phone,
+  ShieldCheck,
   StickyNote,
   Trash2,
   User,
@@ -52,8 +53,10 @@ import {
   CelluleLoyer,
   CorrectionOptions,
   duMois,
+  FraisCreditModal,
   moisCouvertPourPaiement,
   montantMarquerPaye,
+  type PaiementMois,
   RENOUVELLEMENT_BADGES
 } from "@/components/immobilier/paiements-actions";
 import { ImmobilierTopbar } from "../../layout";
@@ -84,6 +87,10 @@ type DossierBail = {
   date_fin: string;
   loyer_mensuel: number;
   depot_garantie: number | null;
+  depot_rendu_le?: string | null;
+  depot_saisi_le?: string | null;
+  depot_saisi_montant?: number | null;
+  depot_saisi_motif?: string | null;
   status: string;
   document_id?: number | null;
   signed_at?: string | null;
@@ -612,6 +619,22 @@ export default function LocataireDetailPage({
           `/api/v1/immobilier/locataires/${locataireId}?force=true`,
           { method: "DELETE" }
         );
+        // Locataire PARTI avec des paiements enregistrés (Phil
+        // 2026-10-08) : deuxième confirmation explicite, puis purge.
+        if (r.status === 409) {
+          const detail2 = (await r.text()).slice(0, 300);
+          if (
+            /purger=true/.test(detail2) &&
+            window.confirm(
+              `${detail2.replace(/["{}]|detail:|\s*\(purger=true\)/g, "")}\n\nSupprimer AUSSI ses paiements et frais ? L'historique financier de ce locataire disparaît définitivement.`
+            )
+          ) {
+            r = await authedFetch(
+              `/api/v1/immobilier/locataires/${locataireId}?force=true&purger=true`,
+              { method: "DELETE" }
+            );
+          }
+        }
       }
       if (!r.ok && r.status !== 204) {
         const t = await r.text();
@@ -970,11 +993,41 @@ export default function LocataireDetailPage({
                   value={money(dossier.loyer_actuel)}
                   cls="border-emerald-500/30 bg-emerald-500/5 text-emerald-200"
                 />
-                <KpiTile
-                  label="Dépôt détenu"
-                  value={money(dossier.depot_total)}
-                  cls="border-violet-500/30 bg-violet-500/5 text-violet-200"
-                />
+                {(() => {
+                  // Miroir de la page Dépôts : un dépôt gardé ou rendu sur
+                  // un bail terminé se lit ici aussi (Phil 2026-10-08).
+                  const garde = dossier.baux.find((b) => b.depot_saisi_le);
+                  const rendu = dossier.baux.find((b) => b.depot_rendu_le);
+                  if (dossier.depot_total <= 0 && garde) {
+                    const m = garde.depot_saisi_montant ?? garde.depot_garantie ?? 0;
+                    return (
+                      <KpiTile
+                        icon={<ShieldCheck className="h-4 w-4" />}
+                        label="Dépôt gardé"
+                        value={money(m)}
+                        hint={`le ${garde.depot_saisi_le}${garde.depot_saisi_motif ? ` — ${garde.depot_saisi_motif}` : ""}`}
+                        cls="border-amber-500/40 bg-amber-500/10 text-amber-200"
+                      />
+                    );
+                  }
+                  if (dossier.depot_total <= 0 && rendu) {
+                    return (
+                      <KpiTile
+                        label="Dépôt rendu"
+                        value={money(rendu.depot_garantie ?? 0)}
+                        hint={`le ${rendu.depot_rendu_le}`}
+                        cls="border-emerald-500/30 bg-emerald-500/5 text-emerald-200"
+                      />
+                    );
+                  }
+                  return (
+                    <KpiTile
+                      label="Dépôt détenu"
+                      value={money(dossier.depot_total)}
+                      cls="border-violet-500/30 bg-violet-500/5 text-violet-200"
+                    />
+                  );
+                })()}
                 <KpiTile
                   icon={
                     dossier.nb_retards > 0 ? (
@@ -1540,11 +1593,14 @@ function KpiTile({
   icon,
   label,
   value,
+  hint,
   cls
 }: {
   icon?: React.ReactNode;
   label: string;
   value: string;
+  /** Précision sous la valeur (ex. « le 2026-10-08 — parti sans préavis »). */
+  hint?: string;
   cls: string;
 }) {
   return (
@@ -1554,6 +1610,7 @@ function KpiTile({
         {label}
       </div>
       <div className="mt-1 text-2xl font-bold">{value}</div>
+      {hint ? <div className="mt-0.5 text-[11px] opacity-70">{hint}</div> : null}
     </div>
   );
 }
@@ -1591,6 +1648,7 @@ type LoyerMoisRow = {
   bail_statut?: string;
   bail_termine_le?: string | null;
   frais_mois?: { id: number; montant: number; libelle: string }[];
+  paiements?: PaiementMois[];
   solde_total?: number;
   nb_relances: number;
   derniere_relance_le: string | null;
@@ -1693,38 +1751,29 @@ function LoyersMoisSection({
     await paiement(row, Math.round(montant * 100) / 100);
   }
 
+  // Frais OU crédit — même fenêtre que la page Paiements et la fiche
+  // immeuble (Phil 2026-10-08) ; le crédit y est enfin possible aussi.
+  const [fraisPour, setFraisPour] = useState<LoyerMoisRow | null>(null);
   async function ajouterFrais(row: LoyerMoisRow) {
-    const saisie = window.prompt(
-      `Frais à facturer (mois ${mois}) ?\nMontant en $ :`,
-      "20"
+    setFraisPour(row);
+  }
+  async function confirmerFrais(montant: number, libelle: string) {
+    if (!fraisPour) return;
+    const r = await authedFetch(
+      `/api/v1/immobilier/baux/${fraisPour.bail_id}/frais`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          mois_couvert: `${mois}-01`,
+          montant,
+          libelle
+        })
+      }
     );
-    if (saisie == null) return;
-    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
-    if (!Number.isFinite(montant) || montant <= 0) {
-      setErr("Montant invalide.");
-      return;
-    }
-    const libelle =
-      window.prompt("Libellé du frais :", "Frais de retard") ||
-      "Frais de retard";
-    try {
-      const r = await authedFetch(
-        `/api/v1/immobilier/baux/${row.bail_id}/frais`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            mois_couvert: `${mois}-01`,
-            montant,
-            libelle
-          })
-        }
-      );
-      if (!r.ok)
-        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
-      await apres();
-    } catch (e) {
-      setErr(`Ajout du frais échoué : ${(e as Error).message}`);
-    }
+    if (!r.ok)
+      throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+    setFraisPour(null);
+    await apres();
   }
 
   async function supprimerFrais(fraisId: number) {
@@ -1860,6 +1909,13 @@ function LoyersMoisSection({
 
   return (
     <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <FraisCreditModal
+        open={fraisPour != null}
+        mois={mois}
+        locataireName={fraisPour?.locataire_name}
+        onClose={() => setFraisPour(null)}
+        onConfirm={confirmerFrais}
+      />
       {relanceApercu ? (
         <ApercuEnvoiModal
           titre="Relance de loyer"
@@ -1993,6 +2049,7 @@ function LoyersMoisSection({
                     solde={r.solde_total}
                     fmt={money}
                     frais={r.frais_mois}
+                    paiements={r.paiements}
                     onSupprimerFrais={(id) => void supprimerFrais(id)}
                   />
                 </span>

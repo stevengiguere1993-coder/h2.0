@@ -1607,7 +1607,7 @@ async def extraction_health(user: CurrentUser) -> dict:
         "ocr": _ocr_health_payload(),
         # Marqueurs du serveur déployé (sonde post-déploiement sans accès
         # aux logs Render) : version du code + commit injecté par Render.
-        "version": "2026-10-08d",
+        "version": "2026-10-08e",
         "commit": (os.getenv("RENDER_GIT_COMMIT") or "")[:12] or None,
     }
 
@@ -4207,6 +4207,8 @@ _TRI_DEFAULTS = {
     "pct": 0.5,
     "cr_loyers": 0.03,
     "cr_dep": 0.03,
+    # Taux d'actualisation du fonds (VAN) — Phil 2026-10-08.
+    "taux_actualisation": 0.10,
 }
 
 
@@ -4235,6 +4237,9 @@ class TriInputs(BaseModel):
     amortissement_initial: bool = False
     taux_refi: float = 0.0
     amort_refi: int = 0
+    # Taux d'actualisation du fonds pour la VAN (fraction) — manuel,
+    # persisté sur la fiche, défaut configurable (tri_defaults).
+    taux_actualisation: float = 0.0
 
 
 class TriInputsResponse(BaseModel):
@@ -4458,11 +4463,13 @@ async def _load_tri_defaults(db) -> dict:
         "pct": _TRI_DEFAULTS["pct"],
         "cr_loyers": _TRI_DEFAULTS["cr_loyers"],
         "cr_dep": _TRI_DEFAULTS["cr_dep"],
+        "taux_actualisation": _TRI_DEFAULTS["taux_actualisation"],
     }
     key_to_field = {
         "tri_pct_investisseur_defaut": "pct",
         "tri_croissance_loyers_defaut": "cr_loyers",
         "tri_croissance_depenses_defaut": "cr_dep",
+        "tri_taux_actualisation_defaut": "taux_actualisation",
     }
     try:
         rows = (
@@ -4509,7 +4516,15 @@ def _persisted_manual_inputs(
         if rec.tri_croissance_depenses is not None
         else d["cr_dep"]
     )
-    return {"capital": cap, "pct": pct, "cr_loyers": cr_l, "cr_dep": cr_d}
+    taux_act = (
+        float(getattr(rec, "tri_taux_actualisation", None))
+        if getattr(rec, "tri_taux_actualisation", None) is not None
+        else d["taux_actualisation"]
+    )
+    return {
+        "capital": cap, "pct": pct, "cr_loyers": cr_l, "cr_dep": cr_d,
+        "taux_actualisation": taux_act,
+    }
 
 
 @router.get(
@@ -4560,6 +4575,7 @@ async def get_tri_inputs(
         pct=manual["pct"],
         cr_loyers=manual["cr_loyers"],
         cr_dep=manual["cr_dep"],
+        taux_actualisation=manual["taux_actualisation"],
         annee_refi=_annee_refi_de(rec),
         **amort,
     )
@@ -4572,7 +4588,7 @@ async def get_tri_inputs(
             "taux_achat", "amort_achat", "amortissement_initial",
             "taux_refi", "amort_refi",
         ],
-        manual_fields=["capital", "pct", "cr_loyers", "cr_dep"],
+        manual_fields=["capital", "pct", "cr_loyers", "cr_dep", "taux_actualisation"],
     )
 
 
@@ -4615,14 +4631,16 @@ async def compute_tri_endpoint(
         amortissement_initial=payload.amortissement_initial,
         taux_refi=payload.taux_refi or None,
         amort_refi=payload.amort_refi or None,
+        taux_actualisation=payload.taux_actualisation,
     )
 
-    # Persiste les 4 intrants MANUELS sur la fiche (les 8 auto sont
+    # Persiste les intrants MANUELS sur la fiche (les auto sont
     # dérivés à la volée, on ne les stocke pas).
     rec.tri_capital_injecte = payload.capital
     rec.tri_pct_investisseur = payload.pct
     rec.tri_croissance_loyers = payload.cr_loyers
     rec.tri_croissance_depenses = payload.cr_dep
+    rec.tri_taux_actualisation = payload.taux_actualisation
     rec.updated_at = datetime.now(timezone.utc)
     await db.commit()
 
