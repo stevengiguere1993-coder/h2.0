@@ -2870,6 +2870,7 @@ function UnitesOptimisationCard({
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [importErr, setImportErr] = useState<string | null>(null);
+  const [importEtape, setImportEtape] = useState<string | null>(null);
   const [importTexteOuvert, setImportTexteOuvert] = useState(false);
   const [importTexte, setImportTexte] = useState("");
   const [importPreview, setImportPreview] = useState<RentRollPreview | null>(
@@ -2880,30 +2881,109 @@ function UnitesOptimisationCard({
     if (files.length === 0 && !texte.trim()) return;
     setImportBusy(true);
     setImportErr(null);
+    setImportEtape("Lecture en cours…");
+    const t0 = Date.now();
     try {
       const fd = new FormData();
       for (const f of files) fd.append("files", f);
       if (texte.trim()) fd.append("text", texte.trim());
-      const r = await authedFetch(
-        `/api/v1/lead-analyses/${analysisId}/unites/extract`,
+      // Tâche de fond + suivi (Phil 2026-10-08 : « l'importation du rent
+      // roll, ça marche presque jamais ») : la lecture IA dépassait la
+      // coupure à 100 s de Render → HTTP 500 à l'écran alors que le
+      // serveur finissait. Le serveur répond tout de suite, on suit.
+      const lancement = await authedFetch(
+        `/api/v1/lead-analyses/${analysisId}/unites/extract-jobs`,
         { method: "POST", body: fd }
       );
-      const body = (await r.json().catch(() => null)) as
-        | (RentRollPreview & { detail?: string })
-        | null;
-      if (!r.ok) {
-        throw new Error(
-          typeof body?.detail === "string"
-            ? body.detail
-            : `Lecture échouée (HTTP ${r.status}).`
+      let body: (RentRollPreview & { detail?: string }) | null = null;
+      if (
+        lancement.status === 404 ||
+        lancement.status === 405 ||
+        lancement.status === 422
+      ) {
+        // Ancien serveur : appel synchrone.
+        const r = await authedFetch(
+          `/api/v1/lead-analyses/${analysisId}/unites/extract`,
+          { method: "POST", body: fd }
         );
+        body = (await r.json().catch(() => null)) as
+          | (RentRollPreview & { detail?: string })
+          | null;
+        if (!r.ok) {
+          throw new Error(
+            typeof body?.detail === "string"
+              ? body.detail
+              : `Lecture échouée (HTTP ${r.status}).`
+          );
+        }
+      } else {
+        if (!lancement.ok) {
+          const err = (await lancement.json().catch(() => null)) as {
+            detail?: string;
+          } | null;
+          throw new Error(
+            typeof err?.detail === "string"
+              ? err.detail
+              : `Lecture échouée (HTTP ${lancement.status}).`
+          );
+        }
+        const { job_id } = (await lancement.json()) as { job_id: string };
+        let echecsSuivi = 0;
+        for (;;) {
+          await new Promise((res) => setTimeout(res, 2000));
+          const sec = Math.round((Date.now() - t0) / 1000);
+          setImportEtape(`Lecture en cours… ${sec} s (l'IA lit le document)`);
+          let j: Response;
+          try {
+            j = await authedFetch(
+              `/api/v1/lead-analyses/${analysisId}/unites/extract-jobs/${job_id}`
+            );
+          } catch {
+            if (++echecsSuivi > 10) {
+              throw new Error(
+                "Suivi impossible (réseau). Relance l'import dans une minute."
+              );
+            }
+            continue;
+          }
+          if (j.status === 404) {
+            throw new Error(
+              "Le serveur a redémarré pendant la lecture. Relance l'import."
+            );
+          }
+          if (!j.ok) {
+            if (++echecsSuivi > 10) {
+              throw new Error(`Suivi impossible (HTTP ${j.status}).`);
+            }
+            continue;
+          }
+          const etat = (await j.json()) as {
+            status: string;
+            resultat?: RentRollPreview | null;
+            erreur?: string | null;
+          };
+          if (etat.status === "termine" && etat.resultat) {
+            body = etat.resultat;
+            break;
+          }
+          if (etat.status === "erreur") {
+            throw new Error(etat.erreur || "Lecture échouée.");
+          }
+          if (Date.now() - t0 > 10 * 60 * 1000) {
+            throw new Error(
+              "La lecture dépasse 10 minutes — relance l'import ou colle le texte du rent roll."
+            );
+          }
+        }
       }
+      if (!body) throw new Error("Lecture échouée.");
       setImportPreview(body as RentRollPreview);
       setImportTexteOuvert(false);
     } catch (e) {
       setImportErr(e instanceof Error ? e.message : "Lecture échouée.");
     } finally {
       setImportBusy(false);
+      setImportEtape(null);
       if (fileRef.current) fileRef.current.value = "";
     }
   }
@@ -3066,6 +3146,9 @@ function UnitesOptimisationCard({
           >
             {importTexteOuvert ? "Fermer le texte" : "Coller du texte"}
           </button>
+          {importBusy && importEtape ? (
+            <span className="text-[11px] text-white/60">{importEtape}</span>
+          ) : null}
           {importErr ? (
             <span className="text-[11px] text-rose-300">{importErr}</span>
           ) : null}

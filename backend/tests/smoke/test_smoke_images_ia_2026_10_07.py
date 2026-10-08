@@ -38,7 +38,7 @@ def test_photo_lourde_reduite_avant_l_ia():
 def test_pipeline_envoie_la_photo_reduite(monkeypatch):
     recu: dict = {}
 
-    async def _gemini_ok(material, images, *, system=None, guide=None):
+    async def _gemini_ok(material, images, *, system=None, guide=None, **kw):
         recu["images"] = images
         return [{"asking_price": 1}], None, "gemini-3.8-flash"
 
@@ -51,7 +51,7 @@ def test_pipeline_envoie_la_photo_reduite(monkeypatch):
     assert mime == "image/jpeg" and len(data) < len(grosse)
 
     # Rent roll : même réduction.
-    async def _gemini_rr(material, images, *, system=None, guide=None):
+    async def _gemini_rr(material, images, *, system=None, guide=None, **kw):
         recu["rr"] = images
         return [{"unites": [{"numero": "1", "typo": "4.5", "loyer_actuel": 900}]}], None, "gemini-3.8-flash"
 
@@ -61,8 +61,10 @@ def test_pipeline_envoie_la_photo_reduite(monkeypatch):
 
 
 def test_modele_sature_puis_suivant_toujours_essaye(monkeypatch):
-    """503 sur le premier modèle : un nouvel essai après 3 s, puis le
-    deuxième modèle est essayé même si le budget est dépassé."""
+    """503 sur le premier modèle : pas de nouvel essai sur lui (un autre
+    modèle reste à essayer — 2026-10-08), et le deuxième modèle est
+    essayé même si le budget est dépassé."""
+    ex._GEMINI_PENALITES.clear()
     monkeypatch.setattr(ex, "_GEMINI_BUDGET_S", 0.2)
     monkeypatch.setattr(settings, "gemini_api_key", "cle-test")
     appels: list = []
@@ -82,12 +84,17 @@ def test_modele_sature_puis_suivant_toujours_essaye(monkeypatch):
     data, raison, modele = asyncio.run(ex._gemini_extract_cascade("texte", []))
     assert data == [{"asking_price": 2}] and modele == "m2 (cascade)"
     # Budget (0,2 s) dépassé après m1 : m2 quand même essayé (au moins deux
-    # modèles) ; pas de nouvel essai sur m1 car 3 s ne tiennent pas dans
-    # le budget.
+    # modèles) ; pas de nouvel essai sur m1 (m2 restait à essayer).
     assert appels == ["m1", "m2"]
+    # m1 est en pause pour les prochains appels.
+    assert "m1" in ex.modeles_gemini_en_pause()
+    ex._GEMINI_PENALITES.clear()
 
 
 def test_erreur_transitoire_un_nouvel_essai(monkeypatch):
+    """Nouvel essai après 3 s sur une erreur transitoire SEULEMENT quand
+    c'est le dernier modèle de la cascade (2026-10-08)."""
+    ex._GEMINI_PENALITES.clear()
     monkeypatch.setattr(ex, "_GEMINI_BUDGET_S", 30.0)
     monkeypatch.setattr(settings, "gemini_api_key", "cle-test")
     monkeypatch.setattr(asyncio, "sleep", _sans_attente)
@@ -100,13 +107,14 @@ def test_erreur_transitoire_un_nouvel_essai(monkeypatch):
         return [{"asking_price": 3}], None, False, False
 
     async def _cascade(_key=None):
-        return ["m1", "m2"]
+        return ["m1"]
 
     monkeypatch.setattr(ex, "_gemini_extract", _extract)
     monkeypatch.setattr(ex, "resolve_gemini_cascade", _cascade)
     data, raison, modele = asyncio.run(ex._gemini_extract_cascade("texte", []))
     assert data == [{"asking_price": 3}]
     assert appels == ["m1", "m1"] and modele == "m1 (retry)"
+    ex._GEMINI_PENALITES.clear()
 
 
 async def _sans_attente(_s):

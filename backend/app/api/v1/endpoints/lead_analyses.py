@@ -1568,6 +1568,7 @@ async def extraction_health(user: CurrentUser) -> dict:
         _groq_list_models,
         _groq_modele_texte,
         _groq_modele_vision,
+        modeles_gemini_en_pause,
         modeles_gemini_utilisables,
         resolve_gemini_cascade,
     )
@@ -1579,6 +1580,9 @@ async def extraction_health(user: CurrentUser) -> dict:
         "cascade": [],
         "disponibles": [],
         "catalogue_ok": False,
+        # Modèles mis en pause après une erreur récente (503, timeout,
+        # quota du jour) → secondes restantes.
+        "en_pause": modeles_gemini_en_pause(),
     }
     if gemini_key:
         modeles = await _gemini_list_models(gemini_key)
@@ -1603,7 +1607,7 @@ async def extraction_health(user: CurrentUser) -> dict:
         "ocr": _ocr_health_payload(),
         # Marqueurs du serveur déployé (sonde post-déploiement sans accès
         # aux logs Render) : version du code + commit injecté par Render.
-        "version": "2026-10-07f",
+        "version": "2026-10-08a",
         "commit": (os.getenv("RENDER_GIT_COMMIT") or "")[:12] or None,
     }
 
@@ -1858,6 +1862,31 @@ async def extract_rent_roll(
         )
     if not file_blobs and not (text and text.strip()):
         raise HTTPException(status_code=400, detail="Aucune source fournie.")
+    return await _lire_rent_roll_et_attacher(
+        db, user, rec, file_blobs=file_blobs, text=text, t0=t0
+    )
+
+
+async def _lire_rent_roll_et_attacher(
+    db,
+    user,
+    rec: LeadAnalysis,
+    *,
+    file_blobs: list[tuple[str, str, bytes]],
+    text: Optional[str],
+    t0: float,
+) -> "RentRollExtractResult":
+    """Lit le rent roll, attache les fichiers à la fiche (sans doublon),
+    journalise, et renvoie la proposition d'unités.
+
+    Partagé par l'endpoint synchrone et par la tâche de fond (Phil
+    2026-10-08 : « l'importation du rent roll, ça marche presque jamais »
+    — un Excel de 21 Ko prenait 115 s de cascade IA, au-delà de la coupure
+    à 100 s de Render : le navigateur voyait un HTTP 500 alors que le
+    serveur finissait, et la fiche supprimée entre-temps faisait échouer
+    les pièces jointes). Tout est blindé : une erreur devient un 502
+    lisible ET une entrée d'audit « rent_roll_failed » avec la trace."""
+    analysis_id = rec.id
     noms = [fn for fn, _ct, _b in file_blobs]
     nb_logements = rec.nb_logements
     typology_json = rec.typology_json
@@ -1868,55 +1897,68 @@ async def extract_rent_roll(
 
     from app.services.lead_rent_roll import extraire_rent_roll
 
-    # Tout ce qui suit est blindé : une erreur devient un 502 lisible ET
-    # une entrée d'audit « rent_roll_failed » avec la trace (lisible via
-    # le connecteur Kratos, sans accès aux logs Render) — un « HTTP 500 »
-    # muet comme celui du 2026-10-07 ne doit plus se reproduire.
     try:
         res = await extraire_rent_roll(files=file_blobs, text=text)
-        # Pièces jointes — une seule fois : même nom + même taille déjà
-        # attachés à la fiche = on ne duplique pas (un 2e essai sur le
-        # même PDF ne doit pas empiler des copies de 700 Ko).
-        deja = {
-            (fn, sz)
-            for fn, sz in (
-                await db.execute(
-                    select(
-                        LeadAnalysisAttachment.filename,
-                        LeadAnalysisAttachment.size_bytes,
-                    ).where(LeadAnalysisAttachment.lead_analysis_id == rec.id)
-                )
-            ).all()
-        }
-        for filename, content_type, blob in file_blobs:
-            if (filename[:255], len(blob)) in deja:
-                continue
-            db.add(
-                LeadAnalysisAttachment(
-                    lead_analysis_id=rec.id,
-                    filename=filename[:255],
-                    content_type=content_type[:64],
-                    size_bytes=len(blob),
-                    blob=blob,
-                )
+        warnings_out = [str(w) for w in res.warnings]
+        # La fiche a pu être supprimée pendant la lecture (longue) : on
+        # renvoie quand même les unités, sans pièces jointes ni audit
+        # rattaché à une fiche fantôme.
+        fiche_existe = (
+            await db.execute(
+                select(LeadAnalysis.id).where(LeadAnalysis.id == analysis_id)
             )
-        await log_action(
-            db,
-            user=user,
-            action="lead_analysis.rent_roll_extracted",
-            entity_type="lead_analysis",
-            entity_id=rec.id,
-            details={
-                "fichiers": noms,
-                "texte": bool(text and text.strip()),
-                "unites": len(res.unites),
-                "model_used": res.model_used,
-                "source": res.source,
-                "warnings": list(res.warnings)[:6],
-                "duree_s": round(time.perf_counter() - t0, 1),
-            },
-        )
-        await db.commit()
+        ).scalar_one_or_none() is not None
+        if fiche_existe:
+            # Pièces jointes — une seule fois : même nom + même taille
+            # déjà attachés à la fiche = on ne duplique pas (un 2e essai
+            # sur le même PDF ne doit pas empiler des copies de 700 Ko).
+            deja = {
+                (fn, sz)
+                for fn, sz in (
+                    await db.execute(
+                        select(
+                            LeadAnalysisAttachment.filename,
+                            LeadAnalysisAttachment.size_bytes,
+                        ).where(
+                            LeadAnalysisAttachment.lead_analysis_id == analysis_id
+                        )
+                    )
+                ).all()
+            }
+            for filename, content_type, blob in file_blobs:
+                if (filename[:255], len(blob)) in deja:
+                    continue
+                db.add(
+                    LeadAnalysisAttachment(
+                        lead_analysis_id=analysis_id,
+                        filename=filename[:255],
+                        content_type=content_type[:64],
+                        size_bytes=len(blob),
+                        blob=blob,
+                    )
+                )
+            await log_action(
+                db,
+                user=user,
+                action="lead_analysis.rent_roll_extracted",
+                entity_type="lead_analysis",
+                entity_id=analysis_id,
+                details={
+                    "fichiers": noms,
+                    "texte": bool(text and text.strip()),
+                    "unites": len(res.unites),
+                    "model_used": res.model_used,
+                    "source": res.source,
+                    "warnings": warnings_out[:6],
+                    "duree_s": round(time.perf_counter() - t0, 1),
+                },
+            )
+            await db.commit()
+        else:
+            warnings_out.append(
+                "La fiche a été supprimée pendant la lecture : unités "
+                "proposées sans pièce jointe."
+            )
 
         typo: dict = {}
         try:
@@ -1927,7 +1969,7 @@ async def extract_rent_roll(
             typo = {}
         reponse = RentRollExtractResult(
             unites=[dict(u) for u in res.unites],
-            warnings=[str(w) for w in res.warnings],
+            warnings=warnings_out,
             model_used=str(res.model_used or "none"),
             source=str(res.source or "none"),
             nb_logements=int(nb_logements) if nb_logements is not None else None,
@@ -1970,6 +2012,124 @@ async def extract_rent_roll(
             detail=f"Lecture du rent roll échouée — {erreur}. Réessaie ; si ça persiste, le détail est dans le journal d'activité.",
         ) from exc
     return reponse
+
+
+async def _rent_roll_job_worker(
+    job_id: str,
+    user_id: Optional[int],
+    analysis_id: int,
+    file_blobs: list[tuple[str, str, bytes]],
+    text: Optional[str],
+) -> None:
+    """Tâche de fond : même lecture que l'endpoint synchrone, dans sa
+    propre session (la requête HTTP est déjà repartie avec un 202)."""
+    job = _EXTRACT_JOBS.get(job_id)
+    if job is None:
+        return
+    t0 = time.perf_counter()
+    try:
+        from app.models.user import User
+
+        factory = _session_factory_jobs()
+        async with factory() as s:
+            user = await s.get(User, user_id) if user_id is not None else None
+            rec = await s.get(LeadAnalysis, analysis_id)
+            if rec is None:
+                raise HTTPException(404, "Analyse introuvable.")
+            res = await _lire_rent_roll_et_attacher(
+                s, user, rec, file_blobs=file_blobs, text=text, t0=t0
+            )
+        job["resultat"] = res.model_dump(mode="json")
+        job["status"] = "termine"
+    except HTTPException as exc:
+        job["erreur"] = str(exc.detail)
+        job["status"] = "erreur"
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Lecture du rent roll en tâche de fond échouée (%s)", job_id)
+        job["erreur"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        job["status"] = "erreur"
+    finally:
+        job["termine_a"] = datetime.now(timezone.utc).isoformat()
+
+
+@router.post(
+    "/{analysis_id}/unites/extract-jobs",
+    response_model=ExtractJobStart,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary=(
+        "Lance la lecture d'un rent roll en tâche de fond (évite la coupure "
+        "à 100 s de Render) ; suivre avec GET /unites/extract-jobs/{job_id}."
+    ),
+)
+async def start_rent_roll_job(
+    analysis_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    text: Optional[str] = Form(default=None),
+    files: List[UploadFile] = File(default=[]),
+) -> ExtractJobStart:
+    _require_prospection(user)
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+    file_blobs: list[tuple[str, str, bytes]] = []
+    for f in files or []:
+        if not f or not f.filename:
+            continue
+        data = await f.read()
+        if len(data) > _MAX_FILE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Fichier {f.filename} trop lourd (max 10 MB).",
+            )
+        file_blobs.append(
+            (f.filename, (f.content_type or "application/octet-stream").lower(), data)
+        )
+    if not file_blobs and not (text and text.strip()):
+        raise HTTPException(status_code=400, detail="Aucune source fournie.")
+    _purger_jobs()
+    job_id = secrets.token_urlsafe(12)
+    uid = getattr(user, "id", None)
+    _EXTRACT_JOBS[job_id] = {
+        "job_id": job_id,
+        "status": "en_cours",
+        "user_id": uid,
+        "kind": "rent_roll",
+        "analysis_id": analysis_id,
+        "demarre_a": datetime.now(timezone.utc).isoformat(),
+        "termine_a": None,
+        "resultat": None,
+        "erreur": None,
+        "_t0": time.monotonic(),
+    }
+    _EXTRACT_JOBS[job_id]["_task"] = asyncio.create_task(
+        _rent_roll_job_worker(job_id, uid, analysis_id, file_blobs, text)
+    )
+    return ExtractJobStart(job_id=job_id, status="en_cours")
+
+
+@router.get(
+    "/{analysis_id}/unites/extract-jobs/{job_id}",
+    summary="État d'une lecture de rent roll en tâche de fond.",
+)
+async def get_rent_roll_job(
+    analysis_id: int, job_id: str, user: CurrentUser
+) -> dict:
+    _require_prospection(user)
+    job = _EXTRACT_JOBS.get(job_id)
+    if (
+        job is None
+        or job.get("user_id") != getattr(user, "id", None)
+        or job.get("kind") != "rent_roll"
+        or job.get("analysis_id") != analysis_id
+    ):
+        raise HTTPException(
+            404,
+            "Lecture introuvable (le serveur a peut-être redémarré). Relance l'import.",
+        )
+    out = {k: v for k, v in job.items() if not k.startswith("_")}
+    out["duree_s"] = round(time.monotonic() - job["_t0"], 1)
+    return out
 
 
 @router.post(

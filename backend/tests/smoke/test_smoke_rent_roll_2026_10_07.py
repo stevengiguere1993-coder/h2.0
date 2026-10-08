@@ -71,7 +71,7 @@ def test_normaliser_unites_extraites():
 def test_extraire_rent_roll_ia_puis_relais_puis_local(monkeypatch):
     recu: dict = {}
 
-    async def _gemini_ok(material, images, *, system=None, guide=None):
+    async def _gemini_ok(material, images, *, system=None, guide=None, **kw):
         recu["system"] = system
         recu["images"] = images
         return [{"unites": [{"numero": "1", "typo": "4½", "loyer_actuel": 950}]}], None, "gemini-2.5-flash"
@@ -85,7 +85,7 @@ def test_extraire_rent_roll_ia_puis_relais_puis_local(monkeypatch):
     assert recu["images"][0][0] == "image/png"
 
     # Gemini à sec → Groq.
-    async def _gemini_ko(material, images, *, system=None, guide=None):
+    async def _gemini_ko(material, images, *, system=None, guide=None, **kw):
         return None, "cascade épuisée — gemini-2.5-flash : quota quotidien gratuit atteint", None
 
     async def _groq_ok(material, images, *, system=None, guide=None):
@@ -148,7 +148,7 @@ def _mk_fiche(run) -> int:
 
 
 def test_endpoint_rent_roll_puis_analyse(client, auth_headers, run, monkeypatch):
-    async def _gemini_ok(material, images, *, system=None, guide=None):
+    async def _gemini_ok(material, images, *, system=None, guide=None, **kw):
         return (
             [{"unites": [
                 {"numero": "101", "typo": "3½", "loyer_actuel": 900},
