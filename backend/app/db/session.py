@@ -2182,6 +2182,9 @@ async def init_db() -> None:
             # Organigramme : niveau d'exécution (direction / adjoint /
             # adjoint_virtuel) — qui doit faire ce rôle / cette tâche.
             ("org_nodes", "execution_tier", "VARCHAR(24)"),
+            # Organigramme : nature forcée d'un détenteur hors groupe
+            # (person | company) — Phil 2026-10-08.
+            ("org_nodes", "nature_forced", "VARCHAR(16)"),
             # Refacturation des achats — Phase A.
             # `is_billable` indique si l'achat doit être refacturé au
             # client. `markup_percent` : majoration appliquée à
