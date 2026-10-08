@@ -361,6 +361,14 @@ def _charger_resultats(rec: Any) -> Dict[str, Any]:
         raise ValueError("Résultats d'analyse illisibles — relance l'analyse.") from exc
     if not isinstance(res, dict) or not res.get("scenarios"):
         raise ValueError("Résultats d'analyse incomplets — relance l'analyse.")
+    if not isinstance(res.get("cout_projet"), dict) or not isinstance(res.get("frais_demarrage"), dict):
+        # Résultats persistés par une version antérieure du moteur (avant
+        # le coût du projet du 2026-10-07) : plutôt qu'imprimer des zéros,
+        # on demande un recalcul (un clic sur « Lancer l'analyse »).
+        raise ValueError(
+            "Résultats d'analyse d'une version antérieure — relance "
+            "l'analyse (onglet Analyse → Lancer l'analyse) avant de générer le deck."
+        )
     return res
 
 
@@ -483,7 +491,14 @@ def construire_donnees(rec: Any, res: Dict[str, Any], tri: Dict[str, Any]) -> Di
         rcd_achat = "N/A"
         type_pret = "Intérêt seul."
         valeur_eco_achat = prix
-        pret_max = _f((res.get("pret_preteur_b") or {}).get("total")) or _f((res.get("pret_preteur_b") or {}).get("sur_prix"))
+        # Prêt hypothécaire sur le PRIX (les frais financés sont un prêt
+        # à part, « ***Certains frais financés ») — comme dans le deck
+        # final 2420 (1 440 000$ = 80 % × 1,8 M$).
+        pret_max = (
+            _f((res.get("pret_preteur_b") or {}).get("sur_prix"))
+            or _f((res.get("pret_preteur_b") or {}).get("total"))
+            or prix * ltv_achat
+        )
         mdf = _f(res.get("mdf_pct_prix_achat")) or (prix * mdf_pct)
         taux_achat = _f(res.get("taux_interet_preteur_b_projet")) or _f(res.get("taux_interet_achat"))
     fonds = _f(cout.get("cash_total")) or _f(res.get("mdf_preteur_b"))
