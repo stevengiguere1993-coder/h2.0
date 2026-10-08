@@ -9,15 +9,17 @@ import {
   useState
 } from "react";
 import {
-  Building2,
   ExternalLink,
+  FileDown,
+  Info,
   LayoutGrid,
-  Link2,
   Loader2,
   Plus,
+  RefreshCw,
+  Search,
+  Sparkles,
   Star,
   Trash2,
-  User as UserIcon,
   Users,
   X
 } from "lucide-react";
@@ -25,22 +27,35 @@ import {
 import { authedFetch } from "@/lib/auth";
 import { Link } from "@/i18n/navigation";
 import { PageDriveSection } from "@/components/drive/PageDriveSection";
+import {
+  construirePdfOrganigramme,
+  FORMATS_PDF,
+  nomFichierPdf,
+  type PdfBulle,
+  type PdfEchelle,
+  type PdfFleche,
+  type PdfFormat,
+  type PdfOrientation
+} from "@/components/entreprises/organigramme-pdf";
 import { QGTopbar, useEntreprisesLayout } from "../layout";
 
 /**
  * Page Organigramme — canvas libre type Miro, seule vue de la page.
  *
- * Bulles déplaçables (INCs Kratos, compagnies externes, personnes)
- * reliées par des flèches de détention (détenteur → détenu), avec la
- * quote-part en % affichée sur chaque flèche quand elle est connue
- * (`ownership_json` du nœud détenu, clé = id du détenteur).
- *
- * « Synchroniser avec les fiches » crée les nœuds manquants (nos INCs
- * et leurs actionnaires) et reconstruit la détention depuis les
- * « Partenaires & parts » des fiches d'entreprises. Des VERSIONS de
- * travail (copies indépendantes des nœuds) se créent depuis le topbar
- * pour tester des scénarios de restructuration sans toucher au
- * « Principal » (version_id null).
+ * Retour Phil 2026-10-08 : l'organigramme ne s'édite plus à la main.
+ * TOUT vient des fiches d'entreprises (Partenaires & parts) :
+ *  • « Synchroniser » crée les bulles manquantes (nos INCs actives et
+ *    leurs détenteurs) EN BAS du canevas — rien d'existant ne bouge —,
+ *    reconstruit les flèches de détention et retire les bulles qui ne
+ *    correspondent plus à rien ;
+ *  • la nature d'une bulle vient de la fiche : INC du groupe (ambre),
+ *    compagnie hors groupe (bleu — case « personne morale » de la ligne
+ *    partenaire ou indices dans le nom), personne (violet) ;
+ *  • on déplace les bulles, on zoome, on bascule Complet / Nos INCs ;
+ *  • « Mettre en évidence » (recherche avec suggestions) fait ressortir
+ *    une bulle — ex. la compagnie acquéreuse montrée à la banque ;
+ *  • « Exporter en PDF » : orientation, format, échelle, aperçu.
+ * Les VERSIONS (copies indépendantes) se gèrent depuis le topbar.
  */
 
 type OrgNode = {
@@ -64,6 +79,11 @@ type OrgNode = {
   // Quotes-parts de détention de CE nœud : JSON objet
   // { "<node_id du détenteur>": pourcentage } — affiché sur les flèches.
   ownership_json: string | null;
+  // Nature forcée d'un détenteur hors groupe (person | company).
+  nature_forced: string | null;
+  // Calculé par l'API : la bulle ne correspond à rien dans les fiches
+  // actives → à retirer (bouton) ou à inscrire dans une fiche.
+  absent_des_fiches: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -74,50 +94,21 @@ type OrgVersion = {
   created_at: string;
 };
 
-type Employe = {
-  id: number;
-  full_name: string;
-  email?: string | null;
-  role?: string | null;
-  active?: boolean;
-};
-
-// Niveau d'exécution : qui doit prendre en charge le rôle / la tâche.
-// Aide à voir d'un coup d'œil ce qui doit rester au dirigeant, ce qui
-// est délégable à un adjoint, et ce qui peut passer à l'adjoint
-// virtuel (automatisable).
-const TIER_LABELS: Record<
-  string,
-  { label: string; short: string; cls: string }
-> = {
-  direction: {
-    label: "Direction",
-    short: "Direction",
-    cls: "bg-rose-500/15 text-rose-300 border-rose-500/30"
-  },
-  adjoint: {
-    label: "Adjoint",
-    short: "Adjoint",
-    cls: "bg-orange-500/15 text-orange-300 border-orange-500/30"
-  },
-  adjoint_virtuel: {
-    label: "Adjoint virtuel",
-    short: "Adj. virtuel",
-    cls: "bg-teal-500/15 text-teal-300 border-teal-500/30"
-  }
+type SyncRapport = {
+  crees: string[];
+  reclasses: string[];
+  absents: string[];
+  sans_lignes: string[];
 };
 
 // ─── Nature des bulles (couleurs du canvas + légende) ────────────
 //
-// La couleur d'une bulle reflète sa NATURE, pas seulement son kind :
-//  • INC Kratos        : company reliée à une fiche entreprise → ambre
-//  • Compagnie externe : company manuelle, sans fiche → sky
-//  • Personne          : kind person → violet
-//  • autre             : service partagé, etc. → neutre
-//
-// Couleurs volontairement FRANCHES (bordure /70, fond /15) : d'un
-// coup d'œil on distingue nos INCs, les compagnies externes et les
-// personnes. Le badge au-dessus du nom reprend la même nature.
+//  • INC du groupe        : company reliée à une fiche entreprise → ambre
+//  • Compagnie hors groupe: company sans fiche (actionnaire externe) → sky
+//  • Personne             : kind person → violet
+//  • autre                : héritage (service partagé…) → neutre
+// La nature est décidée par la sync depuis les fiches ; le panneau
+// permet de corriger personne ↔ compagnie (répercuté sur la fiche).
 
 type BubbleNature = "inc" | "externe" | "person" | "autre";
 
@@ -139,14 +130,14 @@ const NATURE_STYLES: Record<
   }
 > = {
   inc: {
-    label: "INC Kratos",
-    badge: "INC Kratos",
+    label: "INC du groupe",
+    badge: "INC du groupe",
     bubbleCls: "border-amber-500/70 bg-amber-500/15",
     dotCls: "bg-amber-500",
     badgeCls: "bg-amber-500/20 text-amber-500 border-amber-500/40"
   },
   externe: {
-    label: "Compagnie externe",
+    label: "Compagnie hors groupe",
     badge: "Compagnie",
     bubbleCls: "border-sky-500/70 bg-sky-500/15",
     dotCls: "bg-sky-500",
@@ -166,6 +157,16 @@ const NATURE_STYLES: Record<
     dotCls: "bg-emerald-400",
     badgeCls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
   }
+};
+
+// Mise en évidence (recherche) : vert franc, hors palette des natures,
+// pour « sortir du lot » — à l'écran comme dans le PDF.
+const HIGHLIGHT = {
+  label: "Mise en évidence",
+  bubbleCls: "border-emerald-500 bg-emerald-500/25",
+  dotCls: "bg-emerald-500",
+  shadow:
+    "0 0 0 3px rgb(16 185 129), 0 0 0 9px rgb(16 185 129 / 0.25), 0 10px 28px -6px rgb(16 185 129 / 0.6)"
 };
 
 // Quotes-parts du nœud DÉTENU : { "<node_id du détenteur>": pct }.
@@ -224,9 +225,18 @@ function composeDescription(
   return parts.length > 0 ? parts.join("\n") : null;
 }
 
+// Recherche insensible aux accents et à la casse.
+const normaliser = (s: string) =>
+  s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .trim();
+
 // ─── Géométrie du canvas (bulles + grille) ───────────────────────
-// Partagée entre la vue canvas et le rangement automatique
-// (« Réorganiser ») du composant page.
+// Partagée par le canvas, le rangement automatique (« Réorganiser »),
+// le placement des nouveautés et l'export PDF. Le backend place les
+// nouvelles bulles avec les mêmes constantes (org_nodes.py).
 const BUBBLE_W = 210;
 const BUBBLE_H = 66;
 const CANVAS_PAD = 400;
@@ -235,33 +245,114 @@ const CANVAS_PAD = 400;
 const GRID = 24;
 const snap = (v: number) => Math.round(v / GRID) * GRID;
 
+type XY = { x: number; y: number };
+
+// Position de chaque bulle : celle du serveur, sinon une rangée SOUS
+// tout ce qui existe (une bulle sans position = nouveauté pas encore
+// placée — même règle que la sync côté serveur).
+function resolvePositions(nodes: OrgNode[]): Map<number, XY> {
+  const out = new Map<number, XY>();
+  let maxY = -Infinity;
+  for (const n of nodes) {
+    if (n.pos_x != null && n.pos_y != null) {
+      out.set(n.id, { x: n.pos_x, y: n.pos_y });
+      maxY = Math.max(maxY, n.pos_y);
+    }
+  }
+  let x = GRID;
+  let y = Number.isFinite(maxY) ? snap(maxY + BUBBLE_H + GRID * 3) : GRID;
+  let col = 0;
+  for (const n of nodes) {
+    if (out.has(n.id)) continue;
+    out.set(n.id, { x, y });
+    col += 1;
+    x += BUBBLE_W + GRID * 2;
+    if (col >= 8) {
+      col = 0;
+      x = GRID;
+      y += BUBBLE_H + GRID * 3;
+    }
+  }
+  return out;
+}
+
+type Arrow = {
+  key: string;
+  fromId: number;
+  toId: number;
+  kind: "parent" | "coowner";
+};
+
+// Flèches de détention : parent_id + co_owner_node_ids, toutes en
+// trait plein (la détention compte autant pour tous les détenteurs).
+// Les flèches vers une bulle hors périmètre sont sautées.
+function buildArrows(nodes: OrgNode[]): Arrow[] {
+  const ids = new Set(nodes.map((n) => n.id));
+  const out: Arrow[] = [];
+  for (const n of nodes) {
+    if (n.parent_id != null && ids.has(n.parent_id))
+      out.push({
+        key: `p-${n.parent_id}-${n.id}`,
+        fromId: n.parent_id,
+        toId: n.id,
+        kind: "parent"
+      });
+    for (const co of n.co_owner_node_ids || [])
+      if (ids.has(co))
+        out.push({
+          key: `c-${co}-${n.id}`,
+          fromId: co,
+          toId: n.id,
+          kind: "coowner"
+        });
+  }
+  return out;
+}
+
+function texteRapport(r: SyncRapport): string {
+  const parts: string[] = [];
+  if (r.crees.length)
+    parts.push(
+      `${r.crees.length} nouvelle(s) bulle(s) placée(s) en bas du canevas : ${r.crees.join(", ")}`
+    );
+  if (r.reclasses.length)
+    parts.push(
+      `${r.reclasses.length} reclassée(s) personne ↔ compagnie : ${r.reclasses.join(", ")}`
+    );
+  if (r.absents.length)
+    parts.push(
+      `${r.absents.length} bulle(s) absente(s) des fiches (en pointillé — à retirer ou à inscrire dans une fiche) : ${r.absents.join(", ")}`
+    );
+  if (r.sans_lignes.length)
+    parts.push(
+      `${r.sans_lignes.length} INC(s) sans ligne Partenaires & parts (leurs liens affichés ne viennent pas des fiches) : ${r.sans_lignes.join(", ")}`
+    );
+  return parts.length
+    ? `Synchronisé — ${parts.join(" · ")}.`
+    : "Synchronisé — déjà à jour, rien n'a changé.";
+}
+
 export default function OrganigrammePage() {
   const { entreprises } = useEntreprisesLayout();
   const [nodes, setNodes] = useState<OrgNode[]>([]);
-  const [employes, setEmployes] = useState<Employe[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [layouting, setLayouting] = useState(false);
-  // Ajout manuel rapide (bandeau) : un seul champ nom, partagé par
-  // les boutons « + Compagnie » et « + Personne ».
-  const [quickLabel, setQuickLabel] = useState("");
-  const [creatingKind, setCreatingKind] = useState<
-    "company" | "person" | null
-  >(null);
-  //: Périmètre affiché : « complet » (INCs + investisseurs externes)
-  //: ou « internes » (seulement nos compagnies) — retour Phil 2026-08-10.
+  //: Périmètre affiché : « complet » (INCs + détenteurs externes) ou
+  //: « internes » (seulement nos compagnies) — retour Phil 2026-08-10.
   const [scope, setScope] = useState<"complet" | "internes">("complet");
+  // Bulle mise en évidence (recherche) — partagée avec l'export PDF.
+  const [highlightId, setHighlightId] = useState<number | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
 
   // Versions de l'organigramme : null = « Principal » (les nœuds sans
-  // version_id). Chaque version est une copie indépendante des nœuds —
-  // on y teste une restructuration sans toucher au Principal.
+  // version_id). Chaque version est une copie indépendante des nœuds.
   const [versionId, setVersionId] = useState<number | null>(null);
   const [versions, setVersions] = useState<OrgVersion[]>([]);
 
-  // Entreprise mère du groupe — sert à mettre en évidence SON nœud
-  // dans l'arbre (étoile + bordure accent), plutôt qu'un bandeau
-  // séparé non interactif.
+  // Entreprise mère du groupe — étoile sur SA bulle.
   const parentEntId = useMemo(() => {
     const e =
       entreprises.find(
@@ -274,16 +365,12 @@ export default function OrganigrammePage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [n, e] = await Promise.all([
-        authedFetch(
-          `/api/v1/org-nodes${
-            versionId != null ? `?version_id=${versionId}` : ""
-          }`
-        ),
-        authedFetch("/api/v1/employes?limit=500")
-      ]);
+      const n = await authedFetch(
+        `/api/v1/org-nodes${
+          versionId != null ? `?version_id=${versionId}` : ""
+        }`
+      );
       if (n.ok) setNodes((await n.json()) as OrgNode[]);
-      if (e.ok) setEmployes((await e.json()) as Employe[]);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -307,6 +394,12 @@ export default function OrganigrammePage() {
   useEffect(() => {
     void loadVersions();
   }, [loadVersions]);
+
+  // Changement de version : la mise en évidence ne s'y applique plus.
+  useEffect(() => {
+    setHighlightId(null);
+    setInfo(null);
+  }, [versionId]);
 
   // Nouvelle version = copie des nœuds de la version affichée (le
   // Principal si aucune n'est sélectionnée), puis bascule dessus.
@@ -366,9 +459,11 @@ export default function OrganigrammePage() {
     }
   }
 
+  // Seule porte d'entrée : tout vient des fiches d'entreprises.
   async function syncDetention() {
     setSyncing(true);
     setError(null);
+    setInfo(null);
     try {
       // La sync s'applique à la version affichée (Principal si aucune).
       const r = await authedFetch(
@@ -381,18 +476,27 @@ export default function OrganigrammePage() {
         const txt = await r.text();
         throw new Error(txt.slice(0, 200) || `HTTP ${r.status}`);
       }
-      setNodes((await r.json()) as OrgNode[]);
+      const body = (await r.json()) as {
+        nodes: OrgNode[];
+        rapport: SyncRapport;
+      };
+      setNodes(body.nodes);
+      setInfo(texteRapport(body.rapport));
+      if (
+        highlightId != null &&
+        !body.nodes.some((n) => n.id === highlightId)
+      )
+        setHighlightId(null);
     } catch (e) {
-      setError(`Sync de la détention échoué : ${(e as Error).message}`);
+      setError(`Synchronisation échouée : ${(e as Error).message}`);
     } finally {
       setSyncing(false);
     }
   }
 
-  // Sous-ensemble « structurel » affiché au canvas : entreprises,
-  // personnes et nœuds libres. On exclut les départements, rôles et
-  // tâches (héritage des anciennes vues) — l'organigramme montre la
-  // détention, pas les fonctions.
+  // Sous-ensemble « structurel » affiché au canvas : compagnies et
+  // personnes. On exclut les départements, rôles et tâches (héritage
+  // des anciennes vues) — l'organigramme montre la détention.
   const structuralNodes = useMemo(
     () =>
       nodes.filter(
@@ -400,61 +504,13 @@ export default function OrganigrammePage() {
           n.kind !== "dept" &&
           n.kind !== "role" &&
           n.kind !== "task" &&
-          // Vue « Nos INCs » : on cache les personnes physiques et
-          // investisseurs externes — il ne reste que la détention
-          // inter-compagnies (les flèches vers les nœuds cachés sont
-          // sautées par la couche SVG).
-          (scope === "complet" || n.kind !== "person")
+          // Vue « Nos INCs » : seulement les compagnies du groupe — les
+          // personnes et compagnies hors groupe sont cachées (les
+          // flèches vers les bulles cachées sont sautées).
+          (scope === "complet" || nodeNature(n) === "inc")
       ),
     [nodes, scope]
   );
-
-  async function moveNode(
-    id: number,
-    parentId: number | null,
-    position: number
-  ) {
-    try {
-      const r = await authedFetch(`/api/v1/org-nodes/${id}/move`, {
-        method: "POST",
-        body: JSON.stringify({ parent_id: parentId, position })
-      });
-      if (!r.ok) {
-        const txt = await r.text();
-        throw new Error(txt.slice(0, 160) || `HTTP ${r.status}`);
-      }
-      setNodes((await r.json()) as OrgNode[]);
-    } catch (e) {
-      setError(`Déplacement échoué : ${(e as Error).message}`);
-    }
-  }
-
-  async function createNode(
-    parent_id: number | null,
-    label: string,
-    kind = "company"
-  ) {
-    if (!label.trim()) return;
-    try {
-      const r = await authedFetch("/api/v1/org-nodes", {
-        method: "POST",
-        body: JSON.stringify({
-          parent_id,
-          label: label.trim(),
-          kind,
-          // Chaque création atterrit dans la version affichée
-          // (null = Principal).
-          version_id: versionId
-        })
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const created = (await r.json()) as OrgNode;
-      setNodes((prev) => [...prev, created]);
-      return created;
-    } catch (e) {
-      setError(`Création échouée : ${(e as Error).message}`);
-    }
-  }
 
   async function patchNode(id: number, patch: Partial<OrgNode>) {
     setNodes((prev) =>
@@ -470,53 +526,65 @@ export default function OrganigrammePage() {
     }
   }
 
+  // Correction personne ↔ compagnie d'un détenteur hors groupe —
+  // répercutée sur ses lignes Partenaires & parts (source de vérité).
+  async function setNature(id: number, nature: "person" | "company") {
+    setError(null);
+    try {
+      const r = await authedFetch(`/api/v1/org-nodes/${id}/nature`, {
+        method: "POST",
+        body: JSON.stringify({ nature })
+      });
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error(txt.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      const updated = (await r.json()) as OrgNode;
+      setNodes((prev) => prev.map((n) => (n.id === id ? updated : n)));
+    } catch (e) {
+      setError(`Changement de nature échoué : ${(e as Error).message}`);
+    }
+  }
+
+  // Retrait d'une bulle ABSENTE des fiches (seul cas où l'on supprime
+  // ici). L'API détache ce qu'elle détenait au lieu de l'emporter.
   async function deleteNode(id: number) {
-    if (!window.confirm("Supprimer ce nœud et tous ses enfants ?")) return;
+    const n = nodes.find((x) => x.id === id);
+    if (!n) return;
+    if (
+      !window.confirm(
+        `Retirer la bulle « ${n.label} » de l'organigramme ? Les compagnies qu'elle détenait restent.`
+      )
+    )
+      return;
+    setError(null);
     try {
       const r = await authedFetch(`/api/v1/org-nodes/${id}`, {
         method: "DELETE"
       });
-      if (!r.ok && r.status !== 204) throw new Error();
-      // Cascade côté DB → on retire tout le sous-arbre côté state.
-      const idsToRemove = new Set<number>([id]);
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const n of nodes) {
-          if (
-            n.parent_id != null &&
-            idsToRemove.has(n.parent_id) &&
-            !idsToRemove.has(n.id)
-          ) {
-            idsToRemove.add(n.id);
-            changed = true;
-          }
-        }
-      }
-      setNodes((prev) => prev.filter((n) => !idsToRemove.has(n.id)));
-    } catch {
-      setError("Suppression échouée.");
-    }
-  }
-
-  // Ajout manuel rapide : compagnie manuelle/externe (company SANS
-  // entreprise_id) ou personne physique — à la racine du canvas.
-  async function quickCreate(kind: "company" | "person") {
-    if (!quickLabel.trim() || creatingKind != null) return;
-    setCreatingKind(kind);
-    try {
-      const created = await createNode(null, quickLabel, kind);
-      if (created) setQuickLabel("");
-    } finally {
-      setCreatingKind(null);
+      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      setNodes((prev) =>
+        prev
+          .filter((x) => x.id !== id)
+          .map((x) => ({
+            ...x,
+            parent_id: x.parent_id === id ? null : x.parent_id,
+            co_owner_node_ids: (x.co_owner_node_ids || []).filter(
+              (c) => c !== id
+            )
+          }))
+      );
+      if (highlightId === id) setHighlightId(null);
+    } catch (e) {
+      setError(`Retrait échoué : ${(e as Error).message}`);
     }
   }
 
   // Rangement automatique (« Réorganiser ») : bulles disposées par
   // COUCHES de détention — niveau 0 = les détenteurs ultimes (aucun
   // parent ni co-détenteur), puis chaque nœud une rangée sous son
-  // détenteur le plus profond. Les flèches pointent ainsi toutes vers
-  // le bas, sans croisements inutiles.
+  // détenteur le plus profond. Action explicite et confirmée : la sync,
+  // elle, ne bouge jamais rien.
   async function autoLayout() {
     if (layouting) return;
     if (
@@ -530,8 +598,6 @@ export default function OrganigrammePage() {
     try {
       const list = structuralNodes;
       const ids = new Set(list.map((n) => n.id));
-      // Détenteurs de chaque nœud : parent + co-détenteurs présents
-      // au canvas (les nœuds hors périmètre sont ignorés).
       const holdersOf = new Map<number, number[]>();
       for (const n of list) {
         const hs: number[] = [];
@@ -541,9 +607,6 @@ export default function OrganigrammePage() {
           if (ids.has(co) && !hs.includes(co)) hs.push(co);
         holdersOf.set(n.id, hs);
       }
-      // Niveaux par propagation : niveau 0 = sans détenteur, sinon
-      // 1 + max(niveau des détenteurs). Le garde-fou (50 passes)
-      // borne les cycles de détention croisée.
       const level = new Map<number, number>();
       for (const n of list) level.set(n.id, 0);
       let changed = true;
@@ -562,7 +625,6 @@ export default function OrganigrammePage() {
           }
         }
       }
-      // Rangées : tri alphabétique dans chaque niveau, puis grille.
       const byLevel = new Map<number, OrgNode[]>();
       for (const n of list) {
         const lv = level.get(n.id) || 0;
@@ -575,17 +637,51 @@ export default function OrganigrammePage() {
         for (let i = 0; i < arr.length; i += 1) {
           const x = snap(i * (BUBBLE_W + GRID * 2) + GRID);
           const y = snap(lv * (BUBBLE_H + GRID * 3) + GRID);
-          // PATCH séquentiels — même mécanique de sauvegarde que le
-          // drag d'une bulle.
           await patchNode(arr[i].id, { pos_x: x, pos_y: y });
         }
       }
-      // Recharge : le canvas se re-seed depuis les positions serveur.
       await load();
     } finally {
       setLayouting(false);
     }
   }
+
+  const versionName =
+    versionId != null
+      ? versions.find((v) => v.id === versionId)?.name || `Version ${versionId}`
+      : "Principal";
+  const scopeLabel = scope === "complet" ? "Complet" : "Nos INCs";
+  const highlightNode =
+    highlightId != null
+      ? structuralNodes.find((n) => n.id === highlightId) || null
+      : null;
+
+  // Données de l'export PDF = exactement ce que le canvas affiche.
+  const pdfData = useMemo(() => {
+    const pos = resolvePositions(structuralNodes);
+    const bulles: PdfBulle[] = structuralNodes.map((n) => {
+      const p = pos.get(n.id) || { x: 0, y: 0 };
+      return {
+        id: n.id,
+        label: n.label,
+        nature: nodeNature(n),
+        societeMere:
+          n.kind === "company" &&
+          parentEntId != null &&
+          n.entreprise_id === parentEntId,
+        enEvidence: n.id === highlightId,
+        x: p.x,
+        y: p.y
+      };
+    });
+    const byId = new Map(structuralNodes.map((n) => [n.id, n]));
+    const fleches: PdfFleche[] = buildArrows(structuralNodes).map((a) => ({
+      fromId: a.fromId,
+      toId: a.toId,
+      pct: parseOwnership(byId.get(a.toId))[String(a.fromId)] ?? null
+    }));
+    return { bulles, fleches };
+  }, [structuralNodes, parentEntId, highlightId]);
 
   return (
     <>
@@ -596,7 +692,7 @@ export default function OrganigrammePage() {
             Organigramme
           </span>
         }
-        subtitle="Structure de détention du groupe — compagnies, personnes et quotes-parts, avec versions de travail"
+        subtitle="Structure de détention du groupe — compagnies, personnes et quotes-parts, synchronisée depuis les fiches d'entreprises"
         rightSlot={
           <div className="flex items-center gap-2">
             {/* Sélecteur de version — « Principal » = version officielle,
@@ -660,7 +756,7 @@ export default function OrganigrammePage() {
           </div>
         ) : (
           <>
-            {/* Bandeau : ajout manuel rapide + sync avec les fiches */}
+            {/* Bandeau : sync, rangement, mise en évidence, export, périmètre */}
             <div
               className="mb-2 flex flex-wrap items-center gap-2 rounded-xl border p-3"
               style={{
@@ -668,68 +764,26 @@ export default function OrganigrammePage() {
                 backgroundColor: "var(--qg-card-bg)"
               }}
             >
-              <Plus className="h-4 w-4 text-accent-500" />
-              <input
-                value={quickLabel}
-                onChange={(e) => setQuickLabel(e.target.value)}
-                onKeyDown={(e) => {
-                  // Entrée = ajout compagnie (le cas le plus fréquent).
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void quickCreate("company");
-                  }
-                }}
-                placeholder="Nom de la compagnie ou de la personne à ajouter…"
-                className="input flex-1 min-w-[220px] text-sm"
-              />
-              <button
-                type="button"
-                onClick={() => void quickCreate("company")}
-                disabled={creatingKind != null || !quickLabel.trim()}
-                className="btn-accent inline-flex items-center gap-1 text-xs disabled:opacity-50"
-                title="Ajoute une compagnie manuelle / externe (sans fiche Kratos — bulle bleue)"
-              >
-                {creatingKind === "company" ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <Building2 className="h-3 w-3" />
-                )}
-                + Compagnie
-              </button>
-              <button
-                type="button"
-                onClick={() => void quickCreate("person")}
-                disabled={creatingKind != null || !quickLabel.trim()}
-                className="btn-secondary btn-sm inline-flex items-center gap-1 disabled:opacity-50"
-                title="Ajoute une personne physique (actionnaire, investisseur — bulle violette)"
-              >
-                {creatingKind === "person" ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <UserIcon className="h-3.5 w-3.5" />
-                )}
-                + Personne
-              </button>
               <button
                 type="button"
                 onClick={() => void syncDetention()}
                 disabled={syncing}
-                className="btn-secondary btn-sm disabled:opacity-50"
-                title="Crée les bulles manquantes (nos INCs et leurs actionnaires) et reconstruit les liens de détention depuis les « Partenaires & parts » des fiches d'entreprises, pourcentages inclus. Les positions des bulles existantes sont conservées."
+                className="btn-accent inline-flex items-center gap-1.5 text-xs disabled:opacity-50"
+                title="Crée les bulles manquantes (nos INCs actives et leurs détenteurs) en bas du canevas, reconstruit les flèches de détention et les quotes-parts depuis les « Partenaires & parts » des fiches, retire ce qui n'existe plus. Les bulles existantes ne bougent pas."
               >
                 {syncing ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
-                  <Link2 className="h-3.5 w-3.5" />
+                  <RefreshCw className="h-3.5 w-3.5" />
                 )}
-                Synchroniser avec les fiches
+                Synchroniser
               </button>
               <button
                 type="button"
                 onClick={() => void autoLayout()}
-                disabled={layouting}
-                className="btn-secondary btn-sm disabled:opacity-50"
-                title="Range automatiquement les bulles par niveaux de détention : les détenteurs ultimes en haut, chaque compagnie sous ses détenteurs. Remplace les positions actuelles."
+                disabled={layouting || structuralNodes.length === 0}
+                className="btn-secondary btn-sm inline-flex items-center gap-1 disabled:opacity-50"
+                title="Range automatiquement les bulles par niveaux de détention : les détenteurs ultimes en haut, chaque compagnie sous ses détenteurs. Remplace les positions actuelles (demande confirmation)."
               >
                 {layouting ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -738,10 +792,25 @@ export default function OrganigrammePage() {
                 )}
                 Réorganiser
               </button>
+              <HighlightSearch
+                nodes={structuralNodes}
+                highlightId={highlightId}
+                onChange={setHighlightId}
+              />
+              <button
+                type="button"
+                onClick={() => setExportOpen(true)}
+                disabled={structuralNodes.length === 0}
+                className="btn-secondary btn-sm inline-flex items-center gap-1 disabled:opacity-50"
+                title="Exporter l'organigramme affiché en PDF (orientation, format, échelle, aperçu)"
+              >
+                <FileDown className="h-3.5 w-3.5" />
+                Exporter en PDF
+              </button>
               <div
                 className="ml-auto inline-flex overflow-hidden rounded-lg border"
                 style={{ borderColor: "var(--qg-border)" }}
-                title="Périmètre affiché dans l'organigramme"
+                title="Périmètre affiché dans l'organigramme (et dans le PDF)"
               >
                 {(
                   [
@@ -771,22 +840,41 @@ export default function OrganigrammePage() {
               </div>
             </div>
 
+            {info ? (
+              <div
+                className="mb-2 flex items-start gap-2 rounded-lg border px-3 py-2 text-xs"
+                style={{
+                  borderColor: "var(--qg-border)",
+                  backgroundColor: "var(--qg-card-bg)",
+                  color: "var(--qg-text)"
+                }}
+              >
+                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-500" />
+                <span className="min-w-0 flex-1">{info}</span>
+                <button
+                  type="button"
+                  onClick={() => setInfo(null)}
+                  className="rounded p-0.5 text-white/40 hover:text-accent-400"
+                  aria-label="Fermer"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : null}
+
             {structuralNodes.length > 0 ? (
               <p
                 className="mb-2 text-[11px]"
                 style={{ color: "var(--qg-text-soft)" }}
               >
-                Déplace les bulles — elles s&apos;aimantent à la grille
-                pour rester alignées. Tire depuis le point{" "}
-                <span
-                  className="inline-block h-2 w-2 rounded-full align-middle"
-                  style={{ backgroundColor: "var(--qg-accent)" }}
-                />{" "}
-                d&apos;une bulle vers une autre pour créer une flèche de
-                détention — la quote-part (%) est demandée au passage et
-                s&apos;affiche sur la flèche. Survole une flèche pour la
-                supprimer. Clique une bulle pour ouvrir son panneau
-                (détenteurs, participations, fiche).
+                Les bulles et les flèches viennent des fiches
+                d&apos;entreprises (Partenaires &amp; parts) — pour
+                ajouter ou corriger quelque chose, modifie la fiche puis
+                clique « Synchroniser » : les nouveautés arrivent en bas
+                du canevas, rien d&apos;existant ne bouge. Déplace les
+                bulles pour faire beau (elles s&apos;aimantent à la
+                grille), clique une bulle pour voir ses détenteurs et ses
+                participations.
               </p>
             ) : null}
 
@@ -805,6 +893,25 @@ export default function OrganigrammePage() {
                     {NATURE_STYLES[k].label}
                   </span>
                 ))}
+                <span className="inline-flex items-center gap-1.5">
+                  <span
+                    aria-hidden
+                    className={`inline-block h-2.5 w-2.5 rounded-full ${HIGHLIGHT.dotCls}`}
+                  />
+                  {HIGHLIGHT.label}
+                </span>
+                {structuralNodes.some((n) => n.absent_des_fiches) ? (
+                  <span
+                    className="inline-flex items-center gap-1.5"
+                    title="Bulle qui ne correspond à rien dans les fiches actives : retire-la (panneau) ou inscris l'actionnaire dans une fiche"
+                  >
+                    <span
+                      aria-hidden
+                      className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-rose-400"
+                    />
+                    Absent des fiches (à retirer ou à inscrire dans une fiche)
+                  </span>
+                ) : null}
               </div>
             ) : null}
 
@@ -816,49 +923,531 @@ export default function OrganigrammePage() {
                   color: "var(--qg-text-muted)"
                 }}
               >
-                <p>Aucun nœud d&apos;organigramme pour l&apos;instant.</p>
+                <p>
+                  {scope === "internes" && nodes.length > 0
+                    ? "Aucune compagnie du groupe dans cette version."
+                    : "Aucune bulle d'organigramme pour l'instant."}
+                </p>
                 <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
                   <button
                     type="button"
                     onClick={() => void syncDetention()}
                     disabled={syncing}
                     className="btn-accent inline-flex items-center gap-1.5 text-sm disabled:opacity-50"
-                    title="Crée une bulle par INC et par actionnaire, avec les liens de détention des fiches d'entreprises."
+                    title="Crée une bulle par INC active et par détenteur, avec les liens de détention des fiches d'entreprises."
                   >
                     {syncing ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
-                      <Link2 className="h-3.5 w-3.5" />
+                      <RefreshCw className="h-3.5 w-3.5" />
                     )}
-                    Synchroniser avec les fiches
+                    Synchroniser depuis les fiches
                   </button>
                 </div>
-                <span
-                  className="mt-2 block text-[10px]"
-                  style={{ color: "var(--qg-text-soft)" }}
-                >
-                  ou ajoute une compagnie / personne via le bandeau
-                  ci-dessus
-                </span>
               </div>
             ) : (
               <CanvasView
-                /* Canvas = organigramme structurel : seulement les
-                   compagnies et les personnes (les anciens nœuds
-                   dept / role / task sont filtrés). */
                 nodes={structuralNodes}
-                entreprises={entreprises}
-                employes={employes}
                 parentEntId={parentEntId}
+                highlightId={highlightId}
+                onHighlight={setHighlightId}
                 onPatch={patchNode}
-                onMove={moveNode}
+                onSetNature={setNature}
                 onDelete={deleteNode}
               />
             )}
           </>
         )}
       </div>
+
+      {exportOpen ? (
+        <ExportPdfModal
+          bulles={pdfData.bulles}
+          fleches={pdfData.fleches}
+          versionName={versionName}
+          scopeLabel={scopeLabel}
+          highlightLabel={highlightNode ? highlightNode.label : null}
+          onClose={() => setExportOpen(false)}
+        />
+      ) : null}
     </>
+  );
+}
+
+// ─── Recherche / mise en évidence ────────────────────────────────
+//
+// Champ avec suggestions : on tape le nom d'une compagnie ou d'une
+// personne, on choisit, et la bulle ressort en vert sur le canevas
+// (et dans le PDF). Une seule bulle à la fois ; la croix l'enlève.
+
+function HighlightSearch({
+  nodes,
+  highlightId,
+  onChange
+}: {
+  nodes: OrgNode[];
+  highlightId: number | null;
+  onChange: (id: number | null) => void;
+}) {
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const [idx, setIdx] = useState(0);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const selected =
+    highlightId != null ? nodes.find((n) => n.id === highlightId) || null : null;
+
+  const results = useMemo(() => {
+    const nq = normaliser(q);
+    return nodes
+      .filter((n) => !nq || normaliser(n.label).includes(nq))
+      .sort((a, b) => a.label.localeCompare(b.label, "fr"))
+      .slice(0, 8);
+  }, [nodes, q]);
+
+  useEffect(() => {
+    setIdx(0);
+  }, [q, open]);
+
+  // Clic hors du champ → ferme les suggestions.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node))
+        setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, []);
+
+  function choisir(n: OrgNode) {
+    onChange(n.id);
+    setQ("");
+    setOpen(false);
+  }
+
+  return (
+    <div ref={wrapRef} className="relative min-w-[260px] flex-1 max-w-sm">
+      <div
+        className="flex items-center gap-1.5 rounded-lg border px-2"
+        style={{
+          borderColor: selected ? "rgb(16 185 129)" : "var(--qg-border)",
+          backgroundColor: "var(--qg-bg, transparent)"
+        }}
+        title="Tape le nom d'une compagnie ou d'une personne : la bulle choisie ressort en vert sur le canevas et dans le PDF (ex. la compagnie acquéreuse)"
+      >
+        {selected ? (
+          <Sparkles className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+        ) : (
+          <Search
+            className="h-3.5 w-3.5 shrink-0"
+            style={{ color: "var(--qg-text-soft)" }}
+          />
+        )}
+        <input
+          value={open ? q : selected ? selected.label : q}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => {
+            setQ("");
+            setOpen(true);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown") {
+              e.preventDefault();
+              setOpen(true);
+              setIdx((i) => Math.min(results.length - 1, i + 1));
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              setIdx((i) => Math.max(0, i - 1));
+            } else if (e.key === "Enter") {
+              e.preventDefault();
+              if (open && results[idx]) choisir(results[idx]);
+            } else if (e.key === "Escape") {
+              setOpen(false);
+              setQ("");
+            }
+          }}
+          placeholder="Mettre en évidence : nom de la compagnie…"
+          className="min-w-0 flex-1 bg-transparent py-1.5 text-xs outline-none"
+          style={{ color: "var(--qg-text)" }}
+          aria-label="Mettre une bulle en évidence"
+        />
+        {selected ? (
+          <button
+            type="button"
+            onClick={() => {
+              onChange(null);
+              setQ("");
+              setOpen(false);
+            }}
+            className="rounded p-0.5 text-white/50 hover:text-rose-400"
+            title="Retirer la mise en évidence"
+            aria-label="Retirer la mise en évidence"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
+      </div>
+      {open ? (
+        <ul
+          className="absolute left-0 right-0 z-30 mt-1 max-h-72 overflow-y-auto rounded-lg border py-1 text-xs shadow-xl"
+          style={{
+            borderColor: "var(--qg-border)",
+            backgroundColor: "var(--qg-card-bg)"
+          }}
+          role="listbox"
+        >
+          {results.length === 0 ? (
+            <li
+              className="px-3 py-1.5"
+              style={{ color: "var(--qg-text-muted)" }}
+            >
+              Aucune bulle ne correspond.
+            </li>
+          ) : (
+            results.map((n, i) => {
+              const nat = NATURE_STYLES[nodeNature(n)];
+              return (
+                <li key={n.id} role="option" aria-selected={i === idx}>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseEnter={() => setIdx(i)}
+                    onClick={() => choisir(n)}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
+                    style={{
+                      backgroundColor:
+                        i === idx ? "var(--qg-bg-alt, rgba(0,0,0,0.06))" : "transparent",
+                      color: "var(--qg-text)"
+                    }}
+                  >
+                    <span
+                      aria-hidden
+                      className={`inline-block h-2 w-2 shrink-0 rounded-full ${nat.dotCls}`}
+                    />
+                    <span className="min-w-0 flex-1 truncate">{n.label}</span>
+                    <span
+                      className="shrink-0 text-[10px]"
+                      style={{ color: "var(--qg-text-soft)" }}
+                    >
+                      {nat.label}
+                    </span>
+                  </button>
+                </li>
+              );
+            })
+          )}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+// ─── Export PDF ──────────────────────────────────────────────────
+//
+// Options de feuille (orientation, format, échelle) + aperçu en direct
+// du PDF généré (vectoriel, fond blanc). Le contenu est exactement ce
+// que le canevas affiche : périmètre, positions, mise en évidence.
+
+function ExportPdfModal({
+  bulles,
+  fleches,
+  versionName,
+  scopeLabel,
+  highlightLabel,
+  onClose
+}: {
+  bulles: PdfBulle[];
+  fleches: PdfFleche[];
+  versionName: string;
+  scopeLabel: string;
+  highlightLabel: string | null;
+  onClose: () => void;
+}) {
+  const [orientation, setOrientation] = useState<PdfOrientation>("paysage");
+  const [format, setFormat] = useState<PdfFormat>("lettre");
+  const [echelle, setEchelle] = useState<PdfEchelle>("page");
+  const [zoom, setZoom] = useState(100);
+  const [titre, setTitre] = useState("Organigramme — structure de détention");
+  const [sousTitre, setSousTitre] = useState(
+    `Version ${versionName} · périmètre ${scopeLabel}`
+  );
+  const [legendeEvidence, setLegendeEvidence] = useState(
+    "Compagnie acquéreuse"
+  );
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [building, setBuilding] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const urlRef = useRef<string | null>(null);
+
+  const options = useMemo(
+    () => ({
+      orientation,
+      format,
+      echelle,
+      zoom,
+      titre,
+      sousTitre,
+      legendeEvidence: highlightLabel ? legendeEvidence || "Mise en évidence" : null
+    }),
+    [orientation, format, echelle, zoom, titre, sousTitre, legendeEvidence, highlightLabel]
+  );
+
+  // Aperçu régénéré à chaque changement d'option (petit délai pour la
+  // saisie du titre / du zoom).
+  useEffect(() => {
+    let annule = false;
+    const t = window.setTimeout(async () => {
+      setBuilding(true);
+      setErr(null);
+      try {
+        const doc = await construirePdfOrganigramme({
+          bulles,
+          fleches,
+          options,
+          bulleW: BUBBLE_W,
+          bulleH: BUBBLE_H
+        });
+        if (annule) return;
+        const url = String(doc.output("bloburl"));
+        if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+        urlRef.current = url;
+        setPreviewUrl(url);
+      } catch (e) {
+        if (!annule) setErr(`Aperçu impossible : ${(e as Error).message}`);
+      } finally {
+        if (!annule) setBuilding(false);
+      }
+    }, 250);
+    return () => {
+      annule = true;
+      window.clearTimeout(t);
+    };
+  }, [bulles, fleches, options]);
+
+  useEffect(
+    () => () => {
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+    },
+    []
+  );
+
+  async function telecharger() {
+    setErr(null);
+    try {
+      const doc = await construirePdfOrganigramme({
+        bulles,
+        fleches,
+        options,
+        bulleW: BUBBLE_W,
+        bulleH: BUBBLE_H
+      });
+      doc.save(nomFichierPdf(versionName, scopeLabel));
+    } catch (e) {
+      setErr(`Téléchargement impossible : ${(e as Error).message}`);
+    }
+  }
+
+  const segment = (
+    actif: boolean
+  ): React.CSSProperties => ({
+    backgroundColor: actif ? "var(--qg-accent)" : "var(--qg-card-bg)",
+    color: actif ? "var(--qg-accent-ink, #0a0a0b)" : "var(--qg-text-soft)"
+  });
+
+  return (
+    <div
+      className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-[var(--qg-border)] bg-[var(--qg-bg)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-[var(--qg-border)] px-5 py-3">
+          <h3 className="flex items-center gap-2 text-base font-semibold">
+            <FileDown className="h-4 w-4 text-accent-500" />
+            Exporter l&apos;organigramme en PDF
+          </h3>
+          <button type="button" onClick={onClose} className="btn-ghost btn-xs" aria-label="Fermer">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5 md:flex-row">
+          {/* Options */}
+          <div className="w-full shrink-0 space-y-4 md:w-72">
+            <div>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--qg-text-soft)]">
+                Orientation
+              </p>
+              <div className="inline-flex overflow-hidden rounded-lg border" style={{ borderColor: "var(--qg-border)" }}>
+                {(
+                  [
+                    ["portrait", "Portrait"],
+                    ["paysage", "Paysage"]
+                  ] as const
+                ).map(([val, lbl]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setOrientation(val)}
+                    className="px-3 py-1.5 text-xs font-semibold"
+                    style={segment(orientation === val)}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--qg-text-soft)]">
+                Format de feuille
+              </p>
+              <select
+                value={format}
+                onChange={(e) => setFormat(e.target.value as PdfFormat)}
+                className="input text-xs"
+              >
+                {(Object.keys(FORMATS_PDF) as PdfFormat[]).map((k) => (
+                  <option key={k} value={k}>
+                    {FORMATS_PDF[k].label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--qg-text-soft)]">
+                Mise à l&apos;échelle
+              </p>
+              <div className="space-y-1 text-xs">
+                {(
+                  [
+                    ["page", "Ajuster à la page (tout rentre)"],
+                    ["largeur", "Ajuster à la largeur"],
+                    ["manuelle", "Échelle manuelle"]
+                  ] as const
+                ).map(([val, lbl]) => (
+                  <label key={val} className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="echelle"
+                      checked={echelle === val}
+                      onChange={() => setEchelle(val)}
+                    />
+                    {lbl}
+                  </label>
+                ))}
+                {echelle === "manuelle" ? (
+                  <div className="mt-1 flex items-center gap-2 pl-5">
+                    <input
+                      type="range"
+                      min={25}
+                      max={250}
+                      step={5}
+                      value={zoom}
+                      onChange={(e) => setZoom(Number(e.target.value))}
+                      className="flex-1"
+                      aria-label="Échelle en pourcentage"
+                    />
+                    <span className="w-12 text-right font-semibold">{zoom} %</span>
+                  </div>
+                ) : null}
+                <p className="pl-5 text-[10px] text-[var(--qg-text-muted)]">
+                  100 % = la taille des bulles à l&apos;écran. Ce qui
+                  déborde de la feuille est coupé.
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--qg-text-soft)]">
+                Titre
+              </p>
+              <input
+                value={titre}
+                onChange={(e) => setTitre(e.target.value)}
+                className="input text-xs"
+              />
+              <input
+                value={sousTitre}
+                onChange={(e) => setSousTitre(e.target.value)}
+                className="input mt-1 text-xs"
+                placeholder="Sous-titre"
+              />
+            </div>
+
+            {highlightLabel ? (
+              <div>
+                <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--qg-text-soft)]">
+                  Bulle en évidence : {highlightLabel}
+                </p>
+                <input
+                  value={legendeEvidence}
+                  onChange={(e) => setLegendeEvidence(e.target.value)}
+                  className="input text-xs"
+                  placeholder="Libellé dans la légende (ex. Compagnie acquéreuse)"
+                  title="Comment la légende du PDF nomme la bulle en évidence"
+                />
+              </div>
+            ) : (
+              <p className="text-[10px] text-[var(--qg-text-muted)]">
+                Astuce : mets une compagnie en évidence avant d&apos;exporter
+                pour la faire ressortir (ex. la compagnie acquéreuse).
+              </p>
+            )}
+
+            <p className="text-[10px] text-[var(--qg-text-muted)]">
+              Le PDF reprend ce qui est affiché : version {versionName},
+              périmètre {scopeLabel}, {bulles.length} bulle(s).
+            </p>
+
+            {err ? (
+              <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-600">
+                {err}
+              </p>
+            ) : null}
+          </div>
+
+          {/* Aperçu */}
+          <div
+            className="relative min-h-[320px] flex-1 overflow-hidden rounded-xl border md:min-h-[60vh]"
+            style={{ borderColor: "var(--qg-border)", backgroundColor: "#525659" }}
+          >
+            {previewUrl ? (
+              <iframe
+                title="Aperçu du PDF"
+                src={`${previewUrl}#toolbar=0&navpanes=0&view=Fit`}
+                className="h-full w-full"
+                style={{ minHeight: 320 }}
+              />
+            ) : null}
+            {building ? (
+              <div className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/60 px-2 py-1 text-[10px] text-white">
+                <Loader2 className="h-3 w-3 animate-spin" /> Aperçu…
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-[var(--qg-border)] px-5 py-3">
+          <button type="button" onClick={onClose} className="btn-secondary btn-sm">
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={() => void telecharger()}
+            className="btn-accent inline-flex items-center gap-1.5 text-xs"
+          >
+            <FileDown className="h-3.5 w-3.5" />
+            Télécharger le PDF
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -921,13 +1510,9 @@ function ZoomControl({
 // ─── Vue Canvas type Miro ────────────────────────────────────────
 //
 // Bulles positionnables librement (pos_x / pos_y persistés) + flèches
-// de détention auto-tracées (parent_id + co_owner_node_ids), toutes
-// en trait plein — un co-détenteur est un propriétaire à part
-// entière —, avec ajout / suppression manuelle. Tirer une flèche A→B
-// re-parente B (ou ajoute A en co-détenteur) et demande la quote-part,
-// affichée ensuite au milieu de la flèche.
-
-type XY = { x: number; y: number };
+// de détention auto-tracées (parent_id + co_owner_node_ids) avec la
+// quote-part au milieu. Les liens ne se créent ni ne se suppriment ici :
+// ils viennent des fiches (sync).
 
 function clipToBubble(center: XY, toward: XY): XY {
   // Point sur le bord de la bulle (rectangle) en direction de `toward`.
@@ -944,38 +1529,30 @@ function clipToBubble(center: XY, toward: XY): XY {
 
 function CanvasView({
   nodes,
-  entreprises,
-  employes,
   parentEntId,
+  highlightId,
+  onHighlight,
   onPatch,
-  onMove,
+  onSetNature,
   onDelete
 }: {
   nodes: OrgNode[];
-  entreprises: Array<{ id: number; name: string }>;
-  employes: Employe[];
   parentEntId: number | null;
+  highlightId: number | null;
+  onHighlight: (id: number | null) => void;
   onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
-  onMove: (
-    id: number,
-    parentId: number | null,
-    position: number
-  ) => Promise<void>;
+  onSetNature: (id: number, nature: "person" | "company") => Promise<void>;
   onDelete: (id: number) => Promise<void>;
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
 
-  // Bulle sélectionnée → ouvre le panneau d'édition latéral.
+  // Bulle sélectionnée → ouvre le panneau latéral.
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
-  // Zoom du canvas — vue plus globale au besoin. Appliqué en
-  // transform:scale sur la couche de contenu ; canvasCoords divise
-  // par le zoom pour garder un drag / des flèches précis. Ajustable
-  // via les boutons ou Ctrl/Cmd + molette.
+  // Zoom du canvas — appliqué en transform:scale sur la couche de
+  // contenu ; canvasCoords divise par le zoom pour garder un drag
+  // précis. Ajustable via les boutons ou Ctrl/Cmd + molette.
   const [zoom, setZoom] = useState(1);
-  // Point de contenu à garder fixe sous le curseur après un zoom
-  // molette (appliqué en useLayoutEffect une fois la nouvelle échelle
-  // rendue).
   const zoomFocusRef = useRef<{
     contentX: number;
     contentY: number;
@@ -984,11 +1561,10 @@ function CanvasView({
   } | null>(null);
 
   // Positions de travail : seed depuis pos_x/pos_y du serveur, sinon
-  // auto-layout en arbre. Le drag les met à jour localement ; on
-  // PATCH au relâchement.
+  // rangée du bas. Le drag les met à jour localement ; on PATCH au
+  // relâchement.
   const [positions, setPositions] = useState<Map<number, XY>>(new Map());
 
-  // Drag d'une bulle (ref : stable entre les re-renders du drag).
   const dragRef = useRef<{
     id: number;
     startX: number;
@@ -998,44 +1574,13 @@ function CanvasView({
     moved: boolean;
   } | null>(null);
 
-  // Tracé d'une flèche en cours.
-  const [connect, setConnect] = useState<{
-    fromId: number;
-    x: number;
-    y: number;
-  } | null>(null);
-
-  const [hoverArrow, setHoverArrow] = useState<string | null>(null);
-
   const byId = useMemo(() => {
     const m = new Map<number, OrgNode>();
     for (const n of nodes) m.set(n.id, n);
     return m;
   }, [nodes]);
 
-  // Auto-layout en arbre pour les nœuds sans position serveur.
-  const autoLayout = useMemo(() => {
-    const childrenOf = new Map<number | null, OrgNode[]>();
-    for (const n of nodes) {
-      const arr = childrenOf.get(n.parent_id) || [];
-      arr.push(n);
-      childrenOf.set(n.parent_id, arr);
-    }
-    for (const arr of childrenOf.values())
-      arr.sort((a, b) => a.position - b.position);
-    const out = new Map<number, XY>();
-    let row = 0;
-    const place = (n: OrgNode, depth: number) => {
-      out.set(n.id, {
-        x: snap(48 + depth * (BUBBLE_W + 96)),
-        y: snap(48 + row * (BUBBLE_H + 42))
-      });
-      row += 1;
-      for (const c of childrenOf.get(n.id) || []) place(c, depth + 1);
-    };
-    for (const r of childrenOf.get(null) || []) place(r, 0);
-    return out;
-  }, [nodes]);
+  const fallback = useMemo(() => resolvePositions(nodes), [nodes]);
 
   // (Re)seed : ajoute les nouveaux nœuds, retire les supprimés,
   // conserve les positions déjà connues (drag local).
@@ -1045,13 +1590,25 @@ function CanvasView({
       for (const n of nodes) {
         const existing = prev.get(n.id);
         if (existing) next.set(n.id, existing);
-        else if (n.pos_x != null && n.pos_y != null)
-          next.set(n.id, { x: n.pos_x, y: n.pos_y });
-        else next.set(n.id, autoLayout.get(n.id) || { x: 60, y: 60 });
+        else next.set(n.id, fallback.get(n.id) || { x: GRID, y: GRID });
       }
       return next;
     });
-  }, [nodes, autoLayout]);
+  }, [nodes, fallback]);
+
+  // Bulle mise en évidence → on la centre dans la vue.
+  useEffect(() => {
+    if (highlightId == null) return;
+    const el = canvasRef.current;
+    const p = positions.get(highlightId);
+    if (!el || !p) return;
+    el.scrollTo({
+      left: Math.max(0, (p.x + BUBBLE_W / 2) * zoom - el.clientWidth / 2),
+      top: Math.max(0, (p.y + BUBBLE_H / 2) * zoom - el.clientHeight / 2),
+      behavior: "smooth"
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightId]);
 
   // Ctrl/Cmd + molette → zoom du canvas centré sur le curseur
   // (molette simple = défilement normal). Listener non-passif posé à
@@ -1100,9 +1657,6 @@ function CanvasView({
     const el = canvasRef.current;
     if (!el) return { x: 0, y: 0 };
     const r = el.getBoundingClientRect();
-    // (clientX - left + scroll) donne la position dans l'espace
-    // ZOOMÉ ; on divise par le zoom pour revenir aux coordonnées de
-    // contenu (celles stockées dans positions / pos_x).
     return {
       x: (e.clientX - r.left + el.scrollLeft) / zoom,
       y: (e.clientY - r.top + el.scrollTop) / zoom
@@ -1119,53 +1673,7 @@ function CanvasView({
     return { canvasW: mx + CANVAS_PAD, canvasH: my + CANVAS_PAD };
   }, [positions]);
 
-  // Flèches de détention : parent_id + co_owner_node_ids, toutes en
-  // trait plein (la détention compte autant pour tous les détenteurs).
-  const arrows = useMemo(() => {
-    const out: Array<{
-      key: string;
-      fromId: number;
-      toId: number;
-      kind: "parent" | "coowner";
-    }> = [];
-    for (const n of nodes) {
-      if (n.parent_id != null && byId.has(n.parent_id))
-        out.push({
-          key: `p-${n.parent_id}-${n.id}`,
-          fromId: n.parent_id,
-          toId: n.id,
-          kind: "parent"
-        });
-      for (const co of n.co_owner_node_ids || [])
-        if (byId.has(co))
-          out.push({
-            key: `c-${co}-${n.id}`,
-            fromId: co,
-            toId: n.id,
-            kind: "coowner"
-          });
-    }
-    return out;
-  }, [nodes, byId]);
-
-  // Descendants d'un nœud — pour empêcher les boucles au branchement.
-  function subtreeOf(rootId: number): Set<number> {
-    const childrenOf = new Map<number | null, number[]>();
-    for (const n of nodes) {
-      const a = childrenOf.get(n.parent_id) || [];
-      a.push(n.id);
-      childrenOf.set(n.parent_id, a);
-    }
-    const s = new Set<number>();
-    const stack = [rootId];
-    while (stack.length) {
-      const cur = stack.pop() as number;
-      if (s.has(cur)) continue;
-      s.add(cur);
-      for (const c of childrenOf.get(cur) || []) stack.push(c);
-    }
-    return s;
-  }
+  const arrows = useMemo(() => buildArrows(nodes), [nodes]);
 
   function onBubbleMouseDown(e: React.MouseEvent, id: number) {
     if (e.button !== 0) return;
@@ -1182,180 +1690,32 @@ function CanvasView({
     };
   }
 
-  function onHandleMouseDown(e: React.MouseEvent, id: number) {
-    if (e.button !== 0) return;
-    e.stopPropagation();
-    const m = canvasCoords(e);
-    setConnect({ fromId: id, x: m.x, y: m.y });
-  }
-
   function onCanvasMouseMove(e: React.MouseEvent) {
-    if (!dragRef.current && !connect) return;
+    if (!dragRef.current) return;
     const m = canvasCoords(e);
-    if (dragRef.current) {
-      const d = dragRef.current;
-      const nx = Math.max(0, snap(d.origX + (m.x - d.startX)));
-      const ny = Math.max(0, snap(d.origY + (m.y - d.startY)));
-      // « moved » seulement si la position change vraiment (au pas de
-      // grille) — un micro-tremblement laisse le clic = sélection.
-      if (nx !== d.origX || ny !== d.origY) d.moved = true;
-      setPositions((prev) => {
-        const next = new Map(prev);
-        next.set(d.id, { x: nx, y: ny });
-        return next;
-      });
-    } else if (connect) {
-      setConnect((c) => (c ? { ...c, x: m.x, y: m.y } : c));
-    }
-  }
-
-  function onCanvasMouseUp() {
-    if (dragRef.current) {
-      const d = dragRef.current;
-      dragRef.current = null;
-      if (d.moved) {
-        const p = positions.get(d.id);
-        if (p) void onPatch(d.id, { pos_x: p.x, pos_y: p.y });
-      } else {
-        // Clic sans déplacement → sélectionne la bulle (ouvre l'éditeur).
-        setSelectedId(d.id);
-      }
-    }
-    if (connect) setConnect(null);
-  }
-
-  // Demande la quote-part (%) du nouveau détenteur — vide = sans %.
-  // Accepte « 50 », « 50 % », « 33,33 »…
-  function promptOwnershipPct(): number | null {
-    const raw = window.prompt(
-      "Quote-part (%) de ce détenteur ? (vide = sans %)"
-    );
-    if (raw == null) return null;
-    const cleaned = raw.replace("%", "").replace(",", ".").trim();
-    if (!cleaned) return null;
-    const pct = Number(cleaned);
-    return Number.isNaN(pct) ? null : pct;
-  }
-
-  // Finalise une flèche fromId → toId (= « fromId détient toId »).
-  function finishConnect(toId: number) {
-    if (!connect) return;
-    const fromId = connect.fromId;
-    setConnect(null);
-    if (fromId === toId) return;
-    // Anti-boucle : la cible ne peut pas être un ancêtre de la source.
-    if (subtreeOf(toId).has(fromId)) return;
-    const target = byId.get(toId);
-    if (!target) return;
-    if (target.parent_id == null) {
-      // Pas de détenteur principal → re-parente (devient le parent).
-      const siblings = nodes.filter(
-        (n) => n.parent_id === fromId && n.id !== toId
-      );
-      void onMove(toId, fromId, siblings.length);
-      const pct = promptOwnershipPct();
-      if (pct != null) {
-        void onPatch(toId, {
-          ownership_json: JSON.stringify({
-            ...parseOwnership(target),
-            [String(fromId)]: pct
-          })
-        });
-      }
-    } else if (
-      target.parent_id !== fromId &&
-      !(target.co_owner_node_ids || []).includes(fromId)
-    ) {
-      // Détenteur principal déjà défini → co-détention.
-      const patch: Partial<OrgNode> = {
-        co_owner_node_ids: [...(target.co_owner_node_ids || []), fromId]
-      };
-      const pct = promptOwnershipPct();
-      if (pct != null) {
-        patch.ownership_json = JSON.stringify({
-          ...parseOwnership(target),
-          [String(fromId)]: pct
-        });
-      }
-      void onPatch(toId, patch);
-    }
-  }
-
-  function deleteArrow(a: {
-    fromId: number;
-    toId: number;
-    kind: "parent" | "coowner";
-  }) {
-    const target = byId.get(a.toId);
-    // Retirer un lien retire aussi la quote-part de ce détenteur.
-    const owns = parseOwnership(target);
-    const hasPct = String(a.fromId) in owns;
-    delete owns[String(a.fromId)];
-    const nextOwnership =
-      Object.keys(owns).length > 0 ? JSON.stringify(owns) : null;
-    if (a.kind === "parent") {
-      const roots = nodes.filter(
-        (n) => n.parent_id == null && n.id !== a.toId
-      );
-      void onMove(a.toId, null, roots.length);
-      if (hasPct) void onPatch(a.toId, { ownership_json: nextOwnership });
-    } else {
-      if (!target) return;
-      void onPatch(a.toId, {
-        co_owner_node_ids: (target.co_owner_node_ids || []).filter(
-          (x) => x !== a.fromId
-        ),
-        ...(hasPct ? { ownership_json: nextOwnership } : {})
-      });
-    }
-  }
-
-  // Retire un lien de détention ownerId → nodeId (panneau latéral) —
-  // même logique que la suppression d'une flèche au survol.
-  function removeOwner(nodeId: number, ownerId: number) {
-    const target = byId.get(nodeId);
-    if (!target) return;
-    deleteArrow({
-      fromId: ownerId,
-      toId: nodeId,
-      kind: target.parent_id === ownerId ? "parent" : "coowner"
+    const d = dragRef.current;
+    const nx = Math.max(0, snap(d.origX + (m.x - d.startX)));
+    const ny = Math.max(0, snap(d.origY + (m.y - d.startY)));
+    // « moved » seulement si la position change vraiment (au pas de
+    // grille) — un micro-tremblement laisse le clic = sélection.
+    if (nx !== d.origX || ny !== d.origY) d.moved = true;
+    setPositions((prev) => {
+      const next = new Map(prev);
+      next.set(d.id, { x: nx, y: ny });
+      return next;
     });
   }
 
-  // Ajoute un détenteur ownerId → nodeId avec sa quote-part (panneau
-  // latéral) — même logique que le tracé d'une flèche : re-parentage
-  // si la bulle n'a pas encore de détenteur principal, sinon
-  // co-détention. La quote-part atterrit dans ownership_json du
-  // nœud détenu (clé = id du détenteur).
-  function addOwner(nodeId: number, ownerId: number, pct: number | null) {
-    if (ownerId === nodeId) return;
-    // Anti-boucle : le détenteur ne peut pas être un descendant.
-    if (subtreeOf(nodeId).has(ownerId)) return;
-    const target = byId.get(nodeId);
-    if (!target) return;
-    const nextOwnership =
-      pct != null
-        ? JSON.stringify({
-            ...parseOwnership(target),
-            [String(ownerId)]: pct
-          })
-        : null;
-    if (target.parent_id == null) {
-      const siblings = nodes.filter(
-        (n) => n.parent_id === ownerId && n.id !== nodeId
-      );
-      void onMove(nodeId, ownerId, siblings.length);
-      if (nextOwnership != null)
-        void onPatch(nodeId, { ownership_json: nextOwnership });
-    } else if (
-      target.parent_id !== ownerId &&
-      !(target.co_owner_node_ids || []).includes(ownerId)
-    ) {
-      const patch: Partial<OrgNode> = {
-        co_owner_node_ids: [...(target.co_owner_node_ids || []), ownerId]
-      };
-      if (nextOwnership != null) patch.ownership_json = nextOwnership;
-      void onPatch(nodeId, patch);
+  function onCanvasMouseUp() {
+    if (!dragRef.current) return;
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (d.moved) {
+      const p = positions.get(d.id);
+      if (p) void onPatch(d.id, { pos_x: p.x, pos_y: p.y });
+    } else {
+      // Clic sans déplacement → sélectionne la bulle (ouvre le panneau).
+      setSelectedId(d.id);
     }
   }
 
@@ -1376,197 +1736,129 @@ function CanvasView({
           height: "calc(100vh - 250px)",
           minHeight: 420,
           borderColor: "var(--qg-border)",
-          backgroundColor: "var(--qg-bg-alt, transparent)",
-          cursor: connect ? "crosshair" : "default"
+          backgroundColor: "var(--qg-bg-alt, transparent)"
         }}
       >
-        {/* Sizer : réserve la zone scrollable à la taille ZOOMÉE.
-            La couche de contenu en dessous est mise à l'échelle via
-            transform:scale — le scroll reste donc cohérent. */}
-        <div
-          style={{ width: canvasW * zoom, height: canvasH * zoom }}
-        >
-        <div
-          onMouseDown={(e) => {
-            // Clic sur le fond quadrillé (hors bulle) → désélectionne.
-            if (e.target === e.currentTarget) setSelectedId(null);
-          }}
-          style={{
-            position: "relative",
-            width: canvasW,
-            height: canvasH,
-            transform: `scale(${zoom})`,
-            transformOrigin: "0 0",
-            // Quadrillage en coordonnées contenu (s'aligne au snap).
-            backgroundImage:
-              "radial-gradient(var(--qg-border-soft) 1px, transparent 1px)",
-            backgroundSize: `${GRID}px ${GRID}px`
-          }}
-        >
-        {/* Couche SVG : flèches */}
-        <svg
-          width={canvasW}
-          height={canvasH}
-          className="absolute inset-0"
-          style={{ pointerEvents: "none" }}
-        >
-          <defs>
-            <marker
-              id="org-arrow"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="7"
-              markerHeight="7"
-              orient="auto-start-reverse"
+        {/* Sizer : réserve la zone scrollable à la taille ZOOMÉE. */}
+        <div style={{ width: canvasW * zoom, height: canvasH * zoom }}>
+          <div
+            onMouseDown={(e) => {
+              // Clic sur le fond quadrillé (hors bulle) → désélectionne.
+              if (e.target === e.currentTarget) setSelectedId(null);
+            }}
+            style={{
+              position: "relative",
+              width: canvasW,
+              height: canvasH,
+              transform: `scale(${zoom})`,
+              transformOrigin: "0 0",
+              backgroundImage:
+                "radial-gradient(var(--qg-border-soft) 1px, transparent 1px)",
+              backgroundSize: `${GRID}px ${GRID}px`
+            }}
+          >
+            {/* Couche SVG : flèches */}
+            <svg
+              width={canvasW}
+              height={canvasH}
+              className="absolute inset-0"
+              style={{ pointerEvents: "none" }}
             >
-              <path d="M0,0 L10,5 L0,10 z" fill="var(--qg-text-muted)" />
-            </marker>
-            <marker
-              id="org-arrow-accent"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="7"
-              markerHeight="7"
-              orient="auto-start-reverse"
-            >
-              <path d="M0,0 L10,5 L0,10 z" fill="var(--qg-accent)" />
-            </marker>
-          </defs>
-          {arrows.map((a) => {
-            const pf = positions.get(a.fromId);
-            const pt = positions.get(a.toId);
-            if (!pf || !pt) return null;
-            const fc = { x: pf.x + BUBBLE_W / 2, y: pf.y + BUBBLE_H / 2 };
-            const tc = { x: pt.x + BUBBLE_W / 2, y: pt.y + BUBBLE_H / 2 };
-            const start = clipToBubble(fc, tc);
-            const end = clipToBubble(tc, fc);
-            const mid = {
-              x: (start.x + end.x) / 2,
-              y: (start.y + end.y) / 2
-            };
-            const hovered = hoverArrow === a.key;
-            // Quote-part du détenteur (fromId) dans le nœud détenu
-            // (toId) — stockée sur le détenu, clé = id du détenteur.
-            const pct = parseOwnership(byId.get(a.toId))[String(a.fromId)];
-            return (
-              <g key={a.key}>
-                <line
-                  x1={start.x}
-                  y1={start.y}
-                  x2={end.x}
-                  y2={end.y}
-                  stroke="transparent"
-                  strokeWidth={16}
-                  style={{ pointerEvents: "stroke", cursor: "pointer" }}
-                  onMouseEnter={() => setHoverArrow(a.key)}
-                  onMouseLeave={() =>
-                    setHoverArrow((h) => (h === a.key ? null : h))
-                  }
-                />
-                <line
-                  x1={start.x}
-                  y1={start.y}
-                  x2={end.x}
-                  y2={end.y}
-                  stroke={
-                    hovered
-                      ? "var(--qg-accent)"
-                      : "var(--qg-text-muted)"
-                  }
-                  strokeWidth={hovered ? 2.5 : 1.75}
-                  markerEnd={`url(#org-arrow${hovered ? "-accent" : ""})`}
-                  style={{ pointerEvents: "none" }}
-                />
-                {pct != null ? (
-                  // Quote-part au milieu de la flèche — halo card-bg
-                  // (paint-order) pour rester lisible sur le quadrillage.
-                  <text
-                    x={mid.x}
-                    y={mid.y - 8}
-                    textAnchor="middle"
-                    fontSize={11}
-                    fontWeight={600}
-                    fill="var(--qg-text)"
-                    stroke="var(--qg-card-bg)"
-                    strokeWidth={4}
-                    paintOrder="stroke"
-                    style={{ pointerEvents: "none" }}
-                  >
-                    {formatPct(pct)}
-                  </text>
-                ) : null}
-                {hovered ? (
-                  <g
-                    style={{ pointerEvents: "all", cursor: "pointer" }}
-                    onMouseEnter={() => setHoverArrow(a.key)}
-                    onClick={() => deleteArrow(a)}
-                  >
-                    <circle
-                      cx={mid.x}
-                      cy={mid.y}
-                      r={9}
-                      fill="var(--qg-card-bg)"
-                      stroke="var(--qg-accent)"
-                    />
-                    <path
-                      d={`M${mid.x - 3},${mid.y - 3} L${mid.x + 3},${mid.y + 3} M${mid.x + 3},${mid.y - 3} L${mid.x - 3},${mid.y + 3}`}
-                      stroke="var(--qg-accent)"
-                      strokeWidth={1.6}
-                    />
-                  </g>
-                ) : null}
-              </g>
-            );
-          })}
-          {connect
-            ? (() => {
-                const pf = positions.get(connect.fromId);
-                if (!pf) return null;
+              <defs>
+                <marker
+                  id="org-arrow"
+                  viewBox="0 0 10 10"
+                  refX="9"
+                  refY="5"
+                  markerWidth="7"
+                  markerHeight="7"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M0,0 L10,5 L0,10 z" fill="var(--qg-text-muted)" />
+                </marker>
+                <marker
+                  id="org-arrow-highlight"
+                  viewBox="0 0 10 10"
+                  refX="9"
+                  refY="5"
+                  markerWidth="7"
+                  markerHeight="7"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M0,0 L10,5 L0,10 z" fill="rgb(16 185 129)" />
+                </marker>
+              </defs>
+              {arrows.map((a) => {
+                const pf = positions.get(a.fromId);
+                const pt = positions.get(a.toId);
+                if (!pf || !pt) return null;
+                const fc = { x: pf.x + BUBBLE_W / 2, y: pf.y + BUBBLE_H / 2 };
+                const tc = { x: pt.x + BUBBLE_W / 2, y: pt.y + BUBBLE_H / 2 };
+                const start = clipToBubble(fc, tc);
+                const end = clipToBubble(tc, fc);
+                const mid = {
+                  x: (start.x + end.x) / 2,
+                  y: (start.y + end.y) / 2
+                };
+                // Les flèches qui touchent la bulle en évidence
+                // ressortent avec elle.
+                const lie =
+                  highlightId != null &&
+                  (a.fromId === highlightId || a.toId === highlightId);
+                const pct = parseOwnership(byId.get(a.toId))[String(a.fromId)];
                 return (
-                  <line
-                    x1={pf.x + BUBBLE_W / 2}
-                    y1={pf.y + BUBBLE_H / 2}
-                    x2={connect.x}
-                    y2={connect.y}
-                    stroke="var(--qg-accent)"
-                    strokeWidth={2}
-                    strokeDasharray="4 3"
-                    markerEnd="url(#org-arrow-accent)"
-                  />
+                  <g key={a.key}>
+                    <line
+                      x1={start.x}
+                      y1={start.y}
+                      x2={end.x}
+                      y2={end.y}
+                      stroke={lie ? "rgb(16 185 129)" : "var(--qg-text-muted)"}
+                      strokeWidth={lie ? 2.5 : 1.75}
+                      markerEnd={`url(#org-arrow${lie ? "-highlight" : ""})`}
+                    />
+                    {pct != null ? (
+                      <text
+                        x={mid.x}
+                        y={mid.y - 8}
+                        textAnchor="middle"
+                        fontSize={11}
+                        fontWeight={600}
+                        fill="var(--qg-text)"
+                        stroke="var(--qg-card-bg)"
+                        strokeWidth={4}
+                        paintOrder="stroke"
+                      >
+                        {formatPct(pct)}
+                      </text>
+                    ) : null}
+                  </g>
                 );
-              })()
-            : null}
-        </svg>
+              })}
+            </svg>
 
-        {/* Bulles */}
-        {nodes.map((n) => {
-          const p = positions.get(n.id);
-          if (!p) return null;
-          return (
-            <CanvasBubble
-              key={n.id}
-              node={n}
-              x={p.x}
-              y={p.y}
-              entreprises={entreprises}
-              employes={employes}
-              isParentCompany={
-                n.kind === "company" &&
-                parentEntId != null &&
-                n.entreprise_id === parentEntId
-              }
-              selected={selectedId === n.id}
-              connecting={connect != null}
-              onMouseDown={(e) => onBubbleMouseDown(e, n.id)}
-              onHandleMouseDown={(e) => onHandleMouseDown(e, n.id)}
-              onMouseUp={() => finishConnect(n.id)}
-              onDelete={() => void onDelete(n.id)}
-            />
-          );
-        })}
-        </div>
+            {/* Bulles */}
+            {nodes.map((n) => {
+              const p = positions.get(n.id);
+              if (!p) return null;
+              return (
+                <CanvasBubble
+                  key={n.id}
+                  node={n}
+                  x={p.x}
+                  y={p.y}
+                  isParentCompany={
+                    n.kind === "company" &&
+                    parentEntId != null &&
+                    n.entreprise_id === parentEntId
+                  }
+                  selected={selectedId === n.id}
+                  highlighted={highlightId === n.id}
+                  onMouseDown={(e) => onBubbleMouseDown(e, n.id)}
+                />
+              );
+            })}
+          </div>
         </div>
       </div>
       {/* Contrôle de zoom — flottant, fixe (hors zone scrollable). */}
@@ -1577,11 +1869,14 @@ function CanvasView({
         <CanvasNodeEditor
           node={selectedNode}
           allNodes={nodes}
-          entreprises={entreprises}
+          highlighted={highlightId === selectedNode.id}
+          onHighlight={onHighlight}
           onPatch={onPatch}
-          onDelete={onDelete}
-          onRemoveOwner={removeOwner}
-          onAddOwner={addOwner}
+          onSetNature={onSetNature}
+          onDelete={async (id) => {
+            await onDelete(id);
+            setSelectedId(null);
+          }}
           onSelect={setSelectedId}
           onClose={() => setSelectedId(null)}
         />
@@ -1594,72 +1889,58 @@ function CanvasBubble({
   node,
   x,
   y,
-  entreprises,
-  employes,
   isParentCompany,
   selected,
-  connecting,
-  onMouseDown,
-  onHandleMouseDown,
-  onMouseUp,
-  onDelete
+  highlighted,
+  onMouseDown
 }: {
   node: OrgNode;
   x: number;
   y: number;
-  entreprises: Array<{ id: number; name: string }>;
-  employes: Employe[];
   isParentCompany: boolean;
   selected: boolean;
-  connecting: boolean;
+  highlighted: boolean;
   onMouseDown: (e: React.MouseEvent) => void;
-  onHandleMouseDown: (e: React.MouseEvent) => void;
-  onMouseUp: () => void;
-  onDelete: () => void;
 }) {
   const [hover, setHover] = useState(false);
-  // Couleur ET badge de la bulle selon sa NATURE : INC Kratos
-  // (ambre), compagnie externe (sky), personne (violet) — cf. légende.
   const nature = nodeNature(node);
   const natureStyle = NATURE_STYLES[nature];
-  const tierInfo = node.execution_tier
-    ? TIER_LABELS[node.execution_tier]
-    : null;
-  const entreprise = node.entreprise_id
-    ? entreprises.find((e) => e.id === node.entreprise_id)
-    : null;
-  const assigneeEmploye = node.assignee_employe_id
-    ? employes.find((e) => e.id === node.assignee_employe_id)
-    : null;
-  const assignee =
-    assigneeEmploye?.full_name || node.assignee_external_name || null;
 
   return (
     <div
       onMouseDown={onMouseDown}
-      onMouseUp={onMouseUp}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      className={`absolute select-none rounded-xl border ${natureStyle.bubbleCls}`}
+      className={`absolute select-none rounded-xl border ${
+        highlighted ? HIGHLIGHT.bubbleCls : natureStyle.bubbleCls
+      } ${node.absent_des_fiches ? "border-dashed" : ""}`}
+      title={
+        node.absent_des_fiches
+          ? "Absente des fiches : retire-la (panneau) ou inscris l'actionnaire dans une fiche"
+          : undefined
+      }
       style={{
         left: x,
         top: y,
         width: BUBBLE_W,
         minHeight: BUBBLE_H,
-        // Nature « autre » : rendu neutre historique (les natures
-        // colorées passent par les classes Tailwind ci-dessus).
-        ...(nature === "autre"
+        zIndex: highlighted ? 2 : undefined,
+        opacity: node.absent_des_fiches && !highlighted ? 0.75 : 1,
+        // Nature « autre » : rendu neutre historique.
+        ...(nature === "autre" && !highlighted
           ? {
               borderColor: "var(--qg-border)",
               backgroundColor: "var(--qg-card-bg)"
             }
           : {}),
-        boxShadow: selected
-          ? "0 0 0 2px var(--qg-accent), 0 6px 18px -4px rgba(0,0,0,0.4)"
-          : hover
-            ? "0 4px 14px -4px rgba(0,0,0,0.35)"
-            : "0 1px 3px rgba(0,0,0,0.18)",
-        cursor: connecting ? "crosshair" : "grab",
+        boxShadow: highlighted
+          ? HIGHLIGHT.shadow
+          : selected
+            ? "0 0 0 2px var(--qg-accent), 0 6px 18px -4px rgba(0,0,0,0.4)"
+            : hover
+              ? "0 4px 14px -4px rgba(0,0,0,0.35)"
+              : "0 1px 3px rgba(0,0,0,0.18)",
+        cursor: "grab",
         padding: "8px 10px"
       }}
     >
@@ -1672,24 +1953,13 @@ function CanvasBubble({
         >
           {natureStyle.badge}
         </span>
-        {tierInfo ? (
-          <span
-            className={`shrink-0 rounded-full border px-1.5 py-0 text-[8px] font-bold ${tierInfo.cls}`}
-            title="Niveau d'exécution — qui doit prendre ça en charge"
-          >
-            {tierInfo.short}
+        {node.absent_des_fiches ? (
+          <span className="shrink-0 rounded-full border border-dashed border-rose-400/70 px-1.5 py-0 text-[8px] font-bold uppercase text-rose-400">
+            Absent des fiches
           </span>
         ) : null}
-        {hover ? (
-          <button
-            type="button"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={onDelete}
-            className="ml-auto rounded p-0.5 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
-            title="Supprimer le nœud"
-          >
-            <Trash2 className="h-3 w-3" />
-          </button>
+        {highlighted ? (
+          <Sparkles className="ml-auto h-3 w-3 shrink-0 text-emerald-500" />
         ) : null}
       </div>
       <p
@@ -1698,81 +1968,39 @@ function CanvasBubble({
       >
         {node.label}
       </p>
-      {entreprise || assignee ? (
-        <p
-          className="mt-0.5 truncate text-[10px]"
-          style={{ color: "var(--qg-text-soft)" }}
-        >
-          {entreprise ? entreprise.name : null}
-          {entreprise && assignee ? " · " : null}
-          {assignee}
-        </p>
-      ) : null}
-
-      {/* Poignée de connexion — tirer vers une autre bulle */}
-      <span
-        role="button"
-        aria-label="Créer une flèche vers une autre bulle"
-        onMouseDown={onHandleMouseDown}
-        title="Tirer vers une autre bulle pour créer une flèche de détention"
-        className="absolute h-4 w-4 rounded-full border-2"
-        style={{
-          right: -9,
-          top: "50%",
-          transform: "translateY(-50%)",
-          borderColor: "var(--qg-card-bg)",
-          backgroundColor: "var(--qg-accent)",
-          cursor: "crosshair"
-        }}
-      />
     </div>
   );
 }
 
 // Panneau latéral du canvas — s'ouvre au clic sur une bulle.
-// Sous-fiche épurée : nature, nom, lien / liaison vers la fiche INC,
-// détenteurs (ajout / retrait avec quotes-parts), participations
-// (cliquables) et notes libres. La ligne « Détention : … » écrite par
-// la sync est montrée à part, en lecture seule.
+// Fiche de la bulle, en lecture : nature (corrigeable personne ↔
+// compagnie pour un détenteur hors groupe), détenteurs et
+// participations avec quotes-parts, fiche Kratos, notes libres,
+// mise en évidence. Les liens eux-mêmes se modifient dans les fiches.
 function CanvasNodeEditor({
   node,
   allNodes,
-  entreprises,
+  highlighted,
+  onHighlight,
   onPatch,
+  onSetNature,
   onDelete,
-  onRemoveOwner,
-  onAddOwner,
   onSelect,
   onClose
 }: {
   node: OrgNode;
   allNodes: OrgNode[];
-  entreprises: Array<{ id: number; name: string }>;
+  highlighted: boolean;
+  onHighlight: (id: number | null) => void;
   onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
+  onSetNature: (id: number, nature: "person" | "company") => Promise<void>;
   onDelete: (id: number) => Promise<void>;
-  onRemoveOwner: (nodeId: number, ownerId: number) => void;
-  onAddOwner: (
-    nodeId: number,
-    ownerId: number,
-    pct: number | null
-  ) => void;
   onSelect: (id: number) => void;
   onClose: () => void;
 }) {
-  const [label, setLabel] = useState(node.label);
-  useEffect(() => {
-    setLabel(node.label);
-  }, [node.id, node.label]);
-
-  // Formulaire « + Ajouter un détenteur » : sélection + quote-part.
-  const [newOwnerId, setNewOwnerId] = useState("");
-  const [newOwnerPct, setNewOwnerPct] = useState("");
-  useEffect(() => {
-    setNewOwnerId("");
-    setNewOwnerPct("");
-  }, [node.id]);
-
-  const natureStyle = NATURE_STYLES[nodeNature(node)];
+  const nature = nodeNature(node);
+  const natureStyle = NATURE_STYLES[nature];
+  const [changingNature, setChangingNature] = useState(false);
 
   // Détenteurs de CE nœud : parent (détenteur principal) +
   // co-détenteurs, avec leur quote-part depuis ownership_json.
@@ -1798,34 +2026,21 @@ function CanvasNodeEditor({
     )
     .map((m) => ({ held: m, pct: parseOwnership(m)[String(node.id)] }));
 
-  // Candidats détenteurs : les autres bulles de la version, hors
-  // détenteurs actuels.
-  const ownerCandidates = allNodes
-    .filter((n) => n.id !== node.id && !ownerIds.includes(n.id))
-    .sort((a, b) => a.label.localeCompare(b.label, "fr"));
-
-  function addOwnerFromForm() {
-    if (!newOwnerId) return;
-    const cleaned = newOwnerPct
-      .replace("%", "")
-      .replace(",", ".")
-      .trim();
-    const pct = cleaned ? Number(cleaned) : NaN;
-    onAddOwner(
-      node.id,
-      Number(newOwnerId),
-      Number.isNaN(pct) ? null : pct
-    );
-    setNewOwnerId("");
-    setNewOwnerPct("");
-  }
-
   // Notes libres, sans la ligne « Détention : … » (affichée à part).
   const { detention, notes } = splitDescription(node.description);
 
+  async function changerNature(n: "person" | "company") {
+    setChangingNature(true);
+    try {
+      await onSetNature(node.id, n);
+    } finally {
+      setChangingNature(false);
+    }
+  }
+
   return (
     <div
-      className="absolute bottom-0 right-0 top-0 z-10 flex w-80 flex-col gap-2 overflow-y-auto border-l p-3"
+      className="absolute bottom-0 right-0 top-0 z-10 flex w-80 flex-col gap-3 overflow-y-auto border-l p-3"
       style={{
         borderColor: "var(--qg-border)",
         backgroundColor: "var(--qg-card-bg)",
@@ -1842,41 +2057,28 @@ function CanvasNodeEditor({
           className="text-[10px]"
           style={{ color: "var(--qg-text-soft)" }}
         >
-          Édition de la bulle
+          Fiche de la bulle
         </span>
-        <span className="ml-auto flex items-center gap-0.5">
-          <button
-            type="button"
-            onClick={() => void onDelete(node.id)}
-            className="rounded p-1 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
-            title="Supprimer le nœud"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded p-1 text-white/40 hover:text-accent-400"
-            title="Fermer le panneau"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="ml-auto rounded p-1 text-white/40 hover:text-accent-400"
+          title="Fermer le panneau"
+          aria-label="Fermer le panneau"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
       </div>
 
-      <input
-        value={label}
-        onChange={(e) => setLabel(e.target.value)}
-        onBlur={() => {
-          if (label.trim() && label !== node.label)
-            void onPatch(node.id, { label: label.trim() });
-        }}
-        className="input text-sm font-semibold"
-        placeholder="Nom du nœud"
-      />
+      <p
+        className="text-sm font-semibold leading-tight"
+        style={{ color: "var(--qg-text)" }}
+      >
+        {node.label}
+      </p>
 
-      {node.kind === "company" ? (
-        node.entreprise_id ? (
+      <div className="flex flex-wrap items-center gap-1.5">
+        {nature === "inc" && node.entreprise_id ? (
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={`/entreprises/${node.entreprise_id}` as any}
@@ -1885,34 +2087,95 @@ function CanvasNodeEditor({
             <ExternalLink className="h-3.5 w-3.5" />
             Ouvrir la fiche
           </Link>
-        ) : (
-          <div>
-            <label
-              className="text-[9px] font-semibold uppercase tracking-wide"
-              style={{ color: "var(--qg-text-soft)" }}
-            >
-              Lier à une de nos INCs
-            </label>
-            <select
-              value=""
-              onChange={(e) => {
-                if (e.target.value)
-                  void onPatch(node.id, {
-                    entreprise_id: Number(e.target.value)
-                  });
-              }}
-              className="input mt-0.5 text-[11px]"
-              title="Relie cette compagnie à sa fiche Kratos — la bulle devient une INC Kratos (ambre)"
-            >
-              <option value="">— non liée —</option>
-              {entreprises.map((ent) => (
-                <option key={ent.id} value={String(ent.id)}>
-                  {ent.name}
-                </option>
-              ))}
-            </select>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => onHighlight(highlighted ? null : node.id)}
+          className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-semibold ${
+            highlighted
+              ? "border-emerald-500 bg-emerald-500/20 text-emerald-500"
+              : "border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10"
+          }`}
+          title="Fait ressortir cette bulle en vert sur le canevas et dans le PDF (ex. la compagnie acquéreuse)"
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          {highlighted ? "Retirer la mise en évidence" : "Mettre en évidence"}
+        </button>
+      </div>
+
+      {node.absent_des_fiches ? (
+        <div className="rounded-lg border border-dashed border-rose-400/60 bg-rose-500/10 p-2 text-[11px]">
+          <p className="font-semibold text-rose-400">Absente des fiches</p>
+          <p
+            className="mt-0.5"
+            style={{ color: "var(--qg-text-muted)" }}
+          >
+            {nature === "inc"
+              ? "Cette compagnie est fermée ou n'existe plus dans Entreprises."
+              : "Aucune ligne Partenaires & parts ne cite ce nom dans une fiche active. Inscris-le comme actionnaire dans la fiche concernée (puis Synchroniser), ou retire la bulle."}
+          </p>
+          <button
+            type="button"
+            onClick={() => void onDelete(node.id)}
+            className="mt-1.5 inline-flex items-center gap-1 rounded-lg border border-rose-400/60 px-2.5 py-1 text-[11px] font-semibold text-rose-400 hover:bg-rose-500/15"
+            title="Retire la bulle de l'organigramme — les compagnies qu'elle détenait restent"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Retirer la bulle
+          </button>
+        </div>
+      ) : null}
+
+      {nature === "externe" || nature === "person" ? (
+        <div>
+          <p
+            className="text-[9px] font-semibold uppercase tracking-wide"
+            style={{ color: "var(--qg-text-soft)" }}
+          >
+            Nature
+          </p>
+          <div
+            className="mt-0.5 inline-flex overflow-hidden rounded-lg border"
+            style={{ borderColor: "var(--qg-border)" }}
+          >
+            {(
+              [
+                ["person", "Personne"],
+                ["company", "Compagnie"]
+              ] as const
+            ).map(([val, lbl]) => {
+              const actif =
+                (val === "person" && nature === "person") ||
+                (val === "company" && nature === "externe");
+              return (
+                <button
+                  key={val}
+                  type="button"
+                  disabled={changingNature || actif}
+                  onClick={() => void changerNature(val)}
+                  className="px-2.5 py-1 text-[11px] font-semibold disabled:cursor-default"
+                  style={{
+                    backgroundColor: actif
+                      ? "var(--qg-accent)"
+                      : "var(--qg-card-bg)",
+                    color: actif
+                      ? "var(--qg-accent-ink, #0a0a0b)"
+                      : "var(--qg-text-soft)"
+                  }}
+                >
+                  {lbl}
+                </button>
+              );
+            })}
           </div>
-        )
+          <p
+            className="mt-1 text-[10px]"
+            style={{ color: "var(--qg-text-muted)" }}
+          >
+            Déduite des lignes Partenaires &amp; parts (case « personne
+            morale »). Corriger ici met aussi la fiche à jour.
+          </p>
+        </div>
       ) : null}
 
       {/* Détenue par — les détenteurs de cette bulle + quote-part. */}
@@ -1928,77 +2191,40 @@ function CanvasNodeEditor({
             className="mt-0.5 text-[11px]"
             style={{ color: "var(--qg-text-muted)" }}
           >
-            Aucun détenteur — bulle racine.
+            Aucun détenteur connu dans les fiches.
           </p>
         ) : (
           <ul className="mt-0.5 space-y-0.5 text-[11px]">
             {owners.map(({ owner, pct }) => (
-              <li
-                key={owner.id}
-                className="flex items-center gap-2 rounded px-1.5 py-0.5"
-                style={{ backgroundColor: "var(--qg-bg-alt, transparent)" }}
-              >
-                <span
-                  className="min-w-0 flex-1 truncate"
-                  style={{ color: "var(--qg-text)" }}
-                >
-                  {owner.label}
-                </span>
-                {pct != null ? (
-                  <span
-                    className="shrink-0 font-semibold"
-                    style={{ color: "var(--qg-text-muted)" }}
-                  >
-                    {formatPct(pct)}
-                  </span>
-                ) : null}
+              <li key={owner.id}>
                 <button
                   type="button"
-                  onClick={() => onRemoveOwner(node.id, owner.id)}
-                  className="shrink-0 rounded p-0.5 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
-                  title={`Retirer ${owner.label} des détenteurs`}
-                  aria-label={`Retirer ${owner.label} des détenteurs`}
+                  onClick={() => onSelect(owner.id)}
+                  className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-0.5 text-left hover:bg-accent-500/10"
+                  style={{
+                    backgroundColor: "var(--qg-bg-alt, transparent)"
+                  }}
+                  title={`Voir ${owner.label}`}
                 >
-                  <X className="h-3 w-3" />
+                  <span
+                    className="min-w-0 flex-1 truncate"
+                    style={{ color: "var(--qg-text)" }}
+                  >
+                    {owner.label}
+                  </span>
+                  {pct != null ? (
+                    <span
+                      className="shrink-0 font-semibold"
+                      style={{ color: "var(--qg-text-muted)" }}
+                    >
+                      {formatPct(pct)}
+                    </span>
+                  ) : null}
                 </button>
               </li>
             ))}
           </ul>
         )}
-        {ownerCandidates.length > 0 ? (
-          <div className="mt-1 flex items-center gap-1">
-            <select
-              value={newOwnerId}
-              onChange={(e) => setNewOwnerId(e.target.value)}
-              className="input min-w-0 flex-1 text-[11px]"
-              title="Choisis la compagnie ou la personne qui détient cette bulle"
-            >
-              <option value="">+ Ajouter un détenteur…</option>
-              {ownerCandidates.map((n) => (
-                <option key={n.id} value={String(n.id)}>
-                  {n.label}
-                </option>
-              ))}
-            </select>
-            <input
-              value={newOwnerPct}
-              onChange={(e) => setNewOwnerPct(e.target.value)}
-              className="input w-14 text-[11px]"
-              placeholder="%"
-              title="Quote-part (%) du détenteur — vide = sans %"
-            />
-            <button
-              type="button"
-              onClick={addOwnerFromForm}
-              disabled={!newOwnerId}
-              className="btn-secondary btn-sm shrink-0 disabled:opacity-50"
-              title="Créer le lien de détention"
-              aria-label="Créer le lien de détention"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        ) : null}
       </div>
 
       {/* Détient — les participations de cette bulle + quote-part. */}
@@ -2066,7 +2292,7 @@ function CanvasNodeEditor({
               borderColor: "var(--qg-border-soft)",
               color: "var(--qg-text-muted)"
             }}
-            title="Ligne maintenue par « Synchroniser avec les fiches » — se met à jour toute seule"
+            title="Ligne maintenue par « Synchroniser » — se met à jour toute seule"
           >
             {detention}
           </p>
@@ -2086,6 +2312,16 @@ function CanvasNodeEditor({
           placeholder="Notes libres sur cette compagnie / personne…"
         />
       </div>
+
+      <p
+        className="mt-auto text-[10px]"
+        style={{ color: "var(--qg-text-muted)" }}
+      >
+        Les bulles et les liens viennent des fiches d&apos;entreprises :
+        pour ajouter un actionnaire, changer un pourcentage ou retirer
+        un lien, modifie la fiche (Partenaires &amp; parts) puis clique
+        « Synchroniser ».
+      </p>
     </div>
   );
 }
