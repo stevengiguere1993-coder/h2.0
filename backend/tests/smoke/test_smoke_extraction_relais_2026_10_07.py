@@ -109,6 +109,7 @@ def test_quota_journalier_detecte():
 def test_cascade_sans_retry_sur_quota_journalier(monkeypatch):
     # Budget court : pas de nouvel essai (3 s) sur le 503 du dernier modèle,
     # on ne teste ici que le quota quotidien et le modèle retiré.
+    ex._GEMINI_PENALITES.clear()
     monkeypatch.setattr(ex, "_GEMINI_BUDGET_S", 1.0)
     appels: list = []
 
@@ -188,7 +189,7 @@ def test_json_lenient():
 
 
 def test_relais_groq_quand_gemini_a_sec(monkeypatch):
-    async def _gemini_ko(material, images, *, system=None, guide=None):
+    async def _gemini_ko(material, images, *, system=None, guide=None, **kw):
         return None, "cascade épuisée — gemini-2.5-flash : quota quotidien gratuit atteint", None
 
     async def _groq_ok(material, images, *, system=None, guide=None):
@@ -211,7 +212,7 @@ def test_relais_groq_quand_gemini_a_sec(monkeypatch):
 
 
 def test_image_lue_par_ia_sans_alerte_ocr(monkeypatch):
-    async def _gemini_ok(material, images, *, system=None, guide=None):
+    async def _gemini_ok(material, images, *, system=None, guide=None, **kw):
         assert images and images[0][0] == "image/png"
         return [{"address": "456 rue Photo", "asking_price": 2000000}], None, "gemini-2.5-flash"
 
@@ -224,7 +225,7 @@ def test_image_lue_par_ia_sans_alerte_ocr(monkeypatch):
 
 
 def test_ia_muette_alerte_quota_et_ocr(monkeypatch):
-    async def _gemini_ko(material, images, *, system=None, guide=None):
+    async def _gemini_ko(material, images, *, system=None, guide=None, **kw):
         return None, "cascade épuisée — gemini-2.5-flash : quota quotidien gratuit atteint", None
 
     async def _groq_ko(material, images, *, system=None, guide=None):
@@ -245,7 +246,7 @@ def test_ia_muette_alerte_quota_et_ocr(monkeypatch):
 def test_pdf_scanne_transmis_a_l_ia(monkeypatch):
     recu: dict = {}
 
-    async def _gemini_ok(material, images, *, system=None, guide=None):
+    async def _gemini_ok(material, images, *, system=None, guide=None, **kw):
         recu["images"] = images
         return [{"asking_price": 900000}], None, "gemini-2.5-flash"
 

@@ -431,12 +431,51 @@ _GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 _GEMINI_RETRY_BACKOFFS = (1.0, 5.0, 30.0)
 #: Budget de temps d'une cascade complète (s) : au-delà, on n'essaie
 #: pas un modèle de plus (Render coupe les requêtes à 100 s ; la tâche
-#: de fond n'a pas cette contrainte mais l'utilisateur attend).
-_GEMINI_BUDGET_S = 120.0
+#: de fond n'a pas cette contrainte mais l'utilisateur attend). 2026-10-08 :
+#: 90 s (deux appels de 45 s au plus) — au-delà, relais Groq.
+_GEMINI_BUDGET_S = 90.0
 #: Modèles toujours essayés, budget ou pas (un premier modèle lent en
 #: erreur ne doit pas priver les autres de leur chance).
 _GEMINI_MODELES_MIN = 2
 _GEMINI_ERREURS_TRANSITOIRES = ("HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504", "injoignable")
+#: Durée maximale d'UN appel Gemini. Phil 2026-10-08 (« 115 s d'IA, pas
+#: normal ») : un ReadTimeout de 60 s sur gemini-3.5-flash + trois 503
+#: sur les modèles plus récents = 131 s pour un Excel de 21 Ko.
+_GEMINI_CALL_TIMEOUT_S = 45.0
+#: Modèles mis en pause après une erreur transitoire (503 saturé,
+#: timeout) ou un quota du jour : {modèle: instant monotonic de fin de
+#: pause}. Le prochain appel va droit à un modèle qui répond, au lieu de
+#: re-payer la même minute d'échecs.
+_GEMINI_PENALITES: Dict[str, float] = {}
+_GEMINI_PAUSE_TRANSITOIRE_S = 600.0
+_GEMINI_PAUSE_QUOTA_JOUR_S = 3600.0
+
+
+def _gemini_en_pause(model: str) -> bool:
+    fin = _GEMINI_PENALITES.get(model)
+    if fin is None:
+        return False
+    if time.monotonic() >= fin:
+        _GEMINI_PENALITES.pop(model, None)
+        return False
+    return True
+
+
+def _mettre_en_pause(model: str, duree_s: float) -> None:
+    _GEMINI_PENALITES[model] = max(
+        _GEMINI_PENALITES.get(model, 0.0), time.monotonic() + duree_s
+    )
+
+
+def modeles_gemini_en_pause() -> Dict[str, int]:
+    """Diagnostic (Paramètres → Outils) : modèles en pause → secondes
+    restantes."""
+    now = time.monotonic()
+    return {
+        m: int(fin - now)
+        for m, fin in list(_GEMINI_PENALITES.items())
+        if fin > now
+    }
 
 
 def _gemini_model_cascade() -> List[str]:
@@ -794,7 +833,7 @@ async def _groq_extract(
         "response_format": {"type": "json_object"},
     }
     try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
                 f"{_GROQ_BASE_URL}/chat/completions",
                 json=payload,
@@ -939,7 +978,7 @@ async def _gemini_extract(
     effective_model = (model or EXTRACTION_MODEL).strip()
     url = f"{_GEMINI_BASE}/models/{effective_model}:generateContent"
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=_GEMINI_CALL_TIMEOUT_S) as client:
             resp = await client.post(
                 url, params={"key": api_key}, json=payload
             )
@@ -1029,6 +1068,8 @@ async def _gemini_extract_cascade(
     *,
     system: Optional[str] = None,
     guide: Optional[str] = None,
+    budget_s: Optional[float] = None,
+    preferer_lite: bool = False,
 ) -> Tuple[
     Optional[List[Dict[str, Any]]], Optional[str], Optional[str]
 ]:
@@ -1061,14 +1102,30 @@ async def _gemini_extract_cascade(
         return None, None, None
 
     cascade = await resolve_gemini_cascade(api_key)
+    if preferer_lite:
+        # Tâche simple (rent roll) : les flash-lite d'abord — plus
+        # rapides, quota séparé, qualité suffisante.
+        cascade = [m for m in cascade if "flash-lite" in m] + [
+            m for m in cascade if "flash-lite" not in m
+        ]
+    # Modèles en pause (erreur récente) ignorés — sauf s'ils le sont
+    # tous : on essaie quand même plutôt que de ne rien faire.
+    actifs = [m for m in cascade if not _gemini_en_pause(m)]
+    en_pause = [m for m in cascade if m not in actifs]
+    if actifs:
+        cascade = actifs
     last_err: Optional[str] = None
     deprecated_models: List[str] = []
     quota_models: List[str] = []
     # Raison finale par modèle — le diagnostic montré à l'utilisateur
     # ne cachait que la DERNIÈRE erreur (ex. « gemini-2.0-flash
     # déprécié ») alors que la vraie cause était le quota du premier.
-    echecs: List[str] = []
-    _deadline = time.monotonic() + _GEMINI_BUDGET_S
+    echecs: List[str] = [
+        f"{m} : en pause (erreur récente)" for m in en_pause if actifs
+    ]
+    _deadline = time.monotonic() + (
+        float(budget_s) if budget_s is not None else _GEMINI_BUDGET_S
+    )
     for idx, model in enumerate(cascade):
         if idx >= _GEMINI_MODELES_MIN and time.monotonic() > _deadline:
             echecs.append(f"{model} : non essayé (budget de temps épuisé)")
@@ -1094,18 +1151,26 @@ async def _gemini_extract_cascade(
                 echecs.append(f"{model} : retiré par Google")
                 break
             if is_quota and "quotidien" in (err or ""):
-                # Quota du JOUR épuisé : attendre 30 s ne change rien.
+                # Quota du JOUR épuisé : attendre 30 s ne change rien, et
+                # le modèle est mis en pause une heure.
+                _mettre_en_pause(model, _GEMINI_PAUSE_QUOTA_JOUR_S)
                 quota_models.append(model)
                 echecs.append(f"{model} : {err}")
                 break
             if not is_quota:
-                # Erreur transitoire (modèle saturé 503, réseau) : UN nouvel
-                # essai après 3 s si le budget le permet ; sinon (ou autre
-                # erreur) → modèle suivant.
+                # Erreur transitoire (modèle saturé 503, timeout) : le
+                # modèle est mis en pause 10 min ; UN nouvel essai après
+                # 3 s seulement s'il n'y a plus d'autre modèle à essayer
+                # (sinon on passe tout de suite au suivant — Phil
+                # 2026-10-08 : « 115 s d'IA, pas normal »).
                 transitoire = any(x in (err or "") for x in _GEMINI_ERREURS_TRANSITOIRES)
+                if transitoire:
+                    _mettre_en_pause(model, _GEMINI_PAUSE_TRANSITOIRE_S)
+                dernier_modele = idx == len(cascade) - 1
                 if (
                     transitoire
                     and attempt == 0
+                    and dernier_modele
                     and time.monotonic() + 3.0 <= _deadline
                 ):
                     log.info(
@@ -3029,6 +3094,8 @@ async def _run_gemini_safely(
     *,
     system: Optional[str] = None,
     guide: Optional[str] = None,
+    budget_s: Optional[float] = None,
+    preferer_lite: bool = False,
 ) -> Tuple[
     Optional[List[Dict[str, Any]]], Optional[str], Optional[str]
 ]:
@@ -3046,7 +3113,8 @@ async def _run_gemini_safely(
     poursuit avec le résultat du parser local seul."""
     try:
         return await _gemini_extract_cascade(
-            material, images, system=system, guide=guide
+            material, images, system=system, guide=guide,
+            budget_s=budget_s, preferer_lite=preferer_lite,
         )
     except Exception as exc:  # noqa: BLE001
         log.warning(
