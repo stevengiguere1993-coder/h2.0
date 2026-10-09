@@ -141,6 +141,11 @@ class StatusResponse(BaseModel):
     realm_id: Optional[str] = None
     company_name: Optional[str] = None
     connected_at: Optional[datetime] = None
+    # Intuit a refusé le jeton enregistré (invalid_grant) : la connexion
+    # existe en base mais ne fonctionne plus → bouton « Reconnecter ».
+    needs_reconnect: bool = False
+    reconnect_required_at: Optional[datetime] = None
+    last_refresh_error: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +304,8 @@ async def qbo_callback(
             row.environment = settings.quickbooks_env
             row.company_name = company_name
             row.connected_at = now
+            row.reconnect_required_at = None
+            row.last_refresh_error = None
         await db.commit()
 
         # Reset the in-process QBO client so the next call reads fresh
@@ -341,6 +348,8 @@ async def qbo_callback(
             conn_row.environment = settings.quickbooks_env
             conn_row.company_name = company_name
             conn_row.connected_at = now
+            conn_row.reconnect_required_at = None
+            conn_row.last_refresh_error = None
         await db.commit()
 
         try:
@@ -385,6 +394,9 @@ async def qbo_status(
         realm_id=row.realm_id,
         company_name=row.company_name,
         connected_at=row.connected_at,
+        needs_reconnect=row.reconnect_required_at is not None,
+        reconnect_required_at=row.reconnect_required_at,
+        last_refresh_error=row.last_refresh_error,
     )
 
 

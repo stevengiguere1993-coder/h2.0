@@ -501,6 +501,13 @@ async def ensure_critical_columns() -> None:
         # Reçus QuickBooks → Drive (2026-10-04) : connexion QB à utiliser.
         ("entreprises", "qbo_scope", "VARCHAR(32)"),
         ("qbo_recus_drive", "run_id", "VARCHAR(40)"),
+        # Connexion QuickBooks refusée par Intuit (invalid_grant) : état
+        # « à reconnecter » lu par GET /qbo/status (2026-10-09). Le client
+        # QBO sélectionne ces colonnes à chaque renouvellement du jeton.
+        ("qbo_tokens", "reconnect_required_at", "TIMESTAMP WITH TIME ZONE"),
+        ("qbo_tokens", "last_refresh_error", "VARCHAR(500)"),
+        ("qbo_connections", "reconnect_required_at", "TIMESTAMP WITH TIME ZONE"),
+        ("qbo_connections", "last_refresh_error", "VARCHAR(500)"),
         ("entreprise_partners", "partner_adresse", "VARCHAR(500)"),
         ("entreprise_partners", "partner_naissance", "DATE"),
         ("entreprise_partners", "partner_telephone", "VARCHAR(32)"),
