@@ -1122,15 +1122,20 @@ export default function FactureDetailPage() {
               </p>
             ) : null}
             {qboNotice ? (
-              <p
-                className={`mt-4 rounded-lg border px-4 py-2 text-sm ${
-                  qboNotice.startsWith("Synchronisée")
-                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
-                    : "border-amber-500/40 bg-amber-500/10 text-amber-200"
-                }`}
-              >
-                {qboNotice}
-              </p>
+              qboNotice.startsWith("Erreur QuickBooks") &&
+              estConnexionQboExpiree(qboNotice) ? (
+                <QboConnexionExpiree className="mt-4" />
+              ) : (
+                <p
+                  className={`mt-4 rounded-lg border px-4 py-2 text-sm ${
+                    qboNotice.startsWith("Synchronisée")
+                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                      : "border-amber-500/40 bg-amber-500/10 text-amber-200"
+                  }`}
+                >
+                  {qboNotice}
+                </p>
+              )
             ) : null}
             {/* Dernière erreur de synchro QBO PERSISTÉE (backend) : visible
                 automatiquement, sans clic — c'est le motif exact renvoyé
@@ -1139,7 +1144,7 @@ export default function FactureDetailPage() {
               estConnexionQboExpiree(f.qbo_sync_error) ? (
                 // Connexion QuickBooks rompue : bouton de reconnexion
                 // plutôt que le message technique (2026-10-09).
-                <QboConnexionExpiree className="mt-4" />
+                <QboConnexionExpiree className="mt-4" echecEnregistre />
               ) : (
                 <p className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-200">
                   ⚠️ Dernière synchro QuickBooks en échec : {f.qbo_sync_error}

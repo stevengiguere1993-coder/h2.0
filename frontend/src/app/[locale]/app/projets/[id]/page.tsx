@@ -696,7 +696,7 @@ export default function ProjectDetailPage() {
                 )
               ) : p.qbo_sync_error ? (
                 estConnexionQboExpiree(p.qbo_sync_error) ? (
-                  <QboConnexionExpiree className="mt-2" />
+                  <QboConnexionExpiree className="mt-2" echecEnregistre />
                 ) : (
                   <p className="mt-2 text-sm text-rose-300">
                     Dernier échec QuickBooks : {p.qbo_sync_error}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
@@ -22,14 +22,49 @@ export function estConnexionQboExpiree(message?: string | null): boolean {
 
 export function QboConnexionExpiree({
   scope = "construction",
+  echecEnregistre = false,
   className = ""
 }: {
   /** Connexion à refaire : « construction » = QuickBooks d'Horizon. */
   scope?: string;
+  /** Échec lu sur la fiche (envoi passé, d'âge inconnu) plutôt que
+   *  résultat de l'envoi qu'on vient de lancer : la connexion a pu être
+   *  rétablie depuis (reconnexion, ou jeton périmé d'avant le correctif
+   *  du 2026-10-09). L'état réel est alors vérifié avant de demander une
+   *  reconnexion. */
+  echecEnregistre?: boolean;
   className?: string;
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // null = vérification de l'état réel en cours.
+  const [aReconnecter, setAReconnecter] = useState<boolean | null>(
+    echecEnregistre ? null : true
+  );
+
+  useEffect(() => {
+    if (!echecEnregistre) return;
+    let annule = false;
+    (async () => {
+      try {
+        const res = await authedFetch(
+          `/api/v1/qbo/status?scope=${encodeURIComponent(scope)}`
+        );
+        if (!res.ok) throw new Error(`http_${res.status}`);
+        const s = (await res.json()) as {
+          connected: boolean;
+          needs_reconnect?: boolean;
+        };
+        if (!annule) setAReconnecter(!s.connected || !!s.needs_reconnect);
+      } catch {
+        // État illisible : on garde l'avertissement complet.
+        if (!annule) setAReconnecter(true);
+      }
+    })();
+    return () => {
+      annule = true;
+    };
+  }, [echecEnregistre, scope]);
 
   async function reconnecter() {
     setBusy(true);
@@ -54,6 +89,18 @@ export function QboConnexionExpiree({
       setErr((e as Error).message);
       setBusy(false);
     }
+  }
+
+  if (aReconnecter === null) return null;
+  if (!aReconnecter) {
+    // La connexion n'est plus signalée comme expirée : le dernier échec
+    // date d'avant son rétablissement, un nouvel envoi suffit.
+    return (
+      <p className={`text-sm text-rose-300 ${className}`}>
+        Dernier échec QuickBooks : la connexion était refusée à ce
+        moment-là. Relance l&apos;envoi.
+      </p>
+    );
   }
 
   return (
