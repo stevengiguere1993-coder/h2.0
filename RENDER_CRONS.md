@@ -72,6 +72,21 @@ Le mega-cron `all-daily` inclut `materiaux-prix` : relevé quotidien des prix ch
 
 **Job de nuit hebdomadaire** (`materiaux-hebdo-nuit`, 2026-10-01) : lancé par le mega-cron `all-hourly` la première heure entre 02:00 et 05:59 (Montréal) où le dernier run date de plus de 6 jours (verrou `cron_runs`). Enchaîne : relevé COMPLET de toutes les offres avec lien (rabais et dates de fin), recherche des prix de base manquants (jusqu'à 300 couples), alertes de rabais, puis analyse IA de l'historique 6 mois par matériau (verdict bon moment / attendre, tendance, fréquence des rabais, prix cible → `materiaux.analyse_ia`, lu par le catalogue et le plan d'achat des projets). Rien à configurer dans cron-job.org tant que `all-hourly` tourne. Forcer : `POST /api/v1/cron/run/materiaux-hebdo?secret=…` (`&wait=true` pour attendre la fin). État : `GET /api/v1/materiaux/prix/analyser/etat`.
 
+## Connexions QuickBooks gardées vivantes (dans le méga-cron `all-daily`, 2026-10-09)
+
+Sous-job `qbo-connexions-vivantes`, avant les autres jobs QuickBooks du
+jour : le jeton de chaque connexion enregistrée (Construction,
+`qbo_tokens` id=1, et chaque ligne de `qbo_connections`) est renouvelé.
+Intuit périme un refresh token inutilisé environ 100 jours : aucune
+connexion n'expire donc faute d'usage. Une connexion qu'Intuit refuse
+(`invalid_grant`) est marquée « à reconnecter » (`reconnect_required_at`,
+badge rouge et bouton « Reconnecter » dans Paramètres → Comptabilité) puis
+sautée jusqu'à la reconnexion. Restent hors de portée de Kratos : la durée
+maximale de 5 ans d'une autorisation Intuit et une déconnexion faite
+depuis QuickBooks. Le jeton de référence est TOUJOURS celui de la base,
+relu sous verrou de ligne à chaque renouvellement (incident 2026-10-09 :
+un 2e client faisait tourner le jeton dans le dos du client partagé).
+
 ## Reçus QuickBooks → Drive (dans le méga-cron `all-daily`, 2026-10-04)
 
 Sous-job `qbo-recus-drive` : pour chaque entreprise dont la compagnie

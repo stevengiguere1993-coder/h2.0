@@ -17,7 +17,9 @@ Couvre :
 3. invalid_grant → erreur « à reconnecter » lisible (plus d'appel d'API
    à faire à la main), état visible dans GET /qbo/status ;
 4. un renouvellement réussi lève cet état ;
-5. le callback OAuth (bouton « Reconnecter ») le lève aussi.
+5. le callback OAuth (bouton « Reconnecter ») le lève aussi ;
+6. le cron quotidien renouvelle chaque connexion (aucune n'expire faute
+   d'usage) et marque tout de suite celle qu'Intuit refuse.
 
 Intuit est simulé (httpx.MockTransport) : aucun appel réseau réel.
 """
@@ -315,3 +317,75 @@ def test_callback_oauth_leve_l_etat_a_reconnecter(
     # Le client partagé repart avec le nouveau jeton.
     run(qb.get_qbo().query("select * from Customer"))
     assert intuit.api_auth[-1] == "Bearer at-oauth"
+
+
+_ETAT = ("refresh_token", "reconnect_required_at", "last_refresh_error")
+
+
+async def _etat_autres_connexions() -> Dict[str, Dict[str, Any]]:
+    """Connexions laissées par d'autres tests (inc:…) : remises telles
+    quelles après le passage du cron."""
+    async with TestSessionLocal() as s:
+        rows = (
+            await s.execute(
+                select(QboConnection).where(QboConnection.scope != SCOPE_INC)
+            )
+        ).scalars().all()
+        return {r.scope: {k: getattr(r, k) for k in _ETAT} for r in rows}
+
+
+async def _restaurer(etat: Dict[str, Dict[str, Any]]) -> None:
+    if not etat:
+        return
+    async with TestSessionLocal() as s:
+        rows = (
+            await s.execute(
+                select(QboConnection).where(QboConnection.scope.in_(list(etat)))
+            )
+        ).scalars().all()
+        for r in rows:
+            for k, v in etat[r.scope].items():
+                setattr(r, k, v)
+        await s.commit()
+
+
+def test_cron_quotidien_garde_chaque_connexion_vivante(intuit, run):
+    """Steven : « faire en sorte qu'elle n'expire jamais ». Le cron
+    all-daily renouvelle chaque connexion (aucune n'atteint les ~100 jours
+    sans usage d'Intuit) ; une connexion refusée est marquée à
+    reconnecter, puis n'est plus présentée à Intuit."""
+
+    async def seed() -> None:
+        async with TestSessionLocal() as s:
+            s.add(
+                QboConnection(
+                    scope=SCOPE_INC,
+                    refresh_token="rt-mort",
+                    realm_id=REALM,
+                    environment="sandbox",
+                    company_name="Inc (test)",
+                )
+            )
+            await s.commit()
+
+    run(seed())
+    autres = run(_etat_autres_connexions())
+    try:
+        res = run(qb.garder_connexions_vivantes())
+        assert res["construction"] == "ok"
+        assert res[SCOPE_INC] == "à reconnecter"
+        assert run(_ligne_construction()).refresh_token == "rt-1"
+        ligne = run(_ligne_inc())
+        assert ligne.reconnect_required_at is not None
+        assert "Paramètres → Drive" in ligne.last_refresh_error
+
+        # Le lendemain : Construction renouvelée de nouveau, la connexion
+        # refusée sautée (seule une reconnexion la rétablit).
+        n = len(intuit.presentes)
+        res = run(qb.garder_connexions_vivantes())
+        assert res["construction"] == "ok"
+        assert SCOPE_INC not in res
+        assert "rt-mort" not in intuit.presentes[n:]
+        assert run(_ligne_construction()).refresh_token == "rt-2"
+    finally:
+        run(_restaurer(autres))

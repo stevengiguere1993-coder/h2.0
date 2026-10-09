@@ -1693,5 +1693,41 @@ def reset_qbo(scope: str) -> None:
         _qbo_by_scope.pop(scope, None)
 
 
+async def garder_connexions_vivantes() -> Dict[str, str]:
+    """Renouvelle une fois par jour (cron all-daily) le jeton de CHAQUE
+    connexion QuickBooks enregistrée : Construction (qbo_tokens id=1) et
+    qbo_connections (autres pôles, inc).
+
+    Intuit périme un refresh token resté inutilisé environ 100 jours : une
+    connexion peu servie (pôle Immobilier, auto-sync coupée…) n'expire
+    donc plus faute d'usage (Steven, 2026-10-09 : « faire en sorte qu'elle
+    n'expire jamais »). Une connexion qu'Intuit refuse est marquée « à
+    reconnecter » dès ce passage, visible dans Paramètres, plutôt qu'au
+    premier envoi raté. Les connexions déjà marquées sont sautées : un
+    jeton refusé ne revient pas, seule une reconnexion les rétablit.
+    """
+    scopes: List[str] = []
+    async with AsyncSessionLocal() as db:
+        tok = (
+            await db.execute(select(QboToken).where(QboToken.id == 1))
+        ).scalar_one_or_none()
+        if tok and tok.refresh_token and tok.reconnect_required_at is None:
+            scopes.append("construction")
+        for c in (await db.execute(select(QboConnection))).scalars().all():
+            if c.refresh_token and c.reconnect_required_at is None:
+                scopes.append(c.scope)
+    out: Dict[str, str] = {}
+    for scope in scopes:
+        try:
+            await get_qbo(scope).forcer_renouvellement()
+            out[scope] = "ok"
+        except QuickBooksReconnexionRequise:
+            out[scope] = "à reconnecter"
+        except Exception as exc:  # noqa: BLE001 — n'arrête pas les autres
+            log.warning("QBO %s : maintien de la connexion échoué : %s", scope, exc)
+            out[scope] = f"erreur : {str(exc)[:200]}"
+    return out
+
+
 # Avoid an unused-import warning in tight environments:
 _ = urllib.parse
