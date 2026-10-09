@@ -20,6 +20,10 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { PaymentsPanel } from "@/components/payments-panel";
+import {
+  QboConnexionExpiree,
+  estConnexionQboExpiree
+} from "@/components/qbo-connexion-expiree";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -1132,9 +1136,15 @@ export default function FactureDetailPage() {
                 automatiquement, sans clic — c'est le motif exact renvoyé
                 par QuickBooks au dernier push (envoi, filet ou resync). */}
             {!qboNotice && f.qbo_sync_error ? (
-              <p className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-200">
-                ⚠️ Dernière synchro QuickBooks en échec : {f.qbo_sync_error}
-              </p>
+              estConnexionQboExpiree(f.qbo_sync_error) ? (
+                // Connexion QuickBooks rompue : bouton de reconnexion
+                // plutôt que le message technique (2026-10-09).
+                <QboConnexionExpiree className="mt-4" />
+              ) : (
+                <p className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-200">
+                  ⚠️ Dernière synchro QuickBooks en échec : {f.qbo_sync_error}
+                </p>
+              )
             ) : null}
             {sendNotice ? (
               <p
