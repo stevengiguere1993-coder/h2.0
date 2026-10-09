@@ -132,9 +132,7 @@ def env(monkeypatch, run, db_setup):
     import app.integrations.quickbooks as qb
     import app.services.drive_auto_upload_dispatcher as disp
 
-    # Le service passe par le client PARTAGÉ du scope (get_qbo) — plus
-    # jamais un QuickBooksClient à part (incident jeton 2026-10-09).
-    monkeypatch.setattr(qb, "get_qbo", lambda scope="construction": FauxQBO(scope))
+    monkeypatch.setattr(qb, "QuickBooksClient", FauxQBO)
 
     async def _owner(db, user_id=None):
         return 1

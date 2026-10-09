@@ -560,8 +560,6 @@ async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
         "connectee": bool(tok and tok.refresh_token and tok.realm_id),
         "company_name": (getattr(tok, "company_name", None) if tok else None) or "Horizon (Construction)",
         "realm_id": tok.realm_id if tok else None,
-        # Intuit refuse le jeton enregistré (invalid_grant) → à reconnecter.
-        "expiree": bool(tok and tok.reconnect_required_at),
     }
     stats = {
         int(eid): (int(n), last)
@@ -585,13 +583,11 @@ async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
             qbo_ok = construction["connectee"]
             qbo_nom = construction["company_name"]
             qbo_realm = construction["realm_id"]
-            qbo_expiree = construction["expiree"]
         else:
             c = conns.get(scope)
             qbo_ok = bool(c and c.realm_id and c.refresh_token)
             qbo_nom = c.company_name if c else None
             qbo_realm = c.realm_id if c else None
-            qbo_expiree = bool(c and c.reconnect_required_at)
         folder, url, source, nom_dossier = await _dossier_entreprise(db, e, liens, convention, drive_user_id)
         n, last = stats.get(e.id, (0, None))
         out.append(
@@ -600,7 +596,6 @@ async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
                 "name": e.name,
                 "qbo_scope": scope,
                 "qbo_connectee": qbo_ok,
-                "qbo_reconnexion_requise": bool(qbo_ok and qbo_expiree),
                 "qbo_company_name": qbo_nom,
                 "qbo_realm_id": qbo_realm,
                 "qbo_construction_disponible": construction["connectee"],
@@ -1163,7 +1158,7 @@ async def _traiter_entreprise(
     pieces_depuis: Optional[datetime] = None,
     reclassement_seul: bool = False,
 ) -> None:
-    from app.integrations.quickbooks import QuickBooksError, get_qbo
+    from app.integrations.quickbooks import QuickBooksClient, QuickBooksError
 
     racine = e["drive_folder_id"]
 
@@ -1198,11 +1193,7 @@ async def _traiter_entreprise(
         "entreprise": e["name"], "phase": "quickbooks", "piece": 0, "pieces_jointes": 0,
         "copies": rapport["copies"] + rapport["prevus"],
     }
-    # Client PARTAGÉ du scope, jamais un client à part : un 2e client sur
-    # la connexion Construction (Horizon) faisait tourner son refresh
-    # token dans le dos du client partagé → invalid_grant pour tout le
-    # reste de Kratos jusqu'au redémarrage (incident 2026-10-09).
-    qbo = get_qbo(e["qbo_scope"])
+    qbo = QuickBooksClient(scope=e["qbo_scope"])
     await qbo._load_refresh_from_db()
     if not qbo.ready:
         rapport["erreurs"] += 1

@@ -32,10 +32,6 @@ import { MultiSelectDropdown } from "@/components/multi-select-dropdown";
 import { ProjectHoursSection } from "@/components/project-hours-section";
 import { ProjectMateriauxTab } from "@/components/project-materiaux-tab";
 import {
-  QboConnexionExpiree,
-  estConnexionQboExpiree
-} from "@/components/qbo-connexion-expiree";
-import {
   AchatMarkPaidModal,
   type MarkPaidAchat
 } from "@/components/achat-mark-paid-modal";
@@ -677,31 +673,20 @@ export default function ProjectDetailPage() {
                     : "Créer dans QuickBooks"}
                 </button>
               </div>
-              {/* Connexion QuickBooks rompue (invalid_grant) : explication
-                  + bouton qui relance l'autorisation Intuit, au lieu du
-                  message technique (incident 2026-10-09). */}
               {qboMsg ? (
-                !qboMsg.ok && estConnexionQboExpiree(qboMsg.text) ? (
-                  <QboConnexionExpiree className="mt-2" />
-                ) : (
-                  <p
-                    className={
-                      qboMsg.ok
-                        ? "mt-2 text-sm text-emerald-300"
-                        : "mt-2 text-sm text-rose-300"
-                    }
-                  >
-                    {qboMsg.text}
-                  </p>
-                )
+                <p
+                  className={
+                    qboMsg.ok
+                      ? "mt-2 text-sm text-emerald-300"
+                      : "mt-2 text-sm text-rose-300"
+                  }
+                >
+                  {qboMsg.text}
+                </p>
               ) : p.qbo_sync_error ? (
-                estConnexionQboExpiree(p.qbo_sync_error) ? (
-                  <QboConnexionExpiree className="mt-2" echecEnregistre />
-                ) : (
-                  <p className="mt-2 text-sm text-rose-300">
-                    Dernier échec QuickBooks : {p.qbo_sync_error}
-                  </p>
-                )
+                <p className="mt-2 text-sm text-rose-300">
+                  Dernier échec QuickBooks : {p.qbo_sync_error}
+                </p>
               ) : null}
             </div>
 

@@ -46,8 +46,6 @@ async def set_qbo_refresh_token(
         db.add(QboToken(id=1, refresh_token=token))
     else:
         row.refresh_token = token
-        row.reconnect_required_at = None
-        row.last_refresh_error = None
     await db.commit()
 
     # Reset the in-process QBO client so the next sync reads the new
@@ -115,17 +113,14 @@ async def qbo_diag(db: DBSession, _: CurrentAdmin) -> QboDiagResponse:
         env_mismatch=bool(db_env and db_env != active_env),
     )
 
-    # Test réel : renouvelle MAINTENANT le jeton du client PARTAGÉ, sous
-    # son verrou. Un client jetable faisait tourner le refresh token dans
-    # le dos du client partagé, qui gardait l'ancien → invalid_grant
-    # partout ailleurs jusqu'au redémarrage (incident 2026-10-09).
+    # Test réel : tente un refresh du token actuellement utilisé.
     try:
-        from app.integrations.quickbooks import get_qbo
+        from app.integrations.quickbooks import QuickBooksClient
 
-        client = get_qbo()
+        client = QuickBooksClient()
         await client._load_refresh_from_db()
         if client.tokens.refresh_token:
-            await client.forcer_renouvellement()
+            await client._refresh()
             out.refresh_ok = True
         else:
             out.refresh_ok = False
