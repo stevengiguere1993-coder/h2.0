@@ -29,14 +29,6 @@ def _num(v: Any) -> float:
         return 0.0
 
 
-def _meme_facture_qb(
-    inv: dict, fa: Facture, familles: dict[int, set[str]]
-) -> bool:
-    from app.services.facture_qbo import est_meme_facture_qb
-
-    return est_meme_facture_qb(inv, fa, familles.get(fa.id, set()))
-
-
 def _parse_date(s: Any) -> Optional[datetime]:
     if not s:
         return None
@@ -132,47 +124,6 @@ async def pull_invoices_from_qbo(
             existing_refs.add(ref)
             if not f.qbo_invoice_id:
                 unlinked_by_ref.setdefault(ref, f)
-    # Clients QB connus de chaque facture non reliée (client parent,
-    # sous-client du projet) : avant de relier une Invoice QB du même
-    # numéro, on vérifie que c'est bien la MÊME facture.
-    familles: dict[int, set[str]] = {}
-    if unlinked_by_ref:
-        from app.models.client import Client as _Client
-
-        _cids = {f.client_id for f in unlinked_by_ref.values() if f.client_id}
-        _pids = {f.project_id for f in unlinked_by_ref.values() if f.project_id}
-        _cli_qb = (
-            dict(
-                (
-                    await db.execute(
-                        select(_Client.id, _Client.qbo_customer_id).where(
-                            _Client.id.in_(_cids)
-                        )
-                    )
-                ).all()
-            )
-            if _cids
-            else {}
-        )
-        _job_qb = (
-            dict(
-                (
-                    await db.execute(
-                        select(Project.id, Project.qbo_job_id).where(
-                            Project.id.in_(_pids)
-                        )
-                    )
-                ).all()
-            )
-            if _pids
-            else {}
-        )
-        for f in unlinked_by_ref.values():
-            familles[f.id] = {
-                str(x)
-                for x in (_cli_qb.get(f.client_id), _job_qb.get(f.project_id))
-                if x
-            }
     # Projet par Job QBO (clé de rattachement). Scopé à un client si
     # demandé (« importer tout d'un client »).
     pstmt = select(Project).where(Project.qbo_job_id.is_not(None))
@@ -295,19 +246,11 @@ async def pull_invoices_from_qbo(
 
         # Pas reliée par ID QB, mais une facture Kratos porte DÉJÀ ce numéro
         # (DocNumber) → on RELIE l'existante (au lieu d'un doublon), on
-        # reflète ses paiements et on solde si besoin. Seulement si c'est
-        # bien la MÊME facture (signée Kratos, ou même client et même
-        # total) : une autre facture QB qui porte ce numéro par hasard ne
-        # doit jamais lui donner ses paiements ni son statut « payée » ; la
-        # facture Kratos sera renumérotée à sa prochaine synchro.
+        # reflète ses paiements et on solde si besoin.
         doc_clean = (doc or "").strip()
         existing_same_num = (
             unlinked_by_ref.get(doc_clean) if doc_clean else None
         )
-        if existing_same_num is not None and not _meme_facture_qb(
-            inv, existing_same_num, familles
-        ):
-            existing_same_num = None
         if existing_same_num is not None:
             if not dry_run:
                 existing_same_num.qbo_invoice_id = iid

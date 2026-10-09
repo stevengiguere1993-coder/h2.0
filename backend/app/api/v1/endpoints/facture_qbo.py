@@ -26,12 +26,8 @@ class QboSyncResult(BaseModel):
     # un paiement n'est pas passé, au lieu d'un échec silencieux.
     sync_warning: Optional[str] = None
     #: Information (pas un échec) : ex. facture QB liée à un devis d'un
-    #: autre sous-client → client QB conservé ; numéro changé parce que
-    #: QB l'avait déjà pour une autre facture.
+    #: autre sous-client → client QB conservé.
     sync_note: Optional[str] = None
-    #: Numéro de la facture après la synchro (il change si QB avait déjà
-    #: ce numéro pour une autre facture).
-    reference: Optional[str] = None
 
 
 @router.post(
@@ -52,14 +48,11 @@ async def sync_facture(
     try:
         result = await sync_facture_to_qbo(db, facture_id)
     except FactureSyncError as exc:
-        # Persiste le motif sur la facture (session fraîche) pour l'afficher
-        # sur la fiche même après fermeture de la bannière. On annule
-        # d'abord la transaction de la requête : une renumérotation en
-        # cours y verrouille la ligne de la facture, et la session fraîche
-        # l'attendrait sans fin.
+        # Persiste le motif sur la facture (session fraîche — celle de la
+        # requête est invalidée par l'exception) pour l'afficher sur la
+        # fiche même après fermeture de la bannière.
         from app.services.facture_qbo import record_facture_sync_error
 
-        await db.rollback()
         await record_facture_sync_error(facture_id, str(exc))
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
     return QboSyncResult(
@@ -67,7 +60,6 @@ async def sync_facture(
         qbo_doc_number=str(result.get("qbo_doc_number") or ""),
         sync_warning=result.get("sync_warning"),
         sync_note=result.get("sync_note"),
-        reference=result.get("reference") or None,
     )
 
 

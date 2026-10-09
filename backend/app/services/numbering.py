@@ -127,22 +127,7 @@ async def numero_pris_dans_kratos(db: AsyncSession, ref: str, *, sauf_id=None):
 async def ensure_facture_number(db: AsyncSession, fa) -> bool:
     """Attribue le VRAI numéro séquentiel à une facture qui n'en a pas
     encore (référence vide ou provisoire « BR-… »). Renvoie True si un
-    numéro a été attribué. Flush mais ne committe pas."""
-    ref = (getattr(fa, "reference", None) or "").strip()
-    if ref and not is_provisional_facture_reference(ref):
-        return False
-    await attribuer_numero_libre(db, fa)
-    return True
-
-
-async def attribuer_numero_libre(db: AsyncSession, fa) -> list[str]:
-    """Donne à la facture le PROCHAIN numéro libre de la séquence, qu'elle
-    ait déjà un numéro ou non. Renvoie les numéros sautés. Flush mais ne
-    committe pas.
-
-    Sert à la première numérotation (ensure_facture_number) et à la
-    renumérotation automatique quand QuickBooks refuse le numéro (déjà
-    pris par une autre facture, Steven 2026-10-09).
+    numéro a été attribué. Flush mais ne committe pas.
 
     Deux garde-fous — jamais deux factures différentes sous le même
     numéro :
@@ -155,6 +140,9 @@ async def attribuer_numero_libre(db: AsyncSession, fa) -> list[str]:
     - QuickBooks (incident facture 145, 2026-10-01) : si le numéro est
       DÉJÀ pris dans QB par une facture qui n'est pas de Kratos (saisie
       à la main pour un autre projet), on le saute aussi."""
+    ref = (getattr(fa, "reference", None) or "").strip()
+    if ref and not is_provisional_facture_reference(ref):
+        return False
     sautes: list[str] = []
     cand = None
     for _ in range(MAX_SAUTS):
@@ -191,40 +179,7 @@ async def attribuer_numero_libre(db: AsyncSession, fa) -> list[str]:
     if sautes:
         NUMEROS_SAUTES[getattr(fa, "id", None)] = sautes
     await db.flush()
-    return sautes
-
-
-async def apercu_prochain_numero_libre(
-    db: AsyncSession, *, sauf_id=None, max_essais: int = 50
-) -> Optional[str]:
-    """Le numéro que la prochaine attribution donnerait, SANS consommer le
-    compteur : prochain de la séquence, en sautant ceux déjà pris dans
-    Kratos ou dans QuickBooks. Sert à suggérer un numéro quand celui saisi
-    à la main est refusé. None si aucun dans la fenêtre."""
-    await _ensure_row(db)
-    n = int(
-        (
-            await db.execute(
-                select(NumberingCounter.next_facture_number).where(
-                    NumberingCounter.id == 1
-                )
-            )
-        ).scalar_one()
-        or 1
-    )
-    from app.services.facture_qbo import numero_pris_hors_kratos
-
-    for k in range(max_essais):
-        cand = str(n + k)
-        if await numero_pris_dans_kratos(db, cand, sauf_id=sauf_id) is not None:
-            continue
-        try:
-            pris = await numero_pris_hors_kratos(db, cand)
-        except Exception:  # noqa: BLE001
-            pris = None
-        if pris is None:
-            return cand
-    return None
+    return True
 
 
 async def next_soumission_number(db: AsyncSession) -> str:

@@ -206,37 +206,29 @@ export default function FactureDetailPage() {
   const [editingRef, setEditingRef] = useState(false);
   const [refDraft, setRefDraft] = useState("");
   const [refSaving, setRefSaving] = useState(false);
-  const [refError, setRefError] = useState<string | null>(null);
 
   async function saveReference() {
     if (!f) return;
     const next = refDraft.trim();
     if (!next || next === f.reference) {
       setEditingRef(false);
-      setRefError(null);
       return;
     }
     setRefSaving(true);
-    setRefError(null);
     try {
       const res = await authedFetch(`/api/v1/factures/${id}`, {
         method: "PATCH",
         body: JSON.stringify({ reference: next })
       });
       if (!res.ok) {
-        const msg = await explainError(res);
-        // Numéro refusé (déjà pris dans Kratos ou QuickBooks) : le message
-        // donne le prochain numéro libre, qu'on met dans le champ.
-        const libre = msg.match(/prochain numéro libre est ([^\s.]+)/);
-        if (libre) setRefDraft(libre[1]);
-        setRefError(msg);
-        return;
+        const t = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status} ${t.slice(0, 200)}`);
       }
       const u = (await res.json()) as Facture;
       setF(u);
       setEditingRef(false);
     } catch (e) {
-      setRefError(`Renumérotation échouée : ${(e as Error).message}`);
+      setError(`Renumérotation échouée : ${(e as Error).message}`);
     } finally {
       setRefSaving(false);
     }
@@ -790,33 +782,16 @@ export default function FactureDetailPage() {
         qbo_doc_number: string;
         sync_warning?: string | null;
         sync_note?: string | null;
-        // Le numéro change si QuickBooks l'avait déjà pour une autre
-        // facture (renumérotation automatique).
-        reference?: string | null;
       };
       setF((cur) =>
         cur
           ? {
               ...cur,
-              reference: r.reference || cur.reference,
               qbo_invoice_id: r.qbo_invoice_id || null,
-              qbo_doc_number: r.qbo_doc_number || null,
-              qbo_sync_error: r.sync_warning || null
+              qbo_doc_number: r.qbo_doc_number || null
             }
           : cur
       );
-      if (r.reference && f && r.reference !== f.reference) {
-        // Renumérotée : le changement est aussi noté dans les notes
-        // internes → on les relit (sinon une sauvegarde des notes
-        // l'effacerait) et l'objet du courriel suit le nouveau numéro.
-        setSendSubject(`Facture ${r.reference}`);
-        const fr = await authedFetch(`/api/v1/factures/${id}`);
-        if (fr.ok) {
-          const fd = (await fr.json()) as Facture;
-          setF(fd);
-          setInternalNotes(fd.internal_notes || "");
-        }
-      }
       // Un avertissement (ex. paiement non enregistré dans QB, avec le motif
       // QBO) s'affiche en ambre. On NE commence PAS par « Synchronisée »
       // pour déclencher le style d'alerte plutôt que le vert de succès.
@@ -981,53 +956,35 @@ export default function FactureDetailPage() {
             <header className="mt-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 {editingRef ? (
-                  <div>
-                    {/* flex-wrap + largeur bornée : sur téléphone, le champ
-                        et les boutons restent à l'écran. */}
-                    <div className="flex flex-wrap items-center gap-2">
-                      <input
-                        autoFocus
-                        type="text"
-                        value={refDraft}
-                        onChange={(e) => {
-                          setRefDraft(e.target.value);
-                          setRefError(null);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") void saveReference();
-                          if (e.key === "Escape") {
-                            setEditingRef(false);
-                            setRefError(null);
-                          }
-                        }}
-                        placeholder="Ex. 98 ou FAC-2026-098"
-                        className="w-44 max-w-full rounded-md border border-accent-500/40 bg-brand-900 px-3 py-1.5 text-2xl font-bold text-white focus:outline-none focus:ring-2 focus:ring-accent-500/40"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => void saveReference()}
-                        disabled={refSaving || !refDraft.trim()}
-                        className="btn-accent btn-sm disabled:opacity-50"
-                      >
-                        {refSaving ? "…" : "Sauver"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingRef(false);
-                          setRefError(null);
-                        }}
-                        disabled={refSaving}
-                        className="btn-secondary btn-sm"
-                      >
-                        Annuler
-                      </button>
-                    </div>
-                    {refError ? (
-                      <p className="mt-2 max-w-xl rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
-                        {refError}
-                      </p>
-                    ) : null}
+                  <div className="flex items-center gap-2">
+                    <input
+                      autoFocus
+                      type="text"
+                      value={refDraft}
+                      onChange={(e) => setRefDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void saveReference();
+                        if (e.key === "Escape") setEditingRef(false);
+                      }}
+                      placeholder="Ex. 98 ou FAC-2026-098"
+                      className="rounded-md border border-accent-500/40 bg-brand-900 px-3 py-1.5 text-2xl font-bold text-white focus:outline-none focus:ring-2 focus:ring-accent-500/40"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void saveReference()}
+                      disabled={refSaving || !refDraft.trim()}
+                      className="btn-accent btn-sm disabled:opacity-50"
+                    >
+                      {refSaving ? "…" : "Sauver"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingRef(false)}
+                      disabled={refSaving}
+                      className="btn-secondary btn-sm"
+                    >
+                      Annuler
+                    </button>
                   </div>
                 ) : (
                   <h1 className="flex items-center gap-2 text-2xl font-bold text-white">
@@ -1045,7 +1002,6 @@ export default function FactureDetailPage() {
                       type="button"
                       onClick={() => {
                         setRefDraft(f.reference);
-                        setRefError(null);
                         setEditingRef(true);
                       }}
                       title="Modifier le numéro de facture"
@@ -1190,21 +1146,9 @@ export default function FactureDetailPage() {
                 // plutôt que le message technique (2026-10-09).
                 <QboConnexionExpiree className="mt-4" echecEnregistre />
               ) : (
-                <div className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-200">
-                  <p className="text-amber-200">
-                    ⚠️ Dernière synchro QuickBooks en échec : {f.qbo_sync_error}
-                  </p>
-                  {/* Nouvel essai tout de suite (un numéro déjà pris dans
-                      QB est remplacé par le prochain numéro libre). */}
-                  <button
-                    type="button"
-                    onClick={() => void syncToQbo()}
-                    disabled={qboBusy}
-                    className="btn-secondary btn-xs mt-2 disabled:opacity-60"
-                  >
-                    {qboBusy ? "Envoi…" : "Renvoyer vers QuickBooks"}
-                  </button>
-                </div>
+                <p className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-200">
+                  ⚠️ Dernière synchro QuickBooks en échec : {f.qbo_sync_error}
+                </p>
               )
             ) : null}
             {sendNotice ? (
