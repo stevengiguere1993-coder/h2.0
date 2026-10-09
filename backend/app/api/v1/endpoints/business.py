@@ -367,6 +367,21 @@ async def _heal_facture_devis_overrun(db, fa) -> None:
         await _recompute_facture_totals(db, fa.id)
 
 
+async def _suggestion_numero_libre(db, model, item_id: int) -> str:
+    """Fin du message quand un numéro saisi est refusé : pour une facture,
+    le prochain numéro libre (Kratos + QuickBooks) ; sinon la consigne."""
+    if model is Facture:
+        try:
+            from app.services.numbering import apercu_prochain_numero_libre
+
+            libre = await apercu_prochain_numero_libre(db, sauf_id=item_id)
+        except Exception:  # noqa: BLE001
+            libre = None
+        if libre:
+            return f"Le prochain numéro libre est {libre}."
+    return "Choisis-en un autre ou supprime le doublon."
+
+
 def make_crud_router(
     *,
     prefix: str,
@@ -728,9 +743,30 @@ def make_crud_router(
                     raise HTTPException(
                         status.HTTP_409_CONFLICT,
                         f"Le numéro « {_new_ref.strip()} » est déjà utilisé "
-                        "par un autre document. Choisis-en un autre ou "
-                        "supprime le doublon.",
+                        "par un autre document. "
+                        + await _suggestion_numero_libre(db, model, item_id),
                     )
+                if model is Facture:
+                    # Numéro de facture saisi à la main : QuickBooks doit
+                    # l'avoir LIBRE aussi, sinon la synchro le changerait
+                    # aussitôt (renumérotation automatique). On le dit
+                    # tout de suite, avec le prochain numéro libre.
+                    from app.services.facture_qbo import (
+                        desc_facture_qb,
+                        numero_pris_dans_qb_pour,
+                    )
+
+                    _pris_qb = await numero_pris_dans_qb_pour(
+                        db, obj, _new_ref.strip()
+                    )
+                    if _pris_qb is not None:
+                        raise HTTPException(
+                            status.HTTP_409_CONFLICT,
+                            f"Le numéro « {_new_ref.strip()} » est déjà pris "
+                            "dans QuickBooks par une autre facture "
+                            f"({desc_facture_qb(_pris_qb)}). "
+                            + await _suggestion_numero_libre(db, model, item_id),
+                        )
         # Capture pre-update status pour détecter la transition
         # vers received sur les achats → autopush QBO en background.
         prev_status = (
@@ -941,7 +977,12 @@ def make_crud_router(
             # mise à jour sparse ensuite). Le cron horaire n'est qu'un
             # filet pour les échecs silencieux.
             if (obj.status or "") not in ("draft", "void"):
-                await db.flush()
+                # Valider AVANT de lancer le push : la tâche relit la
+                # facture dans sa propre session, et la session de la
+                # requête n'est validée qu'après l'envoi de la réponse.
+                # Sinon elle pouvait relire l'ancien numéro (crayon) et
+                # renuméroter par-dessus celui choisi à la main.
+                await db.commit()
                 import asyncio
 
                 from app.services.qbo_auto_sync import push_facture_now
