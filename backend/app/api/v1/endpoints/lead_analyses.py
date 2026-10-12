@@ -163,6 +163,10 @@ class LeadAnalysisRead(BaseModel):
     balance_vente_montant: Optional[float] = None
     cashback_montant: Optional[float] = None
     optimisation_moment: Optional[str] = None
+    # Achat prêteur B — cashflow (Phil 2026-10-12).
+    retenue_travaux_pct: Optional[float] = None
+    nb_deboursements_travaux: Optional[int] = None
+    fonds_roulement_travaux: Optional[float] = None
     ltv_residentiel_pct: Optional[float] = None
     amort_residentiel_annees: Optional[int] = None
     # Assumation hypothécaire (Phil 2026-09-29).
@@ -316,6 +320,12 @@ class LeadAnalysisUpdate(BaseModel):
     optimisation_moment: Optional[str] = Field(
         default=None, pattern=r"^(post_achat|pre_achat)$"
     )
+    # Achat prêteur B — cashflow (Phil 2026-10-12) : retenue sur les
+    # travaux (100.0 = 100 %), nombre de déboursés, fonds de roulement
+    # saisi (null = retenue ÷ nombre de déboursés).
+    retenue_travaux_pct: Optional[float] = Field(default=None, ge=0, le=100)
+    nb_deboursements_travaux: Optional[int] = Field(default=None, ge=1, le=60)
+    fonds_roulement_travaux: Optional[float] = Field(default=None, ge=0)
     # Mode résidentiel (2026-09-08).
     ltv_residentiel_pct: Optional[float] = Field(default=None, ge=0, le=100)
     amort_residentiel_annees: Optional[int] = Field(default=None, ge=1, le=40)
@@ -556,6 +566,8 @@ _DEFAULTS_FALLBACK: dict = {
     "ajout_wifi": True,
     "loyers_max_abordabilite_json": json.dumps({"abordable": 1090}),
     "mdf_preteur_b_pct": 25.0,
+    "retenue_travaux_pct": 100.0,
+    "nb_deboursements_travaux": 3,
     "projection_horizon_annees": 5,
     "ltv_residentiel_pct": 80.0,
     "amort_residentiel_annees": 25,
@@ -593,6 +605,9 @@ _DB_KEY_TO_FIELD: dict[str, str] = {
     "projection_horizon_annees": "projection_horizon_annees",
     "ltv_residentiel_pct": "ltv_residentiel_pct",
     "amort_residentiel_annees": "amort_residentiel_annees",
+    # Achat prêteur B — cashflow (Phil 2026-10-12).
+    "retenue_travaux_pct": "retenue_travaux_pct",
+    "nb_deboursements_travaux": "nb_deboursements_travaux",
 }
 
 # Champs entiers parmi ceux ci-dessus (les autres sont des floats).
@@ -604,6 +619,7 @@ _DB_KEY_INT_FIELDS: set[str] = {
     "nb_thermopompes_ajoutees",
     "projection_horizon_annees",
     "amort_residentiel_annees",
+    "nb_deboursements_travaux",
 }
 
 
@@ -1607,7 +1623,7 @@ async def extraction_health(user: CurrentUser) -> dict:
         "ocr": _ocr_health_payload(),
         # Marqueurs du serveur déployé (sonde post-déploiement sans accès
         # aux logs Render) : version du code + commit injecté par Render.
-        "version": "2026-10-08g",
+        "version": "2026-10-12a",
         "commit": (os.getenv("RENDER_GIT_COMMIT") or "")[:12] or None,
     }
 
@@ -2621,6 +2637,8 @@ RECALC_INPUT_FIELDS = {
     "depenses_residentiel_json", "depenses_optimisation_supp",
     "balance_vente_taux_pct", "projection_horizon_annees",
     "tri_croissance_loyers", "tri_croissance_depenses", "unites_json",
+    "retenue_travaux_pct", "nb_deboursements_travaux",
+    "fonds_roulement_travaux",
 }
 
 
@@ -2645,6 +2663,8 @@ _CHAMPS_COMPLETES_PARAMETRES: tuple = (
     "projection_horizon_annees",
     "ltv_residentiel_pct",
     "amort_residentiel_annees",
+    "retenue_travaux_pct",
+    "nb_deboursements_travaux",
 )
 
 
@@ -2899,6 +2919,15 @@ async def _compute_and_store(rec, db) -> dict:
         / 100.0,
         cashback_montant=float(rec.cashback_montant or 0),
         optimisation_pre_achat=(rec.optimisation_moment == "pre_achat"),
+        # Achat prêteur B — cashflow (Phil 2026-10-12) : complétés depuis
+        # Paramètres juste avant (``_completer_depuis_parametres``).
+        retenue_travaux_pct=float(rec.retenue_travaux_pct) / 100.0,
+        nb_deboursements_travaux=int(rec.nb_deboursements_travaux),
+        fonds_roulement_travaux=(
+            float(rec.fonds_roulement_travaux)
+            if rec.fonds_roulement_travaux is not None
+            else None
+        ),
         # Mode résidentiel (2026-09-08).
         ltv_residentiel=float(rec.ltv_residentiel_pct) / 100.0,
         amort_residentiel_annees=int(rec.amort_residentiel_annees),

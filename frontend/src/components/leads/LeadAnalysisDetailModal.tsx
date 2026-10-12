@@ -145,6 +145,12 @@ type LeadDetail = {
   balance_vente_taux_pct: number | null;
   /** Cashback reçu au notaire (coût réel = prix − cashback). */
   cashback_montant?: number | null;
+  // Achat prêteur B — cashflow (Phil 2026-10-12) : retenue du prêteur
+  // sur les travaux (100 = 100 %), nombre de déboursés, fonds de
+  // roulement saisi (null = retenue ÷ déboursés).
+  retenue_travaux_pct?: number | null;
+  nb_deboursements_travaux?: number | null;
+  fonds_roulement_travaux?: number | null;
   /** post_achat (défaut) | pre_achat — moment de l'optimisation. */
   optimisation_moment?: string | null;
   /** Mode résidentiel : ratio prêt-valeur (%), amortissement, lignes
@@ -516,16 +522,16 @@ export function LeadAnalysisDetailModal({
   // en clair au lieu de laisser des résultats périmés sans le dire.
   const [recalcError, setRecalcError] = useState<string | null>(null);
 
-  // Stratégie « institution traditionnelle » (alias inclus) → onglet
-  // « Achat » visible ; s'il est actif quand la stratégie change, on
-  // retombe sur Refinancement.
-  const modeTradTop =
-    (data?.strategie_acquisition ?? "preteur_b") !== "preteur_b";
   // Mode résidentiel (2026-09-08) : onglet « Cashflow » à la place du
   // refinancement, tuiles prêt / cash / cashflow.
   const modeResTop = data?.strategie_acquisition === "residentiel";
-  const tabEffectif: TabKey =
-    tab === "achat" && !modeTradTop ? "resultats" : tab;
+  // Stratégie « institution traditionnelle » (alias inclus) — tuiles
+  // du haut adaptées.
+  const modeTradTop =
+    (data?.strategie_acquisition ?? "preteur_b") !== "preteur_b";
+  // L'onglet « Achat » existe dans TOUTES les stratégies (Phil
+  // 2026-10-12 : cashflow prêteur B + coût du projet).
+  const tabEffectif: TabKey = tab;
 
   useEffect(() => {
     if (!open) return;
@@ -1054,12 +1060,10 @@ export function LeadAnalysisDetailModal({
                 </div>
               ) : null}
 
-              {/* Barre d'onglets — « Achat » seulement en stratégie
-                  institution traditionnelle. */}
+              {/* Barre d'onglets — « Achat » dans toutes les stratégies
+                  (Phil 2026-10-12). */}
               <div className="mt-3 flex gap-1 overflow-x-auto">
-                {TABS.filter(
-                  (t) => t.key !== "achat" || modeTradTop
-                ).map((t) => {
+                {TABS.map((t) => {
                   const active = tabEffectif === t.key;
                   const Icon = t.icon;
                   return (
@@ -1381,6 +1385,8 @@ export function LeadAnalysisDetailModal({
                   {(() => {
                     let trad: AnalysisResults["traditionnel"] = null;
                     let resid: AnalysisResults["residentiel"] = null;
+                    let achatB: AnalysisResults["achat_preteur_b"] = null;
+                    let cout: AnalysisResults["cout_projet"] = null;
                     try {
                       const parsed = data.analysis_results_json
                         ? (JSON.parse(
@@ -1389,22 +1395,46 @@ export function LeadAnalysisDetailModal({
                         : null;
                       trad = parsed?.traditionnel ?? null;
                       resid = parsed?.residentiel ?? null;
+                      achatB = parsed?.achat_preteur_b ?? null;
+                      cout = parsed?.cout_projet ?? null;
                     } catch {
                       trad = null;
                       resid = null;
+                      achatB = null;
+                      cout = null;
                     }
-                    if (resid) return <ResidentielAchatPanel r={resid} />;
-                    return trad ? (
+                    const panneau = resid ? (
+                      <ResidentielAchatPanel r={resid} />
+                    ) : trad ? (
                       <TraditionnelAchatPanel
                         t={trad}
                         programmeChoisi={data.programme_achat ?? null}
                         onPatchField={patchField}
                       />
+                    ) : achatB ? (
+                      <PreteurBAchatPanel
+                        a={achatB}
+                        data={data}
+                        onPatchField={patchField}
+                      />
                     ) : (
                       <EmptyTabHint
                         icon={Banknote}
-                        message="Lance l'analyse (onglet « Analyse ») pour voir le financement à l'achat des 4 programmes."
+                        message={
+                          data.analysis_results_json
+                            ? "Relance l'analyse (onglet « Analyse ») : la vue Achat prêteur B apparaît au prochain calcul."
+                            : "Lance l'analyse (onglet « Analyse ») pour voir l'achat : cashflow au notaire, pendant les travaux et coût du projet."
+                        }
                       />
+                    );
+                    return (
+                      <>
+                        {panneau}
+                        {/* Coût du projet (Phil 2026-10-07) — déplacé ici
+                            depuis Analyse (Phil 2026-10-12), pour toutes
+                            les stratégies. */}
+                        {cout ? <CoutProjetCard cout={cout} /> : null}
+                      </>
                     );
                   })()}
                 </div>
@@ -4261,20 +4291,8 @@ function ManualAnalysisSection({
           );
         })()}
 
-        {/* Coût du projet (Phil 2026-10-07) — même carte pour les quatre
-            stratégies, sous la composition de la mise de fonds. */}
-        {(() => {
-          if (!data.analysis_results_json) return null;
-          let cout: AnalysisResults["cout_projet"] = null;
-          try {
-            cout =
-              (JSON.parse(data.analysis_results_json) as AnalysisResults)
-                .cout_projet ?? null;
-          } catch {
-            cout = null;
-          }
-          return cout ? <CoutProjetCard cout={cout} /> : null;
-        })()}
+        {/* Coût du projet : dans l'onglet « Achat » depuis le 2026-10-12
+            (Phil : « ça fait plus de sens là »). */}
       </div>
 
       {err ? (
@@ -4531,6 +4549,58 @@ type ResidentielResult = {
   projection: ResProjPoint[];
 };
 
+/** Achat prêteur B — cashflow de l'acquisition (Phil 2026-10-12) :
+ *  retenue du prêteur sur les travaux, avance au notaire, cash par
+ *  moment (notaire / travaux / refi), fonds de roulement. */
+type AchatPreteurBPoste = {
+  cle: string;
+  label: string;
+  montant: number;
+  cash: number;
+  finance: number;
+  financable: boolean;
+};
+type AchatPreteurB = {
+  prix_achat: number;
+  mdf_pct: number;
+  assise: number;
+  travaux: number;
+  travaux_financables: boolean;
+  part_financee_travaux: number;
+  engagement_travaux: number;
+  retenue_pct: number;
+  retenue: number;
+  manque_travaux_notaire: number;
+  pret_sur_prix: number;
+  frais_finances: number;
+  frais_finances_hors_travaux: number;
+  pret_total: number;
+  avance_notaire: number;
+  mdf_notaire: number;
+  cashback: number;
+  balance_vente: number;
+  cash_notaire_frais: number;
+  cash_notaire: number;
+  travaux_cash: number;
+  travaux_cash_projet: number;
+  nb_deboursements: number;
+  fonds_roulement_calcule: number;
+  fonds_roulement: number;
+  fonds_roulement_saisi: boolean;
+  cash_projet_frais: number;
+  cash_projet: number;
+  cash_refi: number;
+  cash_definitif: number;
+  mdf_preteur_b: number;
+  ecart: number;
+  besoin_max: number;
+  postes: {
+    notaire: AchatPreteurBPoste[];
+    projet: AchatPreteurBPoste[];
+    refi: AchatPreteurBPoste[];
+  };
+};
+
 type AnalysisResults = {
   frais_demarrage?: FraisDemarrageBreakdown;
   frais_demarrage_total: number;
@@ -4559,6 +4629,8 @@ type AnalysisResults = {
     pre_achat?: number;
     post_achat?: number;
   } | null;
+  /** Achat prêteur B — cashflow (Phil 2026-10-12). null hors prêteur B. */
+  achat_preteur_b?: AchatPreteurB | null;
   /** Coût du projet (Phil 2026-10-07) : coût total = revente pour
    *  revenir à 0 $ ; cash total nécessaire. */
   cout_projet?: {
@@ -5821,6 +5893,260 @@ function DepensesResidentielCard({
 
 /** Onglet ACHAT — institution traditionnelle : 4 programmes sur les
  *  loyers actuels, choix du programme retenu, composition de la MDF. */
+/** Achat — Prêteur B : cashflow de l'acquisition (Phil 2026-10-12).
+ *  « Ils retiennent 100 % des coûts de construction au lieu de 80 % :
+ *  au notaire on n'a pas 800 000 $ mais 700 000 $ ; les frais initiaux
+ *  sont cash au début ; même financés à 100 %, les travaux se paient
+ *  d'abord de ma poche puis sont remboursés → fonds de roulement. »
+ *  Aucun nouveau poste : les frais, le prêt B et la mise de fonds déjà
+ *  calculés, répartis dans le temps. Page juste avant Refinancement. */
+function PreteurBAchatPanel({
+  a,
+  data,
+  onPatchField
+}: {
+  a: AchatPreteurB;
+  data: LeadDetail;
+  onPatchField: (field: string, value: unknown) => void;
+}) {
+  const pct = (f: number) =>
+    `${String(Math.round(f * 1000) / 10).replace(".", ",")} %`;
+  const ligne = (
+    label: ReactNode,
+    val: number,
+    opts?: { gras?: boolean; muted?: boolean; tone?: "amber" | "emerald" }
+  ) => (
+    <div
+      className={`flex items-center justify-between gap-3 px-2 py-1 ${
+        opts?.gras
+          ? opts.tone === "amber"
+            ? "font-semibold text-amber-200"
+            : opts.tone === "emerald"
+            ? "font-semibold text-emerald-200"
+            : "font-semibold text-white"
+          : opts?.muted
+          ? "text-white/45"
+          : "text-white/70"
+      }`}
+    >
+      <span className="min-w-0">{label}</span>
+      <span className="shrink-0 font-mono tabular-nums">{fmtMoney(val)}</span>
+    </div>
+  );
+  const postes = (lst: AchatPreteurBPoste[]) =>
+    lst.map((p) =>
+      ligne(
+        <>
+          + {p.label}
+          {p.financable ? (
+            <span className="text-white/40">
+              {" "}
+              (cash {pct(a.mdf_pct)}, {fmtMoney(p.finance)} financés)
+            </span>
+          ) : null}
+        </>,
+        p.cash
+      )
+    );
+  const colonne = (titre: string, sousTitre: string, body: ReactNode) => (
+    <div className="rounded-lg border border-brand-800 bg-brand-950/40 py-1">
+      <p className="px-2 pt-1 text-[10px] font-semibold uppercase tracking-wider text-white/60">
+        {titre}
+      </p>
+      <p className="px-2 pb-1 text-[10px] text-white/40">{sousTitre}</p>
+      {body}
+    </div>
+  );
+
+  return (
+    <SectionCard
+      icon={Banknote}
+      title="Achat — Prêteur B : cashflow de l'acquisition"
+      tone="amber"
+      subtitle={
+        <>
+          Le prêteur s&apos;engage sur {pct(a.part_financee_travaux)} des
+          travaux mais en retient {pct(a.retenue_pct)} et les débourse
+          progressivement : ce qu&apos;il retient au-delà de sa part est
+          exigé d&apos;avance au notaire. Les frais d&apos;acquisition se
+          paient cash au départ, et les travaux s&apos;avancent de ta
+          poche avant d&apos;être remboursés (fonds de roulement).
+        </>
+      }
+      action={
+        <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-1.5 text-right">
+          <p className="text-[9px] uppercase tracking-wider text-amber-300/80">
+            Besoin de trésorerie maximal
+          </p>
+          <p className="font-mono text-sm font-bold tabular-nums text-amber-200">
+            {fmtMoney(a.besoin_max)}
+          </p>
+          <p className="text-[10px] text-white/50">
+            notaire + travaux + fonds de roulement
+          </p>
+        </div>
+      }
+    >
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatTile
+          icon={Wallet}
+          label="Cash à sortir au notaire"
+          value={fmtMoney(a.cash_notaire)}
+          hint={`Avance du prêteur ${fmtMoney(a.avance_notaire)} sur ${fmtMoney(a.pret_total)} engagés`}
+          tone="amber"
+        />
+        <StatTile
+          icon={PiggyBank}
+          label="Fonds de roulement travaux"
+          value={fmtMoney(a.fonds_roulement)}
+          hint={
+            a.travaux_financables
+              ? `${fmtMoney(a.retenue)} remboursés en ${a.nb_deboursements} déboursé(s) — temporaire`
+              : "Travaux non financés par le prêteur"
+          }
+        />
+        <StatTile
+          icon={Coins}
+          label="Cash pendant les travaux"
+          value={fmtMoney(a.cash_projet)}
+          hint="Hors fonds de roulement (intérêts, travaux à ta charge…)"
+        />
+        <StatTile
+          icon={Gauge}
+          label="Cash définitif"
+          value={fmtMoney(a.cash_definitif)}
+          hint="Notaire + travaux + refi = mise de fonds prêteur B"
+          tone="emerald"
+        />
+      </div>
+
+      <div className="mt-4">
+        <SubCard
+          icon={Percent}
+          title="Hypothèses du prêteur (fiche — défauts dans Paramètres → Analyse)"
+          cols={3}
+        >
+          <FieldNumber
+            label="Retenue sur les travaux (%)"
+            value={data.retenue_travaux_pct ?? null}
+            onSave={(v) => onPatchField("retenue_travaux_pct", v)}
+            format="percent"
+            hint="100 % typique : il retient tout et débourse progressivement"
+          />
+          <FieldNumber
+            label="Nombre de déboursés"
+            value={data.nb_deboursements_travaux ?? null}
+            onSave={(v) =>
+              onPatchField(
+                "nb_deboursements_travaux",
+                v == null ? null : Math.max(1, Math.round(v))
+              )
+            }
+            hint="Fonds de roulement = retenue ÷ nombre de déboursés"
+          />
+          <FieldNumber
+            label="Fonds de roulement (si différent)"
+            value={data.fonds_roulement_travaux ?? null}
+            onSave={(v) => onPatchField("fonds_roulement_travaux", v)}
+            format="money"
+            hint={`Vide = calculé : ${fmtMoney(a.fonds_roulement_calcule)}`}
+          />
+        </SubCard>
+      </div>
+
+      <div className="mt-4 grid gap-3 text-[11px] lg:grid-cols-3">
+        {colonne(
+          "Au notaire (jour 0)",
+          "Ce qui sort de ta poche à l'acquisition",
+          <>
+            {ligne("Prêt du prêteur B engagé (bâtisse + frais financés)", a.pret_total, {
+              muted: true
+            })}
+            {a.travaux_financables
+              ? ligne(
+                  `− Retenue sur les travaux (${pct(a.retenue_pct)} de ${fmtMoney(
+                    a.travaux
+                  )}, déboursée progressivement)`,
+                  -a.retenue,
+                  { muted: true }
+                )
+              : null}
+            {ligne("= Avance du prêteur B au notaire", a.avance_notaire, { gras: true })}
+            {ligne(
+              `Mise de fonds au notaire (assise ${fmtMoney(a.assise)} + manque sur les travaux ${fmtMoney(
+                a.manque_travaux_notaire
+              )})`,
+              a.mdf_notaire
+            )}
+            {a.cashback > 0 ? ligne("− Cashback reçu au notaire", -a.cashback) : null}
+            {a.balance_vente > 0 ? ligne("− Balance de vente", -a.balance_vente) : null}
+            {postes(a.postes.notaire)}
+            {ligne("= Cash à sortir au notaire", a.cash_notaire, {
+              gras: true,
+              tone: "amber"
+            })}
+          </>
+        )}
+        {colonne(
+          "Pendant les travaux",
+          "Déboursés progressifs du prêteur, avances de ta poche",
+          <>
+            {a.travaux_financables ? (
+              <>
+                {ligne(
+                  `Travaux remboursés par les déboursés (${a.nb_deboursements})`,
+                  a.retenue,
+                  { muted: true }
+                )}
+                {ligne(
+                  a.fonds_roulement_saisi
+                    ? "Fonds de roulement — saisi (temporaire)"
+                    : `Fonds de roulement = ${fmtMoney(a.retenue)} ÷ ${a.nb_deboursements} (temporaire)`,
+                  a.fonds_roulement,
+                  { gras: true }
+                )}
+              </>
+            ) : (
+              ligne("Travaux non financés par le prêteur", a.travaux, { muted: true })
+            )}
+            {ligne("Travaux à ta charge pendant les travaux", a.travaux_cash_projet)}
+            {postes(a.postes.projet)}
+            {ligne("= Cash pendant les travaux (hors fonds de roulement)", a.cash_projet, {
+              gras: true,
+              tone: "amber"
+            })}
+          </>
+        )}
+        {colonne(
+          "Au refinancement et récapitulatif",
+          "Frais du refi, puis le total",
+          <>
+            {postes(a.postes.refi)}
+            {ligne("= Cash au refinancement", a.cash_refi, { gras: true })}
+            {ligne("Cash définitif (notaire + travaux + refi)", a.cash_definitif, {
+              gras: true,
+              tone: "emerald"
+            })}
+            {ligne("Besoin de trésorerie maximal (+ fonds de roulement)", a.besoin_max, {
+              gras: true,
+              tone: "amber"
+            })}
+            {Math.abs(a.ecart) > 1
+              ? ligne("Écart avec la mise de fonds (devrait être 0)", a.ecart, { muted: true })
+              : null}
+          </>
+        )}
+      </div>
+      <p className="mt-3 text-[10px] leading-snug text-white/40">
+        Aucun nouveau poste : ce sont les frais de démarrage, le prêt du
+        prêteur B et la mise de fonds de la composition, répartis dans le
+        temps. Le détail ligne par ligne est dans « Détails des calculs »,
+        section 6b.
+      </p>
+    </SectionCard>
+  );
+}
+
 function TraditionnelAchatPanel({
   t,
   programmeChoisi,
