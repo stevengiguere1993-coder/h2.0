@@ -1069,16 +1069,20 @@ def compute_frais_demarrage(
 
 # ─── Achat prêteur B : cashflow de l'acquisition (Phil 2026-10-12) ──
 #
-# « Ils retiennent 100 % des coûts de construction au lieu de 80 % :
-# au notaire on n'a pas 800 000 $ (80 % de 1 M) mais 800 000 − 20 % des
-# 500 000 $ de travaux = 700 000 $. Les frais initiaux (courtier,
-# notaire, avocat, inspection, frais de dossier…) sont tous en cash au
-# début. Et même financés à 100 %, les travaux se paient d'abord de ma
-# poche puis sont remboursés : il faut un fonds de roulement. »
+# « Ils retiennent 100 % des coûts de construction au lieu de 80 % : au
+# notaire on n'a pas 800 000 $ (80 % de 1 M) mais 800 000 − 20 % des
+# 500 000 $ de travaux = 700 000 $. Les frais initiaux sont tous en cash
+# au début. Les travaux se paient d'abord de ma poche puis sont
+# remboursés. » Puis, sur le 1660 Saint-Clément : « la retenue, c'est pas
+# juste les travaux mais TOUS les frais finançables — on avance le reste
+# tant qu'il n'y a pas eu de déboursé ; jour 1 on peut faire le premier
+# déboursé avec tous les frais pour l'achat, frais de dev aussi ; ensuite
+# c'est les travaux. Si je demande 610 k aux investisseurs, il va rester
+# combien à quel moment ? »
 #
-# Moment où chaque poste de frais se paie : « notaire » (acquisition),
-# « projet » (pendant les travaux), « refi » (les postes « _2 » du
-# refinancement). Poste personnalisé ou inconnu → notaire.
+# Moment où chaque poste se paie : « notaire » (acquisition — jour 0),
+# « projet » (pendant les travaux), « refi » (postes « _2 », quand le
+# prêt B est remboursé). Poste personnalisé ou inconnu → notaire.
 _MOMENT_FRAIS: Dict[str, str] = {
     "courtier_hypothecaire_1": "notaire",
     "taxes_bienvenue": "notaire",
@@ -1087,9 +1091,12 @@ _MOMENT_FRAIS: Dict[str, str] = {
     "avocat": "notaire",
     "notaire": "notaire",
     "frais_dossier_preteur": "notaire",
-    "frais_negociations": "notaire",
+    # Phil 2026-10-12 : « frais de dev aussi » au 1er déboursé → payés
+    # au départ, remboursés au jour 1 s'ils sont finançables.
+    "frais_developpement": "notaire",
+    # Phil 2026-10-12 : « les frais de négo c'est pendant les travaux ».
+    "frais_negociations": "projet",
     "frais_travaux": "projet",
-    "frais_developpement": "projet",
     "rapport_efficacite": "projet",
     "interets": "projet",
     "interets_balance_vente": "projet",
@@ -1098,6 +1105,15 @@ _MOMENT_FRAIS: Dict[str, str] = {
     "courtier_hypothecaire_2": "refi",
     "evaluateur_2": "refi",
     "notaire_2": "refi",
+}
+# Postes du projet ÉTALÉS sur les tranches de travaux ; les autres postes
+# « projet » (négociation, rapport d'efficacité…) tombent en 1re tranche.
+_ETALES_SUR_TRAVAUX = {
+    "frais_travaux",
+    "interets",
+    "interets_balance_vente",
+    "revenus_nets_pendant_projet",
+    "detention",
 }
 _LIBELLES_FRAIS: Dict[str, str] = {
     "courtier_hypothecaire_1": "Courtier hypothécaire (achat)",
@@ -1135,31 +1151,31 @@ def _achat_preteur_b_cashflow(
 ) -> dict:
     """Vue CASHFLOW de l'acquisition avec un prêteur B. Aucun nouveau
     poste : les frais, le prêt B et la mise de fonds déjà calculés sont
-    répartis dans le TEMPS (notaire / travaux / refi) avec la mécanique
-    de RETENUE du prêteur sur les travaux. La somme des cash par moment
-    redonne exactement la mise de fonds prêteur B (``ecart`` = 0)."""
-    financables = set(inputs.frais_demarrage_financables or [])
-    travaux = float(frais.frais_travaux or 0.0)
-    travaux_financables = "frais_travaux" in financables and travaux > 0
-    part_financee_travaux = (1 - mdf_pct) if travaux_financables else 0.0
-    engagement_travaux = part_financee_travaux * travaux
-    retenue_pct = (
-        max(0.0, float(inputs.retenue_travaux_pct or 0.0))
-        if travaux_financables
-        else 0.0
-    )
-    retenue = (
-        min(retenue_pct * travaux, float(pret_total))
-        if travaux_financables
-        else 0.0
-    )
-    manque_travaux_notaire = max(0.0, retenue - engagement_travaux)
+    répartis dans le TEMPS.
 
+    • Le prêteur s'engage sur (1 − MDF %) de chaque frais finançable mais
+      RETIENT ``retenue_travaux_pct`` (100 % typique) du montant complet
+      de TOUS les frais finançables du notaire et du projet ; ce qu'il
+      retient au-delà de son engagement manque au notaire → l'avance sur
+      le prix baisse d'autant. Les postes du refi n'en font pas partie
+      (le prêt B est alors remboursé).
+    • Jour 0 : on paie prix − avance (− cashback − balance de vente) et
+      TOUS les postes du notaire, montant complet. Jour 1 : le premier
+      déboursé rembourse les finançables du notaire au taux de retenue.
+    • Travaux : ``nb_deboursements_travaux`` tranches ; les postes étalés
+      (travaux, intérêts, revenus nets…) ÷ nb, les ponctuels en tranche 1 ;
+      chaque tranche est suivie de son déboursé (part finançable × taux).
+    • Échéancier avec solde : part du montant demandé aux investisseurs
+      (``capital_investisseurs`` = capital du TRI) ou, s'il est vide, du
+      besoin de trésorerie maximal (le compte descend alors à 0 au point
+      bas). La somme sorties − déboursés redonne exactement la mise de
+      fonds prêteur B (``ecart`` ≈ 0)."""
+    financables = set(inputs.frais_demarrage_financables or [])
     postes: Dict[str, list] = {"notaire": [], "projet": [], "refi": []}
 
     def _ajouter(cle: str, label: str, montant: object, financable: bool) -> None:
         try:
-            m = float(montant or 0.0)
+            m = float(montant or 0.0)  # type: ignore[arg-type]
         except (TypeError, ValueError):
             return
         if m == 0.0:
@@ -1173,11 +1189,12 @@ def _achat_preteur_b_cashflow(
                 "cash": round(cash, 2),
                 "finance": round(m - cash, 2),
                 "financable": bool(financable),
+                "etale": cle in _ETALES_SUR_TRAVAUX,
             }
         )
 
     for k, v in frais.__dict__.items():
-        if k in ("frais_custom", "frais_travaux"):
+        if k == "frais_custom":
             continue
         _ajouter(k, _LIBELLES_FRAIS.get(k, k), v, k in financables)
     for c in frais.frais_custom:
@@ -1187,65 +1204,146 @@ def _achat_preteur_b_cashflow(
             bool(c.get("financable")),
         )
 
-    cash_notaire_frais = sum(p["cash"] for p in postes["notaire"])
-    cash_projet_frais = sum(p["cash"] for p in postes["projet"])
-    cash_refi_frais = sum(p["cash"] for p in postes["refi"])
-    frais_finances_hors_travaux = sum(
-        p["finance"] for lst in postes.values() for p in lst
+    np_ = postes["notaire"] + postes["projet"]
+    base_retenue = sum(p["montant"] for p in np_ if p["financable"])
+    finance_np = sum(p["finance"] for p in np_ if p["financable"])
+    retenue_pct = max(0.0, float(inputs.retenue_travaux_pct or 0.0))
+    retenue = (
+        min(retenue_pct * base_retenue, float(pret_total))
+        if base_retenue > 0
+        else 0.0
     )
-    # Travaux : part définitivement à notre charge (MDF % si financés,
-    # 100 % sinon) — exigée au notaire à hauteur du manque, le reste
-    # pendant les travaux.
-    travaux_cash = travaux * (mdf_pct if travaux_financables else 1.0)
-    travaux_cash_projet = max(0.0, travaux_cash - manque_travaux_notaire)
-    assise = mdf_pct * float(inputs.prix_achat)
-    avance_notaire = float(pret_total) - retenue
-    mdf_notaire = assise + manque_travaux_notaire
-    cash_notaire = mdf_notaire - cashback - balance_vente + cash_notaire_frais
+    taux_remb = retenue / base_retenue if base_retenue > 0 else 0.0
+    manque_notaire = max(0.0, retenue - finance_np)
+    prix = float(inputs.prix_achat)
+    assise = mdf_pct * prix
+    avance = float(pret_total) - retenue
+    mdf_notaire = prix - avance
+    frais_notaire = sum(p["montant"] for p in postes["notaire"])
+    sorties_j0 = mdf_notaire - float(cashback) - float(balance_vente) + frais_notaire
+    remb_j1 = taux_remb * sum(
+        p["montant"] for p in postes["notaire"] if p["financable"]
+    )
     nb = max(1, int(inputs.nb_deboursements_travaux or 1))
-    fonds_roulement_calcule = retenue / nb if retenue > 0 else 0.0
-    saisi = inputs.fonds_roulement_travaux is not None
-    fonds_roulement = (
-        float(inputs.fonds_roulement_travaux) if saisi else fonds_roulement_calcule
+    etales = [p for p in postes["projet"] if p["etale"]]
+    ponctuels = [p for p in postes["projet"] if not p["etale"]]
+    tot_etale = sum(p["montant"] for p in etales)
+    tot_etale_fin = sum(p["montant"] for p in etales if p["financable"])
+    tot_ponct = sum(p["montant"] for p in ponctuels)
+    tot_ponct_fin = sum(p["montant"] for p in ponctuels if p["financable"])
+    travaux = float(frais.frais_travaux or 0.0)
+    sorties_refi = sum(p["montant"] for p in postes["refi"])
+
+    etapes: list = [
+        {
+            "etape": "notaire",
+            "libelle": "Jour 0 — au notaire",
+            "sorties": sorties_j0,
+            "debourse": 0.0,
+            "postes": ["Mise de fonds au notaire"]
+            + [p["label"] for p in postes["notaire"]],
+        },
+        {
+            "etape": "deboursement_1",
+            "libelle": "Jour 1 — 1er déboursé : frais finançables de l'achat remboursés",
+            "sorties": 0.0,
+            "debourse": remb_j1,
+            "postes": [p["label"] for p in postes["notaire"] if p["financable"]],
+        },
+    ]
+    for k in range(1, nb + 1):
+        etapes.append(
+            {
+                "etape": f"tranche_{k}",
+                "libelle": f"Travaux — tranche {k} sur {nb}, puis déboursé {k + 1}",
+                "sorties": tot_etale / nb + (tot_ponct if k == 1 else 0.0),
+                "debourse": taux_remb
+                * (tot_etale_fin / nb + (tot_ponct_fin if k == 1 else 0.0)),
+                "postes": [p["label"] for p in etales]
+                + ([p["label"] for p in ponctuels] if k == 1 else []),
+            }
+        )
+    etapes.append(
+        {
+            "etape": "refi",
+            "libelle": "Au refinancement (le prêt B est remboursé)",
+            "sorties": sorties_refi,
+            "debourse": 0.0,
+            "postes": [p["label"] for p in postes["refi"]],
+        }
     )
-    cash_projet = travaux_cash_projet + cash_projet_frais
-    cash_refi = cash_refi_frais
-    cash_definitif = cash_notaire + cash_projet + cash_refi
-    besoin_max = cash_notaire + cash_projet + fonds_roulement
+
+    # Exposition maximale = besoin de trésorerie (solde partant de 0).
+    cum = 0.0
+    expo = 0.0
+    for e in etapes:
+        avant = cum - e["sorties"]
+        expo = max(expo, -avant)
+        cum = avant + e["debourse"]
+    besoin_max = expo
+    capital_saisi = inputs.capital_investisseurs is not None
+    capital = (
+        float(inputs.capital_investisseurs) if capital_saisi else besoin_max
+    )
+    solde = capital
+    point_bas: Optional[dict] = None
+    for e in etapes:
+        avant = solde - e["sorties"]
+        apres = avant + e["debourse"]
+        e["solde_avant"] = round(avant, 2)
+        e["solde_apres"] = round(apres, 2)
+        e["sorties"] = round(e["sorties"], 2)
+        e["debourse"] = round(e["debourse"], 2)
+        if point_bas is None or avant < point_bas["solde"]:
+            point_bas = {
+                "solde": round(avant, 2),
+                "etape": e["etape"],
+                "libelle": e["libelle"],
+            }
+        solde = apres
+    tranches = [e for e in etapes if e["etape"].startswith("tranche_")]
+    cash_projet = sum(e["sorties"] for e in tranches) - sum(
+        e["debourse"] for e in tranches
+    )
+    cash_definitif = sum(e["sorties"] for e in etapes) - sum(
+        e["debourse"] for e in etapes
+    )
     return {
-        "prix_achat": round(float(inputs.prix_achat), 2),
+        "prix_achat": round(prix, 2),
         "mdf_pct": mdf_pct,
         "assise": round(assise, 2),
-        "travaux": round(travaux, 2),
-        "travaux_financables": travaux_financables,
-        "part_financee_travaux": part_financee_travaux,
-        "engagement_travaux": round(engagement_travaux, 2),
-        "retenue_pct": retenue_pct,
-        "retenue": round(retenue, 2),
-        "manque_travaux_notaire": round(manque_travaux_notaire, 2),
         "pret_sur_prix": round(float(pret_sur_prix), 2),
         "frais_finances": round(float(frais_finance_total), 2),
-        "frais_finances_hors_travaux": round(frais_finances_hors_travaux, 2),
         "pret_total": round(float(pret_total), 2),
-        "avance_notaire": round(avance_notaire, 2),
+        "travaux": round(travaux, 2),
+        "travaux_financables": "frais_travaux" in financables and travaux > 0,
+        "base_retenue": round(base_retenue, 2),
+        "retenue_pct": retenue_pct,
+        "retenue": round(retenue, 2),
+        "taux_remboursement": round(taux_remb, 6),
+        "finance_np": round(finance_np, 2),
+        "manque_notaire": round(manque_notaire, 2),
+        "avance_notaire": round(avance, 2),
         "mdf_notaire": round(mdf_notaire, 2),
         "cashback": round(float(cashback), 2),
         "balance_vente": round(float(balance_vente), 2),
-        "cash_notaire_frais": round(cash_notaire_frais, 2),
-        "cash_notaire": round(cash_notaire, 2),
-        "travaux_cash": round(travaux_cash, 2),
-        "travaux_cash_projet": round(travaux_cash_projet, 2),
+        "frais_notaire": round(frais_notaire, 2),
+        "cash_notaire": round(sorties_j0, 2),
+        "remboursement_jour_1": round(remb_j1, 2),
         "nb_deboursements": nb,
-        "fonds_roulement_calcule": round(fonds_roulement_calcule, 2),
-        "fonds_roulement": round(fonds_roulement, 2),
-        "fonds_roulement_saisi": saisi,
-        "cash_projet_frais": round(cash_projet_frais, 2),
         "cash_projet": round(cash_projet, 2),
-        "cash_refi": round(cash_refi, 2),
+        "cash_refi": round(sorties_refi, 2),
+        "echeancier": etapes,
+        "capital": round(capital, 2),
+        "capital_saisi": capital_saisi,
+        "besoin_max": round(besoin_max, 2),
+        "manque": round(max(0.0, besoin_max - capital), 2),
+        "point_bas": point_bas,
+        "solde_fin_travaux": tranches[-1]["solde_apres"] if tranches else round(capital - sorties_j0 + remb_j1, 2),
+        "solde_fin": round(solde, 2),
         "cash_definitif": round(cash_definitif, 2),
         "mdf_preteur_b": round(float(mdf_preteur_b), 2),
         "ecart": round(cash_definitif - float(mdf_preteur_b), 2),
-        "besoin_max": round(besoin_max, 2),
         "postes": postes,
     }
 
@@ -1423,7 +1521,9 @@ class FinanceInputs:
     # des Paramètres seedés (aucun calcul ne change si on n'y touche pas).
     retenue_travaux_pct: float = 1.0
     nb_deboursements_travaux: int = 3
-    fonds_roulement_travaux: Optional[float] = None
+    #: Montant demandé aux investisseurs (= capital injecté du TRI,
+    #: même colonne de fiche). None = on affiche le besoin maximal.
+    capital_investisseurs: Optional[float] = None
 
     # Overrides GLOBAUX (par opposition à `frais_demarrage_overrides`
     # qui est par fiche) des frais one-shot. Provient de la table

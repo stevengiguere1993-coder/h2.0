@@ -733,142 +733,124 @@ def _section_mdf(res: FinanceResults) -> Dict[str, Any]:
 
 def _section_achat_preteur_b(res: FinanceResults) -> Optional[Dict[str, Any]]:
     """Achat prêteur B — cashflow de l'acquisition (Phil 2026-10-12) :
-    retenue du prêteur sur les travaux, avance au notaire, cash par
-    moment (notaire / travaux / refi), fonds de roulement. Aucun nouveau
-    poste : les montants des sections 5 et 6 répartis dans le temps."""
+    retenue du prêteur sur tous les frais finançables, avance au notaire,
+    sorties jour 0, premier déboursé, tranches de travaux, refi, solde du
+    compte à partir du montant des investisseurs. Aucun nouveau poste."""
     a = getattr(res, "achat_preteur_b", None)
     if not a:
         return None
     mdf = a["mdf_pct"]
 
-    def _noms(moment: str) -> str:
-        noms = [p["label"] for p in a["postes"].get(moment, [])]
+    def _noms(moment: str, seulement_financables: bool = False) -> str:
+        noms = [
+            p["label"]
+            for p in a["postes"].get(moment, [])
+            if not seulement_financables or p["financable"]
+        ]
         return ", ".join(noms) if noms else "aucun"
 
     L = [
         ligne(
-            "Prêt du prêteur B engagé (bâtisse + frais financés, travaux inclus)",
+            "Prêt du prêteur B engagé (bâtisse + frais financés)",
             "section 6", a["pret_total"],
         ),
-    ]
-    if a["travaux_financables"]:
-        L.append(ligne("Travaux estimés", None, a["travaux"], source="fiche"))
-        L.append(
-            ligne(
-                "Part des travaux financée par le prêteur B",
-                f"(1 − {_p(mdf)}) × {_m(a['travaux'])}",
-                a["engagement_travaux"],
-            )
-        )
-        L.append(
-            ligne(
-                "Retenue du prêteur sur les travaux (déboursée progressivement)",
-                f"{_p(a['retenue_pct'])} × {_m(a['travaux'])}",
-                a["retenue"],
-                source="fiche",
-                note="Retenue plafonnée au prêt engagé.",
-            )
-        )
-        L.append(
-            ligne(
-                "Manque à combler au notaire (retenue − part financée)",
-                f"{_m(a['retenue'])} − {_m(a['engagement_travaux'])}",
-                a["manque_travaux_notaire"],
-            )
-        )
-    else:
-        L.append(
-            ligne(
-                "Travaux non financés par le prêteur B (payés cash pendant les travaux)",
-                None, a["travaux"], source="fiche",
-            )
-        )
-    L.append(
+        ligne(
+            "Base de la retenue : frais finançables du notaire et du projet",
+            f"{_noms('notaire', True)} ; {_noms('projet', True)}",
+            a["base_retenue"],
+        ),
+        ligne(
+            "Retenue du prêteur (déboursée progressivement)",
+            f"{_p(a['retenue_pct'])} × {_m(a['base_retenue'])}",
+            a["retenue"],
+            source="fiche",
+            note="Plafonnée au prêt engagé.",
+        ),
+        ligne(
+            "Part de ces frais financée par le prêteur",
+            f"(1 − {_p(mdf)}) × {_m(a['base_retenue'])}",
+            a["finance_np"],
+        ),
+        ligne(
+            "Manque à combler au notaire (retenue − part financée)",
+            f"{_m(a['retenue'])} − {_m(a['finance_np'])}",
+            a["manque_notaire"],
+        ),
         ligne(
             "= Avance du prêteur B au notaire",
             f"{_m(a['pret_total'])} − {_m(a['retenue'])}",
             a["avance_notaire"],
             gras=True,
-        )
-    )
-    L.append(
+        ),
         ligne(
-            "Mise de fonds au notaire (assise + manque sur les travaux)",
-            f"{_m(a['assise'])} + {_m(a['manque_travaux_notaire'])}",
+            "Mise de fonds au notaire (prix − avance)",
+            f"{_m(a['prix_achat'])} − {_m(a['avance_notaire'])}",
             a["mdf_notaire"],
-        )
-    )
+        ),
+    ]
     if a["cashback"] > 0:
         L.append(ligne("− Cashback reçu au notaire", None, -a["cashback"], source="fiche"))
     if a["balance_vente"] > 0:
         L.append(ligne("− Balance de vente", None, -a["balance_vente"], source="fiche"))
     L.append(
         ligne(
-            "+ Frais d'acquisition payés cash au notaire",
-            f"part cash des postes au notaire : {_noms('notaire')}",
-            a["cash_notaire_frais"],
+            "+ Frais payés au notaire, montant complet (finançables avancés inclus)",
+            _noms("notaire"),
+            a["frais_notaire"],
         )
     )
     L.append(
         ligne(
-            "= Cash à sortir au notaire",
+            "= Sorties au jour 0 (notaire)",
             f"{_m(a['mdf_notaire'])}"
             + (f" − {_m(a['cashback'])}" if a["cashback"] > 0 else "")
             + (f" − {_m(a['balance_vente'])}" if a["balance_vente"] > 0 else "")
-            + f" + {_m(a['cash_notaire_frais'])}",
+            + f" + {_m(a['frais_notaire'])}",
             a["cash_notaire"],
             gras=True,
         )
     )
     L.append(
         ligne(
-            "Nombre de déboursés progressifs", None, a["nb_deboursements"],
-            source="fiche", unite="n",
+            "Jour 1 — 1er déboursé : frais finançables de l'achat remboursés",
+            f"{_p(a['taux_remboursement'])} × ({_noms('notaire', True)})",
+            a["remboursement_jour_1"],
         )
     )
     L.append(
         ligne(
-            "Fonds de roulement travaux (avance maximale avant remboursement)",
-            "saisi sur la fiche" if a["fonds_roulement_saisi"]
-            else f"{_m(a['retenue'])} ÷ {a['nb_deboursements']}",
-            a["fonds_roulement"],
-            source="fiche" if a["fonds_roulement_saisi"] else "calcul",
-            note="Temporaire : remboursé par les déboursés du prêteur.",
+            "Nombre de déboursés pendant les travaux", None,
+            a["nb_deboursements"], source="fiche", unite="n",
         )
     )
-    L.append(
-        ligne(
-            "Travaux à notre charge pendant les travaux",
-            f"{_m(a['travaux_cash'])} − {_m(a['manque_travaux_notaire'])}",
-            a["travaux_cash_projet"],
+    for e in a["echeancier"]:
+        if not e["etape"].startswith("tranche_"):
+            continue
+        L.append(
+            ligne(
+                f"{e['libelle']} — sorties",
+                "postes étalés ÷ nb de déboursés" + (" + postes ponctuels" if e["etape"] == "tranche_1" else ""),
+                e["sorties"],
+            )
         )
-    )
-    L.append(
-        ligne(
-            "+ Frais pendant le projet payés cash",
-            f"part cash des postes du projet : {_noms('projet')}",
-            a["cash_projet_frais"],
+        L.append(
+            ligne(
+                f"{e['libelle']} — déboursé du prêteur",
+                f"{_p(a['taux_remboursement'])} × part finançable de la tranche",
+                e["debourse"],
+            )
         )
-    )
     L.append(
         ligne(
-            "= Cash à sortir pendant les travaux (hors fonds de roulement)",
-            f"{_m(a['travaux_cash_projet'])} + {_m(a['cash_projet_frais'])}",
-            a["cash_projet"],
-            gras=True,
-        )
-    )
-    L.append(
-        ligne(
-            "Cash au refinancement",
-            f"part cash des postes du refi : {_noms('refi')}",
+            "Au refinancement — frais du refi (le prêt B est remboursé)",
+            _noms("refi"),
             a["cash_refi"],
         )
     )
     L.append(
         ligne(
-            "= Cash définitif (notaire + travaux + refi)",
-            f"{_m(a['cash_notaire'])} + {_m(a['cash_projet'])} + {_m(a['cash_refi'])}",
+            "= Cash définitif (Σ sorties − Σ déboursés)",
+            "toutes les étapes",
             a["cash_definitif"],
             gras=True,
             note="= mise de fonds prêteur B (section 6).",
@@ -876,16 +858,35 @@ def _section_achat_preteur_b(res: FinanceResults) -> Optional[Dict[str, Any]]:
     )
     L.append(
         ligne(
-            "Besoin de trésorerie maximal (notaire + travaux + fonds de roulement)",
-            f"{_m(a['cash_notaire'])} + {_m(a['cash_projet'])} + {_m(a['fonds_roulement'])}",
+            "Besoin de trésorerie maximal (exposition la plus haute avant un déboursé)",
+            "max sur l'échéancier de (Σ sorties − Σ déboursés)",
             a["besoin_max"],
             gras=True,
         )
     )
+    L.append(
+        ligne(
+            "Montant demandé aux investisseurs",
+            None if a["capital_saisi"] else "vide → besoin de trésorerie maximal",
+            a["capital"],
+            source="fiche" if a["capital_saisi"] else "calcul",
+        )
+    )
+    if a.get("point_bas"):
+        L.append(
+            ligne(
+                "Point bas du compte",
+                a["point_bas"]["libelle"],
+                a["point_bas"]["solde"],
+                gras=True,
+            )
+        )
+    L.append(ligne("Solde à la fin des travaux", "capital − sorties + déboursés", a["solde_fin_travaux"]))
+    L.append(ligne("Solde après le refinancement", "capital − cash définitif", a["solde_fin"]))
     return section(
         "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
         L,
-        "Aucun nouveau poste : les montants des sections 5 et 6 répartis dans le temps, avec la retenue du prêteur sur les travaux.",
+        "Aucun nouveau poste : les montants des sections 5 et 6 répartis dans le temps, avec la retenue du prêteur sur tous les frais finançables.",
     )
 
 

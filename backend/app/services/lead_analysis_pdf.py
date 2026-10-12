@@ -388,9 +388,14 @@ def _bloc_unites(rl, results: dict, *, s) -> list:
 
 def _bloc_achat_preteur_b(rl, results: dict, *, s) -> list:
     """Achat prêteur B — cashflow de l'acquisition (Phil 2026-10-12) :
-    reflet de la page Achat de la fiche (notaire / travaux / refi)."""
+    reflet de la page Achat de la fiche — au notaire, échéancier de
+    trésorerie (solde à chaque étape), récapitulatif."""
     Paragraph = rl["Paragraph"]
     Spacer = rl["Spacer"]
+    Table = rl["Table"]
+    TableStyle = rl["TableStyle"]
+    mm = rl["mm"]
+    colors = rl["colors"]
     a = (results or {}).get("achat_preteur_b")
     if not a:
         return []
@@ -398,99 +403,114 @@ def _bloc_achat_preteur_b(rl, results: dict, *, s) -> list:
         Paragraph(
             "Le prêteur retient "
             + _pct_fraction(a.get("retenue_pct") or 0)
-            + " des travaux et les débourse progressivement ; ce qu'il "
-            "retient au-delà de sa part financée est exigé d'avance au "
-            "notaire. Les frais d'acquisition se paient cash au départ et "
-            "les travaux s'avancent avant d'être remboursés (fonds de "
-            "roulement).",
+            + " de tous les frais finançables et les débourse "
+            "progressivement : ce qu'il retient au-delà de sa part est "
+            "exigé d'avance au notaire, et chaque frais finançable est "
+            "avancé de notre poche jusqu'au déboursé suivant. Les frais "
+            "non finançables sont cash définitivement.",
             s["small_muted"],
         ),
     ]
     tuiles = [
-        ("Cash à sortir au notaire", _money(a.get("cash_notaire"))),
-        ("Fonds de roulement travaux", _money(a.get("fonds_roulement"))),
-        ("Cash pendant les travaux", _money(a.get("cash_projet"))),
+        ("Sorties au notaire", _money(a.get("cash_notaire"))),
         ("Besoin de trésorerie maximal", _money(a.get("besoin_max"))),
+        (
+            "Montant des investisseurs"
+            + ("" if a.get("capital_saisi") else " (= besoin, non saisi)"),
+            _money(a.get("capital")),
+        ),
+        ("Cash définitif", _money(a.get("cash_definitif"))),
     ]
     out.append(Paragraph(
         " · ".join(f"{l} : <b>{v}</b>" for l, v in tuiles), s["small"]
     ))
     out.append(Spacer(1, 3))
 
-    def _postes(moment: str) -> list:
-        rows = []
-        for p in a.get("postes", {}).get(moment, []) or []:
-            lbl = p.get("label") or p.get("cle")
-            if p.get("financable"):
-                lbl += f" (cash {_pct_fraction(a.get('mdf_pct') or 0)}, le reste financé)"
-            rows.append((f"+ {lbl}", _money(p.get("cash"))))
-        return rows
-
     # Au notaire
     rows = [
         ("Prêt du prêteur B engagé (bâtisse + frais financés)", _money(a.get("pret_total"))),
-    ]
-    if a.get("travaux_financables"):
-        rows.append((
-            f"− Retenue sur les travaux ({_pct_fraction(a.get('retenue_pct') or 0)} de {_money(a.get('travaux'))}, déboursée progressivement)",
+        (
+            f"− Retenue du prêteur ({_pct_fraction(a.get('retenue_pct') or 0)} des frais finançables {_money(a.get('base_retenue'))}, déboursée progressivement)",
             _money(-(a.get("retenue") or 0)),
-        ))
-    rows.append(("<b>= Avance du prêteur B au notaire</b>", f"<b>{_money(a.get('avance_notaire'))}</b>"))
-    rows.append((
-        f"Mise de fonds au notaire (assise {_money(a.get('assise'))} + manque sur les travaux {_money(a.get('manque_travaux_notaire'))})",
-        _money(a.get("mdf_notaire")),
-    ))
+        ),
+        ("<b>= Avance du prêteur B au notaire</b>", f"<b>{_money(a.get('avance_notaire'))}</b>"),
+        ("Mise de fonds au notaire (prix − avance)", _money(a.get("mdf_notaire"))),
+    ]
     if (a.get("cashback") or 0) > 0:
         rows.append(("− Cashback reçu au notaire", _money(-(a.get("cashback") or 0))))
     if (a.get("balance_vente") or 0) > 0:
         rows.append(("− Balance de vente", _money(-(a.get("balance_vente") or 0))))
-    rows.extend(_postes("notaire"))
-    rows.append(("<b>= Cash à sortir au notaire</b>", f"<b>{_money(a.get('cash_notaire'))}</b>"))
+    for p in a.get("postes", {}).get("notaire", []) or []:
+        lbl = p.get("label") or p.get("cle")
+        if p.get("financable"):
+            lbl += " (finançable — remboursé au 1er déboursé)"
+        rows.append((f"+ {lbl}", _money(p.get("montant"))))
+    rows.append(("<b>= Sorties au jour 0</b>", f"<b>{_money(a.get('cash_notaire'))}</b>"))
     out.append(Paragraph("<b>Au notaire (jour 0)</b>", s["small"]))
     tb = _table_two_col(rl, rows, s=s)
     if tb is not None:
         out.append(tb)
-    out.append(Spacer(1, 3))
+    out.append(Spacer(1, 4))
 
-    # Pendant les travaux
-    rows = []
-    if a.get("travaux_financables"):
-        rows.append((
-            f"Travaux remboursés par les déboursés du prêteur ({a.get('nb_deboursements')} déboursés)",
-            _money(a.get("retenue")),
-        ))
-        rows.append((
-            "Fonds de roulement — avance maximale avant remboursement (temporaire)"
-            + (" — saisi" if a.get("fonds_roulement_saisi") else f" = {_money(a.get('retenue'))} ÷ {a.get('nb_deboursements')}"),
-            _money(a.get("fonds_roulement")),
-        ))
-    rows.append((
-        "Travaux à notre charge pendant les travaux",
-        _money(a.get("travaux_cash_projet")),
-    ))
-    rows.extend(_postes("projet"))
-    rows.append(("<b>= Cash à sortir pendant les travaux (hors fonds de roulement)</b>", f"<b>{_money(a.get('cash_projet'))}</b>"))
-    out.append(Paragraph("<b>Pendant les travaux (déboursés progressifs)</b>", s["small"]))
-    tb = _table_two_col(rl, rows, s=s)
-    if tb is not None:
-        out.append(tb)
-    out.append(Spacer(1, 3))
+    # Échéancier de trésorerie
+    def _solde(v) -> str:
+        v = float(v or 0)
+        txt = _money(v)
+        return f'<font color="{_C_RED}"><b>{txt}</b></font>' if v < 0 else txt
 
-    # Au refinancement + récapitulatif
-    rows = _postes("refi")
-    rows.append(("<b>= Cash au refinancement</b>", f"<b>{_money(a.get('cash_refi'))}</b>"))
-    rows.append((
-        "<b>Cash définitif (notaire + travaux + refi) = mise de fonds prêteur B</b>",
-        f"<b>{_money(a.get('cash_definitif'))}</b>",
+    data = [[
+        Paragraph("<b>Étape</b>", s["small"]),
+        Paragraph("<b>Sorties</b>", s["num"]),
+        Paragraph("<b>Solde avant déboursé</b>", s["num"]),
+        Paragraph("<b>Déboursé du prêteur</b>", s["num"]),
+        Paragraph("<b>Solde après</b>", s["num"]),
+    ]]
+    pb = (a.get("point_bas") or {}).get("etape")
+    idx_pb = None
+    for i, e in enumerate(a.get("echeancier") or []):
+        if e.get("etape") == pb:
+            idx_pb = i + 1
+        data.append([
+            Paragraph(str(e.get("libelle") or ""), s["small"]),
+            Paragraph(_money(e.get("sorties")), s["num"]),
+            Paragraph(_solde(e.get("solde_avant")), s["num"]),
+            Paragraph(_money(e.get("debourse")), s["num"]),
+            Paragraph(_solde(e.get("solde_apres")), s["num"]),
+        ])
+    tbl = Table(data, colWidths=[62 * mm, "*", "*", "*", "*"], repeatRows=1)
+    style = [
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(_C_AMBER_SOFT)),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.75, colors.HexColor(_C_AMBER_LINE)),
+        ("LINEBELOW", (0, 1), (-1, -2), 0.25, colors.HexColor(_C_LINE)),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#fafafa")]),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]
+    if idx_pb is not None:
+        style.append(("BACKGROUND", (0, idx_pb), (-1, idx_pb), colors.HexColor(_C_AMBER_SOFT)))
+    tbl.setStyle(TableStyle(style))
+    out.append(Paragraph(
+        "<b>Échéancier de trésorerie</b> — solde du compte à partir du "
+        "montant des investisseurs ; la ligne surlignée est le point bas.",
+        s["small"],
     ))
-    rows.append((
-        "<b>Besoin de trésorerie maximal (notaire + travaux + fonds de roulement)</b>",
-        f"<b>{_money(a.get('besoin_max'))}</b>",
-    ))
-    out.append(Paragraph("<b>Au refinancement et récapitulatif</b>", s["small"]))
-    tb = _table_two_col(rl, rows, s=s)
-    if tb is not None:
-        out.append(tb)
+    out.append(tbl)
+    out.append(Spacer(1, 3))
+    recap = (
+        f"Point bas du compte : <b>{_money((a.get('point_bas') or {}).get('solde'))}</b>"
+        f" ({(a.get('point_bas') or {}).get('libelle', '')}) · "
+        f"solde à la fin des travaux : <b>{_money(a.get('solde_fin_travaux'))}</b> · "
+        f"après le refinancement : <b>{_money(a.get('solde_fin'))}</b>."
+    )
+    if (a.get("manque") or 0) > 0:
+        recap += (
+            f' <font color="{_C_RED}"><b>Il manque {_money(a.get("manque"))} : '
+            f"demander au moins {_money(a.get('besoin_max'))} aux investisseurs.</b></font>"
+        )
+    out.append(Paragraph(recap, s["small"]))
     return out
 
 
@@ -2575,9 +2595,11 @@ def _render_bytes(
         story.append(Paragraph(
             "ACHAT — PRÊTEUR B : CASHFLOW DE L'ACQUISITION", s["section"]
         ))
-        story.extend(_bloc_achat_preteur_b(rl, results, s=s))
-        story.append(Spacer(1, 3))
+        # Coût du projet EN HAUT de la page Achat (Phil 2026-10-12),
+        # puis le cashflow — reflet de la fiche.
         story.extend(_bloc_cout_projet(rl, results, s=s))
+        story.append(Spacer(1, 4))
+        story.extend(_bloc_achat_preteur_b(rl, results, s=s))
 
     if _res_pdf:
         story.append(Paragraph(
