@@ -2151,6 +2151,10 @@ async def init_db() -> None:
             ("lead_analyses", "balance_vente_taux_pct", "NUMERIC(5,3)"),
             ("lead_analyses", "cashback_montant", "NUMERIC(14,2)"),
             ("lead_analyses", "optimisation_moment", "VARCHAR(16)"),
+            # Achat prêteur B — cashflow (Phil 2026-10-12).
+            ("lead_analyses", "retenue_travaux_pct", "NUMERIC(5,2)"),
+            ("lead_analyses", "nb_deboursements_travaux", "INTEGER"),
+            ("lead_analyses", "fonds_roulement_travaux", "NUMERIC(14,2)"),
             ("lead_analyses", "ltv_residentiel_pct", "NUMERIC(5,2)"),
             ("lead_analyses", "amort_residentiel_annees", "INTEGER"),
             # Assumation hypothécaire (Phil 2026-09-29).
@@ -3754,6 +3758,32 @@ async def init_db() -> None:
                     0.0,
                     100.0,
                     0.5,
+                    "inputs_manuels",
+                ),
+                # ── Achat prêteur B — cashflow (Phil 2026-10-12) ──
+                (
+                    "retenue_travaux_pct",
+                    100.0,
+                    "Retenue du prêteur B sur les travaux (%)",
+                    "Part des travaux estimés que le prêteur B retient et "
+                    "débourse progressivement (100 % typique, même s'il "
+                    "n'en finance que 1 − MDF %). Ce qu'il retient au-delà "
+                    "de sa part est exigé d'avance au notaire.",
+                    0.0,
+                    100.0,
+                    1.0,
+                    "inputs_manuels",
+                ),
+                (
+                    "nb_deboursements_travaux",
+                    3.0,
+                    "Nombre de déboursés progressifs (travaux)",
+                    "Nombre de déboursés du prêteur B pendant les travaux. "
+                    "Fonds de roulement = retenue ÷ nombre de déboursés "
+                    "(avance maximale avant remboursement).",
+                    1.0,
+                    24.0,
+                    1.0,
                     "inputs_manuels",
                 ),
                 (

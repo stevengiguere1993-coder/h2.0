@@ -386,6 +386,114 @@ def _bloc_unites(rl, results: dict, *, s) -> list:
     return out
 
 
+def _bloc_achat_preteur_b(rl, results: dict, *, s) -> list:
+    """Achat prêteur B — cashflow de l'acquisition (Phil 2026-10-12) :
+    reflet de la page Achat de la fiche (notaire / travaux / refi)."""
+    Paragraph = rl["Paragraph"]
+    Spacer = rl["Spacer"]
+    a = (results or {}).get("achat_preteur_b")
+    if not a:
+        return []
+    out = [
+        Paragraph(
+            "Le prêteur retient "
+            + _pct_fraction(a.get("retenue_pct") or 0)
+            + " des travaux et les débourse progressivement ; ce qu'il "
+            "retient au-delà de sa part financée est exigé d'avance au "
+            "notaire. Les frais d'acquisition se paient cash au départ et "
+            "les travaux s'avancent avant d'être remboursés (fonds de "
+            "roulement).",
+            s["small_muted"],
+        ),
+    ]
+    tuiles = [
+        ("Cash à sortir au notaire", _money(a.get("cash_notaire"))),
+        ("Fonds de roulement travaux", _money(a.get("fonds_roulement"))),
+        ("Cash pendant les travaux", _money(a.get("cash_projet"))),
+        ("Besoin de trésorerie maximal", _money(a.get("besoin_max"))),
+    ]
+    out.append(Paragraph(
+        " · ".join(f"{l} : <b>{v}</b>" for l, v in tuiles), s["small"]
+    ))
+    out.append(Spacer(1, 3))
+
+    def _postes(moment: str) -> list:
+        rows = []
+        for p in a.get("postes", {}).get(moment, []) or []:
+            lbl = p.get("label") or p.get("cle")
+            if p.get("financable"):
+                lbl += f" (cash {_pct_fraction(a.get('mdf_pct') or 0)}, le reste financé)"
+            rows.append((f"+ {lbl}", _money(p.get("cash"))))
+        return rows
+
+    # Au notaire
+    rows = [
+        ("Prêt du prêteur B engagé (bâtisse + frais financés)", _money(a.get("pret_total"))),
+    ]
+    if a.get("travaux_financables"):
+        rows.append((
+            f"− Retenue sur les travaux ({_pct_fraction(a.get('retenue_pct') or 0)} de {_money(a.get('travaux'))}, déboursée progressivement)",
+            _money(-(a.get("retenue") or 0)),
+        ))
+    rows.append(("<b>= Avance du prêteur B au notaire</b>", f"<b>{_money(a.get('avance_notaire'))}</b>"))
+    rows.append((
+        f"Mise de fonds au notaire (assise {_money(a.get('assise'))} + manque sur les travaux {_money(a.get('manque_travaux_notaire'))})",
+        _money(a.get("mdf_notaire")),
+    ))
+    if (a.get("cashback") or 0) > 0:
+        rows.append(("− Cashback reçu au notaire", _money(-(a.get("cashback") or 0))))
+    if (a.get("balance_vente") or 0) > 0:
+        rows.append(("− Balance de vente", _money(-(a.get("balance_vente") or 0))))
+    rows.extend(_postes("notaire"))
+    rows.append(("<b>= Cash à sortir au notaire</b>", f"<b>{_money(a.get('cash_notaire'))}</b>"))
+    out.append(Paragraph("<b>Au notaire (jour 0)</b>", s["small"]))
+    tb = _table_two_col(rl, rows, s=s)
+    if tb is not None:
+        out.append(tb)
+    out.append(Spacer(1, 3))
+
+    # Pendant les travaux
+    rows = []
+    if a.get("travaux_financables"):
+        rows.append((
+            f"Travaux remboursés par les déboursés du prêteur ({a.get('nb_deboursements')} déboursés)",
+            _money(a.get("retenue")),
+        ))
+        rows.append((
+            "Fonds de roulement — avance maximale avant remboursement (temporaire)"
+            + (" — saisi" if a.get("fonds_roulement_saisi") else f" = {_money(a.get('retenue'))} ÷ {a.get('nb_deboursements')}"),
+            _money(a.get("fonds_roulement")),
+        ))
+    rows.append((
+        "Travaux à notre charge pendant les travaux",
+        _money(a.get("travaux_cash_projet")),
+    ))
+    rows.extend(_postes("projet"))
+    rows.append(("<b>= Cash à sortir pendant les travaux (hors fonds de roulement)</b>", f"<b>{_money(a.get('cash_projet'))}</b>"))
+    out.append(Paragraph("<b>Pendant les travaux (déboursés progressifs)</b>", s["small"]))
+    tb = _table_two_col(rl, rows, s=s)
+    if tb is not None:
+        out.append(tb)
+    out.append(Spacer(1, 3))
+
+    # Au refinancement + récapitulatif
+    rows = _postes("refi")
+    rows.append(("<b>= Cash au refinancement</b>", f"<b>{_money(a.get('cash_refi'))}</b>"))
+    rows.append((
+        "<b>Cash définitif (notaire + travaux + refi) = mise de fonds prêteur B</b>",
+        f"<b>{_money(a.get('cash_definitif'))}</b>",
+    ))
+    rows.append((
+        "<b>Besoin de trésorerie maximal (notaire + travaux + fonds de roulement)</b>",
+        f"<b>{_money(a.get('besoin_max'))}</b>",
+    ))
+    out.append(Paragraph("<b>Au refinancement et récapitulatif</b>", s["small"]))
+    tb = _table_two_col(rl, rows, s=s)
+    if tb is not None:
+        out.append(tb)
+    return out
+
+
 def _bloc_cout_projet(rl, results: dict, *, s) -> list:
     """Coût du projet (Phil 2026-10-07) — reflet de la carte de la fiche :
     coût total (revente pour revenir à 0 $) et cash total nécessaire."""
@@ -2455,6 +2563,22 @@ def _render_bytes(
         if getattr(rec, "strategie_acquisition", None) == "residentiel"
         else None
     )
+    # Achat prêteur B (Phil 2026-10-12) : page Achat de la fiche —
+    # cashflow de l'acquisition + coût du projet — AVANT le
+    # refinancement, comme à l'écran.
+    _achat_b_pdf = (
+        (results or {}).get("achat_preteur_b")
+        if results and not _mode_direct and not _res_pdf
+        else None
+    )
+    if _achat_b_pdf:
+        story.append(Paragraph(
+            "ACHAT — PRÊTEUR B : CASHFLOW DE L'ACQUISITION", s["section"]
+        ))
+        story.extend(_bloc_achat_preteur_b(rl, results, s=s))
+        story.append(Spacer(1, 3))
+        story.extend(_bloc_cout_projet(rl, results, s=s))
+
     if _res_pdf:
         story.append(Paragraph(
             "RÉSIDENTIEL — ACHAT POUR LE CASHFLOW", s["section"]
@@ -2501,7 +2625,10 @@ def _render_bytes(
             "La colonne surlignée en vert est le scénario gagnant "
             "(meilleure équité au refinancement).", s["small_muted"]))
         story.extend(_bloc_unites(rl, results, s=s))
-        story.extend(_bloc_cout_projet(rl, results, s=s))
+        # Coût du projet déplacé dans la section Achat (Phil
+        # 2026-10-12) ; repli ici pour les résultats calculés avant.
+        if not _achat_b_pdf:
+            story.extend(_bloc_cout_projet(rl, results, s=s))
     else:
         story.append(Paragraph(
             "Aucun scénario calculé — lance l'analyse financière "
