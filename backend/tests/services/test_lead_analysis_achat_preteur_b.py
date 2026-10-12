@@ -1,14 +1,16 @@
-"""Achat prêteur B — cashflow de l'acquisition (Phil 2026-10-12).
+"""Achat prêteur B — cashflow de l'acquisition (Phil 2026-10-12, v3).
 
 L'exemple de Phil : prix 1 000 000 $, travaux 500 000 $, prêteur à 80 %
 (MDF 20 %). Le prêteur s'engage sur 80 % des frais finançables mais en
 RETIENT 100 % (déboursés progressifs) → au notaire il n'avance pas
 800 000 $ mais 800 000 − 20 % × (frais finançables) ; les frais
 d'acquisition se paient au notaire (montant complet, les finançables
-sont remboursés au 1er déboursé) ; les travaux s'avancent par tranche
-puis sont remboursés. Échéancier avec solde à partir du montant des
-investisseurs. Aucun nouveau poste : Σ sorties − Σ déboursés = mise de
-fonds prêteur B.
+sont remboursés au 1er déboursé) ; les frais de développement se paient
+au jour 1 avec le 1er déboursé ; les travaux s'avancent par tranche puis
+sont remboursés ; l'exploitation (revenus nets − intérêts) est montrée à
+part. Échéancier avec solde à partir du montant des investisseurs. Aucun
+nouveau poste : Σ sorties − Σ exploitation − Σ déboursés = mise de fonds
+prêteur B.
 """
 from __future__ import annotations
 
@@ -62,20 +64,34 @@ def test_exemple_de_phil_travaux_seuls_financables():
     assert a["manque_notaire"] == 100_000.0
     assert a["avance_notaire"] == 700_000.0
     assert a["mdf_notaire"] == 300_000.0
-    # Jour 0 : mise de fonds + TOUS les frais du notaire (montant complet,
-    # dont les frais de développement non finançables ici).
+    # Jour 0 : mise de fonds + les frais du notaire (montant complet) —
+    # les frais de développement, eux, se paient au jour 1.
     frais_notaire = sum(p["montant"] for p in a["postes"]["notaire"])
     assert a["cash_notaire"] == round(300_000.0 + frais_notaire, 2)
-    assert any(p["cle"] == "frais_developpement" for p in a["postes"]["notaire"])
-    # Rien de finançable au notaire → 1er déboursé nul.
-    assert _etape(a, "deboursement_1")["debourse"] == 0.0
+    assert not any(p["cle"] == "frais_developpement" for p in a["postes"]["notaire"])
+    j1 = _etape(a, "deboursement_1")
+    assert j1["sorties"] == 150_000.0 and a["frais_jour1"] == 150_000.0
+    # Rien de finançable au notaire ni au jour 1 → déboursé 1 nul.
+    assert j1["debourse"] == 0.0
+    # Chaque étape détaille ses postes avec leur montant.
+    j0 = _etape(a, "notaire")
+    assert j0["details"]["sorties"][0]["montant"] == 300_000.0
+    assert any(d["label"] == "Inspection" for d in j0["details"]["sorties"])
     # Les frais de négociation sont pendant les travaux (tranche 1).
-    assert any(p["cle"] == "frais_negociations" for p in a["postes"]["projet"]) or True
-    # 3 tranches : chacune rembourse 100 % des travaux de la tranche.
+    t1 = _etape(a, "tranche_1")
+    assert any(d["label"].startswith("Frais de négociation") for d in t1["details"]["sorties"]) or res.frais_demarrage.frais_negociations == 0
+    # 3 tranches : chacune rembourse 100 % des travaux de la tranche ; les
+    # travaux (sorties) sont séparés de l'exploitation.
     tranches = [e for e in a["echeancier"] if e["etape"].startswith("tranche_")]
     assert len(tranches) == 3
     assert all(abs(e["debourse"] - 500_000.0 / 3) < 0.05 for e in tranches)
-    # Σ sorties − Σ déboursés = mise de fonds prêteur B.
+    assert abs(sum(e["exploitation"] for e in tranches) - a["exploitation_total"]) < 0.05
+    assert abs(
+        a["exploitation_total"]
+        - (a["revenus_nets_projet"] - a["interets_portage"] - a["interets_bv"])
+    ) < 0.05
+    assert a["interets_portage"] == round(res.frais_demarrage.interets, 2)
+    # Σ sorties − Σ exploitation − Σ déboursés = mise de fonds prêteur B.
     assert abs(a["ecart"]) < 0.05
     assert abs(a["cash_definitif"] - res.mdf_preteur_b) < 0.05
     # Capital non saisi → il vaut le besoin maximal et le point bas est 0.
@@ -89,7 +105,8 @@ def test_exemple_de_phil_travaux_seuls_financables():
 
 def test_retenue_sur_tous_les_frais_financables_et_premier_debourse():
     # Courtier 1 et frais de développement finançables en plus des travaux :
-    # ils sont avancés au notaire (montant complet) et remboursés au jour 1.
+    # le courtier est avancé au notaire, le développement payé au jour 1,
+    # les deux remboursés par le 1er déboursé.
     res = compute_all(
         _inputs(
             frais_demarrage_financables=[
@@ -105,7 +122,13 @@ def test_retenue_sur_tous_les_frais_financables_et_premier_debourse():
     # Avance = prêt engagé − retenue = 800 000 − 20 % × base.
     assert abs(a["avance_notaire"] - (800_000.0 - 0.2 * base)) < 0.05
     assert abs(a["manque_notaire"] - 0.2 * base) < 0.05
-    assert abs(_etape(a, "deboursement_1")["debourse"] - (courtier["montant"] + 150_000.0)) < 0.05
+    j1 = _etape(a, "deboursement_1")
+    assert abs(j1["debourse"] - (courtier["montant"] + 150_000.0)) < 0.05
+    assert j1["sorties"] == 150_000.0
+    assert {d["label"] for d in j1["details"]["debourse"]} == {
+        "Courtier hypothécaire (achat) — remboursé",
+        "Frais de développement — remboursé",
+    }
     assert abs(a["ecart"]) < 0.05
 
 

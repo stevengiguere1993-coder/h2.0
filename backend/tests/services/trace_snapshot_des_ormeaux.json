@@ -1282,9 +1282,23 @@
   },
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
-    "label": "Jour 1 — 1er déboursé : frais finançables de l'achat remboursés",
-    "formule": "100 % × (aucun)",
+    "label": "Jour 1 — frais payés avec le 1er déboursé",
+    "formule": "aucun",
     "valeur": "0 $",
+    "source": "calcul"
+  },
+  {
+    "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
+    "label": "Jour 1 — 1er déboursé : frais finançables de l'achat et du jour 1 remboursés",
+    "formule": "100 % × (aucun ; aucun)",
+    "valeur": "0 $",
+    "source": "calcul"
+  },
+  {
+    "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
+    "label": "Jeu d'exploitation pendant les travaux (revenus nets − intérêts de portage − intérêts BV)",
+    "formule": "345 538 $ − 639 296 $ − 0 $",
+    "valeur": "-293 758 $",
     "source": "calcul"
   },
   {
@@ -1297,8 +1311,15 @@
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
     "label": "Travaux — tranche 1 sur 3, puis déboursé 2 — sorties",
-    "formule": "postes étalés ÷ nb de déboursés + postes ponctuels",
-    "valeur": "182 419 $",
+    "formule": "travaux ÷ nb de déboursés + postes ponctuels",
+    "valeur": "84 500 $",
+    "source": "calcul"
+  },
+  {
+    "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
+    "label": "Travaux — tranche 1 sur 3, puis déboursé 2 — exploitation nette",
+    "formule": "(revenus nets − intérêts) ÷ nb de déboursés",
+    "valeur": "-97 919 $",
     "source": "calcul"
   },
   {
@@ -1311,8 +1332,15 @@
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
     "label": "Travaux — tranche 2 sur 3, puis déboursé 3 — sorties",
-    "formule": "postes étalés ÷ nb de déboursés",
-    "valeur": "177 919 $",
+    "formule": "travaux ÷ nb de déboursés",
+    "valeur": "80 000 $",
+    "source": "calcul"
+  },
+  {
+    "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
+    "label": "Travaux — tranche 2 sur 3, puis déboursé 3 — exploitation nette",
+    "formule": "(revenus nets − intérêts) ÷ nb de déboursés",
+    "valeur": "-97 919 $",
     "source": "calcul"
   },
   {
@@ -1325,8 +1353,15 @@
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
     "label": "Travaux — tranche 3 sur 3, puis déboursé 4 — sorties",
-    "formule": "postes étalés ÷ nb de déboursés",
-    "valeur": "177 919 $",
+    "formule": "travaux ÷ nb de déboursés",
+    "valeur": "80 000 $",
+    "source": "calcul"
+  },
+  {
+    "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
+    "label": "Travaux — tranche 3 sur 3, puis déboursé 4 — exploitation nette",
+    "formule": "(revenus nets − intérêts) ÷ nb de déboursés",
+    "valeur": "-97 919 $",
     "source": "calcul"
   },
   {
@@ -1345,7 +1380,7 @@
   },
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
-    "label": "= Cash définitif (Σ sorties − Σ déboursés)",
+    "label": "= Cash définitif (Σ sorties − Σ exploitation − Σ déboursés)",
     "formule": "toutes les étapes",
     "valeur": "1 618 172 $",
     "source": "calcul"
@@ -1353,7 +1388,7 @@
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
     "label": "Besoin de trésorerie maximal (exposition la plus haute avant un déboursé)",
-    "formule": "max sur l'échéancier de (Σ sorties − Σ déboursés)",
+    "formule": "max sur l'échéancier de (Σ sorties − Σ exploitation − Σ déboursés)",
     "valeur": "1 651 808 $",
     "source": "calcul"
   },

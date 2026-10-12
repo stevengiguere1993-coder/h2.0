@@ -4591,14 +4591,21 @@ type AchatPreteurBPoste = {
   finance: number;
   financable: boolean;
 };
+type AchatPreteurBDetail = { label: string; montant: number };
 type AchatPreteurBEtape = {
   etape: string;
   libelle: string;
   sorties: number;
+  /** Exploitation nette de l'étape (+ = entrée : revenus nets − intérêts). */
+  exploitation: number;
   debourse: number;
   solde_avant: number;
   solde_apres: number;
-  postes: string[];
+  details: {
+    sorties: AchatPreteurBDetail[];
+    exploitation: AchatPreteurBDetail[];
+    debourse: AchatPreteurBDetail[];
+  };
 };
 type AchatPreteurB = {
   prix_achat: number;
@@ -4621,8 +4628,13 @@ type AchatPreteurB = {
   balance_vente: number;
   frais_notaire: number;
   cash_notaire: number;
+  frais_jour1: number;
   remboursement_jour_1: number;
   nb_deboursements: number;
+  exploitation_total: number;
+  revenus_nets_projet: number;
+  interets_portage: number;
+  interets_bv: number;
   cash_projet: number;
   cash_refi: number;
   echeancier: AchatPreteurBEtape[];
@@ -4638,6 +4650,7 @@ type AchatPreteurB = {
   ecart: number;
   postes: {
     notaire: AchatPreteurBPoste[];
+    jour1: AchatPreteurBPoste[];
     projet: AchatPreteurBPoste[];
     refi: AchatPreteurBPoste[];
   };
@@ -5938,11 +5951,12 @@ function DepensesResidentielCard({
 /** Achat — Prêteur B : cashflow de l'acquisition (Phil 2026-10-12).
  *  « Ils retiennent 100 % au lieu de 80 % : au notaire on n'a pas
  *  800 000 $ mais 700 000 $ ; les frais initiaux sont cash au début ;
- *  les travaux se paient d'abord de ma poche puis sont remboursés. » Et
- *  sur le 1660 Saint-Clément : « la retenue, c'est tous les frais
- *  finançables ; jour 1 on fait le premier déboursé avec les frais de
- *  l'achat et de développement ; si je demande 610 k aux investisseurs,
- *  il va rester combien à quel moment ? » → échéancier de trésorerie.
+ *  les travaux se paient d'abord de ma poche puis sont remboursés. »
+ *  1660 Saint-Clément : « la retenue, c'est tous les frais finançables ;
+ *  le frais de dev se paie au jour 1 avec le déboursé ; la différence
+ *  entre revenus nets et intérêts c'est notre roulement ; il faut voir
+ *  quel montant est combien ; si je demande 610 k aux investisseurs, il
+ *  va rester combien à quel moment ? » → échéancier dépliable.
  *  Aucun nouveau poste : les frais, le prêt B et la mise de fonds déjà
  *  calculés, répartis dans le temps. Page juste avant Refinancement. */
 function PreteurBAchatPanel({
@@ -5957,6 +5971,18 @@ function PreteurBAchatPanel({
   const pct = (f: number) =>
     `${String(Math.round(f * 1000) / 10).replace(".", ",")} %`;
   const soldeCls = (v: number) => (v < 0 ? "text-rose-300" : "text-white");
+  const signeCls = (v: number) =>
+    v < 0 ? "text-rose-300" : v > 0 ? "text-emerald-300" : "text-white/50";
+  const signe = (v: number) => (v > 0 ? `+ ${fmtMoney(v)}` : fmtMoney(v));
+  // Étapes dépliées (montant par poste) — le jour 0 ouvert par défaut.
+  const [ouverts, setOuverts] = useState<Set<string>>(() => new Set(["notaire"]));
+  const basculer = (k: string) =>
+    setOuverts((prev) => {
+      const n = new Set(prev);
+      if (n.has(k)) n.delete(k);
+      else n.add(k);
+      return n;
+    });
   const ligne = (
     label: ReactNode,
     val: number,
@@ -5987,8 +6013,37 @@ function PreteurBAchatPanel({
       {body}
     </div>
   );
-  const momentLabels: Record<"notaire" | "projet" | "refi", string> = {
+  const detailListe = (
+    titre: string,
+    items: AchatPreteurBDetail[],
+    tone: "sortie" | "exploitation" | "debourse"
+  ) =>
+    items.length ? (
+      <div>
+        <p className="mb-0.5 px-2 text-[9px] font-semibold uppercase tracking-wider text-white/40">
+          {titre}
+        </p>
+        {items.map((d, i) => (
+          <div key={`${d.label}-${i}`} className="flex items-center justify-between gap-2 px-2 py-0.5">
+            <span className="min-w-0 truncate text-white/60">{d.label}</span>
+            <span
+              className={`shrink-0 font-mono tabular-nums ${
+                tone === "debourse"
+                  ? "text-emerald-300"
+                  : tone === "exploitation"
+                  ? signeCls(d.montant)
+                  : "text-white/80"
+              }`}
+            >
+              {tone === "debourse" ? `+ ${fmtMoney(d.montant)}` : tone === "exploitation" ? signe(d.montant) : fmtMoney(d.montant)}
+            </span>
+          </div>
+        ))}
+      </div>
+    ) : null;
+  const momentLabels: Record<"notaire" | "jour1" | "projet" | "refi", string> = {
     notaire: "Au notaire (jour 0)",
+    jour1: "Jour 1 — payés avec le 1er déboursé",
     projet: "Pendant les travaux",
     refi: "Au refinancement"
   };
@@ -6004,8 +6059,9 @@ function PreteurBAchatPanel({
           finançables mais en retient {pct(a.retenue_pct)} et les débourse
           progressivement : ce qu&apos;il retient au-delà de sa part est
           exigé d&apos;avance au notaire, et chaque frais finançable est
-          avancé de ta poche jusqu&apos;au déboursé suivant. Les frais non
-          finançables sont cash pour de bon.
+          avancé de ta poche jusqu&apos;au déboursé suivant. Les frais de
+          développement se paient au jour 1 avec le premier déboursé. Clique
+          une étape pour voir chaque montant.
         </>
       }
       action={
@@ -6037,6 +6093,15 @@ function PreteurBAchatPanel({
           tone="amber"
         />
         <StatTile
+          icon={Gauge}
+          label="Jeu d'exploitation (travaux)"
+          value={signe(a.exploitation_total)}
+          hint={`Revenus nets ${fmtMoney(a.revenus_nets_projet)} − intérêts ${fmtMoney(
+            a.interets_portage + a.interets_bv
+          )}`}
+          tone={a.exploitation_total < 0 ? "rose" : "emerald"}
+        />
+        <StatTile
           icon={PiggyBank}
           label={
             a.capital_saisi
@@ -6052,12 +6117,6 @@ function PreteurBAchatPanel({
               : "= besoin maximal (montant non saisi)"
           }
           tone={a.capital_saisi && a.manque > 0 ? "rose" : "emerald"}
-        />
-        <StatTile
-          icon={Gauge}
-          label="Cash définitif"
-          value={fmtMoney(a.cash_definitif)}
-          hint="Sorties − déboursés = mise de fonds prêteur B"
         />
       </div>
 
@@ -6095,14 +6154,15 @@ function PreteurBAchatPanel({
         </SubCard>
       </div>
 
-      {/* Échéancier de trésorerie — la réponse à « il va rester combien
-          à quel moment ». */}
+      {/* Échéancier de trésorerie — « il va rester combien à quel
+          moment » ; chaque étape se déplie poste par poste. */}
       <div className="mt-4 overflow-x-auto rounded-xl border border-brand-800">
         <table className="w-full text-[11px]">
           <thead>
             <tr className="bg-brand-950/60 text-[10px] uppercase tracking-wider text-white/50">
               <th className="px-3 py-2 text-left font-semibold">Étape</th>
               <th className="px-3 py-2 text-right font-semibold">Sorties</th>
+              <th className="px-3 py-2 text-right font-semibold">Exploitation nette</th>
               <th className="px-3 py-2 text-right font-semibold">Solde avant déboursé</th>
               <th className="px-3 py-2 text-right font-semibold">Déboursé du prêteur</th>
               <th className="px-3 py-2 text-right font-semibold">Solde après</th>
@@ -6111,37 +6171,69 @@ function PreteurBAchatPanel({
           <tbody>
             {a.echeancier.map((e) => {
               const bas = a.point_bas?.etape === e.etape;
+              const ouvert = ouverts.has(e.etape);
+              const nbPostes =
+                e.details.sorties.length +
+                e.details.exploitation.length +
+                e.details.debourse.length;
               return (
-                <tr
-                  key={e.etape}
-                  className={`border-t border-brand-800 ${bas ? "bg-amber-500/10" : ""}`}
-                >
-                  <td className="px-3 py-2 align-top text-white/80">
-                    <span>{e.libelle}</span>
-                    {bas ? (
-                      <span className="ml-2 rounded-full border border-amber-400/50 px-1.5 text-[9px] font-bold uppercase text-amber-300">
-                        point bas
+                <Fragment key={e.etape}>
+                  <tr
+                    onClick={() => basculer(e.etape)}
+                    className={`cursor-pointer border-t border-brand-800 hover:bg-white/[0.03] ${
+                      bas ? "bg-amber-500/10" : ""
+                    }`}
+                    title="Cliquer pour voir chaque montant"
+                  >
+                    <td className="px-3 py-2 align-top text-white/80">
+                      <span className="mr-1.5 inline-block w-3 text-white/40">
+                        {ouvert ? "▾" : "▸"}
                       </span>
-                    ) : null}
-                    {e.postes.length ? (
-                      <p className="mt-0.5 text-[10px] leading-snug text-white/35">
-                        {e.postes.join(" · ")}
+                      <span>{e.libelle}</span>
+                      {bas ? (
+                        <span className="ml-2 rounded-full border border-amber-400/50 px-1.5 text-[9px] font-bold uppercase text-amber-300">
+                          point bas
+                        </span>
+                      ) : null}
+                      <p className="mt-0.5 pl-[18px] text-[10px] text-white/35">
+                        {nbPostes} poste{nbPostes > 1 ? "s" : ""} · cliquer pour le détail
                       </p>
-                    ) : null}
-                  </td>
-                  <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-white/70">
-                    {e.sorties ? fmtMoney(e.sorties) : "—"}
-                  </td>
-                  <td className={`px-3 py-2 text-right align-top font-mono tabular-nums ${soldeCls(e.solde_avant)}`}>
-                    {fmtMoney(e.solde_avant)}
-                  </td>
-                  <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-emerald-300">
-                    {e.debourse ? `+ ${fmtMoney(e.debourse)}` : "—"}
-                  </td>
-                  <td className={`px-3 py-2 text-right align-top font-mono font-semibold tabular-nums ${soldeCls(e.solde_apres)}`}>
-                    {fmtMoney(e.solde_apres)}
-                  </td>
-                </tr>
+                    </td>
+                    <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-white/70">
+                      {e.sorties ? fmtMoney(e.sorties) : "—"}
+                    </td>
+                    <td className={`px-3 py-2 text-right align-top font-mono tabular-nums ${signeCls(e.exploitation)}`}>
+                      {e.exploitation ? signe(e.exploitation) : "—"}
+                    </td>
+                    <td className={`px-3 py-2 text-right align-top font-mono tabular-nums ${soldeCls(e.solde_avant)}`}>
+                      {fmtMoney(e.solde_avant)}
+                    </td>
+                    <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-emerald-300">
+                      {e.debourse ? `+ ${fmtMoney(e.debourse)}` : "—"}
+                    </td>
+                    <td className={`px-3 py-2 text-right align-top font-mono font-semibold tabular-nums ${soldeCls(e.solde_apres)}`}>
+                      {fmtMoney(e.solde_apres)}
+                    </td>
+                  </tr>
+                  {ouvert ? (
+                    <tr className="border-t border-brand-800/60 bg-brand-950/50">
+                      <td colSpan={6} className="px-3 py-2">
+                        <div className="grid gap-3 text-[11px] lg:grid-cols-3">
+                          {detailListe("Sorties", e.details.sorties, "sortie")}
+                          {detailListe(
+                            "Exploitation (revenus nets − intérêts)",
+                            e.details.exploitation,
+                            "exploitation"
+                          )}
+                          {detailListe("Déboursé du prêteur", e.details.debourse, "debourse")}
+                          {nbPostes === 0 ? (
+                            <p className="px-2 text-white/40">Rien à cette étape.</p>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
               );
             })}
           </tbody>
@@ -6158,7 +6250,10 @@ function PreteurBAchatPanel({
         <b className={soldeCls(a.solde_fin_travaux)}>{fmtMoney(a.solde_fin_travaux)}</b>{" "}
         à la fin des travaux et{" "}
         <b className={soldeCls(a.solde_fin)}>{fmtMoney(a.solde_fin)}</b> après le
-        refinancement.
+        refinancement. Pendant les travaux, le bâtiment{" "}
+        {a.exploitation_total >= 0 ? "dégage" : "coûte"}{" "}
+        <b className={signeCls(a.exploitation_total)}>{fmtMoney(Math.abs(a.exploitation_total))}</b>{" "}
+        (revenus nets − intérêts) : c&apos;est le jeu qui finance le roulement.
         {a.manque > 0 ? (
           <span className="text-rose-300">
             {" "}
@@ -6170,7 +6265,7 @@ function PreteurBAchatPanel({
 
       <div className="mt-4 grid gap-3 text-[11px] lg:grid-cols-2">
         {bloc(
-          "Au notaire (jour 0)",
+          "Au notaire (jour 0) — poste par poste",
           <>
             {ligne("Prêt du prêteur B engagé (bâtisse + frais financés)", a.pret_total, { muted: true })}
             {ligne(
@@ -6182,23 +6277,50 @@ function PreteurBAchatPanel({
             {ligne("Mise de fonds au notaire (prix − avance)", a.mdf_notaire)}
             {a.cashback > 0 ? ligne("− Cashback reçu au notaire", -a.cashback) : null}
             {a.balance_vente > 0 ? ligne("− Balance de vente", -a.balance_vente) : null}
-            {ligne("+ Frais payés au notaire (montant complet, finançables avancés inclus)", a.frais_notaire)}
+            {a.postes.notaire.map((p) =>
+              ligne(
+                <>
+                  + {p.label}
+                  {p.financable ? (
+                    <span className="text-emerald-300/70"> (remboursé au jour 1)</span>
+                  ) : null}
+                </>,
+                p.montant
+              )
+            )}
             {ligne("= Sorties au jour 0", a.cash_notaire, { gras: true, tone: "amber" })}
           </>
         )}
         {bloc(
-          "Retenue et déboursés",
+          "Retenue, jour 1 et exploitation",
           <>
-            {ligne("Frais finançables (notaire + travaux) = base de la retenue", a.base_retenue, { muted: true })}
+            {ligne("Frais finançables (notaire + jour 1 + travaux) = base de la retenue", a.base_retenue, { muted: true })}
             {ligne(`Part financée par le prêteur (${pct(1 - a.mdf_pct)})`, a.finance_np, { muted: true })}
             {ligne("Manque à combler au notaire (retenue − part financée)", a.manque_notaire)}
+            {a.postes.jour1.map((p) =>
+              ligne(
+                <>
+                  Jour 1 — {p.label} (payé avec le déboursé)
+                  {p.financable ? <span className="text-emerald-300/70"> (remboursé)</span> : null}
+                </>,
+                p.montant
+              )
+            )}
             {ligne(
-              `Jour 1 — 1er déboursé (${pct(a.taux_remboursement)} des finançables de l'achat)`,
+              `Jour 1 — 1er déboursé (${pct(a.taux_remboursement)} des finançables de l'achat et du jour 1)`,
               a.remboursement_jour_1,
               { gras: true, tone: "emerald" }
             )}
-            {ligne(`Cash pendant les travaux (${a.nb_deboursements} tranches, sorties − déboursés)`, a.cash_projet)}
+            {ligne("Revenus nets pendant les travaux", a.revenus_nets_projet)}
+            {ligne("− Intérêts de portage pendant les travaux", -a.interets_portage)}
+            {a.interets_bv > 0 ? ligne("− Intérêts de la balance de vente", -a.interets_bv) : null}
+            {ligne("= Jeu d'exploitation (étalé sur les tranches)", a.exploitation_total, {
+              gras: true,
+              tone: a.exploitation_total >= 0 ? "emerald" : "amber"
+            })}
+            {ligne(`Cash pendant les travaux (${a.nb_deboursements} tranches, net)`, a.cash_projet)}
             {ligne("Frais au refinancement (le prêt B est remboursé)", a.cash_refi)}
+            {ligne("Cash définitif = mise de fonds prêteur B", a.cash_definitif, { gras: true })}
             {Math.abs(a.ecart) > 1
               ? ligne("Écart avec la mise de fonds (devrait être 0)", a.ecart, { muted: true })
               : null}
@@ -6208,10 +6330,10 @@ function PreteurBAchatPanel({
 
       <details className="mt-3 rounded-lg border border-brand-800 bg-brand-950/40 p-3 text-[11px]">
         <summary className="cursor-pointer text-white/70">
-          Détail des postes par moment (montant complet · part financée)
+          Tous les postes par moment (montant complet · part financée)
         </summary>
-        <div className="mt-2 grid gap-3 lg:grid-cols-3">
-          {(["notaire", "projet", "refi"] as const).map((m) => (
+        <div className="mt-2 grid gap-3 lg:grid-cols-4">
+          {(["notaire", "jour1", "projet", "refi"] as const).map((m) => (
             <div key={m}>
               <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/50">
                 {momentLabels[m]}
