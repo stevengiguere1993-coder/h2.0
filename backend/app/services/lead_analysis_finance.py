@@ -2230,17 +2230,28 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
     # le montant retenu (s'il dépasse la mise de fonds, l'excédent
     # couvre les frais, comme le cashback). Ses intérêts suivent.
     _bv = max(0.0, float(inputs.balance_vente_montant or 0.0))
-    frais.interets = (
-        (1 - _mdf_pct)
-        * (inputs.prix_achat + _frais_fin_total)
-        * inputs.taux_interet_preteur_b_projet
-        * inputs.duree_projet_annees
-    )
-    frais.interets_balance_vente = (
-        _bv
-        * float(inputs.balance_vente_taux_pct or 0.0)
-        * inputs.duree_projet_annees
-    )
+    # Un override de fiche ou un poste masqué garde la valeur déjà posée
+    # (Phil 2026-10-12, 1660 Saint-Clément : l'override « Intérêts
+    # pendant projet » de la fiche était ignoré par ce recalcul → MDF du
+    # moteur 712 315 $ vs composition 611 436 $, badge « recalcul
+    # requis » sans issue).
+    _ov_i = inputs.frais_demarrage_overrides or {}
+    if _ov_i.get("interets") is None and "interets" not in masques:
+        frais.interets = (
+            (1 - _mdf_pct)
+            * (inputs.prix_achat + _frais_fin_total)
+            * inputs.taux_interet_preteur_b_projet
+            * inputs.duree_projet_annees
+        )
+    if (
+        _ov_i.get("interets_balance_vente") is None
+        and "interets_balance_vente" not in masques
+    ):
+        frais.interets_balance_vente = (
+            _bv
+            * float(inputs.balance_vente_taux_pct or 0.0)
+            * inputs.duree_projet_annees
+        )
 
     # Total dépensé (prêt initial + tout le cash) = coût réel + frais.
     prix_acquisition = prix_reel + frais.total

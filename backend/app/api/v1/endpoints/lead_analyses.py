@@ -1625,7 +1625,7 @@ async def extraction_health(user: CurrentUser) -> dict:
         "ocr": _ocr_health_payload(),
         # Marqueurs du serveur déployé (sonde post-déploiement sans accès
         # aux logs Render) : version du code + commit injecté par Render.
-        "version": "2026-10-12b",
+        "version": "2026-10-12c",
         "commit": (os.getenv("RENDER_GIT_COMMIT") or "")[:12] or None,
     }
 
