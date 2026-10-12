@@ -166,7 +166,6 @@ class LeadAnalysisRead(BaseModel):
     # Achat prêteur B — cashflow (Phil 2026-10-12).
     retenue_travaux_pct: Optional[float] = None
     nb_deboursements_travaux: Optional[int] = None
-    fonds_roulement_travaux: Optional[float] = None
     ltv_residentiel_pct: Optional[float] = None
     amort_residentiel_annees: Optional[int] = None
     # Assumation hypothécaire (Phil 2026-09-29).
@@ -182,6 +181,9 @@ class LeadAnalysisRead(BaseModel):
     # Croissances annuelles (FRACTIONS, 0.03 = 3 %) — partagées avec
     # le TRI (source unique) et la projection des achats directs.
     tri_croissance_loyers: Optional[float] = None
+    #: Capital injecté du TRI = montant demandé aux investisseurs (page
+    #: Achat prêteur B, Phil 2026-10-12).
+    tri_capital_injecte: Optional[float] = None
     tri_croissance_depenses: Optional[float] = None
     # Phase 3 — optimisation par unité (liste JSON).
     unites_json: Optional[str] = None
@@ -325,7 +327,6 @@ class LeadAnalysisUpdate(BaseModel):
     # saisi (null = retenue ÷ nombre de déboursés).
     retenue_travaux_pct: Optional[float] = Field(default=None, ge=0, le=100)
     nb_deboursements_travaux: Optional[int] = Field(default=None, ge=1, le=60)
-    fonds_roulement_travaux: Optional[float] = Field(default=None, ge=0)
     # Mode résidentiel (2026-09-08).
     ltv_residentiel_pct: Optional[float] = Field(default=None, ge=0, le=100)
     amort_residentiel_annees: Optional[int] = Field(default=None, ge=1, le=40)
@@ -353,6 +354,7 @@ class LeadAnalysisUpdate(BaseModel):
     )
     # Croissances annuelles (FRACTIONS, 0.03 = 3 %) — partagées avec
     # le TRI.
+    tri_capital_injecte: Optional[float] = Field(default=None, ge=0)
     tri_croissance_loyers: Optional[float] = Field(
         default=None, ge=0, le=0.3
     )
@@ -1623,7 +1625,7 @@ async def extraction_health(user: CurrentUser) -> dict:
         "ocr": _ocr_health_payload(),
         # Marqueurs du serveur déployé (sonde post-déploiement sans accès
         # aux logs Render) : version du code + commit injecté par Render.
-        "version": "2026-10-12a",
+        "version": "2026-10-12b",
         "commit": (os.getenv("RENDER_GIT_COMMIT") or "")[:12] or None,
     }
 
@@ -2638,7 +2640,7 @@ RECALC_INPUT_FIELDS = {
     "balance_vente_taux_pct", "projection_horizon_annees",
     "tri_croissance_loyers", "tri_croissance_depenses", "unites_json",
     "retenue_travaux_pct", "nb_deboursements_travaux",
-    "fonds_roulement_travaux",
+    "tri_capital_injecte",
 }
 
 
@@ -2923,9 +2925,11 @@ async def _compute_and_store(rec, db) -> dict:
         # Paramètres juste avant (``_completer_depuis_parametres``).
         retenue_travaux_pct=float(rec.retenue_travaux_pct) / 100.0,
         nb_deboursements_travaux=int(rec.nb_deboursements_travaux),
-        fonds_roulement_travaux=(
-            float(rec.fonds_roulement_travaux)
-            if rec.fonds_roulement_travaux is not None
+        # Montant demandé aux investisseurs = capital injecté du TRI
+        # (même colonne : l'onglet Achat et l'onglet TRI se lisent).
+        capital_investisseurs=(
+            float(rec.tri_capital_injecte)
+            if rec.tri_capital_injecte is not None
             else None
         ),
         # Mode résidentiel (2026-09-08).

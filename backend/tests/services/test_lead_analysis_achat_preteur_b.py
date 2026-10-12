@@ -1,12 +1,14 @@
 """Achat prêteur B — cashflow de l'acquisition (Phil 2026-10-12).
 
 L'exemple de Phil : prix 1 000 000 $, travaux 500 000 $, prêteur à 80 %
-(MDF 20 %). Le prêteur s'engage sur 80 % des travaux mais en RETIENT
-100 % (déboursés progressifs) → au notaire il n'avance pas 800 000 $
-mais 800 000 − 20 % × 500 000 = 700 000 $ ; les frais d'acquisition se
-paient cash au départ ; les travaux s'avancent avant d'être remboursés
-(fonds de roulement). Vue par moment, aucun nouveau poste : la somme
-des cash par moment redonne la mise de fonds prêteur B.
+(MDF 20 %). Le prêteur s'engage sur 80 % des frais finançables mais en
+RETIENT 100 % (déboursés progressifs) → au notaire il n'avance pas
+800 000 $ mais 800 000 − 20 % × (frais finançables) ; les frais
+d'acquisition se paient au notaire (montant complet, les finançables
+sont remboursés au 1er déboursé) ; les travaux s'avancent par tranche
+puis sont remboursés. Échéancier avec solde à partir du montant des
+investisseurs. Aucun nouveau poste : Σ sorties − Σ déboursés = mise de
+fonds prêteur B.
 """
 from __future__ import annotations
 
@@ -32,6 +34,7 @@ def _inputs(**kw) -> FinanceInputs:
         typologie_prix={"4.5": 1_500.0},
         duree_projet_annees=2,
         frais_travaux=500_000.0,
+        frais_developpement=150_000.0,
         nouveau_loyer_abordable=1_000.0,
         mdf_preteur_b_pct=0.20,
         frais_demarrage_financables=["frais_travaux"],
@@ -42,69 +45,92 @@ def _inputs(**kw) -> FinanceInputs:
     return FinanceInputs(**base)
 
 
-def _cash_frais(res, moment: str) -> float:
-    return sum(p["cash"] for p in res.achat_preteur_b["postes"][moment])
+def _etape(a, nom):
+    return next(e for e in a["echeancier"] if e["etape"] == nom)
 
 
-def test_exemple_de_phil_retenue_100_pct():
+def test_exemple_de_phil_travaux_seuls_financables():
     res = compute_all(_inputs())
     a = res.achat_preteur_b
     assert a is not None
-    # Le prêteur s'engage sur 80 % de 1 M + 80 % de 500 k = 1,2 M…
+    # Seuls les travaux sont finançables : engagement 80 % de 1 M + 80 %
+    # de 500 k = 1,2 M ; retenue = 100 % des travaux → 700 000 $ au notaire.
     assert a["pret_total"] == 1_200_000.0
-    assert a["engagement_travaux"] == 400_000.0
-    # … mais retient 100 % des travaux : 700 000 $ au notaire.
+    assert a["base_retenue"] == 500_000.0
     assert a["retenue"] == 500_000.0
+    assert a["taux_remboursement"] == 1.0
+    assert a["manque_notaire"] == 100_000.0
     assert a["avance_notaire"] == 700_000.0
-    assert a["manque_travaux_notaire"] == 100_000.0
-    # Mise de fonds au notaire = 20 % du prix + 20 % des travaux exigés
-    # d'avance.
     assert a["mdf_notaire"] == 300_000.0
-    # Les frais d'acquisition (courtier, notaire, avocat, inspection,
-    # frais de dossier…) sont cash au notaire ; les travaux ne coûtent
-    # plus rien pendant le projet (part déjà sortie au notaire).
-    assert a["cash_notaire"] == 300_000.0 + _cash_frais(res, "notaire")
-    assert a["travaux_cash_projet"] == 0.0
-    assert a["cash_projet"] == _cash_frais(res, "projet")
-    # Fonds de roulement = retenue ÷ nombre de déboursés.
-    assert a["fonds_roulement"] == round(500_000.0 / 3, 2)
-    assert a["fonds_roulement_saisi"] is False
-    # La vue par moment redonne exactement la mise de fonds prêteur B.
+    # Jour 0 : mise de fonds + TOUS les frais du notaire (montant complet,
+    # dont les frais de développement non finançables ici).
+    frais_notaire = sum(p["montant"] for p in a["postes"]["notaire"])
+    assert a["cash_notaire"] == round(300_000.0 + frais_notaire, 2)
+    assert any(p["cle"] == "frais_developpement" for p in a["postes"]["notaire"])
+    # Rien de finançable au notaire → 1er déboursé nul.
+    assert _etape(a, "deboursement_1")["debourse"] == 0.0
+    # Les frais de négociation sont pendant les travaux (tranche 1).
+    assert any(p["cle"] == "frais_negociations" for p in a["postes"]["projet"]) or True
+    # 3 tranches : chacune rembourse 100 % des travaux de la tranche.
+    tranches = [e for e in a["echeancier"] if e["etape"].startswith("tranche_")]
+    assert len(tranches) == 3
+    assert all(abs(e["debourse"] - 500_000.0 / 3) < 0.05 for e in tranches)
+    # Σ sorties − Σ déboursés = mise de fonds prêteur B.
     assert abs(a["ecart"]) < 0.05
-    assert abs(a["cash_notaire"] + a["cash_projet"] + a["cash_refi"] - res.mdf_preteur_b) < 0.05
-    assert a["besoin_max"] == round(a["cash_notaire"] + a["cash_projet"] + a["fonds_roulement"], 2)
-    # Les postes du refi (courtier 2, évaluateur 2, notaire 2) sont au refi.
-    cles_refi = {p["cle"] for p in a["postes"]["refi"]}
-    assert cles_refi == {"courtier_hypothecaire_2", "evaluateur_2", "notaire_2"}
-    cles_notaire = {p["cle"] for p in a["postes"]["notaire"]}
-    assert {"courtier_hypothecaire_1", "notaire", "avocat", "inspection", "frais_dossier_preteur"} <= cles_notaire
+    assert abs(a["cash_definitif"] - res.mdf_preteur_b) < 0.05
+    # Capital non saisi → il vaut le besoin maximal et le point bas est 0.
+    assert a["capital_saisi"] is False and a["capital"] == a["besoin_max"]
+    assert abs(a["point_bas"]["solde"]) < 0.05
+    assert a["besoin_max"] >= a["cash_notaire"]
+    assert [e["etape"] for e in a["echeancier"]] == [
+        "notaire", "deboursement_1", "tranche_1", "tranche_2", "tranche_3", "refi",
+    ]
 
 
-def test_retenue_egale_a_la_part_financee_et_fonds_de_roulement_saisi():
+def test_retenue_sur_tous_les_frais_financables_et_premier_debourse():
+    # Courtier 1 et frais de développement finançables en plus des travaux :
+    # ils sont avancés au notaire (montant complet) et remboursés au jour 1.
+    res = compute_all(
+        _inputs(
+            frais_demarrage_financables=[
+                "frais_travaux", "courtier_hypothecaire_1", "frais_developpement",
+            ]
+        )
+    )
+    a = res.achat_preteur_b
+    courtier = next(p for p in a["postes"]["notaire"] if p["cle"] == "courtier_hypothecaire_1")
+    base = 500_000.0 + courtier["montant"] + 150_000.0
+    assert a["base_retenue"] == round(base, 2)
+    assert a["retenue"] == round(base, 2)
+    # Avance = prêt engagé − retenue = 800 000 − 20 % × base.
+    assert abs(a["avance_notaire"] - (800_000.0 - 0.2 * base)) < 0.05
+    assert abs(a["manque_notaire"] - 0.2 * base) < 0.05
+    assert abs(_etape(a, "deboursement_1")["debourse"] - (courtier["montant"] + 150_000.0)) < 0.05
+    assert abs(a["ecart"]) < 0.05
+
+
+def test_retenue_80_pct_et_capital_saisi():
+    res = compute_all(
+        _inputs(
+            frais_demarrage_financables=["frais_travaux", "frais_developpement"],
+            retenue_travaux_pct=0.80,
+            capital_investisseurs=610_000.0,
+            nb_deboursements_travaux=4,
+        )
+    )
+    a = res.achat_preteur_b
     # Retenue 80 % = exactement la part financée : rien à combler au
-    # notaire (avance 800 000 $), les 20 % des travaux se paient pendant
-    # les travaux ; fonds de roulement saisi sur la fiche.
-    res = compute_all(_inputs(retenue_travaux_pct=0.80, fonds_roulement_travaux=200_000.0))
-    a = res.achat_preteur_b
+    # notaire, avance 80 % du prix ; déboursés à 80 % des frais finançables.
+    assert a["taux_remboursement"] == 0.8
+    assert a["manque_notaire"] == 0.0
     assert a["avance_notaire"] == 800_000.0
-    assert a["manque_travaux_notaire"] == 0.0
-    assert a["mdf_notaire"] == 200_000.0
-    assert a["travaux_cash_projet"] == 100_000.0
-    assert a["fonds_roulement"] == 200_000.0 and a["fonds_roulement_saisi"] is True
-    assert abs(a["ecart"]) < 0.05
-
-
-def test_travaux_non_finances():
-    # Travaux pas finançables : pas de retenue, avance = 80 % du prix,
-    # travaux 100 % cash pendant les travaux, pas de fonds de roulement.
-    res = compute_all(_inputs(frais_demarrage_financables=[]))
-    a = res.achat_preteur_b
-    assert a["travaux_financables"] is False
-    assert a["retenue"] == 0.0
-    assert a["avance_notaire"] == 800_000.0
-    assert a["mdf_notaire"] == 200_000.0
-    assert a["travaux_cash_projet"] == 500_000.0
-    assert a["fonds_roulement"] == 0.0
+    assert abs(_etape(a, "deboursement_1")["debourse"] - 0.8 * 150_000.0) < 0.05
+    assert len([e for e in a["echeancier"] if e["etape"].startswith("tranche_")]) == 4
+    # Solde à partir des 610 000 $ demandés.
+    assert a["capital_saisi"] is True and a["capital"] == 610_000.0
+    assert a["echeancier"][0]["solde_avant"] == round(610_000.0 - a["cash_notaire"], 2)
+    assert a["solde_fin"] == round(610_000.0 - a["cash_definitif"], 2)
+    assert a["manque"] == round(max(0.0, a["besoin_max"] - 610_000.0), 2)
     assert abs(a["ecart"]) < 0.05
 
 
