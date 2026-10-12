@@ -1067,6 +1067,189 @@ def compute_frais_demarrage(
     )
 
 
+# ─── Achat prêteur B : cashflow de l'acquisition (Phil 2026-10-12) ──
+#
+# « Ils retiennent 100 % des coûts de construction au lieu de 80 % :
+# au notaire on n'a pas 800 000 $ (80 % de 1 M) mais 800 000 − 20 % des
+# 500 000 $ de travaux = 700 000 $. Les frais initiaux (courtier,
+# notaire, avocat, inspection, frais de dossier…) sont tous en cash au
+# début. Et même financés à 100 %, les travaux se paient d'abord de ma
+# poche puis sont remboursés : il faut un fonds de roulement. »
+#
+# Moment où chaque poste de frais se paie : « notaire » (acquisition),
+# « projet » (pendant les travaux), « refi » (les postes « _2 » du
+# refinancement). Poste personnalisé ou inconnu → notaire.
+_MOMENT_FRAIS: Dict[str, str] = {
+    "courtier_hypothecaire_1": "notaire",
+    "taxes_bienvenue": "notaire",
+    "evaluateur": "notaire",
+    "inspection": "notaire",
+    "avocat": "notaire",
+    "notaire": "notaire",
+    "frais_dossier_preteur": "notaire",
+    "frais_negociations": "notaire",
+    "frais_travaux": "projet",
+    "frais_developpement": "projet",
+    "rapport_efficacite": "projet",
+    "interets": "projet",
+    "interets_balance_vente": "projet",
+    "revenus_nets_pendant_projet": "projet",
+    "detention": "projet",
+    "courtier_hypothecaire_2": "refi",
+    "evaluateur_2": "refi",
+    "notaire_2": "refi",
+}
+_LIBELLES_FRAIS: Dict[str, str] = {
+    "courtier_hypothecaire_1": "Courtier hypothécaire (achat)",
+    "courtier_hypothecaire_2": "Courtier hypothécaire (refi)",
+    "taxes_bienvenue": "Taxes de bienvenue",
+    "evaluateur": "Évaluateur (achat)",
+    "evaluateur_2": "Évaluateur (refi)",
+    "inspection": "Inspection",
+    "avocat": "Avocat",
+    "notaire": "Notaire (achat)",
+    "notaire_2": "Notaire (refi)",
+    "rapport_efficacite": "Rapport d'efficacité énergétique",
+    "frais_developpement": "Frais de développement",
+    "frais_negociations": "Frais de négociation",
+    "frais_travaux": "Travaux estimés",
+    "frais_dossier_preteur": "Frais de dossier du prêteur B",
+    "interets": "Intérêts de portage pendant le projet",
+    "interets_balance_vente": "Intérêts de la balance de vente",
+    "revenus_nets_pendant_projet": "Revenus nets pendant le projet",
+    "detention": "Détention",
+}
+
+
+def _achat_preteur_b_cashflow(
+    inputs: "FinanceInputs",
+    frais: FraisDemarrage,
+    *,
+    mdf_pct: float,
+    pret_sur_prix: float,
+    frais_finance_total: float,
+    pret_total: float,
+    cashback: float,
+    balance_vente: float,
+    mdf_preteur_b: float,
+) -> dict:
+    """Vue CASHFLOW de l'acquisition avec un prêteur B. Aucun nouveau
+    poste : les frais, le prêt B et la mise de fonds déjà calculés sont
+    répartis dans le TEMPS (notaire / travaux / refi) avec la mécanique
+    de RETENUE du prêteur sur les travaux. La somme des cash par moment
+    redonne exactement la mise de fonds prêteur B (``ecart`` = 0)."""
+    financables = set(inputs.frais_demarrage_financables or [])
+    travaux = float(frais.frais_travaux or 0.0)
+    travaux_financables = "frais_travaux" in financables and travaux > 0
+    part_financee_travaux = (1 - mdf_pct) if travaux_financables else 0.0
+    engagement_travaux = part_financee_travaux * travaux
+    retenue_pct = (
+        max(0.0, float(inputs.retenue_travaux_pct or 0.0))
+        if travaux_financables
+        else 0.0
+    )
+    retenue = (
+        min(retenue_pct * travaux, float(pret_total))
+        if travaux_financables
+        else 0.0
+    )
+    manque_travaux_notaire = max(0.0, retenue - engagement_travaux)
+
+    postes: Dict[str, list] = {"notaire": [], "projet": [], "refi": []}
+
+    def _ajouter(cle: str, label: str, montant: object, financable: bool) -> None:
+        try:
+            m = float(montant or 0.0)
+        except (TypeError, ValueError):
+            return
+        if m == 0.0:
+            return
+        cash = m * mdf_pct if financable else m
+        postes[_MOMENT_FRAIS.get(cle, "notaire")].append(
+            {
+                "cle": cle,
+                "label": label,
+                "montant": round(m, 2),
+                "cash": round(cash, 2),
+                "finance": round(m - cash, 2),
+                "financable": bool(financable),
+            }
+        )
+
+    for k, v in frais.__dict__.items():
+        if k in ("frais_custom", "frais_travaux"):
+            continue
+        _ajouter(k, _LIBELLES_FRAIS.get(k, k), v, k in financables)
+    for c in frais.frais_custom:
+        cid = str(c.get("id", ""))
+        _ajouter(
+            cid, str(c.get("label_fr") or cid), c.get("montant", 0),
+            bool(c.get("financable")),
+        )
+
+    cash_notaire_frais = sum(p["cash"] for p in postes["notaire"])
+    cash_projet_frais = sum(p["cash"] for p in postes["projet"])
+    cash_refi_frais = sum(p["cash"] for p in postes["refi"])
+    frais_finances_hors_travaux = sum(
+        p["finance"] for lst in postes.values() for p in lst
+    )
+    # Travaux : part définitivement à notre charge (MDF % si financés,
+    # 100 % sinon) — exigée au notaire à hauteur du manque, le reste
+    # pendant les travaux.
+    travaux_cash = travaux * (mdf_pct if travaux_financables else 1.0)
+    travaux_cash_projet = max(0.0, travaux_cash - manque_travaux_notaire)
+    assise = mdf_pct * float(inputs.prix_achat)
+    avance_notaire = float(pret_total) - retenue
+    mdf_notaire = assise + manque_travaux_notaire
+    cash_notaire = mdf_notaire - cashback - balance_vente + cash_notaire_frais
+    nb = max(1, int(inputs.nb_deboursements_travaux or 1))
+    fonds_roulement_calcule = retenue / nb if retenue > 0 else 0.0
+    saisi = inputs.fonds_roulement_travaux is not None
+    fonds_roulement = (
+        float(inputs.fonds_roulement_travaux) if saisi else fonds_roulement_calcule
+    )
+    cash_projet = travaux_cash_projet + cash_projet_frais
+    cash_refi = cash_refi_frais
+    cash_definitif = cash_notaire + cash_projet + cash_refi
+    besoin_max = cash_notaire + cash_projet + fonds_roulement
+    return {
+        "prix_achat": round(float(inputs.prix_achat), 2),
+        "mdf_pct": mdf_pct,
+        "assise": round(assise, 2),
+        "travaux": round(travaux, 2),
+        "travaux_financables": travaux_financables,
+        "part_financee_travaux": part_financee_travaux,
+        "engagement_travaux": round(engagement_travaux, 2),
+        "retenue_pct": retenue_pct,
+        "retenue": round(retenue, 2),
+        "manque_travaux_notaire": round(manque_travaux_notaire, 2),
+        "pret_sur_prix": round(float(pret_sur_prix), 2),
+        "frais_finances": round(float(frais_finance_total), 2),
+        "frais_finances_hors_travaux": round(frais_finances_hors_travaux, 2),
+        "pret_total": round(float(pret_total), 2),
+        "avance_notaire": round(avance_notaire, 2),
+        "mdf_notaire": round(mdf_notaire, 2),
+        "cashback": round(float(cashback), 2),
+        "balance_vente": round(float(balance_vente), 2),
+        "cash_notaire_frais": round(cash_notaire_frais, 2),
+        "cash_notaire": round(cash_notaire, 2),
+        "travaux_cash": round(travaux_cash, 2),
+        "travaux_cash_projet": round(travaux_cash_projet, 2),
+        "nb_deboursements": nb,
+        "fonds_roulement_calcule": round(fonds_roulement_calcule, 2),
+        "fonds_roulement": round(fonds_roulement, 2),
+        "fonds_roulement_saisi": saisi,
+        "cash_projet_frais": round(cash_projet_frais, 2),
+        "cash_projet": round(cash_projet, 2),
+        "cash_refi": round(cash_refi, 2),
+        "cash_definitif": round(cash_definitif, 2),
+        "mdf_preteur_b": round(float(mdf_preteur_b), 2),
+        "ecart": round(cash_definitif - float(mdf_preteur_b), 2),
+        "besoin_max": round(besoin_max, 2),
+        "postes": postes,
+    }
+
+
 # ─── Pipeline complet ──────────────────────────────────────────────
 
 
@@ -1229,6 +1412,19 @@ class FinanceInputs:
     # frais_developpement, frais_travaux.
     frais_demarrage_financables: list[str] = field(default_factory=list)
 
+    # Achat prêteur B — cashflow de l'acquisition (Phil 2026-10-12). Le
+    # prêteur s'engage sur (1 − MDF %) des travaux finançables mais en
+    # RETIENT `retenue_travaux_pct` (100 % typique) qu'il débourse
+    # progressivement ; ce qu'il retient au-delà de son engagement est
+    # exigé d'avance au notaire. Les travaux se paient d'abord de notre
+    # poche → fonds de roulement = retenue ÷ nombre de déboursés (ou le
+    # montant saisi sur la fiche). Valeurs toujours résolues par
+    # l'endpoint (fiche ← Paramètres) ; les défauts ci-dessous sont ceux
+    # des Paramètres seedés (aucun calcul ne change si on n'y touche pas).
+    retenue_travaux_pct: float = 1.0
+    nb_deboursements_travaux: int = 3
+    fonds_roulement_travaux: Optional[float] = None
+
     # Overrides GLOBAUX (par opposition à `frais_demarrage_overrides`
     # qui est par fiche) des frais one-shot. Provient de la table
     # ``prospection_analysis_defaults`` (groupe ``mdf_frais``) — chargé
@@ -1356,6 +1552,11 @@ class FinanceResults:
     #: pour revenir à 0 $, cash total nécessaire — pour la stratégie
     #: active. Montants déjà établis, assemblés ; aucun nouveau calcul.
     cout_projet: Optional[dict] = None
+    #: Achat prêteur B — cashflow de l'acquisition (Phil 2026-10-12) :
+    #: avance au notaire après retenue sur les travaux, cash par moment
+    #: (notaire / travaux / refi), fonds de roulement. None hors
+    #: stratégie prêteur B.
+    achat_preteur_b: Optional[dict] = None
 
     def to_dict(self) -> dict:
         """Pour persistance JSON dans `LeadAnalysis.analysis_results_json`."""
@@ -1426,6 +1627,7 @@ class FinanceResults:
             #: totaux (Phil 2026-10-07) — ce que les scénarios utilisent.
             "unites_calcul": self.unites_calcul,
             "cout_projet": self.cout_projet,
+            "achat_preteur_b": self.achat_preteur_b,
             "typology": {
                 "h13_loyer_pondere": self.typology.h13_loyer_pondere,
                 "nb_abordables": self.typology.nb_abordables,
@@ -2863,6 +3065,22 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         _bv_c = float(balance_vente)
         _frais_fin_hors_pret = 0.0  # les frais financés sont DANS le prêt B
         _cout_c = float(prix_acquisition)
+    # Achat prêteur B — cashflow de l'acquisition (Phil 2026-10-12) :
+    # vue par moment, aucun nouveau poste. Seulement en stratégie
+    # prêteur B (les achats directs ont déjà leur page Achat).
+    achat_preteur_b = None
+    if traditionnel is None and residentiel is None:
+        achat_preteur_b = _achat_preteur_b_cashflow(
+            inputs,
+            frais,
+            mdf_pct=mdf_pct,
+            pret_sur_prix=pret_b_sur_prix,
+            frais_finance_total=frais_finance_total,
+            pret_total=pret_preteur_b_total,
+            cashback=_cashback,
+            balance_vente=balance_vente,
+            mdf_preteur_b=mdf_preteur_b,
+        )
     cout_projet = {
         "strategie": _strat_cout,
         "prix_achat": round(inputs.prix_achat, 2),
@@ -2911,4 +3129,5 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         frais_dossier_preteur_base=frais_dossier_preteur_base,
         unites_calcul=unites_calcul,
         cout_projet=cout_projet,
+        achat_preteur_b=achat_preteur_b,
     )
