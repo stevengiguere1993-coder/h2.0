@@ -812,9 +812,24 @@ def _section_achat_preteur_b(res: FinanceResults) -> Optional[Dict[str, Any]]:
     )
     L.append(
         ligne(
-            "Jour 1 — 1er déboursé : frais finançables de l'achat remboursés",
-            f"{_p(a['taux_remboursement'])} × ({_noms('notaire', True)})",
+            "Jour 1 — frais payés avec le 1er déboursé",
+            _noms("jour1"),
+            a["frais_jour1"],
+        )
+    )
+    L.append(
+        ligne(
+            "Jour 1 — 1er déboursé : frais finançables de l'achat et du jour 1 remboursés",
+            f"{_p(a['taux_remboursement'])} × ({_noms('notaire', True)} ; {_noms('jour1', True)})",
             a["remboursement_jour_1"],
+        )
+    )
+    L.append(
+        ligne(
+            "Jeu d'exploitation pendant les travaux (revenus nets − intérêts de portage − intérêts BV)",
+            f"{_m(a['revenus_nets_projet'])} − {_m(a['interets_portage'])} − {_m(a['interets_bv'])}",
+            a["exploitation_total"],
+            note="+ = le bâtiment finance une partie du roulement ; étalé sur les tranches.",
         )
     )
     L.append(
@@ -829,8 +844,15 @@ def _section_achat_preteur_b(res: FinanceResults) -> Optional[Dict[str, Any]]:
         L.append(
             ligne(
                 f"{e['libelle']} — sorties",
-                "postes étalés ÷ nb de déboursés" + (" + postes ponctuels" if e["etape"] == "tranche_1" else ""),
+                "travaux ÷ nb de déboursés" + (" + postes ponctuels" if e["etape"] == "tranche_1" else ""),
                 e["sorties"],
+            )
+        )
+        L.append(
+            ligne(
+                f"{e['libelle']} — exploitation nette",
+                "(revenus nets − intérêts) ÷ nb de déboursés",
+                e["exploitation"],
             )
         )
         L.append(
@@ -849,7 +871,7 @@ def _section_achat_preteur_b(res: FinanceResults) -> Optional[Dict[str, Any]]:
     )
     L.append(
         ligne(
-            "= Cash définitif (Σ sorties − Σ déboursés)",
+            "= Cash définitif (Σ sorties − Σ exploitation − Σ déboursés)",
             "toutes les étapes",
             a["cash_definitif"],
             gras=True,
@@ -859,7 +881,7 @@ def _section_achat_preteur_b(res: FinanceResults) -> Optional[Dict[str, Any]]:
     L.append(
         ligne(
             "Besoin de trésorerie maximal (exposition la plus haute avant un déboursé)",
-            "max sur l'échéancier de (Σ sorties − Σ déboursés)",
+            "max sur l'échéancier de (Σ sorties − Σ exploitation − Σ déboursés)",
             a["besoin_max"],
             gras=True,
         )

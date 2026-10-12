@@ -413,6 +413,7 @@ def _bloc_achat_preteur_b(rl, results: dict, *, s) -> list:
     ]
     tuiles = [
         ("Sorties au notaire", _money(a.get("cash_notaire"))),
+        ("Jeu d'exploitation pendant les travaux", _money(a.get("exploitation_total"))),
         ("Besoin de trésorerie maximal", _money(a.get("besoin_max"))),
         (
             "Montant des investisseurs"
@@ -461,6 +462,7 @@ def _bloc_achat_preteur_b(rl, results: dict, *, s) -> list:
     data = [[
         Paragraph("<b>Étape</b>", s["small"]),
         Paragraph("<b>Sorties</b>", s["num"]),
+        Paragraph("<b>Exploitation nette</b>", s["num"]),
         Paragraph("<b>Solde avant déboursé</b>", s["num"]),
         Paragraph("<b>Déboursé du prêteur</b>", s["num"]),
         Paragraph("<b>Solde après</b>", s["num"]),
@@ -470,14 +472,28 @@ def _bloc_achat_preteur_b(rl, results: dict, *, s) -> list:
     for i, e in enumerate(a.get("echeancier") or []):
         if e.get("etape") == pb:
             idx_pb = i + 1
+        # Détail poste par poste sous le libellé (Phil 2026-10-12 : « il
+        # faut voir quel montant est combien »).
+        det = e.get("details") or {}
+        lignes_det = []
+        for d in det.get("sorties") or []:
+            lignes_det.append(f"{d.get('label')} : {_money(d.get('montant'))}")
+        for d in det.get("exploitation") or []:
+            lignes_det.append(f"{d.get('label')} : {_money(d.get('montant'))}")
+        for d in det.get("debourse") or []:
+            lignes_det.append(f"{d.get('label')} : +{_money(d.get('montant'))}")
+        libelle = f"<b>{e.get('libelle') or ''}</b>"
+        if lignes_det:
+            libelle += '<br/><font size="6.5" color="' + _C_MUTED + '">' + " · ".join(lignes_det) + "</font>"
         data.append([
-            Paragraph(str(e.get("libelle") or ""), s["small"]),
+            Paragraph(libelle, s["small"]),
             Paragraph(_money(e.get("sorties")), s["num"]),
+            Paragraph(_solde(e.get("exploitation")), s["num"]),
             Paragraph(_solde(e.get("solde_avant")), s["num"]),
             Paragraph(_money(e.get("debourse")), s["num"]),
             Paragraph(_solde(e.get("solde_apres")), s["num"]),
         ])
-    tbl = Table(data, colWidths=[62 * mm, "*", "*", "*", "*"], repeatRows=1)
+    tbl = Table(data, colWidths=[66 * mm, "*", "*", "*", "*", "*"], repeatRows=1)
     style = [
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(_C_AMBER_SOFT)),
@@ -503,7 +519,12 @@ def _bloc_achat_preteur_b(rl, results: dict, *, s) -> list:
         f"Point bas du compte : <b>{_money((a.get('point_bas') or {}).get('solde'))}</b>"
         f" ({(a.get('point_bas') or {}).get('libelle', '')}) · "
         f"solde à la fin des travaux : <b>{_money(a.get('solde_fin_travaux'))}</b> · "
-        f"après le refinancement : <b>{_money(a.get('solde_fin'))}</b>."
+        f"après le refinancement : <b>{_money(a.get('solde_fin'))}</b>. "
+        f"Jeu d'exploitation pendant les travaux : <b>{_money(a.get('exploitation_total'))}</b> "
+        f"(revenus nets {_money(a.get('revenus_nets_projet'))} − intérêts de portage "
+        f"{_money(a.get('interets_portage'))}"
+        + (f" − intérêts BV {_money(a.get('interets_bv'))}" if (a.get("interets_bv") or 0) > 0 else "")
+        + ")."
     )
     if (a.get("manque") or 0) > 0:
         recap += (
