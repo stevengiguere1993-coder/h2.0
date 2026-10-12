@@ -72,14 +72,19 @@ def test_page_achat_preteur_b(client, auth_headers, run):
     fiche = client.get(base, headers=h).json()
     assert float(fiche["retenue_travaux_pct"]) == 100.0
     assert int(fiche["nb_deboursements_travaux"]) == 3
-    assert fiche["fonds_roulement_travaux"] is None
     a = res["achat_preteur_b"]
     assert a["pret_total"] == 1_200_000.0
     assert a["retenue"] == 500_000.0
     assert a["avance_notaire"] == 700_000.0
     assert a["mdf_notaire"] == 300_000.0
     assert a["nb_deboursements"] == 3
-    assert a["fonds_roulement"] == round(500_000 / 3, 2)
+    # Échéancier : notaire, 1er déboursé, 3 tranches, refi ; capital non
+    # saisi → point bas à 0.
+    assert [e["etape"] for e in a["echeancier"]] == [
+        "notaire", "deboursement_1", "tranche_1", "tranche_2", "tranche_3", "refi",
+    ]
+    assert a["capital_saisi"] is False and a["capital"] == a["besoin_max"]
+    assert abs(a["point_bas"]["solde"]) < 0.05
     assert abs(a["ecart"]) < 0.05
     # La trace porte la section 6b.
     titres = [s["titre"] for s in res["details_calculs"]]
@@ -94,12 +99,18 @@ def test_page_achat_preteur_b(client, auth_headers, run):
     res2 = json.loads(r.json()["analysis_results_json"])
     a2 = res2["achat_preteur_b"]
     assert a2["avance_notaire"] == 800_000.0
-    assert a2["manque_travaux_notaire"] == 0.0
-    assert a2["fonds_roulement"] == round(0.8 * 500_000 / 4, 2)
-    r = client.patch(base, headers=h, json={"fonds_roulement_travaux": 200_000})
+    assert a2["manque_notaire"] == 0.0
+    assert a2["nb_deboursements"] == 4
+    assert len(a2["echeancier"]) == 2 + 4 + 1
+    # Montant demandé aux investisseurs = capital du TRI (même colonne).
+    r = client.patch(base, headers=h, json={"tri_capital_injecte": 610_000})
     assert r.status_code == 200, r.text
     a3 = json.loads(r.json()["analysis_results_json"])["achat_preteur_b"]
-    assert a3["fonds_roulement"] == 200_000.0 and a3["fonds_roulement_saisi"] is True
+    assert a3["capital"] == 610_000.0 and a3["capital_saisi"] is True
+    assert a3["solde_fin"] == round(610_000.0 - a3["cash_definitif"], 2)
+    assert a3["manque"] == round(max(0.0, a3["besoin_max"] - 610_000.0), 2)
+    tri = client.get(f"{base}/tri-inputs", headers=h).json()
+    assert float(tri["inputs"]["capital"]) == 610_000.0
 
     # PDF = reflet (génération OK avec la nouvelle section).
     r = client.get(f"{base}/pdf", headers=h)

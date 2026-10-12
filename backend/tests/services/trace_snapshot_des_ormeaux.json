@@ -1219,121 +1219,170 @@
   },
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
-    "label": "Prêt du prêteur B engagé (bâtisse + frais financés, travaux inclus)",
+    "label": "Prêt du prêteur B engagé (bâtisse + frais financés)",
     "formule": "section 6",
     "valeur": "3 995 600 $",
     "source": "calcul"
   },
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
-    "label": "Travaux estimés",
-    "formule": null,
-    "valeur": "240 000 $",
-    "source": "fiche"
-  },
-  {
-    "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
-    "label": "Part des travaux financée par le prêteur B",
-    "formule": "(1 − 20 %) × 240 000 $",
-    "valeur": "192 000 $",
+    "label": "Base de la retenue : frais finançables du notaire et du projet",
+    "formule": "aucun ; Rapport d'efficacité énergétique, Travaux estimés",
+    "valeur": "244 500 $",
     "source": "calcul"
   },
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
-    "label": "Retenue du prêteur sur les travaux (déboursée progressivement)",
-    "formule": "100 % × 240 000 $",
-    "valeur": "240 000 $",
+    "label": "Retenue du prêteur (déboursée progressivement)",
+    "formule": "100 % × 244 500 $",
+    "valeur": "244 500 $",
     "source": "fiche"
   },
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
+    "label": "Part de ces frais financée par le prêteur",
+    "formule": "(1 − 20 %) × 244 500 $",
+    "valeur": "195 600 $",
+    "source": "calcul"
+  },
+  {
+    "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
     "label": "Manque à combler au notaire (retenue − part financée)",
-    "formule": "240 000 $ − 192 000 $",
-    "valeur": "48 000 $",
+    "formule": "244 500 $ − 195 600 $",
+    "valeur": "48 900 $",
     "source": "calcul"
   },
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
     "label": "= Avance du prêteur B au notaire",
-    "formule": "3 995 600 $ − 240 000 $",
-    "valeur": "3 755 600 $",
+    "formule": "3 995 600 $ − 244 500 $",
+    "valeur": "3 751 100 $",
     "source": "calcul"
   },
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
-    "label": "Mise de fonds au notaire (assise + manque sur les travaux)",
-    "formule": "950 000 $ + 48 000 $",
-    "valeur": "998 000 $",
+    "label": "Mise de fonds au notaire (prix − avance)",
+    "formule": "4 750 000 $ − 3 751 100 $",
+    "valeur": "998 900 $",
     "source": "calcul"
   },
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
-    "label": "+ Frais d'acquisition payés cash au notaire",
-    "formule": "part cash des postes au notaire : Courtier hypothécaire (achat), Taxes de bienvenue, Évaluateur (achat), Inspection, Avocat, Notaire (achat), Frais de dossier du prêteur B",
+    "label": "+ Frais payés au notaire, montant complet (finançables avancés inclus)",
+    "formule": "Courtier hypothécaire (achat), Taxes de bienvenue, Évaluateur (achat), Inspection, Avocat, Notaire (achat), Frais de dossier du prêteur B",
     "valeur": "279 150 $",
     "source": "calcul"
   },
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
-    "label": "= Cash à sortir au notaire",
-    "formule": "998 000 $ + 279 150 $",
-    "valeur": "1 277 150 $",
+    "label": "= Sorties au jour 0 (notaire)",
+    "formule": "998 900 $ + 279 150 $",
+    "valeur": "1 278 050 $",
     "source": "calcul"
   },
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
-    "label": "Nombre de déboursés progressifs",
+    "label": "Jour 1 — 1er déboursé : frais finançables de l'achat remboursés",
+    "formule": "100 % × (aucun)",
+    "valeur": "0 $",
+    "source": "calcul"
+  },
+  {
+    "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
+    "label": "Nombre de déboursés pendant les travaux",
     "formule": null,
     "valeur": "3",
     "source": "fiche"
   },
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
-    "label": "Fonds de roulement travaux (avance maximale avant remboursement)",
-    "formule": "240 000 $ ÷ 3",
+    "label": "Travaux — tranche 1 sur 3, puis déboursé 2 — sorties",
+    "formule": "postes étalés ÷ nb de déboursés + postes ponctuels",
+    "valeur": "182 419 $",
+    "source": "calcul"
+  },
+  {
+    "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
+    "label": "Travaux — tranche 1 sur 3, puis déboursé 2 — déboursé du prêteur",
+    "formule": "100 % × part finançable de la tranche",
+    "valeur": "84 500 $",
+    "source": "calcul"
+  },
+  {
+    "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
+    "label": "Travaux — tranche 2 sur 3, puis déboursé 3 — sorties",
+    "formule": "postes étalés ÷ nb de déboursés",
+    "valeur": "177 919 $",
+    "source": "calcul"
+  },
+  {
+    "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
+    "label": "Travaux — tranche 2 sur 3, puis déboursé 3 — déboursé du prêteur",
+    "formule": "100 % × part finançable de la tranche",
     "valeur": "80 000 $",
     "source": "calcul"
   },
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
-    "label": "Travaux à notre charge pendant les travaux",
-    "formule": "48 000 $ − 48 000 $",
-    "valeur": "0 $",
+    "label": "Travaux — tranche 3 sur 3, puis déboursé 4 — sorties",
+    "formule": "postes étalés ÷ nb de déboursés",
+    "valeur": "177 919 $",
     "source": "calcul"
   },
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
-    "label": "+ Frais pendant le projet payés cash",
-    "formule": "part cash des postes du projet : Rapport d'efficacité énergétique, Intérêts de portage pendant le projet, Revenus nets pendant le projet",
-    "valeur": "294 658 $",
+    "label": "Travaux — tranche 3 sur 3, puis déboursé 4 — déboursé du prêteur",
+    "formule": "100 % × part finançable de la tranche",
+    "valeur": "80 000 $",
     "source": "calcul"
   },
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
-    "label": "= Cash à sortir pendant les travaux (hors fonds de roulement)",
-    "formule": "0 $ + 294 658 $",
-    "valeur": "294 658 $",
-    "source": "calcul"
-  },
-  {
-    "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
-    "label": "Cash au refinancement",
-    "formule": "part cash des postes du refi : Courtier hypothécaire (refi), Évaluateur (refi), Notaire (refi)",
+    "label": "Au refinancement — frais du refi (le prêt B est remboursé)",
+    "formule": "Courtier hypothécaire (refi), Évaluateur (refi), Notaire (refi)",
     "valeur": "46 364 $",
     "source": "calcul"
   },
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
-    "label": "= Cash définitif (notaire + travaux + refi)",
-    "formule": "1 277 150 $ + 294 658 $ + 46 364 $",
+    "label": "= Cash définitif (Σ sorties − Σ déboursés)",
+    "formule": "toutes les étapes",
     "valeur": "1 618 172 $",
     "source": "calcul"
   },
   {
     "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
-    "label": "Besoin de trésorerie maximal (notaire + travaux + fonds de roulement)",
-    "formule": "1 277 150 $ + 294 658 $ + 80 000 $",
+    "label": "Besoin de trésorerie maximal (exposition la plus haute avant un déboursé)",
+    "formule": "max sur l'échéancier de (Σ sorties − Σ déboursés)",
     "valeur": "1 651 808 $",
+    "source": "calcul"
+  },
+  {
+    "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
+    "label": "Montant demandé aux investisseurs",
+    "formule": "vide → besoin de trésorerie maximal",
+    "valeur": "1 651 808 $",
+    "source": "calcul"
+  },
+  {
+    "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
+    "label": "Point bas du compte",
+    "formule": "Travaux — tranche 3 sur 3, puis déboursé 4",
+    "valeur": "0 $",
+    "source": "calcul"
+  },
+  {
+    "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
+    "label": "Solde à la fin des travaux",
+    "formule": "capital − sorties + déboursés",
+    "valeur": "80 000 $",
+    "source": "calcul"
+  },
+  {
+    "section": "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
+    "label": "Solde après le refinancement",
+    "formule": "capital − cash définitif",
+    "valeur": "33 636 $",
     "source": "calcul"
   },
   {
