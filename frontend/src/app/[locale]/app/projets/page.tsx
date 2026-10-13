@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Briefcase,
   CheckCircle2,
@@ -17,6 +17,11 @@ import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { Link } from "@/i18n/navigation";
 import { useConfirm } from "@/components/confirm-dialog";
+import {
+  TOUCH_CARD_STYLE,
+  useFinePointer,
+  useKanbanTouchDrag
+} from "@/hooks/use-kanban-touch-drag";
 
 type Project = {
   id: number;
@@ -98,6 +103,16 @@ export default function ProjectsPage() {
   const [search, setSearch] = useState("");
   const [dragging, setDragging] = useState<number | null>(null);
   const [hoverCol, setHoverCol] = useState<string | null>(null);
+  const finePointer = useFinePointer();
+  const boardRef = useKanbanTouchDrag({
+    onStart: (id) => setDragging(id),
+    onOver: setHoverCol,
+    onDrop: dropOn,
+    onCancel: () => {
+      setDragging(null);
+      setHoverCol(null);
+    }
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -191,23 +206,11 @@ export default function ProjectsPage() {
     }
   }
 
-  // ── Glisser-déposer tactile (mobile) ──
-  // Le drag HTML5 ne marche pas au doigt : on gère le tactile via une
-  // poignée + Pointer Events. La colonne sous le doigt est retrouvée par
-  // `data-col-id` + elementFromPoint.
-  function columnIdAtPoint(x: number, y: number): string | null {
-    if (typeof document === "undefined") return null;
-    const el = document.elementFromPoint(x, y);
-    return el?.closest("[data-col-id]")?.getAttribute("data-col-id") ?? null;
-  }
-  function onTouchDragMove(x: number, y: number) {
-    setHoverCol(columnIdAtPoint(x, y));
-  }
-  function onTouchDragEnd(id: number, x: number, y: number) {
-    const cid = columnIdAtPoint(x, y);
-    const col = COLUMNS.find((c) => c.id === cid);
+  // Dépôt d'une carte — souris (glisser HTML5) comme doigt
+  // (useKanbanTouchDrag, colonne sous le doigt, null hors colonne).
+  function dropOn(id: number, colId: string | null) {
     const item = items.find((p) => p.id === id);
-    if (col && item && item.status !== col.id) moveProject(id, col.id);
+    if (colId && item && item.status !== colId) moveProject(id, colId);
     setDragging(null);
     setHoverCol(null);
   }
@@ -267,14 +270,15 @@ export default function ProjectsPage() {
         ) : items.length === 0 ? (
           <EmptyState />
         ) : (
-          <div className="flex gap-4 overflow-x-auto pb-4">
+          <div ref={boardRef} className="flex gap-4 overflow-x-auto pb-4">
             {COLUMNS.map((col) => {
               const cards = byColumn[col.id] || [];
               const isHover = hoverCol === col.id;
               return (
                 <div
                   key={col.id}
-                  data-col-id={col.id}
+                  data-kanban-col={col.id}
+                  data-kanban-col-label={col.label}
                   onDragOver={(e) => {
                     e.preventDefault();
                     setHoverCol(col.id);
@@ -283,11 +287,7 @@ export default function ProjectsPage() {
                     setHoverCol((h) => (h === col.id ? null : h))
                   }
                   onDrop={() => {
-                    if (dragging == null) return;
-                    const p = items.find((x) => x.id === dragging);
-                    if (p && p.status !== col.id) moveProject(dragging, col.id);
-                    setDragging(null);
-                    setHoverCol(null);
+                    if (dragging != null) dropOn(dragging, col.id);
                   }}
                   className={`flex w-80 min-w-[320px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
                     isHover
@@ -323,15 +323,13 @@ export default function ProjectsPage() {
                               : null
                           }
                           dragging={dragging === p.id}
+                          finePointer={finePointer}
                           onDragStart={() => setDragging(p.id)}
                           onDragEnd={() => {
                             setDragging(null);
                             setHoverCol(null);
                           }}
                           onDelete={() => deleteProject(p.id, p.name)}
-                          onTouchDragStart={() => setDragging(p.id)}
-                          onTouchDragMove={onTouchDragMove}
-                          onTouchDragEnd={(x, y) => onTouchDragEnd(p.id, x, y)}
                         />
                       ))
                     )}
@@ -350,29 +348,28 @@ function ProjectCard({
   project: p,
   clientName,
   dragging,
+  finePointer,
   onDragStart,
   onDragEnd,
-  onDelete,
-  onTouchDragStart,
-  onTouchDragMove,
-  onTouchDragEnd
+  onDelete
 }: {
   project: Project;
   clientName: string | null;
   dragging: boolean;
+  /** Souris : glisser HTML5. Doigt : appui long, voir useKanbanTouchDrag. */
+  finePointer: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
   onDelete: () => void;
-  onTouchDragStart: () => void;
-  onTouchDragMove: (x: number, y: number) => void;
-  onTouchDragEnd: (x: number, y: number) => void;
 }) {
-  const touch = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   return (
     // Le TITRE ouvre le projet ; le reste de la carte se glisse dans le
-    // kanban (Phil 2026-10-03, comme les tâches d'entreprise).
+    // kanban (Phil 2026-10-03, comme les tâches d'entreprise). Au doigt :
+    // appui long n'importe où sur la carte, ou tout de suite par la poignée.
     <div
-      draggable
+      data-kanban-card={p.id}
+      draggable={finePointer}
+      style={finePointer ? undefined : TOUCH_CARD_STYLE}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       className={`group relative block cursor-grab rounded-lg border bg-brand-950 py-3 pl-7 pr-3 transition active:cursor-grabbing ${
@@ -381,41 +378,15 @@ function ProjectCard({
           : "border-brand-800 hover:border-accent-500"
       }`}
     >
-      {/* Poignée de glissement — fonctionne au doigt (Pointer Events).
-          touch-action:none pour que le glisser ne fasse pas défiler la
-          page. Le reste de la carte se tape pour ouvrir le projet. */}
+      {/* Poignée de glissement : au doigt, le glisser part sans appui long
+          (useKanbanTouchDrag). touch-action:none pour que le glisser ne
+          fasse pas défiler la page. */}
       <div
+        data-kanban-handle
         className="absolute left-0 top-0 flex h-full w-6 cursor-grab touch-none items-start justify-center pt-3 text-white/30 active:cursor-grabbing"
         style={{ touchAction: "none" }}
         aria-label="Glisser pour déplacer"
         title="Glisser pour déplacer"
-        onPointerDown={(e) => {
-          if (e.pointerType === "mouse") return;
-          touch.current = { x: e.clientX, y: e.clientY, moved: false };
-          (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-        }}
-        onPointerMove={(e) => {
-          const t = touch.current;
-          if (!t || e.pointerType === "mouse") return;
-          const dist = Math.hypot(e.clientX - t.x, e.clientY - t.y);
-          if (!t.moved && dist > 8) {
-            t.moved = true;
-            onTouchDragStart();
-          }
-          if (t.moved) {
-            e.preventDefault();
-            onTouchDragMove(e.clientX, e.clientY);
-          }
-        }}
-        onPointerUp={(e) => {
-          const t = touch.current;
-          touch.current = null;
-          if (!t || e.pointerType === "mouse") return;
-          if (t.moved) onTouchDragEnd(e.clientX, e.clientY);
-        }}
-        onPointerCancel={() => {
-          touch.current = null;
-        }}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();

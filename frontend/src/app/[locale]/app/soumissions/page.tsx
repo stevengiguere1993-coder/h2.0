@@ -15,6 +15,11 @@ import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { Link } from "@/i18n/navigation";
+import {
+  TOUCH_CARD_STYLE,
+  useFinePointer,
+  useKanbanTouchDrag
+} from "@/hooks/use-kanban-touch-drag";
 
 type Soumission = {
   id: number;
@@ -123,6 +128,16 @@ export default function SoumissionsPage() {
   const [search, setSearch] = useState("");
   const [dragging, setDragging] = useState<number | null>(null);
   const [hoverCol, setHoverCol] = useState<string | null>(null);
+  const finePointer = useFinePointer();
+  const boardRef = useKanbanTouchDrag({
+    onStart: (id) => setDragging(id),
+    onOver: setHoverCol,
+    onDrop: dropOn,
+    onCancel: () => {
+      setDragging(null);
+      setHoverCol(null);
+    }
+  });
   const [collapsedCols, setCollapsedCols] = useState<Set<string>>(
     () => new Set(DEFAULT_COLLAPSED)
   );
@@ -358,6 +373,21 @@ export default function SoumissionsPage() {
     }
   }
 
+  // Dépôt d'une carte — souris (glisser HTML5) comme doigt
+  // (useKanbanTouchDrag, colonne sous le doigt, null hors colonne).
+  function dropOn(id: number, colId: string | null) {
+    const item = items.find((s) => s.id === id);
+    // Colonne d'origine de la carte (archivée ou par statut).
+    const fromCol = item
+      ? item.archived_at
+        ? ARCHIVED_COL
+        : item.status
+      : null;
+    if (colId && item && fromCol !== colId) moveToColumn(id, colId);
+    setDragging(null);
+    setHoverCol(null);
+  }
+
   async function deleteSoumission(id: number, ref: string) {
     if (!(await confirm(`Supprimer la soumission ${ref} ?`))) return;
     const prev = items;
@@ -406,7 +436,7 @@ export default function SoumissionsPage() {
         ) : items.length === 0 ? (
           <EmptyState />
         ) : (
-          <div className="flex gap-4 overflow-x-auto pb-4">
+          <div ref={boardRef} className="flex gap-4 overflow-x-auto pb-4">
             {COLUMNS.map((col) => {
               const cards = byColumn[col.id] || [];
               const isHover = hoverCol === col.id;
@@ -414,6 +444,8 @@ export default function SoumissionsPage() {
               return (
                 <div
                   key={col.id}
+                  data-kanban-col={col.id}
+                  data-kanban-col-label={col.label}
                   onDragOver={(e) => {
                     e.preventDefault();
                     setHoverCol(col.id);
@@ -422,18 +454,7 @@ export default function SoumissionsPage() {
                     setHoverCol((h) => (h === col.id ? null : h))
                   }
                   onDrop={() => {
-                    if (dragging == null) return;
-                    const item = items.find((s) => s.id === dragging);
-                    // Colonne d'origine de la carte (archivée ou par statut).
-                    const fromCol = item
-                      ? item.archived_at
-                        ? ARCHIVED_COL
-                        : item.status
-                      : null;
-                    if (item && fromCol !== col.id)
-                      moveToColumn(dragging, col.id);
-                    setDragging(null);
-                    setHoverCol(null);
+                    if (dragging != null) dropOn(dragging, col.id);
                   }}
                   className={`flex flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
                     collapsed ? "w-56 min-w-[224px]" : "w-80 min-w-[320px]"
@@ -506,6 +527,7 @@ export default function SoumissionsPage() {
                             null
                           }
                           dragging={dragging === s.id}
+                          finePointer={finePointer}
                           onDragStart={() => setDragging(s.id)}
                           onDragEnd={() => {
                             setDragging(null);
@@ -534,6 +556,7 @@ function SoumissionCard({
   clientName,
   projectAddress,
   dragging,
+  finePointer,
   onDragStart,
   onDragEnd,
   onDelete
@@ -543,13 +566,17 @@ function SoumissionCard({
   clientName: string | null;
   projectAddress: string | null;
   dragging: boolean;
+  /** Souris : glisser HTML5. Doigt : appui long, voir useKanbanTouchDrag. */
+  finePointer: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
   onDelete: () => void;
 }) {
   return (
     <div
-      draggable
+      data-kanban-card={s.id}
+      draggable={finePointer}
+      style={finePointer ? undefined : TOUCH_CARD_STYLE}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       className={`group relative cursor-grab rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-accent-500 active:cursor-grabbing ${
