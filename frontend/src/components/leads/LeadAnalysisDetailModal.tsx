@@ -1405,6 +1405,9 @@ export function LeadAnalysisDetailModal({
                       achatB = null;
                       cout = null;
                     }
+                    // Résultats d'une version précédente du moteur →
+                    // on demande une relance au lieu de planter.
+                    if (achatB && !estAchatPreteurBAJour(achatB)) achatB = null;
                     const panneau = resid ? (
                       <ResidentielAchatPanel r={resid} />
                     ) : trad ? (
@@ -1420,13 +1423,16 @@ export function LeadAnalysisDetailModal({
                         onPatchField={patchField}
                       />
                     ) : (
-                      <EmptyTabHint
-                        icon={Banknote}
-                        message={
-                          data.analysis_results_json
-                            ? "Relance l'analyse (onglet « Analyse ») : la vue Achat prêteur B apparaît au prochain calcul."
-                            : "Lance l'analyse (onglet « Analyse ») pour voir l'achat : cashflow au notaire, pendant les travaux et coût du projet."
-                        }
+                      <RelancerAnalyseHint
+                        analysisId={analysisId}
+                        dejaCalculee={!!data.analysis_results_json}
+                        onRefresh={async () => {
+                          const r = await authedFetch(
+                            `/api/v1/lead-analyses/${analysisId}`
+                          );
+                          if (r.ok) setData((await r.json()) as LeadDetail);
+                          onAfterUpdate?.();
+                        }}
                       />
                     );
                     return (
@@ -4656,6 +4662,28 @@ type AchatPreteurB = {
   };
 };
 
+/** Vrai si les résultats stockés ont la forme attendue par le panneau
+ *  Achat prêteur B (v3 : échéancier avec `details`, postes `jour1`).
+ *  Des résultats calculés avant doivent être relancés — on l'annonce au
+ *  lieu de planter (retour Phil 2026-10-13). */
+function estAchatPreteurBAJour(a: AchatPreteurB | null | undefined): a is AchatPreteurB {
+  if (!a || typeof a !== "object") return false;
+  if (!Array.isArray(a.echeancier)) return false;
+  if (
+    !a.echeancier.every(
+      (e) =>
+        e &&
+        typeof e === "object" &&
+        e.details &&
+        Array.isArray(e.details.sorties) &&
+        Array.isArray(e.details.exploitation) &&
+        Array.isArray(e.details.debourse)
+    )
+  )
+    return false;
+  return !!a.postes && Array.isArray(a.postes.jour1) && Array.isArray(a.postes.notaire);
+}
+
 type AnalysisResults = {
   frais_demarrage?: FraisDemarrageBreakdown;
   frais_demarrage_total: number;
@@ -5948,6 +5976,76 @@ function DepensesResidentielCard({
 
 /** Onglet ACHAT — institution traditionnelle : 4 programmes sur les
  *  loyers actuels, choix du programme retenu, composition de la MDF. */
+/** Onglet Achat sans vue à jour : résultats absents ou calculés avant
+ *  la version courante du moteur → bouton « Relancer l'analyse » sur
+ *  place (retour Phil 2026-10-13 : l'onglet plantait). */
+function RelancerAnalyseHint({
+  analysisId,
+  dejaCalculee,
+  onRefresh
+}: {
+  analysisId: number;
+  dejaCalculee: boolean;
+  onRefresh: () => Promise<void>;
+}) {
+  const [running, setRunning] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  async function relancer() {
+    setRunning(true);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/lead-analyses/${analysisId}/run-financial-analysis`,
+        { method: "POST" }
+      );
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(t.slice(0, 240) || `HTTP ${r.status}`);
+      }
+      await onRefresh();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setRunning(false);
+    }
+  }
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-12 text-center">
+      <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/[0.04] text-white/40">
+        <Banknote className="h-6 w-6" />
+      </span>
+      <p className="max-w-md text-sm text-white/70">
+        {dejaCalculee
+          ? "Ces résultats datent d'une version précédente du calcul : relance l'analyse pour voir l'achat (cashflow au notaire, échéancier de trésorerie, coût du projet)."
+          : "Lance l'analyse pour voir l'achat : cashflow au notaire, échéancier de trésorerie et coût du projet."}
+      </p>
+      <button
+        type="button"
+        onClick={() => void relancer()}
+        disabled={running}
+        className="btn-accent inline-flex items-center text-sm disabled:opacity-60"
+      >
+        {running ? (
+          <>
+            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+            Calcul en cours…
+          </>
+        ) : (
+          <>
+            <Flame className="mr-1.5 h-4 w-4" />
+            {dejaCalculee ? "Relancer l'analyse" : "Lancer l'analyse"}
+          </>
+        )}
+      </button>
+      {err ? (
+        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-300">
+          {err}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /** Achat — Prêteur B : cashflow de l'acquisition (Phil 2026-10-12).
  *  « Ils retiennent 100 % au lieu de 80 % : au notaire on n'a pas
  *  800 000 $ mais 700 000 $ ; les frais initiaux sont cash au début ;
@@ -6172,10 +6270,9 @@ function PreteurBAchatPanel({
             {a.echeancier.map((e) => {
               const bas = a.point_bas?.etape === e.etape;
               const ouvert = ouverts.has(e.etape);
+              const det = e.details ?? { sorties: [], exploitation: [], debourse: [] };
               const nbPostes =
-                e.details.sorties.length +
-                e.details.exploitation.length +
-                e.details.debourse.length;
+                det.sorties.length + det.exploitation.length + det.debourse.length;
               return (
                 <Fragment key={e.etape}>
                   <tr
@@ -6219,13 +6316,13 @@ function PreteurBAchatPanel({
                     <tr className="border-t border-brand-800/60 bg-brand-950/50">
                       <td colSpan={6} className="px-3 py-2">
                         <div className="grid gap-3 text-[11px] lg:grid-cols-3">
-                          {detailListe("Sorties", e.details.sorties, "sortie")}
+                          {detailListe("Sorties", det.sorties, "sortie")}
                           {detailListe(
                             "Exploitation (revenus nets − intérêts)",
-                            e.details.exploitation,
+                            det.exploitation,
                             "exploitation"
                           )}
-                          {detailListe("Déboursé du prêteur", e.details.debourse, "debourse")}
+                          {detailListe("Déboursé du prêteur", det.debourse, "debourse")}
                           {nbPostes === 0 ? (
                             <p className="px-2 text-white/40">Rien à cette étape.</p>
                           ) : null}
@@ -6277,7 +6374,7 @@ function PreteurBAchatPanel({
             {ligne("Mise de fonds au notaire (prix − avance)", a.mdf_notaire)}
             {a.cashback > 0 ? ligne("− Cashback reçu au notaire", -a.cashback) : null}
             {a.balance_vente > 0 ? ligne("− Balance de vente", -a.balance_vente) : null}
-            {a.postes.notaire.map((p) =>
+            {(a.postes.notaire ?? []).map((p) =>
               ligne(
                 <>
                   + {p.label}
@@ -6297,7 +6394,7 @@ function PreteurBAchatPanel({
             {ligne("Frais finançables (notaire + jour 1 + travaux) = base de la retenue", a.base_retenue, { muted: true })}
             {ligne(`Part financée par le prêteur (${pct(1 - a.mdf_pct)})`, a.finance_np, { muted: true })}
             {ligne("Manque à combler au notaire (retenue − part financée)", a.manque_notaire)}
-            {a.postes.jour1.map((p) =>
+            {(a.postes.jour1 ?? []).map((p) =>
               ligne(
                 <>
                   Jour 1 — {p.label} (payé avec le déboursé)
@@ -6338,10 +6435,10 @@ function PreteurBAchatPanel({
               <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/50">
                 {momentLabels[m]}
               </p>
-              {a.postes[m].length === 0 ? (
+              {(a.postes[m] ?? []).length === 0 ? (
                 <p className="px-2 text-white/40">Aucun poste.</p>
               ) : (
-                a.postes[m].map((p) => (
+                (a.postes[m] ?? []).map((p) => (
                   <div
                     key={p.cle}
                     className="flex items-center justify-between gap-2 px-2 py-0.5 text-white/70"
