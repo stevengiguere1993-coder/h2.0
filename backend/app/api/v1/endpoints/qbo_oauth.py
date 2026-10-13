@@ -101,7 +101,12 @@ def _verify_state(token: str) -> Optional[str]:
     try:
         padded = token + "=" * (-len(token) % 4)
         decoded = base64.urlsafe_b64decode(padded.encode())
-        raw, sig = decoded.rsplit(b"|", 1)
+        # La signature HMAC-SHA256 (32 octets, binaire) peut contenir
+        # elle-même l'octet « | » : on la prend à position fixe au lieu
+        # de couper au dernier « | ».
+        raw, sep, sig = decoded[:-33], decoded[-33:-32], decoded[-32:]
+        if sep != b"|":
+            return None
         expected = hmac.new(
             settings.jwt_secret.encode(), raw, hashlib.sha256
         ).digest()
