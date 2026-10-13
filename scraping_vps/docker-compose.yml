@@ -26,3 +26,23 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  # Pré-chauffage de Kratos (Render Free) avant les routines Claude du
+  # matin — voir prewarm.sh. Conteneur minuscule, aucun port, redémarre
+  # seul ; journal : `docker logs horizon-prewarm`. Fenêtre et cadence
+  # réglables par variables d'environnement (heures UTC).
+  prewarm:
+    image: curlimages/curl:8.10.1
+    container_name: horizon-prewarm
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/prewarm.sh"]
+    volumes:
+      - ./prewarm.sh:/prewarm.sh:ro
+    environment:
+      PREWARM_FROM_UTC: "9"
+      PREWARM_TO_UTC: "14"
+      PREWARM_INTERVAL: "300"
+    deploy:
+      resources:
+        limits:
+          memory: 32M
