@@ -15,6 +15,11 @@ import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { Link } from "@/i18n/navigation";
+import {
+  TOUCH_CARD_STYLE,
+  useFinePointer,
+  useKanbanTouchDrag
+} from "@/hooks/use-kanban-touch-drag";
 
 type Bon = {
   id: number;
@@ -85,6 +90,24 @@ export default function BonsPage() {
   const [search, setSearch] = useState("");
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
   const dragIdRef = useRef<number | null>(null);
+  const finePointer = useFinePointer();
+  // Au doigt : appui long sur la carte (le glisser HTML5 ne sert qu'à la
+  // souris), même dépôt que la souris.
+  const boardRef = useKanbanTouchDrag({
+    onStart: (id) => {
+      dragIdRef.current = id;
+    },
+    onOver: setDragOverCol,
+    onDrop: (id, colId) => {
+      dragIdRef.current = null;
+      setDragOverCol(null);
+      if (colId) void moveTo(id, colId);
+    },
+    onCancel: () => {
+      dragIdRef.current = null;
+      setDragOverCol(null);
+    }
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -268,13 +291,15 @@ export default function BonsPage() {
                 un avec « Nouveau bon », ou retrouve tes anciens bons plus bas.
               </p>
             ) : (
-              <div className="flex gap-4 overflow-x-auto pb-4">
+              <div ref={boardRef} className="flex gap-4 overflow-x-auto pb-4">
                 {COLUMNS.map((col) => {
               const cards = byColumn[col.id] || [];
               const isOver = dragOverCol === col.id;
               return (
                 <div
                   key={col.id}
+                  data-kanban-col={col.id}
+                  data-kanban-col-label={col.label}
                   className={`flex w-80 min-w-[320px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 transition ${
                     isOver
                       ? "border-accent-500 ring-1 ring-accent-500/40"
@@ -319,10 +344,13 @@ export default function BonsPage() {
                           et === "" || et === "a_classifier";
                         return (
                           // Le TITRE ouvre le bon ; le reste de la carte se
-                          // glisse dans le kanban (Phil 2026-10-03).
+                          // glisse dans le kanban (Phil 2026-10-03). Au
+                          // doigt : appui long n'importe où sur la carte.
                           <div
                             key={b.id}
-                            draggable
+                            data-kanban-card={b.id}
+                            draggable={finePointer}
+                            style={finePointer ? undefined : TOUCH_CARD_STYLE}
                             onDragStart={(e) => {
                               dragIdRef.current = b.id;
                               e.dataTransfer.effectAllowed = "move";
