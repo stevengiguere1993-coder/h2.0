@@ -130,6 +130,31 @@ def normaliser_cle(nom: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+_TITRES_FIN_RE = re.compile(
+    r"\s*[,\-–]?\s*\b(?:courtiers?(?:\s+immobiliers?)?(?:\s+(?:r[ée]sidentiel(?:\s+et\s+commercial)?"
+    r"|commercial|agr[ée]{2}))?|c\.?i\.?(?:r|c)?\.?|inc\.?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def nettoyer_nom(nom: str) -> tuple[str, Optional[str]]:
+    """Nom tel que lu sur une fiche → (nom affiché, agence déduite).
+    « François Courval Courtier » → (« François Courval », None) ;
+    « Denis Gallico (Immo Alliances) » → (« Denis Gallico », « Immo Alliances ») ;
+    « Rosibel Martinez inc. » → (« Rosibel Martinez », None)."""
+    s = re.sub(r"\s+", " ", (nom or "").strip())
+    agence: Optional[str] = None
+    m = re.match(r"^(.*?)\s*\(([^()]{2,120})\)\s*$", s)
+    if m and m.group(1).strip():
+        s, agence = m.group(1).strip(), m.group(2).strip()
+    for _ in range(3):
+        s2 = _TITRES_FIN_RE.sub("", s).strip(" ,-–")
+        if s2 == s or len(s2) < 3:
+            break
+        s = s2
+    return (s or (nom or "").strip()), agence
+
+
 def prenom_de(nom: str) -> str:
     parts = [p for p in re.split(r"\s+", (nom or "").strip()) if p]
     return parts[0].capitalize() if parts else ""
@@ -167,6 +192,10 @@ def _telephone_propre(t: Optional[str]) -> Optional[str]:
     if len(chiffres) == 11 and chiffres.startswith("1"):
         chiffres = chiffres[1:]
     if len(chiffres) != 10:
+        return None
+    # Plan de numérotation nord-américain : indicatif régional et central
+    # commencent par 2-9 (écarte « 055-… », « 329-093-… » lus de travers).
+    if chiffres[0] not in "23456789" or chiffres[3] not in "23456789":
         return None
     return f"{chiffres[0:3]}-{chiffres[3:6]}-{chiffres[6:]}"
 
@@ -243,19 +272,38 @@ async def upsert_courtier(
     """Crée ou complète la fiche d'un courtier (clé = nom normalisé). Ne
     remplace jamais une coordonnée déjà saisie par une coordonnée vide.
     Retourne (courtier, créé)."""
-    nom = (nom or "").strip()
+    nom_brut = (nom or "").strip()
+    nom, agence_deduite = nettoyer_nom(nom_brut)
+    agence = agence or agence_deduite
     cle = normaliser_cle(nom)
+    cle_brute = normaliser_cle(nom_brut)
     if not cle or len(cle) < 3:
         return None, False
     vu_le = _aware(vu_le) or datetime.now(timezone.utc)
-    existant = (
+    # Une ligne créée avant le nettoyage des noms porte la clé « brute » :
+    # on la retrouve aussi et on la met au propre (pas de doublon).
+    candidats = (
         await db.execute(
-            select(ProspectionCourtier).where(ProspectionCourtier.cle_dedup == cle)
+            select(ProspectionCourtier).where(
+                ProspectionCourtier.cle_dedup.in_({cle, cle_brute})
+            )
         )
-    ).scalar_one_or_none()
+    ).scalars().all()
+    existant = next((c for c in candidats if c.cle_dedup == cle), None) or (
+        candidats[0] if candidats else None
+    )
     courriel = _courriel_valide(courriel)
     telephone = _telephone_propre(telephone)
     if existant is not None:
+        if existant.cle_dedup != cle and not any(c.cle_dedup == cle for c in candidats):
+            existant.cle_dedup = cle
+        nom_existant_propre, agence_existante = nettoyer_nom(existant.nom)
+        if nom_existant_propre != existant.nom:
+            existant.nom = nom_existant_propre[:255]
+            if agence_existante and not existant.agence:
+                existant.agence = agence_existante[:255]
+        if existant.telephone and _telephone_propre(existant.telephone) is None:
+            existant.telephone = None  # numéro impossible lu de travers
         if agence and not existant.agence:
             existant.agence = agence[:255]
         if courriel and not existant.courriel:
@@ -468,12 +516,28 @@ async def scan(
 
             if scraping_proxy.vps_available():
                 _dire("Centris (VPS) : liste des immeubles résidentiels 6+…")
-                listings = await scraping_proxy.scrape_centris_search(
+                reponse = await scraping_proxy.scrape_centris_search_complet(
                     category="immeuble_residentiel_6_plus",
                     max_pages=int(config.get("pages_centris") or 5),
-                )
+                ) or {}
+                listings = list(reponse.get("listings") or [])
+                diagnostic = reponse.get("diagnostic") or {}
+                rapport["vps_utilise"] = True
+                if not listings:
+                    rapport["vps_diagnostic"] = diagnostic or None
+                    precision = ""
+                    if diagnostic.get("captcha"):
+                        precision = " Le VPS a vu une page de vérification anti-robot (captcha)."
+                    elif diagnostic.get("title"):
+                        precision = f" Titre de la page vue : « {diagnostic['title']} »."
+                    rapport["erreurs"].append(
+                        "Centris (VPS) : le VPS a répondu mais n'a lu aucune annonce "
+                        "sur la liste « immeuble résidentiel 6+ » — Centris bloque "
+                        "probablement le robot ou la page a changé." + precision
+                        + " Le registre se nourrit alors des annonces reçues par "
+                        "l'extension et des fiches d'analyse."
+                    )
                 if listings:
-                    rapport["vps_utilise"] = True
                     rapport["vps_annonces_lues"] = len(listings)
                     await upsert_listings(
                         db, listings, "immeuble_residentiel_6_plus"
@@ -724,6 +788,7 @@ __all__ = [
     "charger_config",
     "fusionner_config",
     "normaliser_cle",
+    "nettoyer_nom",
     "prenom_de",
     "separer_contact",
     "parser_courtier_html",

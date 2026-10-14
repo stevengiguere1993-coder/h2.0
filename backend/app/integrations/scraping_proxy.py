@@ -98,6 +98,39 @@ async def scrape_centris_search(
         return r.json().get("listings", [])
 
 
+async def scrape_centris_search_complet(
+    *,
+    category: str = "multiplex_2_5",
+    region: Optional[str] = None,
+    max_pages: int = 2,
+) -> Optional[dict]:
+    """Comme ``scrape_centris_search`` mais renvoie la réponse entière du
+    VPS : ``{"listings": [...], "diagnostic": {...} | None}``. Le
+    diagnostic (titre de la page, captcha détecté, extrait) n'est fourni
+    que quand le VPS n'a lu aucune annonce — registre des courtiers
+    2026-10-14."""
+    if not vps_available():
+        return None
+    url = f"{VPS_URL}/scrape/centris-search"
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        r = await client.post(
+            url,
+            headers=_headers(),
+            json={
+                "category": category,
+                "region": region,
+                "max_pages": max_pages,
+            },
+        )
+        r.raise_for_status()
+        data = r.json()
+        if not isinstance(data, dict):
+            return {"listings": [], "diagnostic": None}
+        data.setdefault("listings", [])
+        data.setdefault("diagnostic", None)
+        return data
+
+
 async def scrape_centris_detail(listing_url: str) -> Optional[dict]:
     """Scrape une page de détail Centris."""
     if not vps_available():
