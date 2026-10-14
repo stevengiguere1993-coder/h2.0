@@ -131,12 +131,19 @@ async def scrape_centris_search_complet(
         return data
 
 
-async def scrape_centris_detail(listing_url: str) -> Optional[dict]:
-    """Scrape une page de détail Centris."""
+async def scrape_centris_detail(
+    listing_url: str, *, timeout_s: Optional[float] = None
+) -> Optional[dict]:
+    """Scrape une page de détail Centris. ``timeout_s`` : délai total
+    (défaut 45 s) — le registre des courtiers passe 90 s, une fiche rendue
+    par Playwright (scroll + sections dépliées) prend ~35 s."""
     if not vps_available():
         return None
     url = f"{VPS_URL}/scrape/centris-detail"
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+    timeout = (
+        httpx.Timeout(float(timeout_s), connect=10.0) if timeout_s else _TIMEOUT
+    )
+    async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.post(
             url,
             headers=_headers(),
