@@ -151,6 +151,7 @@ from app.api.v1.endpoints import (
     prospection_analyse_extract,
     prospection_analyses,
     prospection_analysis_defaults,
+    prospection_courtiers,
     prospection_deals,
     prospection_lists,
     rental_comparables,
@@ -450,6 +451,9 @@ api_router.include_router(purchase_order_items.router, dependencies=DEP_CONSTRUC
 # prospection_analyses qui a /prospection/analyses/* — match littéral
 # avant /prospection/{lead_id}.
 api_router.include_router(prospection_lists.router, dependencies=DEP_PROSPECTION)
+# Registre des courtiers (Phil 2026-10-14) : /prospection/courtiers/*
+# — sous-route littérale, AVANT /prospection/{lead_id} comme les autres.
+api_router.include_router(prospection_courtiers.router, dependencies=DEP_PROSPECTION)
 # rental_comparables : prefix /prospection/rental-comparables, doit
 # matcher avant /prospection/{lead_id} comme les autres.
 api_router.include_router(rental_comparables.router, dependencies=DEP_PROSPECTION_INVEST)

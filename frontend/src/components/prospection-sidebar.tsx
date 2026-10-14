@@ -5,6 +5,7 @@ import {
   BarChart3,
   Building2,
   Calendar,
+  Contact,
   KanbanSquare,
   KeyRound,
   Layers,
@@ -82,6 +83,12 @@ const PROSPECTION_SECTIONS: NavSection[] = [
         label: "Pipeline",
         icon: KanbanSquare,
         minRole: "employee"
+      },
+      {
+        href: "/prospection/courtiers",
+        label: "Courtiers",
+        icon: Contact,
+        minRole: "manager"
       },
       {
         href: "/prospection/moyenne-locative",
