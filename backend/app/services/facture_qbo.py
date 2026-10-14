@@ -8,7 +8,6 @@ Invoice with SalesItemLineDetail lines referencing real Items
 from __future__ import annotations
 
 import logging
-import re
 from datetime import date
 from typing import Any, Dict, Optional
 
@@ -81,49 +80,6 @@ MEMO_KRATOS = "Kratos facture #{id}"
 #: Tolérance sur le total pour reconnaître « la même facture » (migration
 #: d'une facture saisie dans QB avant Kratos).
 TOLERANCE_TOTAL = 0.05
-
-#: Code d'erreur QBO dans le message d'une QuickBooksError : « 'code':
-#: '5010' » (Fault renvoyé par QB) ou « (5010) ».
-_RE_CODE_QBO = re.compile(r"""['"]code['"]\s*:\s*['"](\d+)['"]|\((\d{3,5})\)""")
-
-
-def _codes_erreur_qbo(message: str) -> set[str]:
-    """Codes d'erreur QBO d'un message d'exception. On ne cherche plus des
-    chiffres n'importe où dans le message : l'intuit_tid et l'heure du
-    Fault (« .610-07:00 ») en contiennent au hasard, et un « 610 » de
-    hasard faisait recréer une facture qui existait toujours."""
-    return {a or b for a, b in _RE_CODE_QBO.findall(message or "")}
-
-
-def _est_doublon_numero(m: str, codes: set[str]) -> bool:
-    return "6140" in codes or any(
-        k in m
-        for k in (
-            "duplicate document number",
-            "numéro de document en double",
-            "numero de document en double",
-        )
-    )
-
-
-def _est_conflit_version(m: str, codes: set[str]) -> bool:
-    """« Stale Object Error » : le SyncToken stocké est périmé. L'Invoice
-    QB a changé depuis notre dernière mise à jour (paiement imputé, autre
-    synchro), elle n'a PAS disparu."""
-    return "5010" in codes or "stale object" in m
-
-
-def _est_introuvable(m: str, codes: set[str]) -> bool:
-    return bool(codes & {"610", "2010"}) or any(
-        k in m for k in ("not found", "introuvable", "deleted", "invalid reference")
-    )
-
-
-def _date_emission(facture: Facture) -> str:
-    """Date de la facture dans QuickBooks : sa date d'émission Kratos, la
-    même que « Émise le » du PDF client (à défaut, aujourd'hui)."""
-    quand = facture.issued_at or facture.created_at
-    return (quand.date() if quand else date.today()).isoformat()
 
 
 def _qb_total(inv: Dict[str, Any]) -> Optional[float]:
@@ -450,6 +406,7 @@ def _build_invoice_payload(
     payload: Dict[str, Any] = {
         "CustomerRef": {"value": str(customer_id)},
         "DocNumber": facture.reference[:21],
+        "TxnDate": date.today().isoformat(),
         "Line": lines,
     }
     if class_id:
@@ -485,14 +442,10 @@ def _build_invoice_payload(
             payload["TxnTaxDetail"] = {"TotalTax": total_tax}
 
     if existing_invoice_id and existing_sync_token is not None:
-        # Mise à jour : la date de l'Invoice QB ne bouge pas. Elle prenait
-        # la date du jour à chaque renvoi (la 120, émise en juin, était
-        # datée du 20 août dans QB) et pouvait changer de période.
         payload["Id"] = existing_invoice_id
         payload["SyncToken"] = existing_sync_token
         payload["sparse"] = True
     else:
-        payload["TxnDate"] = _date_emission(facture)
         # Signature Kratos (mémo interne, invisible du client) : permet de
         # distinguer nos Invoices d'une facture saisie à la main dans QB.
         payload["PrivateNote"] = MEMO_KRATOS.format(id=facture.id)
@@ -1003,6 +956,16 @@ async def sync_facture_to_qbo(
         # la corriger (projet/classe) — au lieu d'en créer une 2e. Si l'Id
         # stocké est obsolète/supprimé, on repart sans Id (puis le doublon
         # éventuel sera relié).
+        _DUP_KEYS = (
+            "duplicate document number",
+            "numéro de document en double",
+            "numero de document en double",
+            "6140",
+        )
+        _STALE_KEYS = (
+            "not found", "object not found", "introuvable", "deleted",
+            "stale", "invalid reference", "5010", "610", "2010",
+        )
         # « Vous avez tenté d'établir une facture pour une imputation, un
         # crédit, une dépense facturable, des heures ou un devis qui
         # n'existent pas » : l'Invoice QB est LIÉE (devis / heures /
@@ -1015,30 +978,11 @@ async def sync_facture_to_qbo(
             "d\u00e9pense facturable", "billable expense",
         )
 
-        async def _invoice_qb_actuelle(
-            iid: str, exc_origine: QuickBooksError
-        ) -> Optional[Dict[str, Any]]:
-            """L'Invoice QB telle qu'elle est maintenant, ou None si elle a
-            vraiment été supprimée de QB. Si QB ne répond pas, on relève
-            l'erreur d'origine : jamais de recréation à l'aveugle."""
-            try:
-                cur = await qbo.get_invoice(iid)
-            except QuickBooksError as exc_get:
-                m_get = str(exc_get).lower()
-                if _est_introuvable(m_get, _codes_erreur_qbo(str(exc_get))):
-                    return None
-                raise exc_origine
-            cur = cur.get("Invoice") or cur
-            return cur if cur.get("Id") else None
-
-        async def _push_invoice(
-            p: Dict[str, Any], _lie_essaye: bool = False, _relu: bool = False
-        ) -> Dict[str, Any]:
+        async def _push_invoice(p: Dict[str, Any], _lie_essaye: bool = False) -> Dict[str, Any]:
             try:
                 return await qbo.create_invoice(p)
             except QuickBooksError as exc:
                 m = str(exc).lower()
-                codes = _codes_erreur_qbo(str(exc))
                 if p.get("Id") and not _lie_essaye and any(k in m for k in _LINK_KEYS):
                     cur = await qbo.get_invoice(str(p["Id"]))
                     cur = cur.get("Invoice") or cur
@@ -1062,11 +1006,11 @@ async def sync_facture_to_qbo(
                             "Facture %s : Invoice QB %s liée, MAJ rejouée avec le client QB %s",
                             fa.id, p["Id"], cust_qb,
                         )
-                        return await _push_invoice(p2, _lie_essaye=True, _relu=_relu)
+                        return await _push_invoice(p2, _lie_essaye=True)
                 # Doublon de numéro : la même facture → on s'y relie et on la
                 # met à jour ; une AUTRE facture → prochain numéro libre et
                 # nouvel essai, jusqu'à ce que QuickBooks accepte.
-                if not p.get("Id") and _est_doublon_numero(m, codes):
+                if not p.get("Id") and any(k in m for k in _DUP_KEYS):
                     docnum = str(p.get("DocNumber") or "").strip()
                     found = (
                         await qbo.find_invoice_by_docnumber(docnum)
@@ -1075,22 +1019,13 @@ async def sync_facture_to_qbo(
                     )
                     if found and found.get("Id"):
                         autre = await facture_kratos_liee(db, str(found["Id"]))
-                        # Sa PROPRE Invoice n'est pas « une autre facture » :
-                        # la renuméroter créerait un doublon dans QB et y
-                        # déplacerait les paiements.
-                        sienne = str(found["Id"]) == str(fa.qbo_invoice_id or "") or (
-                            autre is not None and autre.id == fa.id
-                        )
-                        if sienne or (
-                            autre is None
-                            and (_est_de_kratos(found) or _meme_facture(found, fa, _famille))
+                        if autre is None and (
+                            _est_de_kratos(found) or _meme_facture(found, fa, _famille)
                         ):
                             p["Id"] = str(found["Id"])
                             p["SyncToken"] = str(found.get("SyncToken") or "0")
                             p["sparse"] = True
                             p.pop("PrivateNote", None)
-                            # Mise à jour : la date de l'Invoice QB ne bouge pas.
-                            p.pop("TxnDate", None)
                             return await qbo.create_invoice(p)
                         motif = _motif_numero_pris(found, autre)
                     else:
@@ -1104,38 +1039,13 @@ async def sync_facture_to_qbo(
                         if line.get("Description") == ref_avant:
                             line["Description"] = fa.reference
                     return await _push_invoice(p)
-                # Mise à jour refusée parce que le SyncToken est périmé (un
-                # paiement imputé dans QB le fait avancer) ou pour un motif
-                # « introuvable » : avant de recréer quoi que ce soit, on
-                # regarde si l'Invoice existe encore. Si oui, on rejoue UNE
-                # fois avec son jeton à jour. Recréer une facture qui existe
-                # donnait un doublon de numéro, puis une renumérotation et
-                # des paiements déplacés vers la nouvelle Invoice.
-                if (
-                    p.get("Id")
-                    and not _relu
-                    and (_est_conflit_version(m, codes) or _est_introuvable(m, codes))
-                ):
-                    cur = await _invoice_qb_actuelle(str(p["Id"]), exc)
-                    if cur is not None:
-                        p2 = dict(p)
-                        p2["SyncToken"] = str(cur.get("SyncToken") or "0")
-                        log.warning(
-                            "Facture %s : MAJ de l'Invoice QB %s rejouée avec le "
-                            "SyncToken à jour (%s)",
-                            fa.id, p["Id"], str(exc)[:200],
-                        )
-                        return await _push_invoice(
-                            p2, _lie_essaye=_lie_essaye, _relu=True
-                        )
-                    # Vraiment supprimée de QB → recréer à neuf (avec la
-                    # signature Kratos, pour la reconnaître ensuite par son
-                    # numéro, et la date d'émission).
+                # Id obsolète/supprimé → recréer à neuf (avec la signature
+                # Kratos, pour la reconnaître ensuite par son numéro).
+                if p.get("Id") and any(k in m for k in _STALE_KEYS):
                     p.pop("Id", None)
                     p.pop("SyncToken", None)
                     p.pop("sparse", None)
                     p.setdefault("PrivateNote", MEMO_KRATOS.format(id=fa.id))
-                    p.setdefault("TxnDate", _date_emission(fa))
                     return await _push_invoice(p)
                 raise
 
@@ -1202,9 +1112,6 @@ async def sync_facture_to_qbo(
         # Le numéro peut avoir changé (renumérotation automatique).
         "reference": fa.reference or "",
     }
-    if _qb_total(inv) is not None:
-        # Total de l'Invoice tel que QB l'a calculé (taxes comprises).
-        result["qbo_total"] = _qb_total(inv)
     if warnings:
         result["sync_warning"] = " | ".join(warnings)
     if result_notes:
@@ -1295,319 +1202,3 @@ async def push_facture_payments_only(
     )
     await db.flush()
     return {"qbo_invoice_id": inv_id, "payments_pushed": len(pushed)}
-
-
-#: Remises à jour au plus par passage du filet horaire : borne le nombre
-#: d'Invoices QB modifiées d'un coup.
-MAX_CORRECTIONS_PAR_PASSAGE = 10
-
-#: Essais par (facture, total Kratos, total QB) dans ce processus : une
-#: remise à jour qui échoue n'est pas rejouée à chaque heure. Repart à
-#: zéro au redémarrage.
-_corrections_tentees: Dict[tuple[int, str, str], int] = {}
-#: Essais au plus pour un même écart (le 2e couvre une panne passagère).
-MAX_ESSAIS_PAR_ECART = 2
-
-_RE_MEMO_KRATOS = re.compile(r"kratos facture #(\d+)", re.IGNORECASE)
-
-#: Lignes qu'une synchro Kratos produit (QB ajoute lui-même la ligne de
-#: sous-total). Une remise, un groupe ou une ligne de texte vient d'une
-#: modification faite dans QuickBooks.
-_LIGNES_KRATOS = {"SalesItemLineDetail", "SubTotalLineDetail"}
-
-MSG_ECART_A_VERIFIER = (
-    "QuickBooks n'est pas à jour ({marque}). Pas de correction "
-    "automatique : l'Invoice QB ne ressemble pas à cette facture (lignes "
-    "ou client différents, ou modifiée dans QuickBooks). Vérifier, puis "
-    "« Renvoyer vers QuickBooks » si Kratos a raison."
-)
-MSG_ECART_PERSISTANT = (
-    "QuickBooks calcule un autre total que Kratos même après la remise à "
-    "jour ({marque}) : vérifier les taxes du client dans QuickBooks."
-)
-
-
-def _total_attendu(sous_total: float) -> float:
-    """Total TTC d'une facture Kratos depuis la somme de ses lignes, comme
-    _recompute_facture_totals (TPS et TVQ arrondies séparément)."""
-    from app.core.taxes import TPS_RATE, TVQ_RATE
-
-    sub = round(sous_total, 2)
-    return round(sub + round(sub * TPS_RATE, 2) + round(sub * TVQ_RATE, 2), 2)
-
-
-def _montant(v: float) -> str:
-    return f"{v:,.2f} $".replace(",", " ").replace(".", ",")
-
-
-def marque_ecart_qb(total_qb: float, total_kratos: float) -> str:
-    """L'écart tel qu'il s'affiche sur la fiche. Sert aussi de repère pour
-    ne pas re-signaler ni re-pousser le même écart à chaque passage."""
-    return f"total QuickBooks {_montant(total_qb)}, Kratos {_montant(total_kratos)}"
-
-
-def _norm_ligne(texte: Any) -> str:
-    return " ".join(str(texte or "").split()).lower()[:100]
-
-
-def invoice_est_miroir_kratos(
-    inv: Dict[str, Any],
-    fa: Facture,
-    items: list[FactureItem],
-    famille: set[str],
-    nom_client: str,
-) -> bool:
-    """L'Invoice QB est-elle le miroir de CETTE facture, produit par une
-    synchro Kratos, et donc sûre à remettre à jour sans demander ? Oui si
-    elle porte la signature de la facture, ou si elle est au même client,
-    n'a que des lignes de type Kratos et qu'au moins la moitié de ses
-    lignes sont des lignes de la facture (une modification manquée n'en
-    change que quelques-unes). Une Invoice reliée à la migration par son
-    seul numéro, ou retouchée dans QuickBooks, n'est jamais écrasée."""
-    m = _RE_MEMO_KRATOS.search(str(inv.get("PrivateNote") or ""))
-    if m and int(m.group(1)) == fa.id:
-        return True
-    cust = inv.get("CustomerRef") or {}
-    cust_id = str(cust.get("value") or "")
-    nom = _norm_ligne(nom_client)
-    if not (cust_id and cust_id in famille) and not (
-        nom and nom in _norm_ligne(cust.get("name"))
-    ):
-        return False
-    lignes = inv.get("Line") or []
-    if any(
-        ln.get("DetailType") not in _LIGNES_KRATOS or ln.get("LinkedTxn")
-        for ln in lignes
-    ):
-        return False
-    ventes = [ln for ln in lignes if ln.get("DetailType") == "SalesItemLineDetail"]
-    if not ventes:
-        return False
-    connues = {_norm_ligne(it.description) for it in items}
-    connues.add(_norm_ligne(fa.reference))
-    communes = sum(
-        1
-        for ln in ventes
-        if _norm_ligne(
-            ln.get("Description")
-            or ((ln.get("SalesItemLineDetail") or {}).get("ItemRef") or {}).get("name")
-        )
-        in connues
-    )
-    return communes * 2 >= len(ventes)
-
-
-async def factures_en_retard_dans_qb(qbo, db: AsyncSession) -> list[Dict[str, Any]]:
-    """Factures émises et reliées à une Invoice QB dont le total QB ne
-    correspond plus à leurs lignes Kratos : une modification n'a pas
-    atteint QuickBooks. Les factures sans lignes (importées de QB) et les
-    Invoices annulées dans QB sont laissées de côté. « miroir » dit si
-    l'Invoice peut être remise à jour sans demander."""
-    from sqlalchemy import func
-
-    rows = (
-        await db.execute(
-            select(
-                Facture.id,
-                Facture.qbo_invoice_id,
-                func.sum(FactureItem.total),
-            )
-            .join(FactureItem, FactureItem.facture_id == Facture.id)
-            .where(
-                Facture.status.in_(("sent", "paid", "overdue")),
-                Facture.qbo_invoice_id.is_not(None),
-                Facture.client_id.is_not(None),
-            )
-            .group_by(Facture.id, Facture.qbo_invoice_id)
-        )
-    ).all()
-    par_invoice = {
-        str(qid): (int(fid), _total_attendu(float(sub or 0)))
-        for fid, qid, sub in rows
-        if qid
-    }
-    ids = sorted(par_invoice)
-    ecarts: list[Dict[str, Any]] = []
-    for i in range(0, len(ids), 40):
-        lot = ", ".join("'" + x.replace("'", "''") + "'" for x in ids[i : i + 40])
-        invoices = await qbo.query(
-            f"SELECT * FROM Invoice WHERE Id IN ({lot}) MAXRESULTS 1000"
-        )
-        for inv in invoices:
-            qid = str(inv.get("Id") or "")
-            if qid not in par_invoice:
-                continue
-            fid, attendu = par_invoice[qid]
-            total_qb = _qb_total(inv)
-            if total_qb is None:
-                continue
-            note = str(inv.get("PrivateNote") or "").lower()
-            if abs(total_qb) < 0.005 or "void" in note or "annul" in note:
-                continue
-            if abs(total_qb - attendu) <= TOLERANCE_TOTAL:
-                continue
-            fa = await _load_facture(db, fid)
-            if fa is None:
-                continue
-            client = await _load_client(db, fa.client_id)
-            miroir = invoice_est_miroir_kratos(
-                inv,
-                fa,
-                await _load_items(db, fid),
-                await _famille_qb(db, fa),
-                getattr(client, "name", "") or "",
-            )
-            ecarts.append(
-                {
-                    "facture_id": fid,
-                    "reference": fa.reference,
-                    "qbo_invoice_id": qid,
-                    "total_kratos": attendu,
-                    "total_qb": round(total_qb, 2),
-                    "miroir": miroir,
-                    "erreur_affichee": fa.qbo_sync_error or "",
-                }
-            )
-    ecarts.sort(key=lambda e: e["facture_id"])
-    return ecarts
-
-
-async def corriger_factures_en_retard_dans_qb(
-    *, limite: int = MAX_CORRECTIONS_PAR_PASSAGE
-) -> Dict[str, Any]:
-    """Filet horaire : remet à jour dans QB les Invoices restées en retard
-    sur les lignes Kratos (facture 120, Steven 2026-10-14 : 16 115,64 $
-    dans QB pour 15 965,88 $ dans Kratos). Même synchro que « Renvoyer
-    vers QuickBooks » : lignes et taxes remplacées, paiements conservés,
-    numéro et date inchangés. Seulement pour une Invoice qui est le miroir
-    de la facture ; les autres écarts sont affichés sur la fiche, à
-    vérifier. Chaque remise à jour est inscrite au journal
-    (« facture.qbo_resynchronisee »)."""
-    from app.db.session import AsyncSessionLocal
-    from app.services.audit import log_action
-    from app.services.qbo_auto_sync import verrou_facture
-
-    qbo = get_qbo()
-    await qbo._load_refresh_from_db()
-    if not qbo.ready:
-        return {"skipped": "qbo_non_configure"}
-    async with AsyncSessionLocal() as db:
-        ecarts = await factures_en_retard_dans_qb(qbo, db)
-
-    corrigees: list[str] = []
-    a_verifier: list[str] = []
-    echecs: Dict[str, str] = {}
-    deja_signalees = deja_tentees = 0
-    for e in ecarts:
-        marque = marque_ecart_qb(e["total_qb"], e["total_kratos"])
-        if marque in e["erreur_affichee"]:
-            # Déjà signalé sur la fiche : rien de neuf tant que personne
-            # n'a touché à la facture.
-            deja_signalees += 1
-            continue
-        if not e["miroir"]:
-            a_verifier.append(e["reference"])
-            log.warning(
-                "Facture %s : Invoice QB en écart (%s), à vérifier",
-                e["reference"], marque,
-            )
-            try:
-                async with AsyncSessionLocal() as s:
-                    fa = await _load_facture(s, e["facture_id"])
-                    if fa is not None:
-                        fa.qbo_sync_error = MSG_ECART_A_VERIFIER.format(
-                            marque=marque
-                        )[:500]
-                        await log_action(
-                            s,
-                            user=None,
-                            action="facture.qbo_ecart_a_verifier",
-                            entity_type="facture",
-                            entity_id=e["facture_id"],
-                            details={
-                                "reference": e["reference"],
-                                "total_qb": e["total_qb"],
-                                "total_kratos": e["total_kratos"],
-                            },
-                        )
-                        await s.commit()
-            except Exception:  # noqa: BLE001
-                log.warning(
-                    "Facture %s : écart QB non signalé", e["reference"],
-                    exc_info=True,
-                )
-            continue
-        cle = (e["facture_id"], f"{e['total_kratos']:.2f}", f"{e['total_qb']:.2f}")
-        if _corrections_tentees.get(cle, 0) >= MAX_ESSAIS_PAR_ECART:
-            deja_tentees += 1
-            continue
-        if len(corrigees) + len(echecs) >= limite:
-            continue
-        _corrections_tentees[cle] = _corrections_tentees.get(cle, 0) + 1
-        try:
-            async with verrou_facture(e["facture_id"]):
-                async with AsyncSessionLocal() as s:
-                    res = await sync_facture_to_qbo(s, e["facture_id"])
-                    if res.get("skipped"):
-                        await s.commit()
-                        continue
-                    apres = res.get("qbo_total")
-                    if apres is None:
-                        # QB a refusé la mise à jour du corps : la synchro
-                        # ne lève pas (elle garde l'Invoice et pousse les
-                        # paiements) mais a posé le motif sur la fiche.
-                        await s.commit()
-                        echecs[e["reference"]] = (
-                            res.get("sync_warning") or "corps non mis à jour"
-                        )[:200]
-                        log.error(
-                            "Facture %s : remise à jour de l'Invoice QB "
-                            "refusée : %s",
-                            e["reference"], res.get("sync_warning"),
-                        )
-                        continue
-                    details: Dict[str, Any] = {
-                        "reference": res.get("reference") or e["reference"],
-                        "total_qb_avant": e["total_qb"],
-                        "total_kratos": e["total_kratos"],
-                        "total_qb_apres": apres,
-                    }
-                    if res.get("sync_warning"):
-                        details["avertissement"] = res["sync_warning"]
-                    if abs(apres - e["total_kratos"]) > TOLERANCE_TOTAL:
-                        # QB recalcule autrement (taxes du client) : on le
-                        # dit sur la fiche et on ne re-pousse plus cet écart.
-                        fa = await _load_facture(s, e["facture_id"])
-                        if fa is not None:
-                            fa.qbo_sync_error = MSG_ECART_PERSISTANT.format(
-                                marque=marque_ecart_qb(apres, e["total_kratos"])
-                            )[:500]
-                    await log_action(
-                        s,
-                        user=None,
-                        action="facture.qbo_resynchronisee",
-                        entity_type="facture",
-                        entity_id=e["facture_id"],
-                        details=details,
-                    )
-                    await s.commit()
-            corrigees.append(e["reference"])
-            log.warning(
-                "Facture %s : Invoice QB remise à jour (%s)",
-                e["reference"], marque,
-            )
-        except Exception as exc:  # noqa: BLE001
-            echecs[e["reference"]] = str(exc)[:200]
-            log.error(
-                "Facture %s : remise à jour de l'Invoice QB échouée : %s",
-                e["reference"], exc,
-            )
-            await record_facture_sync_error(e["facture_id"], str(exc))
-    return {
-        "ecarts": len(ecarts),
-        "corrigees": corrigees,
-        "a_verifier": a_verifier,
-        "echecs": echecs,
-        "deja_signalees": deja_signalees,
-        "deja_tentees": deja_tentees,
-    }

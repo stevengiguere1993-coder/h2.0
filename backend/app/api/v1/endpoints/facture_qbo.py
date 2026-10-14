@@ -49,15 +49,8 @@ async def sync_facture(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Permissions insuffisantes pour cette action.",
         )
-    from app.services.qbo_auto_sync import verrou_facture
-
     try:
-        # Une synchro à la fois par facture (push d'arrière-plan d'une
-        # modification, filet horaire) ; commit DANS le verrou pour que la
-        # suivante relise ce qui vient d'être enregistré.
-        async with verrou_facture(facture_id):
-            result = await sync_facture_to_qbo(db, facture_id)
-            await db.commit()
+        result = await sync_facture_to_qbo(db, facture_id)
     except FactureSyncError as exc:
         # Persiste le motif sur la facture (session fraîche) pour l'afficher
         # sur la fiche même après fermeture de la bannière. On annule

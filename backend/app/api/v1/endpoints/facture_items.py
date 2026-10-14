@@ -259,24 +259,23 @@ async def list_items(
     return out
 
 
-async def _autopush_if_emise(db: DBSession, fa: Facture) -> None:
+def _autopush_if_emise(fa: Facture) -> None:
     """Reflète en arrière-plan toute mutation de LIGNE sur l'Invoice QB
     d'une facture ÉMISE (sent/overdue) : le miroir QuickBooks doit suivre
     l'éditeur SANS clic (lignes importées, ajoutées, modifiées,
     supprimées). Les brouillons partent entiers à l'envoi au client ;
     push_facture_now est délibéré (non gated) et idempotent
-    (qbo_invoice_id → mise à jour sparse, jamais de doublon).
-
-    La modification est VALIDÉE avant de lancer le push : la session de
-    la requête n'est commitée qu'après l'envoi de la réponse, et le push
-    (session à lui) relisait alors les lignes d'AVANT — QuickBooks
-    restait une modification en retard (facture 120, 2026-10-14)."""
+    (qbo_invoice_id → mise à jour sparse, jamais de doublon)."""
     if (fa.status or "") in ("draft", "void"):
         return
-    from app.services.qbo_auto_sync import lancer_push_facture
+    import asyncio
 
-    await db.commit()
-    lancer_push_facture(int(fa.id))
+    from app.services.qbo_auto_sync import push_facture_now
+
+    try:
+        asyncio.create_task(push_facture_now(int(fa.id)))
+    except RuntimeError:
+        pass
 
 
 @router.post(
@@ -350,7 +349,7 @@ async def create_item(
     await db.flush()
     await _recompute_facture_totals(db, facture_id)
     await db.refresh(item)
-    await _autopush_if_emise(db, fa)
+    _autopush_if_emise(fa)
     return FactureItemRead.model_validate(item)
 
 
@@ -402,7 +401,7 @@ async def update_item(
     await db.flush()
     await _recompute_facture_totals(db, facture_id)
     await db.refresh(item)
-    await _autopush_if_emise(db, fa)
+    _autopush_if_emise(fa)
     return FactureItemRead.model_validate(item)
 
 
@@ -453,7 +452,7 @@ async def delete_item(
     await db.delete(item)
     await db.flush()
     await _recompute_facture_totals(db, facture_id)
-    await _autopush_if_emise(db, fa)
+    _autopush_if_emise(fa)
 
 
 # Backfill : resynchronise les totaux de TOUTES les factures

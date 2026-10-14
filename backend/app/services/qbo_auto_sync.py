@@ -10,7 +10,6 @@ Idempotent : on ne pousse pas un enregistrement qui a déjà son ID QBO.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from sqlalchemy import select
@@ -21,41 +20,6 @@ from app.models.automation_setting import AutomationSetting
 log = logging.getLogger(__name__)
 
 QBO_AUTO_SYNC_KEY = "qbo_auto_sync"
-
-#: Une synchro QuickBooks à la fois PAR FACTURE (l'API tourne dans un seul
-#: processus). Deux modifications rapprochées lançaient deux push en
-#: parallèle : chacun envoyait sa version des lignes et ils se disputaient
-#: le SyncToken de l'Invoice QB (facture 120, Steven 2026-10-14).
-_verrous_factures: dict[int, asyncio.Lock] = {}
-#: Factures dont un push attend déjà son tour : inutile d'en empiler un
-#: autre, celui qui attend relira la facture telle qu'elle est enregistrée.
-_push_en_attente: set[int] = set()
-#: Références des push lancés en arrière-plan (sans elles, une tâche
-#: asyncio peut être ramassée avant la fin).
-_taches_push: set[asyncio.Task] = set()
-
-
-def verrou_facture(facture_id: int) -> asyncio.Lock:
-    """Verrou de synchro QB de la facture. Non réentrant : ne jamais le
-    reprendre dans un appel qu'il protège déjà."""
-    verrou = _verrous_factures.get(int(facture_id))
-    if verrou is None:
-        verrou = _verrous_factures[int(facture_id)] = asyncio.Lock()
-    return verrou
-
-
-def lancer_push_facture(facture_id: int) -> None:
-    """Lance push_facture_now en arrière-plan. L'appelant doit avoir
-    VALIDÉ (commit) sa transaction avant : la tâche relit la facture dans
-    sa propre session, et la session d'une requête n'est validée qu'après
-    l'envoi de la réponse. Sinon le push renvoyait à QB les lignes
-    d'avant la modification."""
-    try:
-        tache = asyncio.create_task(push_facture_now(int(facture_id)))
-    except RuntimeError:
-        return
-    _taches_push.add(tache)
-    tache.add_done_callback(_taches_push.discard)
 
 
 async def is_qbo_auto_sync_enabled() -> bool:
@@ -88,10 +52,9 @@ async def push_facture_payments_now(facture_id: int) -> None:
     try:
         from app.services.facture_qbo import push_facture_payments_only
 
-        async with verrou_facture(facture_id):
-            async with AsyncSessionLocal() as db:
-                await push_facture_payments_only(db, facture_id)
-                await db.commit()
+        async with AsyncSessionLocal() as db:
+            await push_facture_payments_only(db, facture_id)
+            await db.commit()
     except Exception as exc:  # noqa: BLE001
         log.warning("push_facture_payments_now %s: %s", facture_id, exc)
 
@@ -105,24 +68,7 @@ async def push_facture_now(facture_id: int) -> None:
     des créations de masse (migration), donc on les reflète TOUJOURS dans
     QuickBooks. Idempotent : `qbo_invoice_id` / `qbo_payment_id` évitent
     tout doublon (création la 1ʳᵉ fois, mise à jour ensuite).
-
-    Une synchro à la fois par facture ; un push demandé pendant qu'un
-    autre attend déjà son tour est fondu dans celui-ci.
     """
-    if facture_id in _push_en_attente:
-        return
-    _push_en_attente.add(facture_id)
-    try:
-        async with verrou_facture(facture_id):
-            # Retiré AVANT de relire la facture : une modification
-            # enregistrée après ce point relance son propre push.
-            _push_en_attente.discard(facture_id)
-            await _push_facture(facture_id)
-    finally:
-        _push_en_attente.discard(facture_id)
-
-
-async def _push_facture(facture_id: int) -> None:
     try:
         from app.services.facture_qbo import sync_facture_to_qbo
 

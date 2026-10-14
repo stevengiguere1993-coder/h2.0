@@ -1172,14 +1172,11 @@ async def trigger_all_hourly(
         pushed = 0
         failed = 0
         errors: dict[str, str] = {}
-        from app.services.qbo_auto_sync import verrou_facture
-
         for fid in ids:
             try:
-                async with verrou_facture(fid):
-                    async with AsyncSessionLocal() as s:
-                        await sync_facture_to_qbo(s, fid)
-                        await s.commit()
+                async with AsyncSessionLocal() as s:
+                    await sync_facture_to_qbo(s, fid)
+                    await s.commit()
                 pushed += 1
             except Exception as exc:  # noqa: BLE001
                 failed += 1
