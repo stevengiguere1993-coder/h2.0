@@ -43,15 +43,17 @@ async def _worker_push_payments(facture_ids: list[int]) -> None:
     """
     from app.db.session import AsyncSessionLocal
     from app.services.facture_qbo import push_facture_payments_only
+    from app.services.qbo_auto_sync import verrou_facture
 
     st = _BACKFILL.get("payments")
     if st is None:
         return
     for fid in facture_ids:
         try:
-            async with AsyncSessionLocal() as s:
-                await push_facture_payments_only(s, fid)
-                await s.commit()
+            async with verrou_facture(fid):
+                async with AsyncSessionLocal() as s:
+                    await push_facture_payments_only(s, fid)
+                    await s.commit()
             st["processed"] += 1
         except Exception as exc:  # noqa: BLE001
             st["failed"] += 1
@@ -73,15 +75,17 @@ async def _worker_reclass(
     from app.services.achat_qbo import sync_achat_to_qbo
     from app.services.facture_qbo import sync_facture_to_qbo
     from app.services.labour_qbo import sync_project_labour_to_qbo
+    from app.services.qbo_auto_sync import verrou_facture
 
     st = _BACKFILL.get("reclass")
     if st is None:
         return
     for fid in facture_ids:
         try:
-            async with AsyncSessionLocal() as s:
-                await sync_facture_to_qbo(s, fid)
-                await s.commit()
+            async with verrou_facture(fid):
+                async with AsyncSessionLocal() as s:
+                    await sync_facture_to_qbo(s, fid)
+                    await s.commit()
             st["processed"] += 1
         except Exception as exc:  # noqa: BLE001
             st["failed"] += 1

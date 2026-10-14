@@ -983,11 +983,9 @@ def make_crud_router(
                 # Sinon elle pouvait relire l'ancien numéro (crayon) et
                 # renuméroter par-dessus celui choisi à la main.
                 await db.commit()
-                import asyncio
+                from app.services.qbo_auto_sync import lancer_push_facture
 
-                from app.services.qbo_auto_sync import push_facture_now
-
-                asyncio.create_task(push_facture_now(int(obj.id)))
+                lancer_push_facture(int(obj.id))
         # Bon de travail CLIENT : associer / changer le client APRÈS la
         # création déclenche la même garantie qu'à la création — projet
         # lié (« <ref BT> — <titre> ») + sous-client QB sous le client
