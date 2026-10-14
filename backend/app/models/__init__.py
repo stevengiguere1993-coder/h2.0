@@ -266,7 +266,6 @@ from app.models.paiement_fournisseur import (  # noqa: F401
     LotPaiementApprobation,
     LotPaiementLigne,
     PaiementEvenement,
-    PaiementOperation,
     PaiementReglage,
     Utilisateur2FA,
 )

@@ -41,12 +41,6 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "paiements_comptes_fournisseurs",
     "paiements_reglages",
     "paiements_journal",
-    #: Paiement automatique par VoPay (2026-10-05) : prélèvements, paiements
-    #: et retours chez VoPay. Lecture IA par l'état du lot (« lots_paiement » :
-    #: statut prelevement | envoi | echec, envoi_auto, auto_erreur) ; les
-    #: opérations elles-mêmes restent hors du connecteur, comme les
-    #: coordonnées et les réglages.
-    "paiements_operations",
     "utilisateurs_2fa",
     "user_access_overrides",
     "achats",
