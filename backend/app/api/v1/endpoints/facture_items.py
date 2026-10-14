@@ -374,14 +374,10 @@ async def update_item(
     # Sans ça, éditer une ligne rabais (prix négatif renvoyé par l'UI) ou
     # basculer une ligne vers/depuis « rabais » laissait un signe
     # incohérent — et l'ancien validateur ge=0 rejetait carrément le PATCH
-    # (→ « Mise à jour échouée » côté UI). La ligne « Moins acompte
-    # appliqué » (acompte_applique) est une déduction comme un rabais :
-    # la modifier la faisait passer en ajout (retour 2026-10-14).
+    # (→ « Mise à jour échouée » côté UI).
     if {"quantity", "unit_price", "kind"} & update.keys():
         base = abs(float(item.unit_price or 0))
-        item.unit_price = (
-            -base if item.kind in ("rabais", "acompte_applique") else base
-        )
+        item.unit_price = -base if item.kind == "rabais" else base
         item.total = round(float(item.quantity) * float(item.unit_price), 2)
     await db.flush()
     await _recompute_facture_totals(db, facture_id)

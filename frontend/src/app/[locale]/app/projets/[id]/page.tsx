@@ -88,8 +88,6 @@ type EtatContrat = {
   acompte_recu: number;
   acompte_applique: number;
   acompte_restant: number;
-  // Facture d'acompte jamais envoyée (brouillon) : rien n'en est déduit.
-  acompte_brouillon?: number;
   solde_a_facturer: number;
   pct_avancement: number;
   surfactures: string[];
@@ -894,33 +892,20 @@ export default function ProjectDetailPage() {
                       {fmtMoney(etatContrat.solde_a_facturer)}
                     </p>
                   </div>
-                  {etatContrat.acompte_recu > 0 ||
-                  (etatContrat.acompte_brouillon ?? 0) > 0 ? (
+                  {etatContrat.acompte_recu > 0 ? (
                     <div className="col-span-2 sm:col-span-3">
                       <span className="text-white/50">Acompte</span>
-                      {etatContrat.acompte_recu > 0 ? (
-                        <p className="text-white/80">
-                          {fmtMoney(etatContrat.acompte_recu)} reçu ·{" "}
-                          {fmtMoney(etatContrat.acompte_applique)} déjà
-                          déduit ·{" "}
-                          <strong className="text-white">
-                            {fmtMoney(etatContrat.acompte_restant)} restant
-                          </strong>
-                          {etatContrat.acompte_restant > 0
-                            ? " — déduit automatiquement au prorata sur cette facture (ligne « Moins acompte appliqué », modifiable)."
-                            : ""}
-                        </p>
-                      ) : null}
-                      {/* Facture d'acompte jamais envoyée : pas un acompte
-                          reçu, donc rien de déduit (retour 2026-10-14). */}
-                      {(etatContrat.acompte_brouillon ?? 0) > 0 ? (
-                        <p className="text-white/80">
-                          Facture d&apos;acompte de{" "}
-                          {fmtMoney(etatContrat.acompte_brouillon ?? 0)}{" "}
-                          encore en brouillon (jamais envoyée) : rien
-                          n&apos;en est déduit sur cette facture.
-                        </p>
-                      ) : null}
+                      <p className="text-white/80">
+                        {fmtMoney(etatContrat.acompte_recu)} reçu ·{" "}
+                        {fmtMoney(etatContrat.acompte_applique)} déjà
+                        déduit ·{" "}
+                        <strong className="text-white">
+                          {fmtMoney(etatContrat.acompte_restant)} restant
+                        </strong>
+                        {etatContrat.acompte_restant > 0
+                          ? " — déduit automatiquement au prorata sur cette facture (ligne « Moins acompte appliqué », modifiable)."
+                          : ""}
+                      </p>
                     </div>
                   ) : null}
                 </div>

@@ -33,17 +33,6 @@ from app.services.permissions_service import require_capability
 
 router = APIRouter(prefix="/projects", tags=["project-to-facture"])
 
-#: Statuts d'une facture d'acompte ÉMISE au client : seule celle-là est un
-#: acompte à déduire. Un brouillon jamais envoyé (ex. la facture d'acompte
-#: créée d'office à l'acceptation du devis) n'a jamais été facturé — le
-#: déduire retranchait l'acompte de la facture finale sans que le client
-#: l'ait jamais eu à payer (retour 2026-10-14).
-STATUTS_ACOMPTE_EMIS = (
-    FactureStatus.SENT.value,
-    FactureStatus.OVERDUE.value,
-    FactureStatus.PAID.value,
-)
-
 
 class ConvertToFactureRequest(BaseModel):
     include_soumission: bool = Field(
@@ -422,8 +411,6 @@ async def convert_project_to_facture(
             # l'avancement que représente CETTE facture sur le restant du
             # contrat (la dernière facture applique tout le solde).
             # apply_deposit_amount : montant imposé ($ HT) ; 0 = sauter.
-            # Seul un acompte FACTURÉ compte : facture d'acompte envoyée,
-            # en retard ou payée — pas un brouillon (retour 2026-10-14).
             if data.progressive_billing and delta_amount > 0:
                 from sqlalchemy import and_ as _and2
 
@@ -446,7 +433,7 @@ async def convert_project_to_facture(
                             .where(
                                 _FacAc.project_id == project_id,
                                 _FacAc.id != facture.id,
-                                _FacAc.status.in_(STATUTS_ACOMPTE_EMIS),
+                                _FacAc.status != FactureStatus.VOID.value,
                                 (FactureItem.kind == "acompte")
                                 | _acompte_lignes,
                             )
@@ -834,9 +821,6 @@ class EtatContrat(BaseModel):
     acompte_recu: float
     acompte_applique: float
     acompte_restant: float
-    #: Facture d'acompte encore en BROUILLON (jamais envoyée) : ce n'est
-    #: pas un acompte reçu, rien n'en est déduit — signalé à part.
-    acompte_brouillon: float = 0.0
     solde_a_facturer: float
     pct_avancement: float
     #: Items facturés AU-DELÀ de leur montant au contrat (crédit à
@@ -891,30 +875,24 @@ async def etat_contrat(
     av_ref = {a.id: a.reference for a in avenants}
     contrat_base = round(contrat_courant - avenants_impact, 2)
 
-    fac_rows = (
+    fac_ids = (
         await db.execute(
-            select(Facture.id, Facture.status).where(
+            select(Facture.id).where(
                 Facture.project_id == project_id,
                 Facture.status != FactureStatus.VOID.value,
             )
         )
-    ).all()
-    fac_ids = [int(fid) for fid, _st in fac_rows]
-    fac_emises = {
-        int(fid) for fid, st in fac_rows if st in STATUTS_ACOMPTE_EMIS
-    }
+    ).scalars().all()
 
     facture_par_item: dict[int, float] = {}
     extras = 0.0
     acompte_recu = 0.0
     acompte_applique = 0.0
-    acompte_brouillon = 0.0
     non_attribue = 0.0
     if fac_ids:
         rows = (
             await db.execute(
                 select(
-                    FactureItem.facture_id,
                     FactureItem.soumission_item_id,
                     FactureItem.kind,
                     FactureItem.description,
@@ -922,14 +900,13 @@ async def etat_contrat(
                 )
                 .where(FactureItem.facture_id.in_(fac_ids))
                 .group_by(
-                    FactureItem.facture_id,
                     FactureItem.soumission_item_id,
                     FactureItem.kind,
                     FactureItem.description,
                 )
             )
         ).all()
-        for fid, sid, kind, desc, tot in rows:
+        for sid, kind, desc, tot in rows:
             m = round(float(tot or 0), 2)
             k = kind or "service"
             if k == "acompte_applique":
@@ -937,12 +914,7 @@ async def etat_contrat(
             elif k == "acompte" or (
                 sid is None and (desc or "").lower().startswith("acompte")
             ):
-                # Même règle que la facturation : un acompte n'est reçu
-                # que si sa facture a été envoyée (pas un brouillon).
-                if int(fid) in fac_emises:
-                    acompte_recu += m
-                else:
-                    acompte_brouillon += m
+                acompte_recu += m
             elif k == "extra":
                 extras += m
             elif sid is not None:
@@ -1019,7 +991,6 @@ async def etat_contrat(
         acompte_recu=acompte_recu,
         acompte_applique=acompte_applique,
         acompte_restant=acompte_restant,
-        acompte_brouillon=round(acompte_brouillon, 2),
         solde_a_facturer=round(
             max(0.0, contrat_courant - facture_a_date), 2
         ),
