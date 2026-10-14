@@ -83,6 +83,8 @@ type Resultat = {
   fournisseur?: string;
   montant?: number | null;
   date?: string | null;
+  /** Classe QB du reçu (« Kratos ») ; null = QB ne l'a pas gardée. */
+  classe?: string | null;
 };
 
 type Doublon = {
@@ -722,7 +724,15 @@ export default function NouveauRecuPage() {
               {resultat.fournisseur ? ` · ${resultat.fournisseur}` : ""}
               {resultat.montant != null ? ` · ${argent(resultat.montant)}` : ""}
               {resultat.date ? ` · ${dateLisible(resultat.date)}` : ""}
+              {resultat.classe ? ` · Classe ${resultat.classe}` : ""}
             </p>
+            {resultat.classe === null ? (
+              <p className="mt-1 text-sm text-amber-300">
+                Reçu parti sans classe : vérifie que le suivi des classes est
+                activé dans ce QuickBooks (Compte et paramètres → Avancé →
+                Catégories).
+              </p>
+            ) : null}
             {resultat.statut === "envoye" ? (
               <p className="mt-1 text-sm text-[var(--qg-text-muted)]">
                 Photo jointe. La copie de nuit la range ensuite dans le Drive de
