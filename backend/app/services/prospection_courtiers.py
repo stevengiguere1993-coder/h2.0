@@ -255,6 +255,51 @@ def parser_courtier_html(html: str, nom_connu: Optional[str] = None) -> dict:
     return out
 
 
+_UNITES_RES = (
+    re.compile(r"nombre\s+d['’]unit[ée]s\D{0,60}?(\d{1,4})", re.IGNORECASE),
+    re.compile(r"r[ée]sidentiel(?:le)?s?\s*\(\s*(\d{1,4})\s*\)", re.IGNORECASE),
+    re.compile(r"(\d{1,4})\s*unit[ée]s\s+r[ée]sidentielles", re.IGNORECASE),
+    re.compile(r"(\d{1,4})\s*(?:logements|unit[ée]s)\b", re.IGNORECASE),
+)
+
+
+def parser_fiche_html(html: str) -> dict:
+    """Lecture best-effort d'une fiche Centris rendue : nombre d'unités,
+    adresse, ville. Retourne {nb_units, adresse, ville} (None si absent).
+    Les vignettes de la liste « Multifamilial » ne donnent pas la taille :
+    c'est ici qu'on l'apprend."""
+    out: dict[str, Any] = {"nb_units": None, "adresse": None, "ville": None}
+    if not html:
+        return out
+    try:
+        from bs4 import BeautifulSoup  # type: ignore
+
+        soup = BeautifulSoup(html, "html.parser")
+    except Exception:  # noqa: BLE001
+        return out
+    texte = soup.get_text(" ", strip=True)
+    for rx in _UNITES_RES:
+        m = rx.search(texte)
+        if m:
+            n = int(m.group(1))
+            if 1 <= n <= 2000:
+                out["nb_units"] = n
+                break
+    el = soup.select_one(
+        '[itemprop="address"], h2[itemprop="address"], .address, h2.pt-1'
+    )
+    if el:
+        complet = " ".join(el.get_text(" ", strip=True).split())
+        if complet:
+            out["adresse"] = complet[:500]
+            parts = [p.strip() for p in complet.split(",") if p.strip()]
+            if len(parts) >= 3:
+                out["ville"] = re.sub(r"\s*\(.*\)\s*$", "", parts[2])[:120] or None
+            elif len(parts) == 2:
+                out["ville"] = re.sub(r"\s*\(.*\)\s*$", "", parts[1])[:120] or None
+    return out
+
+
 # ─── Upserts ─────────────────────────────────────────────────────────
 
 
@@ -430,7 +475,11 @@ async def scan(
         "analyses_examinees": 0,
         "vps_utilise": False,
         "vps_annonces_lues": 0,
+        "vps_sans_taille": 0,
         "vps_details_lus": 0,
+        "vps_sous_seuil": 0,
+        "vps_sans_courtier": 0,
+        "vps_exemples": [],
         "erreurs": [],
     }
 
@@ -566,13 +615,32 @@ async def scan(
                     await upsert_listings(
                         db, listings, "immeuble_residentiel_6_plus"
                     )
-                    # Détail des annonces ≥ seuil sans courtier connu.
-                    urls = [
-                        L["source_url"] for L in listings
-                        if (L.get("nb_units") or 0) >= seuil and L.get("source_url")
+                    # Détail des annonces ≥ seuil OU de taille inconnue (les
+                    # vignettes « Multifamilial » ne donnent pas le nombre
+                    # d'unités) — sauf celles déjà lues (courtier connu ou
+                    # taille connue sous le seuil).
+                    rapport["vps_sans_taille"] = sum(
+                        1 for L in listings if not L.get("nb_units")
+                    )
+                    rapport["vps_exemples"] = [
+                        {
+                            "url": L.get("source_url"),
+                            "nb_units": L.get("nb_units"),
+                            "prix": L.get("price"),
+                        }
+                        for L in listings[:3]
+                    ]
+                    candidats = [
+                        L for L in listings
+                        if L.get("source_url")
+                        and (not L.get("nb_units") or int(L["nb_units"]) >= seuil)
                     ]
                     maxd = int(config.get("max_details_par_scan") or 40)
-                    for url in urls[:maxd]:
+                    ouverts = 0
+                    for L in candidats:
+                        if ouverts >= maxd:
+                            break
+                        url = L["source_url"]
                         row = (
                             await db.execute(
                                 select(CentrisListing).where(
@@ -580,9 +648,13 @@ async def scan(
                                 )
                             )
                         ).scalar_one_or_none()
-                        if row is not None and row.broker_name:
+                        if row is not None and (
+                            row.broker_name
+                            or (row.nb_units is not None and row.nb_units < seuil)
+                        ):
                             continue
-                        _dire(f"Centris (VPS) : détail {url}")
+                        ouverts += 1
+                        _dire(f"Centris (VPS) : fiche {ouverts}/{min(maxd, len(candidats))} — {url}")
                         try:
                             detail = await scraping_proxy.scrape_centris_detail(url)
                         except Exception as exc:  # noqa: BLE001
@@ -591,11 +663,15 @@ async def scan(
                         if not detail:
                             continue
                         rapport["vps_details_lus"] += 1
-                        info = parser_courtier_html(
-                            detail.get("html") or "", detail.get("broker_name")
+                        html_fiche = detail.get("html") or ""
+                        info = parser_courtier_html(html_fiche, detail.get("broker_name"))
+                        fiche = parser_fiche_html(html_fiche)
+                        nb_units = (
+                            detail.get("nb_units") or fiche.get("nb_units")
+                            or L.get("nb_units") or (row.nb_units if row is not None else None)
                         )
-                        if not info.get("nom"):
-                            continue
+                        adresse = detail.get("address") or fiche.get("adresse") or L.get("address")
+                        ville = detail.get("city") or fiche.get("ville") or L.get("city")
                         try:
                             async with db.begin_nested():
                                 if row is not None:
@@ -603,22 +679,31 @@ async def scan(
                                         row.broker_name = info["nom"][:255]
                                     if info.get("telephone") and not row.broker_phone:
                                         row.broker_phone = info["telephone"]
+                                    if nb_units and not row.nb_units:
+                                        row.nb_units = int(nb_units)
+                                    if adresse and not row.address:
+                                        row.address = str(adresse)[:500]
+                                    if ville and not row.city:
+                                        row.city = str(ville)[:120]
+                                if not info.get("nom"):
+                                    rapport["vps_sans_courtier"] += 1
+                                    continue
+                                if not nb_units or int(nb_units) < seuil:
+                                    rapport["vps_sous_seuil"] += 1
+                                    continue
                                 courtier, cree = await upsert_courtier(
                                     db, nom=info["nom"], agence=info.get("agence"),
                                     courriel=info.get("courriel"),
                                     telephone=info.get("telephone"), source="centris",
-                                    secteur=(row.city if row is not None else None),
+                                    secteur=(ville or (row.city if row is not None else None)),
                                 )
                                 if courtier is None:
                                     continue
                                 await _compter(courtier, cree)
-                                L = next(
-                                    (x for x in listings if x.get("source_url") == url), {}
-                                )
                                 _, liee = await lier_annonce(
                                     db, courtier, source_url=url, mls_id=L.get("mls_id"),
-                                    adresse=L.get("address"), ville=L.get("city"),
-                                    nb_units=L.get("nb_units"), prix=L.get("price"),
+                                    adresse=adresse, ville=ville, nb_units=int(nb_units),
+                                    prix=L.get("price") or detail.get("price"),
                                     centris_listing_id=(row.id if row is not None else None),
                                 )
                                 rapport["annonces_liees"] += int(liee)
@@ -824,6 +909,7 @@ __all__ = [
     "prenom_de",
     "separer_contact",
     "parser_courtier_html",
+    "parser_fiche_html",
     "upsert_courtier",
     "lier_annonce",
     "scan",
