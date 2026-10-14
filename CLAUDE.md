@@ -128,16 +128,3 @@ toutes les lectures de `lead_analyses` en erreur). Depuis :
 5. Après un revert sur `main`, **ne jamais resynchroniser `main → dev` tel
    quel** (les reverts effaceraient le chantier sur dev) : re-promouvoir
    par « revert des reverts » une fois la cause corrigée.
-
-## QuickBooks — modifier les lignes d'une transaction (2026-10-14)
-
-Une mise à jour `sparse: true` d'une Invoice QBO **ne remplace pas les
-lignes** : QuickBooks répond 200 et renvoie l'objet inchangé (facture 120
-restée à 16 115,64 $ après le passage du filet). Pour changer les lignes :
-relire l'objet, construire le corps COMPLET (`corps_mise_a_jour_complete`
-dans `app/services/facture_qbo.py` : champs calculés retirés,
-`TxnTaxDetail` retiré pour que QB recalcule les taxes, `sparse: false`),
-puis POST. Le double de test `QBMiroir` ignore `Line` quand `sparse` est
-vrai pour que ce piège reste couvert. Même précaution à prendre pour
-Bill / Purchase / Estimate (`achat_qbo.py`, `soumission_qbo.py` envoient
-encore `sparse`).
