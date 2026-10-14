@@ -409,6 +409,102 @@ def test_scan_tolere_une_fiche_cassee(run, monkeypatch):
     assert rapport["courtiers_mis_a_jour"] + rapport["courtiers_crees"] >= 2
 
 
+def test_scan_vps_fiches_de_taille_inconnue(run, monkeypatch):
+    """Bug prod 2026-10-14 : 68 annonces « Multifamilial » lues, 0 fiche
+    ouverte car les vignettes ne donnent pas le nombre d'unités. On ouvre
+    les fiches de taille inconnue, on lit unités + adresse + courtier, et
+    seules les ≥ seuil entrent au registre."""
+    from app.integrations import scraping_proxy
+    from app.models.centris_listing import CentrisListing
+    from sqlalchemy import select
+
+    u_grand = "https://www.centris.ca/fr/immeuble-a-revenus~a-vendre~laval/70000001"
+    u_petit = "https://www.centris.ca/fr/immeuble-a-revenus~a-vendre~laval/70000002"
+    monkeypatch.setattr(scraping_proxy, "vps_available", lambda: True)
+
+    async def _liste(**kw):
+        return {
+            "listings": [
+                {"source_url": u_grand, "mls_id": "70000001", "price": 7_500_000.0, "nb_units": None},
+                {"source_url": u_petit, "mls_id": "70000002", "price": 1_200_000.0, "nb_units": None},
+            ],
+            "diagnostic": None,
+        }
+
+    fiches_html = {
+        u_grand: """<html><body>
+            <h2 itemprop="address">1500, boulevard des Laurentides, Laval (Vimont), H7M 2Y1</h2>
+            <div class="carac-title">Nombre d'unités</div><div class="carac-value">Résidentiel (36)</div>
+            <div class="broker-info"><h2 class="broker-info__name">Sylvie Grandparc</h2>
+              <p>RE/MAX Platine</p><a href="tel:4505551000">450 555-1000</a></div>
+        </body></html>""",
+        u_petit: """<html><body>
+            <h2 itemprop="address">12, rue Courte, Laval (Chomedey), H7V 1A1</h2>
+            <div class="carac-title">Nombre d'unités</div><div class="carac-value">Résidentiel (8)</div>
+            <div class="broker-info"><h2 class="broker-info__name">Paul Petitplex</h2><p>Sutton</p></div>
+        </body></html>""",
+    }
+    ouvertes: list = []
+
+    async def _detail(url):
+        ouvertes.append(url)
+        return {"source_url": url, "broker_name": None, "html": fiches_html[url]}
+
+    monkeypatch.setattr(scraping_proxy, "scrape_centris_search_complet", _liste)
+    monkeypatch.setattr(scraping_proxy, "scrape_centris_detail", _detail)
+
+    async def _scan():
+        async with TestSessionLocal() as s:
+            rapport = await svc.scan(s, config=dict(svc.DEFAUTS), utiliser_vps=True)
+            rows = {
+                r.source_url: r for r in (
+                    await s.execute(
+                        select(CentrisListing).where(
+                            CentrisListing.source_url.in_([u_grand, u_petit])
+                        )
+                    )
+                ).scalars().all()
+            }
+            grand = (
+                await s.execute(
+                    select(ProspectionCourtier).where(
+                        ProspectionCourtier.cle_dedup == svc.normaliser_cle("Sylvie Grandparc")
+                    )
+                )
+            ).scalar_one_or_none()
+            petit = (
+                await s.execute(
+                    select(ProspectionCourtier).where(
+                        ProspectionCourtier.cle_dedup == svc.normaliser_cle("Paul Petitplex")
+                    )
+                )
+            ).scalar_one_or_none()
+            etat = {
+                "rapport": rapport,
+                "grand_units": rows[u_grand].nb_units, "grand_broker": rows[u_grand].broker_name,
+                "grand_city": rows[u_grand].city,
+                "petit_units": rows[u_petit].nb_units, "petit_broker": rows[u_petit].broker_name,
+                "courtier_grand": (grand.nom, grand.agence, grand.telephone) if grand else None,
+                "courtier_petit": petit is not None,
+            }
+            await s.rollback()
+            return etat
+
+    from app.models.prospection_courtier import ProspectionCourtier
+
+    etat = run(_scan())
+    r = etat["rapport"]
+    assert r["vps_annonces_lues"] == 2 and r["vps_sans_taille"] == 2
+    assert sorted(ouvertes) == sorted([u_grand, u_petit])
+    assert r["vps_details_lus"] == 2 and r["vps_sous_seuil"] == 1
+    assert etat["grand_units"] == 36 and etat["grand_broker"] == "Sylvie Grandparc"
+    assert etat["grand_city"] == "Laval"
+    assert etat["petit_units"] == 8 and etat["petit_broker"] == "Paul Petitplex"
+    assert etat["courtier_grand"] == ("Sylvie Grandparc", "RE/MAX Platine", "450-555-1000")
+    assert etat["courtier_petit"] is False  # 8 logements : sous le seuil
+    assert len(r["vps_exemples"]) == 2 and not r["erreurs"]
+
+
 def test_scan_vps_vide_explique_pourquoi(run, monkeypatch):
     """Le VPS répond 200 mais n'a lu aucune annonce (Centris bloque) : le
     rapport le dit, avec le diagnostic du VPS, sans planter le scan."""
@@ -478,4 +574,11 @@ def test_unites():
     assert info["telephone"] == "514-555-1212"
     assert info["courriel"] == "marc@remax-cartier.ca"
     assert svc.parser_courtier_html("", "X")["nom"] == "X"
+    fiche = svc.parser_fiche_html(
+        '<h2 itemprop="address">1500, boul. des Laurentides, Laval (Vimont), H7M 2Y1</h2>'
+        "<div>Nombre d'unités</div><div>Résidentiel (36)</div>"
+    )
+    assert fiche == {"nb_units": 36, "adresse": "1500, boul. des Laurentides, Laval (Vimont), H7M 2Y1", "ville": "Laval"}
+    assert svc.parser_fiche_html("<p>24 logements à vendre</p>")["nb_units"] == 24
+    assert svc.parser_fiche_html("")["nb_units"] is None
     assert svc.parser_courtier_html("<p>rien</p>")["nom"] is None
