@@ -21,6 +21,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from typing import List, Optional
+from urllib.parse import quote_plus
 
 from fastapi import Depends, FastAPI, HTTPException, Header
 from playwright.async_api import (
@@ -210,6 +211,111 @@ async def centris_search(req: CentrisSearchRequest):
             else None
         ),
     )
+
+
+class WebSearchRequest(BaseModel):
+    query: str
+    max_results: int = 8
+
+
+class WebSearchResult(BaseModel):
+    url: str
+    titre: Optional[str] = None
+    extrait: Optional[str] = None
+
+
+class WebSearchResponse(BaseModel):
+    results: List[WebSearchResult]
+    moteur: Optional[str] = None
+
+
+@app.post(
+    "/scrape/web-search",
+    response_model=WebSearchResponse,
+    dependencies=[Depends(require_api_key)],
+)
+async def web_search(req: WebSearchRequest):
+    """Résultats web rendus par un vrai navigateur (Bing, puis DuckDuckGo)
+    — secours de la recherche du courriel des courtiers (Kratos
+    2026-10-14) quand le serveur est bloqué par les moteurs."""
+    browser: Browser = app.state.browser
+    context = await browser.new_context(locale="fr-CA")
+    page = await context.new_page()
+    page.set_default_timeout(20_000)
+    results: list = []
+    moteur = None
+    try:
+        for moteur_essai, url in (
+            ("bing", "https://www.bing.com/search?q=" + quote_plus(req.query) + "&setlang=fr&cc=CA"),
+            ("duckduckgo", "https://html.duckduckgo.com/html/?q=" + quote_plus(req.query) + "&kl=ca-fr"),
+        ):
+            try:
+                await page.goto(url, wait_until="domcontentloaded")
+                await page.wait_for_timeout(1200)
+                if moteur_essai == "bing":
+                    items = await page.evaluate(
+                        """() => Array.from(document.querySelectorAll('li.b_algo')).map(li => {
+                            const a = li.querySelector('h2 a');
+                            const p = li.querySelector('.b_caption p, p');
+                            return a ? {url: a.href, titre: a.innerText, extrait: p ? p.innerText : ''} : null;
+                        }).filter(Boolean)"""
+                    )
+                else:
+                    items = await page.evaluate(
+                        """() => Array.from(document.querySelectorAll('.result')).map(r => {
+                            const a = r.querySelector('a.result__a');
+                            const s = r.querySelector('.result__snippet');
+                            return a ? {url: a.href, titre: a.innerText, extrait: s ? s.innerText : ''} : null;
+                        }).filter(Boolean)"""
+                    )
+                items = [i for i in (items or []) if str(i.get("url", "")).startswith("http")]
+                if items:
+                    results = items[: max(1, min(20, req.max_results))]
+                    moteur = moteur_essai
+                    break
+            except Exception as exc:  # noqa: BLE001
+                log.warning("web-search %s en échec : %s", moteur_essai, exc)
+    finally:
+        await context.close()
+    return WebSearchResponse(
+        results=[WebSearchResult(**r) for r in results], moteur=moteur
+    )
+
+
+class PageTextRequest(BaseModel):
+    url: str
+
+
+@app.post(
+    "/scrape/page-text",
+    dependencies=[Depends(require_api_key)],
+)
+async def page_text(req: PageTextRequest):
+    """Texte visible + liens mailto d'une page rendue (JS exécuté) —
+    lecture des pages d'agences / sites de courtiers (Kratos 2026-10-14)."""
+    browser: Browser = app.state.browser
+    context = await browser.new_context(locale="fr-CA")
+    page = await context.new_page()
+    page.set_default_timeout(25_000)
+    try:
+        await page.goto(req.url, wait_until="domcontentloaded")
+        await page.wait_for_timeout(1500)
+        texte = await page.evaluate("() => document.body ? document.body.innerText : ''")
+        mailtos = await page.evaluate(
+            "() => Array.from(document.querySelectorAll('a[href^=\"mailto:\"]')).map(a => a.getAttribute('href'))"
+        )
+        title = await page.title()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("page-text %s en échec : %s", req.url, exc)
+        raise HTTPException(502, f"Échec lecture de la page : {exc}")
+    finally:
+        await context.close()
+    return {
+        "url": req.url,
+        "title": title,
+        "texte": (texte or "")[:200_000],
+        "mailtos": list(dict.fromkeys(m for m in (mailtos or []) if m)),
+    }
 
 
 class CentrisDetailRequest(BaseModel):

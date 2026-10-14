@@ -25,6 +25,19 @@ from tests.smoke.conftest import TestSessionLocal
 
 BASE = "/api/v1/prospection/courtiers"
 URL_24 = "https://www.centris.ca/fr/immeuble~a-vendre~montreal/90000001"
+
+
+@pytest.fixture(autouse=True)
+def _sans_recherche_de_courriels(monkeypatch):
+    """Le scan enchaîne la recherche web des courriels : jamais de réseau
+    dans les tests (un vrai gmail s'est retrouvé sur une fiche de test)."""
+    from app.services import prospection_courtiers_courriels as courriels
+
+    async def _rien(db, *, config, courtier_ids=None, max_courtiers=20, forcer=False, progres=None):
+        return {"examines": 0, "trouves": 0, "verifies": 0, "probables": 0,
+                "sans_resultat": 0, "sautes_recemment_cherches": 0, "erreurs": [], "details": []}
+
+    monkeypatch.setattr(courriels, "enrichir_courriels", _rien)
 URL_6 = "https://www.centris.ca/fr/immeuble~a-vendre~montreal/90000002"
 IDS: dict = {}
 
@@ -327,6 +340,9 @@ def test_parametres_et_acces(client, auth_headers, employee_headers):
     p = r.json()
     assert p["config"]["seuil_logements"] == 20
     assert p["config"]["relance_jours"] == 14
+    assert p["config"]["pages_centris"] == 3 and p["config"]["max_details_par_scan"] == 10
+    assert p["config"]["pause_centris_s"] == 12
+    assert p["config"]["recherche_courriels_auto"] is True
     assert p["defauts"]["sujet"] == svc.GABARIT_SUJET_DEFAUT
     assert any(v["cle"] == "prenom" for v in p["variables"])
     assert isinstance(p["mailer_pret"], bool)
@@ -495,7 +511,8 @@ def test_scan_vps_fiches_de_taille_inconnue(run, db_setup, monkeypatch):
 
     async def _scan():
         async with TestSessionLocal() as s:
-            rapport = await svc.scan(s, config=dict(svc.DEFAUTS), utiliser_vps=True)
+            cfg = dict(svc.DEFAUTS, pause_centris_s=0)  # pas d'attente en test
+            rapport = await svc.scan(s, config=cfg, utiliser_vps=True)
             rows = {
                 r.source_url: r for r in (
                     await s.execute(

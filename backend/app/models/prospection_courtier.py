@@ -98,6 +98,18 @@ class ProspectionCourtier(Base, TimestampUpdateMixin):
     nb_relances: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
+    #: Recherche automatique du courriel (2026-10-14) : où on l'a lu,
+    #: verifie | probable, quand on a cherché, ce qu'on a écarté.
+    #: ⚠️ Colonnes ajoutées après la création de la table →
+    #: ensure_critical_columns (session.py).
+    courriel_source: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    courriel_confiance: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    courriel_cherche_le: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    courriel_recherche_note: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True
+    )
 
 
 class ProspectionCourtierAnnonce(Base):

@@ -147,6 +147,12 @@ async def ensure_critical_columns() -> None:
         # (audit 2026-08-19). Sans elle, GET /immobilier/communications
         # plante sur une base créée avant l'ajout.
         ("imm_communications", "document_id", "INTEGER"),
+        # Registre des courtiers : recherche automatique du courriel
+        # (2026-10-14) — colonnes ajoutées après la création de la table.
+        ("prospection_courtiers", "courriel_source", "VARCHAR(500)"),
+        ("prospection_courtiers", "courriel_confiance", "VARCHAR(16)"),
+        ("prospection_courtiers", "courriel_cherche_le", "TIMESTAMP WITH TIME ZONE"),
+        ("prospection_courtiers", "courriel_recherche_note", "VARCHAR(500)"),
         # Refus d'un document signable (consentement notamment).
         ("imm_documents", "refuse_le", "TIMESTAMP WITH TIME ZONE"),
         ("imm_documents", "refuse_par", "VARCHAR(255)"),

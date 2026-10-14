@@ -14,6 +14,7 @@ import {
   Plus,
   Radar,
   RefreshCw,
+  Search,
   Send,
   Settings,
   Trash2,
@@ -51,6 +52,10 @@ type Courtier = {
   dernier_contact_le: string | null;
   prochaine_relance_le: string | null;
   nb_relances: number;
+  courriel_source: string | null;
+  courriel_confiance: string | null;
+  courriel_cherche_le: string | null;
+  courriel_recherche_note: string | null;
   nb_annonces: number;
   nb_annonces_actives: number;
   max_logements: number | null;
@@ -149,6 +154,32 @@ function fmtPrix(v: number | null | undefined): string {
   return `${Math.round(v).toLocaleString("fr-CA")} $`;
 }
 
+const CONFIANCE: Record<string, { label: string; badge: string }> = {
+  verifie: { label: "vérifié", badge: "badge-emerald" },
+  probable: { label: "probable", badge: "badge-sky" }
+};
+
+function BadgeConfiance({
+  confiance,
+  source
+}: {
+  confiance: string | null;
+  source: string | null;
+}) {
+  if (!confiance || !CONFIANCE[confiance]) return null;
+  const c = CONFIANCE[confiance];
+  const titre = source
+    ? source === "saisi à la main"
+      ? "Saisi à la main"
+      : `Trouvé automatiquement sur ${source}`
+    : undefined;
+  return (
+    <span className={`badge ${c.badge}`} title={titre}>
+      {c.label}
+    </span>
+  );
+}
+
 function relanceDue(iso: string | null): boolean {
   if (!iso) return false;
   return iso.slice(0, 10) <= new Date().toISOString().slice(0, 10);
@@ -200,6 +231,7 @@ export default function ProspectionCourtiersPage() {
   const [apercu, setApercu] = useState<Apercu | null>(null);
   const [apercuBusy, setApercuBusy] = useState(false);
   const [sending, setSending] = useState(false);
+  const [chercheCourriel, setChercheCourriel] = useState(false);
   const [journal, setJournal] = useState({
     canal: "telephone",
     direction: "sortant",
@@ -320,6 +352,60 @@ export default function ProspectionCourtiersPage() {
       pollScan(j.job_id);
     } catch (e) {
       setError((e as Error).message);
+    }
+  }
+
+  async function trouverCourriels() {
+    setError(null);
+    setInfo(null);
+    try {
+      const res = await authedFetch(
+        "/api/v1/prospection/courtiers/courriels/chercher",
+        { method: "POST", body: JSON.stringify({ courtier_ids: [], max: 20 }) }
+      );
+      if (!res.ok) throw new Error(await lireErreur(res));
+      const j = (await res.json()) as {
+        job_id: string;
+        status: string;
+        deja_en_cours: boolean;
+      };
+      setScan({
+        job_id: j.job_id,
+        status: "en_cours",
+        etape: j.deja_en_cours
+          ? "Une tâche est déjà en cours…"
+          : "Recherche des courriels manquants…",
+        resultat: null,
+        erreur: null,
+        duree_s: 0
+      });
+      pollScan(j.job_id);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function chercherCourrielFiche(id: number) {
+    if (chercheCourriel) return;
+    setChercheCourriel(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/prospection/courtiers/${id}/chercher-courriel`,
+        { method: "POST" }
+      );
+      if (!res.ok) throw new Error(await lireErreur(res));
+      const d = (await res.json()) as CourtierDetail;
+      setInfo(
+        d.courriel
+          ? `Courriel trouvé : ${d.courriel} (${CONFIANCE[d.courriel_confiance || ""]?.label || "à confirmer"}).`
+          : `Aucun courriel au nom de ${d.nom} trouvé pour l'instant.`
+      );
+      await Promise.all([load(), ouvrirFiche(id)]);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setChercheCourriel(false);
     }
   }
 
@@ -594,9 +680,20 @@ export default function ProspectionCourtiersPage() {
         vps_sous_seuil?: number;
         vps_sans_courtier?: number;
         erreurs?: string[];
+        courriels?: {
+          examines?: number;
+          trouves?: number;
+          verifies?: number;
+          probables?: number;
+          sans_resultat?: number;
+          sautes_recemment_cherches?: number;
+          erreurs?: string[];
+        };
       }
     | null
     | undefined;
+  const estLotCourriels =
+    !!rapport && rapport.courriels !== undefined && rapport.courtiers_crees === undefined;
 
   return (
     <>
@@ -698,6 +795,16 @@ export default function ProspectionCourtiersPage() {
             title="Sans Centris : seulement ce que Kratos connaît déjà (annonces reçues par l'extension, fiches d'analyse)"
           >
             Mettre à jour sans Centris
+          </button>
+          <button
+            type="button"
+            onClick={trouverCourriels}
+            disabled={scan?.status === "en_cours"}
+            className="btn-outline-accent btn-sm"
+            title="Cherche sur le web (sites d'agences, annuaires) le courriel des courtiers qui n'en ont pas — jamais sur Centris. Se fait aussi tout seul après chaque scan."
+          >
+            <Search className="h-3.5 w-3.5" />
+            Trouver les courriels
           </button>
           <button
             type="button"
@@ -807,7 +914,7 @@ export default function ProspectionCourtiersPage() {
             {scan.status === "en_cours" ? (
               <span className="inline-flex items-center gap-2">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Scan en cours — {scan.etape || "…"} ({Math.round(scan.duree_s)} s)
+                En cours — {scan.etape || "…"} ({Math.round(scan.duree_s)} s)
               </span>
             ) : scan.status === "erreur" ? (
               <span className="inline-flex items-start gap-2">
@@ -818,9 +925,27 @@ export default function ProspectionCourtiersPage() {
               <div>
                 <span className="inline-flex items-center gap-2 font-medium">
                   <CheckCircle2 className="h-4 w-4" />
-                  Scan terminé en {Math.round(scan.duree_s)} s
+                  {estLotCourriels ? "Recherche des courriels terminée" : "Scan terminé"} en{" "}
+                  {Math.round(scan.duree_s)} s
                 </span>
-                {rapport ? (
+                {rapport?.courriels ? (
+                  <p className="mt-1 text-xs text-white/70">
+                    Courriels : {rapport.courriels.trouves ?? 0} trouvé
+                    {(rapport.courriels.trouves ?? 0) > 1 ? "s" : ""} (
+                    {rapport.courriels.verifies ?? 0} vérifié
+                    {(rapport.courriels.verifies ?? 0) > 1 ? "s" : ""},{" "}
+                    {rapport.courriels.probables ?? 0} probable
+                    {(rapport.courriels.probables ?? 0) > 1 ? "s" : ""}) sur{" "}
+                    {rapport.courriels.examines ?? 0} courtier
+                    {(rapport.courriels.examines ?? 0) > 1 ? "s" : ""} cherché
+                    {(rapport.courriels.examines ?? 0) > 1 ? "s" : ""},{" "}
+                    {rapport.courriels.sans_resultat ?? 0} sans résultat
+                    {(rapport.courriels.sautes_recemment_cherches ?? 0) > 0
+                      ? ` · ${rapport.courriels.sautes_recemment_cherches} déjà cherchés récemment (réessai plus tard)`
+                      : ""}
+                  </p>
+                ) : null}
+                {rapport && !estLotCourriels ? (
                   <p className="mt-1 text-xs text-white/70">
                     {rapport.courtiers_crees ?? 0} nouveau
                     {(rapport.courtiers_crees ?? 0) > 1 ? "x" : ""} courtier
@@ -985,12 +1110,23 @@ export default function ProspectionCourtiersPage() {
                       </td>
                       <td className="px-3 py-2">
                         {c.courriel ? (
-                          <div className="inline-flex items-center gap-1 text-white/80">
+                          <div className="inline-flex flex-wrap items-center gap-1 text-white/80">
                             <Mail className="h-3 w-3 text-white/40" />
                             {c.courriel}
+                            <BadgeConfiance
+                              confiance={c.courriel_confiance}
+                              source={c.courriel_source}
+                            />
                           </div>
                         ) : (
-                          <span className="badge badge-amber">Courriel manquant</span>
+                          <span
+                            className="badge badge-amber"
+                            title={c.courriel_recherche_note || undefined}
+                          >
+                            {c.courriel_cherche_le
+                              ? "Courriel introuvable"
+                              : "Courriel manquant"}
+                          </span>
                         )}
                         {c.telephone ? (
                           <div className="inline-flex items-center gap-1 text-[11px] text-white/50">
@@ -1179,6 +1315,46 @@ export default function ProspectionCourtiersPage() {
                           setForm({ ...form, courriel: e.target.value })
                         }
                       />
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-white/50">
+                        <BadgeConfiance
+                          confiance={detail.courriel_confiance}
+                          source={detail.courriel_source}
+                        />
+                        {detail.courriel_source &&
+                        detail.courriel_source.startsWith("http") ? (
+                          <a
+                            href={detail.courriel_source}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 hover:text-accent-500"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            source
+                          </a>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => chercherCourrielFiche(detail.id)}
+                          disabled={chercheCourriel}
+                          className="btn-ghost btn-xs"
+                          title="Chercher sur le web (sites d'agences, annuaires) — jamais sur Centris"
+                        >
+                          {chercheCourriel ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Search className="h-3 w-3" />
+                          )}
+                          {detail.courriel ? "Rechercher à nouveau" : "Chercher le courriel"}
+                        </button>
+                      </div>
+                      {detail.courriel_recherche_note ? (
+                        <p className="mt-1 text-[11px] text-white/40">
+                          {detail.courriel_recherche_note}
+                          {detail.courriel_cherche_le
+                            ? ` · cherché le ${fmtDate(detail.courriel_cherche_le)}`
+                            : ""}
+                        </p>
+                      ) : null}
                     </Champ>
                     <Champ label="Téléphone">
                       <input
