@@ -972,6 +972,38 @@ def serialize_lot_paiement(obj: Any, level: str = "summary") -> dict:
     return _drop_none(data)
 
 
+def serialize_prospection_courtier(obj: Any, level: str = "summary") -> dict:
+    """Registre des courtiers (Prospection, 2026-10-14) : qui vend les gros
+    parcs de logements et où en est la relation. Les coordonnées sont
+    celles d'un professionnel (publiques sur les annonces)."""
+    data = {
+        "id": _get(obj, "id"),
+        "type": "prospection_courtier",
+        "nom": _str(_get(obj, "nom")),
+        "agence": _str(_get(obj, "agence")),
+        "courriel": _str(_get(obj, "courriel")),
+        "telephone": _str(_get(obj, "telephone")),
+        "secteur": _str(_get(obj, "secteur")),
+        "statut": _str(_get(obj, "statut")),
+        "source": _str(_get(obj, "source")),
+        "dernier_vu_le": _iso(_get(obj, "dernier_vu_le")),
+        "dernier_contact_le": _iso(_get(obj, "dernier_contact_le")),
+        "prochaine_relance_le": _iso(_get(obj, "prochaine_relance_le")),
+        "nb_relances": _get(obj, "nb_relances"),
+        "updated_at": _iso(_get(obj, "updated_at")),
+    }
+    if level == "detail":
+        data.update({
+            "cellulaire": _str(_get(obj, "cellulaire")),
+            "site_web": _str(_get(obj, "site_web")),
+            "langue": _str(_get(obj, "langue")),
+            "notes": _str(_get(obj, "notes")),
+            "premier_vu_le": _iso(_get(obj, "premier_vu_le")),
+            "created_at": _iso(_get(obj, "created_at")),
+        })
+    return _drop_none(data)
+
+
 SERIALIZERS: dict[str, Callable[..., dict]] = {
     "devlog_soumission": serialize_devlog_soumission,
     "devlog_project_task": serialize_devlog_project_task,
@@ -989,6 +1021,7 @@ SERIALIZERS: dict[str, Callable[..., dict]] = {
     "imm_tal_dossier": serialize_imm_tal_dossier,
     "imm_locataire_contact": serialize_imm_locataire_contact,
     "lot_paiement": serialize_lot_paiement,
+    "prospection_courtier": serialize_prospection_courtier,
 }
 
 

@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import {
   Calculator,
   Cog,
+  Contact,
   Database,
   Plug,
   RefreshCw,
@@ -48,6 +49,12 @@ const TABS: Tab[] = [
     href: "/prospection/parametres/analyse",
     label: "Calculateur",
     icon: Calculator,
+    minRole: "admin"
+  },
+  {
+    href: "/prospection/parametres/courtiers",
+    label: "Courtiers",
+    icon: Contact,
     minRole: "admin"
   },
   {
