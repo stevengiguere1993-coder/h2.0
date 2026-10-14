@@ -21,10 +21,14 @@ log = logging.getLogger(__name__)
 
 CATEGORY_URLS = {
     "multiplex_2_5": (
-        "https://www.centris.ca/fr/multiplex~immeuble-residentiel-a-vendre"
+        # Centris 2026-10 : « Plex à vendre » (2 à 5 logements).
+        "https://www.centris.ca/fr/plex~a-vendre"
     ),
     "immeuble_residentiel_6_plus": (
-        "https://www.centris.ca/fr/immeuble-residentiel-a-vendre"
+        # Centris 2026-10 : « Multifamilial à vendre » (6 logements et plus).
+        # L'ancienne URL immeuble-residentiel-a-vendre répond 404 (constaté
+        # par le diagnostic du scan du registre des courtiers, 2026-10-14).
+        "https://www.centris.ca/fr/immeuble-a-revenus~a-vendre"
     ),
 }
 
