@@ -15,7 +15,11 @@ Causes :
    Invoice prise pour « une autre facture » → renumérotation et paiements
    déplacés ;
 4. la date de l'Invoice QB prenait la date du jour à chaque renvoi ;
-5. rien ne revérifiait les factures déjà reliées : l'écart restait.
+5. rien ne revérifiait les factures déjà reliées : l'écart restait ;
+6. (filet du 2026-10-14, 21 h 41 UTC) la mise à jour « sparse » de
+   l'Invoice laissait les LIGNES telles quelles : QuickBooks acceptait la
+   requête et gardait 16 115,64 $. Seule une mise à jour COMPLÈTE (objet
+   relu, lignes remplacées, taxes recalculées par QB) les change.
 
 Couvre :
 1. modifier / ajouter / supprimer une ligne par l'API met l'Invoice QB à
@@ -36,7 +40,10 @@ Couvre :
    signalée sur la fiche sans être écrasée, totaux égaux / annulées /
    sans lignes laissés tranquilles ;
 9. filet horaire : limite par passage, refus QB non rejoué sans fin,
-   total QB différent après remise à jour signalé.
+   total QB différent après remise à jour complète signalé (détail au
+   journal), fiche marquée du temps des mises à jour « sparse » retentée ;
+10. mise à jour complète : corps sans les champs calculés par QB, lignes
+    remplacées, date / mémo / courriel / conditions de QB conservés.
 
 QuickBooks est simulé en mémoire : aucun appel réseau.
 """
@@ -68,14 +75,25 @@ EMISE_LE = datetime(2026, 6, 15, 14, 0, tzinfo=timezone.utc)
 ACTIONS_JOURNAL = (
     "facture.renumerotee",
     "facture.qbo_resynchronisee",
+    "facture.qbo_ecart_persistant",
     "facture.qbo_ecart_a_verifier",
 )
 
 
 class QBMiroir(FauxQB):
     """FauxQB qui, comme la vraie compagnie, refuse un SyncToken périmé
-    (5010), recalcule le total (lignes + taxes) à chaque écriture et
-    compte les écritures simultanées sur une Invoice."""
+    (5010), laisse les lignes telles quelles sur une mise à jour
+    « sparse », remplace les lignes et efface les champs absents sur une
+    mise à jour complète, recalcule le total (lignes + taxes) à chaque
+    écriture et compte les écritures simultanées sur une Invoice."""
+
+    #: Champs modifiables remis à zéro par une mise à jour COMPLÈTE quand
+    #: le corps ne les renvoie pas (QuickBooks : « writable fields omitted
+    #: from the request body are set to NULL »).
+    EFFACES_SI_ABSENTS = (
+        "TxnDate", "PrivateNote", "CustomerMemo", "BillEmail", "EmailStatus",
+        "LinkedTxn", "DueDate", "ClassRef", "SalesTermRef", "CurrencyRef",
+    )
 
     def __init__(self) -> None:
         super().__init__()
@@ -88,16 +106,29 @@ class QBMiroir(FauxQB):
         #: Taxe calculée par QB au lieu de celle envoyée (compagnie AST).
         self.taxe_forcee: Optional[float] = None
 
-    def _total(self, p: Dict[str, Any]) -> float:
-        lignes = sum(
-            float(li.get("Amount") or 0)
-            for li in p.get("Line") or []
-            if li.get("DetailType") == "SalesItemLineDetail"
+    @staticmethod
+    def _lignes(p: Dict[str, Any]) -> float:
+        return round(
+            sum(
+                float(li.get("Amount") or 0)
+                for li in p.get("Line") or []
+                if li.get("DetailType") == "SalesItemLineDetail"
+            ),
+            2,
         )
+
+    def _taxe(self, lignes: float) -> float:
+        """TPS + TVQ calculées par QB sur les lignes (code de taxe de la
+        compagnie), ou la taxe forcée (client exonéré)."""
         if self.taxe_forcee is not None:
-            return round(lignes + self.taxe_forcee, 2)
-        taxe = float(((p.get("TxnTaxDetail") or {}).get("TotalTax")) or 0)
-        return round(lignes + taxe, 2)
+            return self.taxe_forcee
+        return round(round(lignes * 0.05, 2) + round(lignes * 0.09975, 2), 2)
+
+    def _recalculer(self, inv: Dict[str, Any], paye: float) -> None:
+        lignes = self._lignes(inv)
+        inv["TxnTaxDetail"] = {"TotalTax": self._taxe(lignes)}
+        inv["TotalAmt"] = round(lignes + inv["TxnTaxDetail"]["TotalTax"], 2)
+        inv["Balance"] = round(inv["TotalAmt"] - paye, 2)
 
     async def create_invoice(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         p = copy.deepcopy(payload)
@@ -122,9 +153,23 @@ class QBMiroir(FauxQB):
                 paye = round(
                     float(inv.get("TotalAmt") or 0) - float(inv.get("Balance") or 0), 2
                 )
+                if p.get("sparse"):
+                    # Comme la vraie compagnie (constaté sur la 120 le
+                    # 2026-10-14) : une mise à jour « sparse » accepte la
+                    # requête mais laisse les LIGNES telles quelles.
+                    p.pop("Line", None)
+                    p.pop("TxnTaxDetail", None)
+                else:
+                    # Mise à jour complète : lignes remplacées, champs
+                    # modifiables absents du corps effacés, montants et
+                    # taxes recalculés (jamais repris du corps).
+                    for champ in ("TotalAmt", "Balance", "MetaData", "TxnTaxDetail"):
+                        assert champ not in p, f"{champ} renvoyé dans la mise à jour"
+                    for champ in self.EFFACES_SI_ABSENTS:
+                        if champ not in p:
+                            inv.pop(champ, None)
                 inv.update({k: v for k, v in p.items() if k != "sparse"})
-                inv["TotalAmt"] = self._total(inv)
-                inv["Balance"] = round(inv["TotalAmt"] - paye, 2)
+                self._recalculer(inv, paye)
                 inv["SyncToken"] = str(int(inv.get("SyncToken") or 0) + 1)
                 return {"Invoice": copy.deepcopy(inv)}
             if self.erreur_creation:
@@ -135,8 +180,9 @@ class QBMiroir(FauxQB):
                     f"QBO 400 : Duplicate Document Number Error (6140) — {doc}"
                 )
             iid = self._id()
-            total = self._total(p)
-            inv = {**p, "Id": iid, "SyncToken": "0", "TotalAmt": total, "Balance": total}
+            inv = {k: v for k, v in p.items() if k != "sparse"}
+            inv.update({"Id": iid, "SyncToken": "0"})
+            self._recalculer(inv, 0.0)
             self.invoices[iid] = inv
             self.creations.append(p)
             return {"Invoice": copy.deepcopy(inv)}
@@ -173,6 +219,9 @@ def qb(monkeypatch, run, db_setup):
     faux = QBMiroir()
     monkeypatch.setattr(fq, "get_qbo", lambda *a, **k: faux)
     monkeypatch.setattr(qb_mod, "get_qbo", lambda *a, **k: faux)
+    # Compagnie à taxe automatisée : les lignes portent le code de taxe,
+    # QuickBooks calcule TPS / TVQ (aucun TxnTaxDetail envoyé).
+    monkeypatch.setitem(fq.settings.__dict__, "qbo_sales_tax_code", "5")
     fq._corrections_tentees.clear()
     crees: Dict[str, list[int]] = {"factures": [], "clients": []}
     faux.crees = crees  # type: ignore[attr-defined]
@@ -286,6 +335,22 @@ def _seed(
         "TotalAmt": total_qb,
         "Balance": total_qb,
         "TxnDate": "2026-06-15",
+        # Ce que QuickBooks renvoie aussi à la lecture : à conserver tel
+        # quel (échéance, courriel, mémo client, conditions, devise…) ou à
+        # ne pas lui renvoyer (métadonnées, totaux).
+        "DueDate": "2026-07-15",
+        "EmailStatus": "EmailSent",
+        "CustomerMemo": {"value": "Merci de votre confiance."},
+        "BillEmail": {"Address": "samuel@example.com"},
+        "SalesTermRef": {"value": "3"},
+        "CurrencyRef": {"value": "CAD", "name": "Canadian Dollar"},
+        "LinkedTxn": [],
+        "MetaData": {
+            "CreateTime": "2026-06-15T10:00:00-07:00",
+            "LastUpdatedTime": "2026-06-15T10:00:00-07:00",
+        },
+        "domain": "QBO",
+        "sparse": False,
     }
     if memo:
         inv["PrivateNote"] = f"Kratos facture #{fid}"
@@ -416,8 +481,10 @@ def test_modifier_une_ligne_met_qb_a_jour_avec_les_nouvelles_lignes(
     assert fa.qbo_invoice_id == iid
     assert fa.qbo_sync_error is None
     assert qb.creations == []
-    # Mise à jour : la date de l'Invoice QB ne bouge pas.
-    assert "TxnDate" not in qb.mises_a_jour[-1]
+    # Mise à jour COMPLÈTE (une mise à jour « sparse » laisse les lignes
+    # telles quelles) ; la date de l'Invoice QB ne bouge pas.
+    assert qb.mises_a_jour[-1]["sparse"] is False
+    assert qb.mises_a_jour[-1]["TxnDate"] == "2026-06-15"
     assert qb.invoices[iid]["TxnDate"] == "2026-06-15"
 
     # Ligne ajoutée puis supprimée : même chose.
@@ -438,6 +505,61 @@ def test_modifier_une_ligne_met_qb_a_jour_avec_les_nouvelles_lignes(
     assert _montants_qb(qb, iid) == [800.0]
     assert qb.invoices[iid]["TotalAmt"] == fq._total_attendu(800.0)
     assert qb.max_en_cours == 1
+
+
+# ── 1 bis. Mise à jour COMPLÈTE : lignes remplacées, le reste conservé ──
+
+
+def test_mise_a_jour_complete_remplace_les_lignes_et_garde_le_reste(qb, run):
+    b = _base()
+    fid, iid = _seed(
+        run,
+        qb,
+        reference=str(b + 120),
+        lignes=[("Travaux", 13886.39)],
+        lignes_qb=[("Travaux", 14016.64)],
+    )
+    avant = copy.deepcopy(qb.invoices[iid])
+
+    # L'ancienne façon (mise à jour « sparse ») : QB accepte et ne change
+    # rien aux lignes — c'est ce qui laissait la 120 à 16 115,64 $.
+    run(
+        qb.create_invoice(
+            {
+                "Id": iid,
+                "SyncToken": "0",
+                "sparse": True,
+                "Line": [_ligne_qb("Travaux", 13886.39)],
+            }
+        )
+    )
+    assert _montants_qb(qb, iid) == [14016.64]
+    assert qb.invoices[iid]["TotalAmt"] == avant["TotalAmt"]
+
+    res = _sync(run, fid)
+
+    corps = qb.mises_a_jour[-1]
+    assert corps["sparse"] is False and corps["Id"] == iid
+    for champ in ("TotalAmt", "Balance", "MetaData", "TxnTaxDetail", "domain"):
+        assert champ not in corps, champ
+    assert [li["Amount"] for li in corps["Line"]] == [13886.39]
+    assert corps["DocNumber"] == str(b + 120)
+    inv = qb.invoices[iid]
+    assert _montants_qb(qb, iid) == [13886.39]
+    assert inv["TotalAmt"] == res["qbo_total"] == 15965.88
+    assert res["qbo_sous_total"] == 13886.39
+    assert res["qbo_taxe"] == round(15965.88 - 13886.39, 2)
+    # Date, mémo, échéance, courriel, mémo client, conditions, devise et
+    # statut d'envoi : ceux de QuickBooks, intacts.
+    for champ in (
+        "TxnDate", "PrivateNote", "DueDate", "BillEmail", "CustomerMemo",
+        "SalesTermRef", "CurrencyRef", "EmailStatus",
+    ):
+        assert inv[champ] == avant[champ], champ
+    assert qb.creations == []
+    fa = _facture(run, fid)
+    assert fa.qbo_sync_error is None
+    assert fa.qbo_sync_token == "2"
 
 
 # ── 2. Paiement enregistré par l'API : dans QB dès la requête ──
@@ -750,21 +872,66 @@ def test_total_qb_different_apres_remise_a_jour_est_signale(qb, run):
         run, qb, reference=str(b + 120), lignes=[("A", 100.0)], lignes_qb=[("A", 90.0)]
     )
     # QB calcule la taxe autrement (client exonéré) : le total ne rejoint
-    # jamais celui de Kratos.
+    # jamais celui de Kratos, même lignes remplacées.
     qb.taxe_forcee = 0.0
 
     res = run(fq.corriger_factures_en_retard_dans_qb())
-    assert res["corrigees"] == [str(b + 120)]
+    assert res["corrigees"] == []
+    assert res["persistants"] == [str(b + 120)]
     assert _montants_qb(qb, iid) == [100.0]
     fa = _facture(run, fid)
     assert "QuickBooks calcule un autre total" in (fa.qbo_sync_error or "")
+    assert "remise à jour complète" in fa.qbo_sync_error
     assert "total QuickBooks 100,00 $, Kratos 114,98 $" in fa.qbo_sync_error
-    (entree,) = _journal(run, fid, "facture.qbo_resynchronisee")
+    assert _journal(run, fid, "facture.qbo_resynchronisee") == []
+    (entree,) = _journal(run, fid, "facture.qbo_ecart_persistant")
     assert '"total_qb_apres": 100.0' in entree.details_json
+    assert '"sous_total_kratos": 100.0' in entree.details_json
+    assert '"sous_total_qb_apres": 100.0' in entree.details_json
+    assert '"taxe_qb_apres": 0.0' in entree.details_json
 
     # Déjà signalé : on ne renvoie pas la facture à chaque heure.
     n = len(qb.mises_a_jour)
     res = run(fq.corriger_factures_en_retard_dans_qb())
-    assert res["corrigees"] == [] and res["deja_signalees"] == 1
+    assert res["persistants"] == [] and res["deja_signalees"] == 1
     assert len(qb.mises_a_jour) == n
+    assert len(_journal(run, fid, "facture.qbo_ecart_persistant")) == 1
+
+
+def test_fiche_marquee_du_temps_des_mises_a_jour_sparse_est_retentee(qb, run):
+    """La 120 et la 113 portaient « …même après la remise à jour (…) »
+    posé par le filet du 2026-10-14, qui n'avait pas remplacé les lignes
+    (mise à jour sparse) : avec la mise à jour complète, elles sont
+    reprises, pas laissées de côté comme « déjà signalées »."""
+    b = _base()
+    fid, iid = _seed(
+        run,
+        qb,
+        reference=str(b + 120),
+        lignes=[("Travaux", 13886.39)],
+        lignes_qb=[("Travaux", 14016.64)],
+    )
+    marque = fq.marque_ecart_qb(qb.invoices[iid]["TotalAmt"], 15965.88)
+    ancien = (
+        "QuickBooks calcule un autre total que Kratos même après la remise à "
+        f"jour ({marque}) : vérifier les taxes du client dans QuickBooks."
+    )
+
+    async def _marquer() -> None:
+        async with TestSessionLocal() as s:
+            fa = (await s.execute(select(Facture).where(Facture.id == fid))).scalar_one()
+            fa.qbo_sync_error = ancien
+            await s.commit()
+
+    run(_marquer())
+
+    res = run(fq.corriger_factures_en_retard_dans_qb())
+
+    assert res["corrigees"] == [str(b + 120)]
+    assert res["deja_signalees"] == 0
+    assert _montants_qb(qb, iid) == [13886.39]
+    assert qb.invoices[iid]["TotalAmt"] == 15965.88
+    fa = _facture(run, fid)
+    assert fa.qbo_sync_error is None
     assert len(_journal(run, fid, "facture.qbo_resynchronisee")) == 1
+    assert _journal(run, fid, "facture.qbo_ecart_persistant") == []
