@@ -420,25 +420,21 @@ async def _build_statement(
 
     # Part « extras » du facturé (taxes incluses). On répartit le total
     # de chaque facture entre contrat et extras au prorata des lignes
-    # hors soumission (kind « extra », ou heures / achats importés
-    # marqués hors soumission), via le ratio TTC/HT de la facture.
+    # (FactureItem.kind == "extra"), via le ratio TTC/HT de la facture.
     extras_billed = 0.0
     if facture_ids:
-        from app.services.facture_lignes import est_hors_soumission
-
         item_rows = (
             await db.execute(
                 select(
                     FactureItem.facture_id,
                     FactureItem.total,
                     FactureItem.kind,
-                    FactureItem.hors_soumission,
                 ).where(FactureItem.facture_id.in_(facture_ids))
             )
         ).all()
         extra_ht_by_fac: dict[int, float] = {}
-        for _fid, _it_total, _it_kind, _it_hors in item_rows:
-            if est_hors_soumission(_it_kind, _it_hors):
+        for _fid, _it_total, _it_kind in item_rows:
+            if (_it_kind or "") == "extra":
                 extra_ht_by_fac[_fid] = extra_ht_by_fac.get(_fid, 0.0) + float(
                     _it_total or 0
                 )

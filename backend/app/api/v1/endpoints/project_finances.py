@@ -100,8 +100,7 @@ class FinancesResponse(BaseModel):
     invoiced_amount: float
     # Facturé HORS TAXES (somme des subtotals des factures émises).
     invoiced_amount_ex_tax: float = 0.0
-    # Sous-total facturé en EXTRAS (kind 'extra' ou ligne importée hors
-    # soumission — cf. app.services.facture_lignes) — ne
+    # Sous-total facturé en EXTRAS (FactureItem.kind == 'extra') — ne
     # compte pas dans le « reste à facturer » du contrat. Sert de
     # revenu additionnel dans le calcul du profit réel.
     extras_billed_amount: float = 0.0
@@ -701,29 +700,25 @@ async def _compute_finances(
     ]
 
     # Sépare l'invoiced en 2 buckets : « contrat » (items kind=service|
-    # materiaux|rabais|frais) et « extras » (items kind=extra, ou heures
-    # et achats importés marqués hors soumission). Les extras n'ont pas
-    # à compter dans le « reste à facturer » du contrat car ils sont
-    # hors-soumission.
+    # rabais|frais) et « extras » (items kind=extra). Les extras n'ont
+    # pas à compter dans le « reste à facturer » du contrat car ils
+    # sont hors-soumission.
     extras_subtotal = 0.0
     contract_subtotal = 0.0
     rabais_subtotal = 0.0  # lignes « rabais » (négatives) sur la base
     if billed_factures:
         from app.models.facture_item import FactureItem as _FI
-        from app.services.facture_lignes import est_hors_soumission
 
         items_rows = (
             await db.execute(
-                select(
-                    _FI.facture_id, _FI.total, _FI.kind, _FI.hors_soumission
-                ).where(
+                select(_FI.facture_id, _FI.total, _FI.kind).where(
                     _FI.facture_id.in_([f.id for f in billed_factures])
                 )
             )
         ).all()
-        for _fid, _it_total, _it_kind, _it_hors in items_rows:
+        for _fid, _it_total, _it_kind in items_rows:
             v = float(_it_total or 0)
-            if est_hors_soumission(_it_kind, _it_hors):
+            if _it_kind == "extra":
                 extras_subtotal += v
             else:
                 contract_subtotal += v

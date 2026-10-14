@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -33,24 +33,12 @@ class FactureItem(Base, TimestampUpdateMixin):
     # Catégorie de ligne (introduit pour tracker les extras hors
     # soumission — ex. main-d'œuvre supplémentaire, ajout en cours de
     # chantier). « service » = ligne standard chargée sur le contrat.
-    # « materiaux » = matériel / fournitures (achats refacturés), traité
-    # comme un service dans les calculs. « extra » = ligne hors-contrat,
-    # ne réduit pas le « reste à facturer » de la soumission et bonifie
-    # le profit réel quand encaissée. « rabais » = ligne négative.
-    # « frais » = ligne sans taxes (ex. frais de déplacement absorbés).
+    # « extra » = ligne hors-contrat, ne réduit pas le « reste à
+    # facturer » de la soumission et bonifie le profit réel quand
+    # encaissée. « rabais » = ligne négative. « frais » = ligne sans
+    # taxes (ex. frais de déplacement absorbés).
     kind: Mapped[str] = mapped_column(
         String(16), nullable=False, default="service", index=True
-    )
-
-    # Ligne HORS SOUMISSION DE BASE sans être un « extra » : la
-    # main-d'œuvre et les achats IMPORTÉS sur un projet qui a une
-    # soumission gardent leur vrai type (Service / Matériaux) mais ne
-    # comptent pas dans l'avancement du devis — même effet comptable
-    # qu'« extra » (retour Steven 2026-10-14 : « il s'agit de services et
-    # de matériaux, non pas d'extra »). Toujours lire via
-    # app.services.facture_lignes.est_hors_soumission.
-    hors_soumission: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default="false"
     )
 
     # Item de la SOUMISSION d'origine (facturation progressive) : permet

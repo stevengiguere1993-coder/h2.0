@@ -70,10 +70,6 @@ type Item = {
   unit_price: number;
   total: number;
   kind: string;
-  // Hors soumission de base sans être un « extra » : heures et achats
-  // importés sur un projet qui a une soumission (Service / Matériaux qui
-  // ne comptent pas dans l'avancement du devis).
-  hors_soumission?: boolean;
   soumission_item_id: number | null;
   // Valeur au contrat (total de l'item de soumission lié) — sert à afficher
   // les colonnes Contrat / Avancement / Facturé. NULL hors soumission.
@@ -85,7 +81,6 @@ type Item = {
 
 const KIND_LABELS: Record<string, string> = {
   service: "Service",
-  materiaux: "Matériaux",
   extra: "Extra",
   rabais: "Rabais",
   frais: "Frais"
@@ -93,7 +88,6 @@ const KIND_LABELS: Record<string, string> = {
 
 const KIND_BADGE_CLASS: Record<string, string> = {
   service: "bg-white/10 text-white/70",
-  materiaux: "bg-violet-500/20 text-violet-300",
   extra: "bg-amber-500/20 text-amber-300",
   rabais: "bg-rose-500/20 text-rose-300",
   frais: "bg-blue-500/20 text-blue-300"
@@ -105,7 +99,6 @@ type ProjectMini = {
   name: string;
   status: string;
   address: string | null;
-  soumission_id?: number | null;
 };
 type ProjectFinances = {
   projected_revenue: number;
@@ -1808,7 +1801,6 @@ export default function FactureDetailPage() {
                         canDown={idx < items.length - 1}
                         onMoveUp={() => moveItem(it.id, -1)}
                         onMoveDown={() => moveItem(it.id, 1)}
-                        projectHasSoumission={!!project?.soumission_id}
                       />
                     </div>
                   ))}
@@ -2280,8 +2272,7 @@ function ItemRow({
   canUp,
   canDown,
   onMoveUp,
-  onMoveDown,
-  projectHasSoumission
+  onMoveDown
 }: {
   item: Item;
   busy: boolean;
@@ -2292,7 +2283,6 @@ function ItemRow({
   canDown: boolean;
   onMoveUp: () => void;
   onMoveDown: () => void;
-  projectHasSoumission: boolean;
 }) {
   const [description, setDescription] = useState(item.description);
   const [unit, setUnit] = useState(item.unit || "");
@@ -2352,20 +2342,10 @@ function ItemRow({
     if (next !== (item.kind || "service")) persist("kind", next);
   }
 
-  // Service / Matériaux hors soumission de base (heures et achats importés
-  // sur un projet qui a une soumission) : même effet qu'un extra sur
-  // l'avancement du devis, mais la ligne garde son vrai type. Basculable
-  // sur toute ligne Service / Matériaux non rattachée au devis.
-  const horsSoumission = !!item.hors_soumission;
-  const marqueHorsSoumission =
-    (kind === "service" || kind === "materiaux") &&
-    item.soumission_item_id == null &&
-    (horsSoumission || projectHasSoumission);
-
   return (
     <div className="px-5 py-3 text-sm">
       <div className="mb-2 flex flex-wrap items-center gap-1.5">
-        {(["service", "materiaux", "extra", "rabais", "frais"] as const).map((k) => {
+        {(["service", "extra", "rabais", "frais"] as const).map((k) => {
           const active = kind === k;
           return (
             <button
@@ -2394,25 +2374,6 @@ function ItemRow({
           <span className="ml-1 text-[10px] text-amber-300/80">
             (hors soumission de base)
           </span>
-        ) : marqueHorsSoumission ? (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => persist("hors_soumission", !horsSoumission)}
-            aria-pressed={horsSoumission}
-            className={`ml-1 rounded-md px-2 py-0.5 text-[10px] font-semibold transition ${
-              horsSoumission
-                ? "bg-amber-500/20 text-amber-300"
-                : "bg-white/5 text-white/40 hover:bg-white/10"
-            } disabled:opacity-50`}
-            title={
-              horsSoumission
-                ? "Ne compte pas dans l'avancement de la soumission (comme un extra). Cliquer pour l'y compter."
-                : "Compte dans l'avancement de la soumission. Cliquer pour la mettre hors soumission de base."
-            }
-          >
-            Hors soumission de base
-          </button>
         ) : null}
         <span className="ml-auto inline-flex items-center gap-1">
           <button

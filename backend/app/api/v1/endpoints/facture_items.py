@@ -59,7 +59,7 @@ async def _recompute_facture_totals(db, facture_id: int) -> None:
     await db.flush()
 
 
-_KIND_PATTERN = "^(service|materiaux|extra|rabais|frais)$"
+_KIND_PATTERN = "^(service|extra|rabais|frais)$"
 
 # L'ordre des lignes est ENTIÈREMENT LIBRE, tous types confondus :
 # l'admin réordonne avec les flèches ↑↓ et les imports AJOUTENT en fin
@@ -80,9 +80,6 @@ class FactureItemCreate(BaseModel):
     #: sinon marquer la ligne « extra » pour ne pas fausser l'avancement
     #: (retour 2026-09-15).
     soumission_item_id: Optional[int] = Field(default=None, gt=0)
-    #: Ligne hors soumission de base sans être un « extra » (service ou
-    #: matériaux qui ne compte pas dans l'avancement du devis).
-    hors_soumission: bool = False
 
 
 class FactureItemUpdate(BaseModel):
@@ -95,7 +92,6 @@ class FactureItemUpdate(BaseModel):
     # côté serveur selon le type de la ligne (voir update_item).
     unit_price: Optional[float] = Field(default=None)
     kind: Optional[str] = Field(default=None, pattern=_KIND_PATTERN)
-    hors_soumission: Optional[bool] = None
 
 
 class FactureItemRead(BaseModel):
@@ -109,9 +105,6 @@ class FactureItemRead(BaseModel):
     unit_price: float
     total: float
     kind: str = "service"
-    #: Hors soumission de base (heures / achats importés sur un projet qui
-    #: a une soumission) — même effet comptable qu'un « extra ».
-    hors_soumission: bool = False
     soumission_item_id: Optional[int] = None
     # AFFICHAGE Kratos (dérivé, non persisté) : « valeur au contrat » de la
     # ligne = total de l'item de soumission lié. Permet d'afficher les
@@ -341,9 +334,6 @@ async def create_item(
         total=total,
         kind=data.kind,
         soumission_item_id=sm_item_id,
-        # Une ligne rattachée au devis compte, par définition, dans la
-        # soumission.
-        hors_soumission=bool(data.hors_soumission) and sm_item_id is None,
     )
     db.add(item)
     await db.flush()
@@ -377,13 +367,8 @@ async def update_item(
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
     update = data.model_dump(exclude_unset=True)
-    if update.get("hors_soumission") is None:
-        update.pop("hors_soumission", None)  # colonne NOT NULL
     for field, value in update.items():
         setattr(item, field, value)
-    if item.soumission_item_id is not None:
-        # Ligne rattachée au devis : toujours dans la soumission.
-        item.hors_soumission = False
     # Normalise le signe du prix selon le type EFFECTIF de la ligne : un
     # « rabais » est toujours stocké en négatif, les autres en positif.
     # Sans ça, éditer une ligne rabais (prix négatif renvoyé par l'UI) ou

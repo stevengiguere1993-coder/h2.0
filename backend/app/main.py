@@ -100,26 +100,6 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning("initialisation du taux CNESST global failed: %s", exc)
 
-    # Lignes importées (2026-10-14) : dans les factures encore en
-    # BROUILLON, les heures et achats importés passent d'« extra » à leur
-    # vrai type (Service / Matériaux), marqués hors soumission si le projet
-    # a une soumission. Une seule fois (applied_backfills) ; après les
-    # colonnes (hors_soumission).
-    try:
-        from app.db.session import AsyncSessionLocal as _LignesSession
-        from app.services.facture_lignes import reclasser_brouillons_une_fois
-
-        async with _LignesSession() as session:
-            n = await reclasser_brouillons_une_fois(session)
-            if n:
-                logger.info(
-                    "Startup : %d ligne(s) importée(s) de brouillons "
-                    "reclassée(s) en Service / Matériaux",
-                    n,
-                )
-    except Exception as exc:
-        logger.warning("reclassement des lignes importées failed: %s", exc)
-
     # STAGING : premier compte owner sur base vide (no-op partout ailleurs).
     try:
         from app.services.bootstrap_admin import ensure_bootstrap_admin
