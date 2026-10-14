@@ -106,6 +106,16 @@ def _seed(run) -> None:
                     courtier_nom="Marie Côté", courtier_contact="450 555 0000",
                 )
             )
+            # Nom « sale » tel que lu sur une fiche réelle : agence entre
+            # parenthèses, titre en fin, téléphone impossible (055-…).
+            s.add(
+                LeadAnalysis(
+                    address="4000 rue Gallico", city="Montréal",
+                    asking_price=6_000_000, nb_logements=38,
+                    courtier_nom="Denis Gallico Courtier (Immo Alliances)",
+                    courtier_contact="055-685-6750",
+                )
+            )
             await s.commit()
 
     run(_s())
@@ -164,6 +174,11 @@ def test_scan_construit_le_registre(client, auth_headers, run, monkeypatch):
 
     r = client.get(BASE, headers=auth_headers, params={"q": "Petit Courtier Smoke"})
     assert r.json()["total"] == 0  # sous le seuil
+
+    denis = _un(client, auth_headers, "Gallico")
+    assert denis["nom"] == "Denis Gallico"             # titre retiré
+    assert denis["agence"] == "Immo Alliances"         # déduite des parenthèses
+    assert denis["telephone"] is None                  # 055-… impossible
 
     # Idempotent : rien de créé, rien de dédoublé.
     rapport2 = _scan(client, auth_headers)
@@ -343,6 +358,41 @@ def test_parametres_et_acces(client, auth_headers, employee_headers):
     ).status_code == 403
 
 
+def test_scan_vps_vide_explique_pourquoi(run, monkeypatch):
+    """Le VPS répond 200 mais n'a lu aucune annonce (Centris bloque) : le
+    rapport le dit, avec le diagnostic du VPS, sans planter le scan."""
+    from app.integrations import scraping_proxy
+
+    monkeypatch.setattr(scraping_proxy, "vps_available", lambda: True)
+
+    async def _vide(**kw):
+        assert kw["category"] == "immeuble_residentiel_6_plus"
+        return {
+            "listings": [],
+            "diagnostic": {"title": "Just a moment...", "captcha": True, "page": 1},
+        }
+
+    monkeypatch.setattr(scraping_proxy, "scrape_centris_search_complet", _vide)
+
+    async def _scan():
+        async with TestSessionLocal() as s:
+            rapport = await svc.scan(s, config=dict(svc.DEFAUTS), utiliser_vps=True)
+            await s.rollback()
+            return rapport
+
+    rapport = run(_scan())
+    assert rapport["vps_utilise"] is True
+    assert rapport["vps_annonces_lues"] == 0
+    assert rapport["vps_diagnostic"]["captcha"] is True
+    assert any("captcha" in e for e in rapport["erreurs"]), rapport["erreurs"]
+
+    # VPS non configuré : message explicite, pas d'exception.
+    monkeypatch.setattr(scraping_proxy, "vps_available", lambda: False)
+    rapport = run(_scan())
+    assert rapport["vps_utilise"] is False
+    assert any("non configur" in e for e in rapport["erreurs"])
+
+
 def test_unites():
     assert svc.normaliser_cle("Jean  Tremblay, courtier immobilier résidentiel") == "jean tremblay"
     assert svc.normaliser_cle("Marie Côté") == svc.normaliser_cle("marie cote")
@@ -350,6 +400,16 @@ def test_unites():
     assert svc.separer_contact("jean@remax.ca / 438-555-9999") == ("jean@remax.ca", "438-555-9999")
     assert svc.separer_contact("+1 (514) 555-1234") == (None, "514-555-1234")
     assert svc.separer_contact("noreply@centris.ca") == (None, None)
+    assert svc.separer_contact("329-093-4500") == (None, None)   # central 093 impossible
+    assert svc.separer_contact("251-144-6950") == (None, None)   # central 144 impossible
+    assert svc.nettoyer_nom("François Courval Courtier") == ("François Courval", None)
+    assert svc.nettoyer_nom("Amy Assaad courtier immobilier résidentiel") == ("Amy Assaad", None)
+    assert svc.nettoyer_nom("Rosibel Martinez inc.") == ("Rosibel Martinez", None)
+    assert svc.nettoyer_nom("Denis Gallico, Maxime Gerard (Immo Alliances)") == (
+        "Denis Gallico, Maxime Gerard", "Immo Alliances"
+    )
+    assert svc.nettoyer_nom("Immeubles Gloria") == ("Immeubles Gloria", None)
+    assert svc.nettoyer_nom("Marc-André Knot") == ("Marc-André Knot", None)
     assert svc.rendre("{{prenom}} {{inconnu}}!", {"prenom": "Jean"}) == "Jean !"
 
     html = """
