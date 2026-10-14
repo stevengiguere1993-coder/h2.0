@@ -395,3 +395,50 @@ async def get_cached_listing(
     if not cached:
         raise HTTPException(404, "Pas encore scrapé pour ce MLS")
     return cached
+
+
+# =========================================================================
+# Projets QuickBooks (Steven 2026-10-14) — l'extension, sur la page Projets
+# du QuickBooks ouvert de la technicienne, convertit les sous-clients créés
+# par Kratos en projets (pas d'API Intuit pour ça sans palier Silver).
+# =========================================================================
+
+
+class ConversionResultat(BaseModel):
+    project_id: int
+    ok: bool = False
+    detail: Optional[str] = None
+
+
+class ConversionsResultatPayload(BaseModel):
+    resultats: List[ConversionResultat] = Field(default_factory=list)
+
+
+@router.post("/qbo-conversions")
+async def qbo_conversions_a_faire(
+    db: DBSession,
+    x_extension_key: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Sous-clients à convertir en projet (nom exact tel que QuickBooks
+    le liste), avec la compagnie attendue (realm) pour que l'extension
+    ne convertisse jamais dans la mauvaise compagnie."""
+    _check_extension_key(x_extension_key)
+    from app.services import qbo_projets_conversion as conversion
+
+    return await conversion.pour_extension(db)
+
+
+@router.post("/qbo-conversions/resultat")
+async def qbo_conversions_resultat(
+    payload: ConversionsResultatPayload,
+    db: DBSession,
+    x_extension_key: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Compte rendu de l'extension après une tentative de conversion. Le
+    projet n'est marqué converti que si l'API QuickBooks le confirme."""
+    _check_extension_key(x_extension_key)
+    from app.services import qbo_projets_conversion as conversion
+
+    return await conversion.resultat_extension(
+        db, [(r.project_id, r.ok, r.detail) for r in payload.resultats[:200]]
+    )

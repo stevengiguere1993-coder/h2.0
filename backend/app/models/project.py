@@ -103,6 +103,22 @@ class Project(Base):
     #: sur la fiche projet ; vidé au succès (retour 2026-09-21).
     qbo_sync_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    #: Nom d'affichage du sous-client QB (tel que QuickBooks le montre
+    #: dans « Convertir depuis un sous-client ») — Steven 2026-10-14.
+    qbo_job_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    #: Conversion du sous-client en PROJET QuickBooks (onglet Projets),
+    #: faite dans QB par l'extension Chrome ou à la main, constatée par
+    #: l'API (Customer.IsProject) : NULL (rien à faire), « a_convertir »,
+    #: « convertie », « ignoree ». Voir services/qbo_projets_conversion.
+    qbo_conversion_etat: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True, index=True
+    )
+    #: Dernier compte rendu (extension, vérification), lisible.
+    qbo_conversion_detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    qbo_conversion_le: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 

@@ -55,6 +55,11 @@ async def notify_new_project_for_qbo(
         f"Projet #{project.id}"
     )
     client_name = await _client_name(db, project.client_id)
+    # Liste des conversions en attente dans Kratos (Steven 2026-10-14) ;
+    # pas de préfixe de langue : next-intl est en « as-needed ».
+    page_kratos = (
+        f"{settings.frontend_url.rstrip('/')}/entreprises/comptabilite/projets-quickbooks"
+    )
 
     html = f"""\
 <div style="font-family:Helvetica,Arial,sans-serif;color:#111;line-height:1.5;max-width:640px">
@@ -69,7 +74,13 @@ async def notify_new_project_for_qbo(
     <p style="margin:0"><strong>Client :</strong> {client_name}</p>
   </div>
 
-  <p style="margin:0 0 6px 0"><strong>Étapes (1 fois) :</strong></p>
+  <p><strong>Le plus simple :</strong> ouvre
+  <a href="{page_kratos}">Kratos → Comptabilité → Projets QB</a>, puis la
+  page Projets de ton QuickBooks avec l'extension Chrome Horizon installée :
+  elle convertit les sous-clients en attente (bouton « Convertir
+  maintenant » du panneau Horizon) et Kratos raye la ligne tout seul.</p>
+
+  <p style="margin:0 0 6px 0"><strong>À la main, sinon :</strong></p>
   <ol style="margin:0 0 12px 18px;padding:0">
     <li>Sur le sous-client : un seul client parent + cocher
       « Facturer avec le client parent ».</li>
