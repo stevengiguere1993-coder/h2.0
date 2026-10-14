@@ -473,12 +473,12 @@ async def import_into_facture(
     # apparaître aussi sur l'Invoice QuickBooks de la facture — sans clic.
     # Push en arrière-plan pour une facture ÉMISE ; un brouillon partira
     # entier à l'envoi au client (sync_facture_to_qbo saute les drafts).
+    # Commit AVANT : le push relit la facture dans sa propre session.
     if (fa.status or "") not in ("draft", "void"):
-        import asyncio as _asyncio
+        from app.services.qbo_auto_sync import lancer_push_facture
 
-        from app.services.qbo_auto_sync import push_facture_now
-
-        _asyncio.create_task(push_facture_now(int(fa.id)))
+        await db.commit()
+        lancer_push_facture(int(fa.id))
     return ImportResult(added=added)
 
 
@@ -775,11 +775,11 @@ async def import_bon_into_facture(
 
     await _recompute_facture_totals(db, facture_id)
     if (fa.status or "") not in ("draft", "void"):
-        import asyncio as _asyncio2
+        # Commit AVANT : le push relit la facture dans sa propre session.
+        from app.services.qbo_auto_sync import lancer_push_facture
 
-        from app.services.qbo_auto_sync import push_facture_now
-
-        _asyncio2.create_task(push_facture_now(int(fa.id)))
+        await db.commit()
+        lancer_push_facture(int(fa.id))
     return ImportBonResult(
         added=added, bon_reference=bon.reference, client_set=client_set,
         heures=round(locals().get("heures_importees", 0.0) or 0.0, 2),

@@ -34,7 +34,10 @@ async def run_qbo_nets() -> Dict[str, Any]:
     """Exécute les filets QBO (best-effort, chaque volet isolé)."""
     from app.db.session import AsyncSessionLocal
     from app.services.cron_guard import claim_cron_run
-    from app.services.qbo_auto_sync import is_qbo_auto_sync_enabled
+    from app.services.qbo_auto_sync import (
+        is_qbo_auto_sync_enabled,
+        verrou_facture,
+    )
 
     async with AsyncSessionLocal() as gdb:
         if not await claim_cron_run(gdb, "qbo-nets", _CLAIM_INTERVAL_SECONDS):
@@ -82,9 +85,10 @@ async def run_qbo_nets() -> Dict[str, Any]:
         pushed = failed = 0
         for fid in fids:
             try:
-                async with AsyncSessionLocal() as s:
-                    await push_facture_payments_only(s, fid)
-                    await s.commit()
+                async with verrou_facture(fid):
+                    async with AsyncSessionLocal() as s:
+                        await push_facture_payments_only(s, fid)
+                        await s.commit()
                 pushed += 1
             except Exception as exc:  # noqa: BLE001
                 failed += 1
@@ -445,9 +449,10 @@ async def run_qbo_nets() -> Dict[str, Any]:
         errors: Dict[str, str] = {}
         for fid, ref in rows:
             try:
-                async with AsyncSessionLocal() as s:
-                    await sync_facture_to_qbo(s, int(fid))
-                    await s.commit()
+                async with verrou_facture(int(fid)):
+                    async with AsyncSessionLocal() as s:
+                        await sync_facture_to_qbo(s, int(fid))
+                        await s.commit()
                 pushed += 1
             except Exception as exc:  # noqa: BLE001
                 failed += 1
@@ -472,6 +477,23 @@ async def run_qbo_nets() -> Dict[str, Any]:
         }
     except Exception:  # noqa: BLE001
         log.warning("Filet factures échoué", exc_info=True)
+
+    # ── Factures émises dont l'Invoice QB est EN RETARD sur Kratos ──
+    # Le filet ci-dessus ne voit que les factures SANS miroir. Une facture
+    # reliée dont une modification de lignes n'a pas atteint QB y restait
+    # fausse pour toujours (facture 120 : QB 16 115,64 $ contre
+    # 15 965,88 $ dans Kratos, Steven 2026-10-14). On compare le total QB
+    # au total des lignes Kratos et on re-pousse le CORPS des factures en
+    # écart (mise à jour de l'Invoice existante : numéro, date et
+    # paiements QB conservés). NON gated, comme le filet ci-dessus.
+    try:
+        from app.services.facture_qbo import (
+            corriger_factures_en_retard_dans_qb,
+        )
+
+        out["factures_en_retard"] = await corriger_factures_en_retard_dans_qb()
+    except Exception:  # noqa: BLE001
+        log.warning("Filet factures en retard dans QB échoué", exc_info=True)
 
     # ── Dépenses actives sans lien QB → re-push ──
     # NON gated : « tous les reçus sont envoyés dans QuickBooks
