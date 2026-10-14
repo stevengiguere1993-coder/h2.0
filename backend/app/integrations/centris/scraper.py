@@ -346,10 +346,26 @@ async def upsert_listings(
     updated = 0
     now = datetime.now(timezone.utc)
 
+    # Une même URL peut revenir deux fois dans un lot (chevauchement des
+    # pages Centris). La session est en autoflush=False : la 2e occurrence
+    # ne verrait pas l'insert en attente et violerait l'index unique. On
+    # fusionne donc les doublons (le premier gagne, les champs manquants
+    # sont complétés par les suivants) — bug prod registre des courtiers
+    # 2026-10-14.
+    uniques: dict[str, dict] = {}
     for L in listings:
-        url = L.get("source_url")
+        url = (L.get("source_url") or "").strip()
         if not url:
             continue
+        if url in uniques:
+            for k, v in L.items():
+                if uniques[url].get(k) in (None, "") and v not in (None, ""):
+                    uniques[url][k] = v
+        else:
+            uniques[url] = dict(L, source_url=url)
+
+    for L in uniques.values():
+        url = L["source_url"]
         existing = (
             await db.execute(
                 select(CentrisListing).where(
