@@ -96,6 +96,10 @@ class Settings(BaseSettings):
     qbo_sales_tax_code: Optional[str] = None
     #: Classe QB des achats « Shop » (non reliés à un projet).
     qbo_shop_class_name: str = "Construction"
+    #: Classe QB de chaque reçu saisi dans Comptabilité → Nouveau reçu
+    #: (Steven 2026-10-14) : les techniciennes comptables repèrent ainsi
+    #: dans QB tout ce qui vient de Kratos. Vide = aucune classe.
+    qbo_recus_class_name: str = "Kratos"
     # Active l'API Projets QuickBooks (GraphQL) pour CRÉER de vrais projets
     # (onglet Projets) depuis Kratos. Désactivé par défaut : tant que l'app
     # Intuit n'a pas l'accès Premium API + le scope, demander ce scope au
