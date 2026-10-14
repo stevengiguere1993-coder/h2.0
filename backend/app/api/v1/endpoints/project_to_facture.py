@@ -27,6 +27,12 @@ from app.models.soumission import Soumission, SoumissionStatus
 from app.models.soumission_item import SoumissionItem
 from app.models.user import User
 from app.schemas.business import FactureRead
+from app.services.facture_lignes import (
+    KIND_SERVICE,
+    clause_hors_soumission,
+    est_hors_soumission,
+    kind_ligne_achat,
+)
 from app.services.numbering import provisional_facture_reference
 from app.services.permissions_service import require_capability
 
@@ -181,6 +187,11 @@ async def convert_project_to_facture(
         if _bt is not None:
             bon_demande = (_bt.title or "").strip() or None
 
+    # Heures et achats importés : vrai type (Service / Matériaux), et hors
+    # soumission de base si le projet en a une — ils ne grugent pas la
+    # cible cumulative du devis (retour Steven 2026-10-14).
+    imports_hors_soumission = project.soumission_id is not None
+
     pos = 0
 
     # 1) Prix fixe — items de la soumission acceptée liée au projet.
@@ -222,11 +233,12 @@ async def convert_project_to_facture(
             # ITEM (lignes liées via soumission_item_id). Un item chargé
             # AU COMPLET sur une facture précédente ne réapparaît plus ;
             # un item chargé partiellement n'est facturé que du restant.
-            # Les lignes « extra » (T&M, achats hors-contrat) sont
-            # exclues : elles ne réduisent pas la cible du devis. Le
-            # montant non attribuable à un item (acompte global, factures
-            # antérieures au lien par item) est réparti au prorata du
-            # poids de chaque item — même effet global qu'avant.
+            # Les lignes hors soumission (« extra », heures et achats
+            # importés) sont exclues : elles ne réduisent pas la cible
+            # du devis. Le montant non attribuable à un item (acompte
+            # global, factures antérieures au lien par item) est réparti
+            # au prorata du poids de chaque item — même effet global
+            # qu'avant.
             linked_billed: dict[int, float] = {}
             unattributed_billed = 0.0
             if data.progressive_billing:
@@ -273,8 +285,9 @@ async def convert_project_to_facture(
                             .where(
                                 FactureItem.facture_id.in_(prev_ids),
                                 FactureItem.kind.notin_(
-                                    ("extra", "acompte", "acompte_applique")
+                                    ("acompte", "acompte_applique")
                                 ),
+                                _not(clause_hors_soumission()),
                                 _not(_acompte_legacy),
                             )
                             .group_by(FactureItem.soumission_item_id)
@@ -634,8 +647,10 @@ async def convert_project_to_facture(
                     quantity=b_hours,
                     unit_price=round(b_amount / b_hours, 2),
                     total=b_amount,
-                    # Heures T&M = hors soumission de base → extra.
-                    kind="extra",
+                    # Main-d'œuvre = un service (pas un extra), hors
+                    # soumission de base quand le projet en a une.
+                    kind=KIND_SERVICE,
+                    hors_soumission=imports_hors_soumission,
                 )
                 db.add(item)
                 items_by_key[key] = item
@@ -742,9 +757,11 @@ async def convert_project_to_facture(
                 quantity=qty,
                 unit_price=up,
                 total=billed,
-                # Achats / matériel / sous-traitant = hors soumission de
-                # base → extra (ne compte pas dans la cible cumulative).
-                kind="extra",
+                # Matériel / outils = Matériaux, sous-traitant = Service ;
+                # hors soumission de base quand le projet en a une (ne
+                # compte pas dans la cible cumulative).
+                kind=kind_ligne_achat(ac.kind),
+                hors_soumission=imports_hors_soumission,
             )
             db.add(item)
             if not is_hourly:
@@ -917,6 +934,7 @@ async def etat_contrat(
                     FactureItem.facture_id,
                     FactureItem.soumission_item_id,
                     FactureItem.kind,
+                    FactureItem.hors_soumission,
                     FactureItem.description,
                     func.coalesce(func.sum(FactureItem.total), 0),
                 )
@@ -925,11 +943,12 @@ async def etat_contrat(
                     FactureItem.facture_id,
                     FactureItem.soumission_item_id,
                     FactureItem.kind,
+                    FactureItem.hors_soumission,
                     FactureItem.description,
                 )
             )
         ).all()
-        for fid, sid, kind, desc, tot in rows:
+        for fid, sid, kind, hors_soum, desc, tot in rows:
             m = round(float(tot or 0), 2)
             k = kind or "service"
             if k == "acompte_applique":
@@ -943,7 +962,8 @@ async def etat_contrat(
                     acompte_recu += m
                 else:
                     acompte_brouillon += m
-            elif k == "extra":
+            elif est_hors_soumission(k, hors_soum):
+                # « Extra » ou heures / achats importés hors soumission.
                 extras += m
             elif sid is not None:
                 facture_par_item[int(sid)] = (
