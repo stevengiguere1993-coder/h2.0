@@ -358,7 +358,7 @@ def test_parametres_et_acces(client, auth_headers, employee_headers):
     ).status_code == 403
 
 
-def test_url_tres_longue_rescannee_sans_doublon(run):
+def test_url_tres_longue_rescannee_sans_doublon(run, db_setup):
     """Bug prod 2026-10-14 : une URL de fiche > 500 car. était insérée
     tronquée au 1er scan puis non retrouvée au 2e → IntegrityError."""
     from app.models.prospection_courtier import ProspectionCourtierAnnonce
@@ -385,7 +385,7 @@ def test_url_tres_longue_rescannee_sans_doublon(run):
     assert run(_deux_fois()) == 1
 
 
-def test_scan_tolere_une_fiche_cassee(run, monkeypatch):
+def test_scan_tolere_une_fiche_cassee(run, db_setup, monkeypatch):
     """Une fiche qui fait planter la liaison (ici lier_annonce lève) est
     notée dans le rapport ; les autres courtiers sont quand même créés."""
     original = svc.lier_annonce
@@ -409,7 +409,7 @@ def test_scan_tolere_une_fiche_cassee(run, monkeypatch):
     assert rapport["courtiers_mis_a_jour"] + rapport["courtiers_crees"] >= 2
 
 
-def test_upsert_listings_tolere_les_doublons_du_lot(run):
+def test_upsert_listings_tolere_les_doublons_du_lot(run, db_setup):
     """Bug prod 2026-10-14 : la même URL deux fois dans un lot (pages
     Centris qui se chevauchent) + autoflush=False → UniqueViolation."""
     from app.integrations.centris.scraper import upsert_listings
@@ -445,7 +445,7 @@ def test_upsert_listings_tolere_les_doublons_du_lot(run):
     assert run(_lot()) == (1, 1, 3_200_000.0, 30)
 
 
-def test_scan_vps_fiches_de_taille_inconnue(run, monkeypatch):
+def test_scan_vps_fiches_de_taille_inconnue(run, db_setup, monkeypatch):
     """Bug prod 2026-10-14 : 68 annonces « Multifamilial » lues, 0 fiche
     ouverte car les vignettes ne donnent pas le nombre d'unités. On ouvre
     les fiches de taille inconnue, on lit unités + adresse + courtier, et
@@ -456,6 +456,7 @@ def test_scan_vps_fiches_de_taille_inconnue(run, monkeypatch):
 
     u_grand = "https://www.centris.ca/fr/immeuble-a-revenus~a-vendre~laval/70000001"
     u_petit = "https://www.centris.ca/fr/immeuble-a-revenus~a-vendre~laval/70000002"
+    u_quad = "https://www.centris.ca/fr/quadruplex~a-vendre~montreal-saint-leonard/70000003"
     monkeypatch.setattr(scraping_proxy, "vps_available", lambda: True)
 
     async def _liste(**kw):
@@ -463,6 +464,8 @@ def test_scan_vps_fiches_de_taille_inconnue(run, monkeypatch):
             "listings": [
                 {"source_url": u_grand, "mls_id": "70000001", "price": 7_500_000.0, "nb_units": None},
                 {"source_url": u_petit, "mls_id": "70000002", "price": 1_200_000.0, "nb_units": None},
+                # Quadruplex : taille lue dans l'URL, fiche jamais ouverte.
+                {"source_url": u_quad, "mls_id": "70000003", "price": 900_000.0, "nb_units": None},
             ],
             "diagnostic": None,
         }
@@ -482,7 +485,8 @@ def test_scan_vps_fiches_de_taille_inconnue(run, monkeypatch):
     }
     ouvertes: list = []
 
-    async def _detail(url):
+    async def _detail(url, **kw):
+        assert kw.get("timeout_s") == 90.0
         ouvertes.append(url)
         return {"source_url": url, "broker_name": None, "html": fiches_html[url]}
 
@@ -496,7 +500,7 @@ def test_scan_vps_fiches_de_taille_inconnue(run, monkeypatch):
                 r.source_url: r for r in (
                     await s.execute(
                         select(CentrisListing).where(
-                            CentrisListing.source_url.in_([u_grand, u_petit])
+                            CentrisListing.source_url.in_([u_grand, u_petit, u_quad])
                         )
                     )
                 ).scalars().all()
@@ -520,6 +524,7 @@ def test_scan_vps_fiches_de_taille_inconnue(run, monkeypatch):
                 "grand_units": rows[u_grand].nb_units, "grand_broker": rows[u_grand].broker_name,
                 "grand_city": rows[u_grand].city,
                 "petit_units": rows[u_petit].nb_units, "petit_broker": rows[u_petit].broker_name,
+                "quad_units": rows[u_quad].nb_units,
                 "courtier_grand": (grand.nom, grand.agence, grand.telephone) if grand else None,
                 "courtier_petit": petit is not None,
             }
@@ -530,18 +535,19 @@ def test_scan_vps_fiches_de_taille_inconnue(run, monkeypatch):
 
     etat = run(_scan())
     r = etat["rapport"]
-    assert r["vps_annonces_lues"] == 2 and r["vps_sans_taille"] == 2
-    assert sorted(ouvertes) == sorted([u_grand, u_petit])
-    assert r["vps_details_lus"] == 2 and r["vps_sous_seuil"] == 1
+    assert r["vps_annonces_lues"] == 3 and r["vps_sans_taille"] == 2
+    assert sorted(ouvertes) == sorted([u_grand, u_petit])   # le quadruplex n'est pas ouvert
+    assert r["vps_details_lus"] == 2 and r["vps_sous_seuil"] == 2
+    assert etat["quad_units"] == 4                           # taille lue dans l'URL
     assert etat["grand_units"] == 36 and etat["grand_broker"] == "Sylvie Grandparc"
     assert etat["grand_city"] == "Laval"
     assert etat["petit_units"] == 8 and etat["petit_broker"] == "Paul Petitplex"
     assert etat["courtier_grand"] == ("Sylvie Grandparc", "RE/MAX Platine", "450-555-1000")
     assert etat["courtier_petit"] is False  # 8 logements : sous le seuil
-    assert len(r["vps_exemples"]) == 2 and not r["erreurs"]
+    assert len(r["vps_exemples"]) == 3 and not r["erreurs"]
 
 
-def test_scan_vps_vide_explique_pourquoi(run, monkeypatch):
+def test_scan_vps_vide_explique_pourquoi(run, db_setup, monkeypatch):
     """Le VPS répond 200 mais n'a lu aucune annonce (Centris bloque) : le
     rapport le dit, avec le diagnostic du VPS, sans planter le scan."""
     from app.integrations import scraping_proxy
@@ -617,4 +623,8 @@ def test_unites():
     assert fiche == {"nb_units": 36, "adresse": "1500, boul. des Laurentides, Laval (Vimont), H7M 2Y1", "ville": "Laval"}
     assert svc.parser_fiche_html("<p>24 logements à vendre</p>")["nb_units"] == 24
     assert svc.parser_fiche_html("")["nb_units"] is None
+    assert svc.taille_depuis_url("https://www.centris.ca/fr/quadruplex~a-vendre~montreal/1") == 4
+    assert svc.taille_depuis_url("https://www.centris.ca/fr/duplex~a-vendre~laval/2") == 2
+    assert svc.taille_depuis_url("https://www.centris.ca/fr/maison~a-vendre~laval/3") == 0
+    assert svc.taille_depuis_url("https://www.centris.ca/fr/immeuble-a-revenus~a-vendre~laval/4") is None
     assert svc.parser_courtier_html("<p>rien</p>")["nom"] is None

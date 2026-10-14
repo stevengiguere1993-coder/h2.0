@@ -263,6 +263,25 @@ _UNITES_RES = (
 )
 
 
+_PLEX_URL_RE = re.compile(
+    r"centris\.ca/(?:fr|en)/(duplex|triplex|quadruplex|quintuplex|maison|condo|"
+    r"terrain|chalet|commercial|propriete-commerciale|bureau|local)[~/-]",
+    re.IGNORECASE,
+)
+_PLEX_TAILLES = {"duplex": 2, "triplex": 3, "quadruplex": 4, "quintuplex": 5}
+
+
+def taille_depuis_url(url: str) -> Optional[int]:
+    """Le type Centris est dans l'URL (/fr/quadruplex~a-vendre~…) : taille
+    connue sans ouvrir la fiche pour les plex (2 à 5), 0 pour une maison,
+    un condo, un terrain ou un commerce (jamais un parc de logements),
+    None si inconnu (immeuble-a-revenus…)."""
+    m = _PLEX_URL_RE.search(url or "")
+    if not m:
+        return None
+    return _PLEX_TAILLES.get(m.group(1).lower(), 0)
+
+
 def parser_fiche_html(html: str) -> dict:
     """Lecture best-effort d'une fiche Centris rendue : nombre d'unités,
     adresse, ville. Retourne {nb_units, adresse, ville} (None si absent).
@@ -581,6 +600,10 @@ async def scan(
                 f"{type(exc).__name__}: {str(exc)[:120]}"
             )
 
+    # Enregistrement progressif : ce qui est fait est fait, même si le
+    # serveur redémarre pendant la (longue) lecture des fiches Centris.
+    await db.commit()
+
     # 3. VPS : liste Centris 6+ puis détails ≥ seuil -------------------
     if utiliser_vps:
         try:
@@ -612,6 +635,13 @@ async def scan(
                     )
                 if listings:
                     rapport["vps_annonces_lues"] = len(listings)
+                    # Taille connue par l'URL (plex 2-5, maison, condo…) :
+                    # enregistrée tout de suite, la fiche ne sera jamais ouverte.
+                    for L in listings:
+                        if not L.get("nb_units"):
+                            t_url = taille_depuis_url(L.get("source_url") or "")
+                            if t_url:
+                                L["nb_units"] = int(t_url)
                     try:
                         # SAVEPOINT : une annonce impossible à enregistrer
                         # n'empêche pas la lecture des fiches.
@@ -640,11 +670,19 @@ async def scan(
                         }
                         for L in listings[:3]
                     ]
-                    candidats = [
-                        L for L in listings
-                        if L.get("source_url")
-                        and (not L.get("nb_units") or int(L["nb_units"]) >= seuil)
-                    ]
+                    candidats = []
+                    for L in listings:
+                        if not L.get("source_url"):
+                            continue
+                        taille = L.get("nb_units") or taille_depuis_url(L["source_url"])
+                        if taille is not None and int(taille) < seuil:
+                            # Plex / maison / condo : taille connue par l'URL,
+                            # pas la peine d'ouvrir la fiche (~35 s chacune).
+                            rapport["vps_sous_seuil"] += 1
+                            if not L.get("nb_units") and taille:
+                                L["nb_units"] = int(taille)
+                            continue
+                        candidats.append(L)
                     maxd = int(config.get("max_details_par_scan") or 40)
                     ouverts = 0
                     for L in candidats:
@@ -666,7 +704,9 @@ async def scan(
                         ouverts += 1
                         _dire(f"Centris (VPS) : fiche {ouverts}/{min(maxd, len(candidats))} — {url}")
                         try:
-                            detail = await scraping_proxy.scrape_centris_detail(url)
+                            detail = await scraping_proxy.scrape_centris_detail(
+                                url, timeout_s=90.0
+                            )
                         except Exception as exc:  # noqa: BLE001
                             rapport["erreurs"].append(f"détail {url} : {exc}")
                             continue
@@ -721,6 +761,7 @@ async def scan(
                             rapport["erreurs"].append(
                                 f"Centris {url} : {type(exc).__name__}: {str(exc)[:120]}"
                             )
+                        await db.commit()  # fiche par fiche : rien n'est perdu
             else:
                 rapport["erreurs"].append(
                     "VPS de scraping non configuré : Centris non lu (les annonces "
@@ -920,6 +961,7 @@ __all__ = [
     "separer_contact",
     "parser_courtier_html",
     "parser_fiche_html",
+    "taille_depuis_url",
     "upsert_courtier",
     "lier_annonce",
     "scan",
