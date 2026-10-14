@@ -612,9 +612,19 @@ async def scan(
                     )
                 if listings:
                     rapport["vps_annonces_lues"] = len(listings)
-                    await upsert_listings(
-                        db, listings, "immeuble_residentiel_6_plus"
-                    )
+                    try:
+                        # SAVEPOINT : une annonce impossible à enregistrer
+                        # n'empêche pas la lecture des fiches.
+                        async with db.begin_nested():
+                            await upsert_listings(
+                                db, listings, "immeuble_residentiel_6_plus"
+                            )
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("scan courtiers : upsert Centris en échec", exc_info=True)
+                        rapport["erreurs"].append(
+                            "Centris (VPS) : annonces lues mais non enregistrées dans "
+                            f"centris_listings ({type(exc).__name__}: {str(exc)[:120]})."
+                        )
                     # Détail des annonces ≥ seuil OU de taille inconnue (les
                     # vignettes « Multifamilial » ne donnent pas le nombre
                     # d'unités) — sauf celles déjà lues (courtier connu ou

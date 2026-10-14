@@ -409,6 +409,42 @@ def test_scan_tolere_une_fiche_cassee(run, monkeypatch):
     assert rapport["courtiers_mis_a_jour"] + rapport["courtiers_crees"] >= 2
 
 
+def test_upsert_listings_tolere_les_doublons_du_lot(run):
+    """Bug prod 2026-10-14 : la même URL deux fois dans un lot (pages
+    Centris qui se chevauchent) + autoflush=False → UniqueViolation."""
+    from app.integrations.centris.scraper import upsert_listings
+    from app.models.centris_listing import CentrisListing
+    from sqlalchemy import func, select
+
+    url = "https://www.centris.ca/fr/immeuble-a-revenus~a-vendre~montreal/60000001"
+
+    async def _lot():
+        async with TestSessionLocal() as s:
+            r = await upsert_listings(
+                s,
+                [
+                    {"source_url": url, "mls_id": "60000001", "price": None, "nb_units": None},
+                    {"source_url": url, "mls_id": "60000001", "price": 3_200_000.0, "nb_units": 30},
+                ],
+                "immeuble_residentiel_6_plus",
+            )
+            n = (
+                await s.execute(
+                    select(func.count()).select_from(CentrisListing).where(
+                        CentrisListing.source_url == url
+                    )
+                )
+            ).scalar_one()
+            row = (
+                await s.execute(select(CentrisListing).where(CentrisListing.source_url == url))
+            ).scalar_one()
+            etat = (r["new"], n, float(row.price or 0), row.nb_units)
+            await s.rollback()
+            return etat
+
+    assert run(_lot()) == (1, 1, 3_200_000.0, 30)
+
+
 def test_scan_vps_fiches_de_taille_inconnue(run, monkeypatch):
     """Bug prod 2026-10-14 : 68 annonces « Multifamilial » lues, 0 fiche
     ouverte car les vignettes ne donnent pas le nombre d'unités. On ouvre
