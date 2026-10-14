@@ -626,5 +626,9 @@ def test_unites():
     assert svc.taille_depuis_url("https://www.centris.ca/fr/quadruplex~a-vendre~montreal/1") == 4
     assert svc.taille_depuis_url("https://www.centris.ca/fr/duplex~a-vendre~laval/2") == 2
     assert svc.taille_depuis_url("https://www.centris.ca/fr/maison~a-vendre~laval/3") == 0
+    assert svc.taille_depuis_url(
+        "https://www.centris.ca/fr/batisse-commerciale~a-vendre~terrebonne-terrebonne/14343533"
+    ) == 0
+    assert svc.taille_depuis_url("https://www.centris.ca/fr/local-commercial~a-vendre~laval/5") == 0
     assert svc.taille_depuis_url("https://www.centris.ca/fr/immeuble-a-revenus~a-vendre~laval/4") is None
     assert svc.parser_courtier_html("<p>rien</p>")["nom"] is None
