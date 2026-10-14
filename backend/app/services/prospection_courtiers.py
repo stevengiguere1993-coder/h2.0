@@ -352,6 +352,12 @@ async def lier_annonce(
     active: bool = True,
 ) -> tuple[ProspectionCourtierAnnonce, bool]:
     """Rattache une annonce au courtier (une ligne par URL)."""
+    # La clé d'unicité est (courtier, URL) telle que STOCKÉE : on normalise
+    # avant de chercher, sinon une URL > 500 car. est insérée tronquée puis
+    # jamais retrouvée (doublon → IntegrityError au scan suivant).
+    source_url = (source_url or "").strip()[:500]
+    if not source_url:
+        raise ValueError("source_url vide")
     vue_le = _aware(vue_le) or datetime.now(timezone.utc)
     existante = (
         await db.execute(
@@ -380,7 +386,7 @@ async def lier_annonce(
         centris_listing_id=centris_listing_id,
         lead_analysis_id=lead_analysis_id,
         mls_id=(mls_id or None) and str(mls_id)[:16],
-        source_url=source_url[:500],
+        source_url=source_url,
         adresse=(adresse or None) and adresse[:500],
         ville=(ville or None) and ville[:120],
         nb_units=nb_units,
@@ -453,26 +459,34 @@ async def scan(
     ).scalars().all()
     for L in annonces:
         rapport["annonces_centris_examinees"] += 1
-        courtier, cree = await upsert_courtier(
-            db,
-            nom=L.broker_name or "",
-            telephone=L.broker_phone,
-            source="extension",
-            vu_le=L.last_seen_at or L.first_seen_at,
-            secteur=L.city,
-        )
-        if courtier is None:
-            continue
-        await _compter(courtier, cree)
-        _, liee = await lier_annonce(
-            db, courtier,
-            source_url=L.source_url, mls_id=L.mls_id, adresse=L.address,
-            ville=L.city, nb_units=L.nb_units,
-            prix=float(L.price) if L.price is not None else None,
-            centris_listing_id=L.id, vue_le=L.last_seen_at or L.first_seen_at,
-            active=L.delisted_at is None,
-        )
-        rapport["annonces_liees"] += int(liee)
+        try:
+            # SAVEPOINT : une annonce cassée n'annule pas le scan.
+            async with db.begin_nested():
+                courtier, cree = await upsert_courtier(
+                    db,
+                    nom=L.broker_name or "",
+                    telephone=L.broker_phone,
+                    source="extension",
+                    vu_le=L.last_seen_at or L.first_seen_at,
+                    secteur=L.city,
+                )
+                if courtier is None:
+                    continue
+                await _compter(courtier, cree)
+                _, liee = await lier_annonce(
+                    db, courtier,
+                    source_url=L.source_url, mls_id=L.mls_id, adresse=L.address,
+                    ville=L.city, nb_units=L.nb_units,
+                    prix=float(L.price) if L.price is not None else None,
+                    centris_listing_id=L.id, vue_le=L.last_seen_at or L.first_seen_at,
+                    active=L.delisted_at is None,
+                )
+                rapport["annonces_liees"] += int(liee)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("scan courtiers : annonce %s ignorée", L.id, exc_info=True)
+            rapport["erreurs"].append(
+                f"Annonce Centris #{L.id} ignorée : {type(exc).__name__}: {str(exc)[:120]}"
+            )
 
     # 2. Fiches d'analyse avec un courtier ---------------------------
     _dire("Fiches d'analyse avec un courtier…")
@@ -486,27 +500,37 @@ async def scan(
     ).scalars().all()
     for f in fiches:
         rapport["analyses_examinees"] += 1
-        courriel, tel = separer_contact(f.courtier_contact)
-        courtier, cree = await upsert_courtier(
-            db, nom=f.courtier_nom or "", courriel=courriel, telephone=tel,
-            source="analyse", vu_le=getattr(f, "created_at", None), secteur=f.city,
-        )
-        if courtier is None:
-            continue
-        await _compter(courtier, cree)
-        url = None
-        for u in re.split(r"[\s,;]+", f.source_urls or ""):
-            if u.startswith("http"):
-                url = u
-                break
-        _, liee = await lier_annonce(
-            db, courtier,
-            source_url=url or f"analyse:{f.id}", adresse=f.address, ville=f.city,
-            nb_units=f.nb_logements,
-            prix=float(f.asking_price) if f.asking_price is not None else None,
-            lead_analysis_id=f.id, vue_le=getattr(f, "created_at", None),
-        )
-        rapport["annonces_liees"] += int(liee)
+        try:
+            # SAVEPOINT : une fiche cassée n'annule pas le scan.
+            async with db.begin_nested():
+                courriel, tel = separer_contact(f.courtier_contact)
+                courtier, cree = await upsert_courtier(
+                    db, nom=f.courtier_nom or "", courriel=courriel, telephone=tel,
+                    source="analyse", vu_le=getattr(f, "created_at", None),
+                    secteur=f.city,
+                )
+                if courtier is None:
+                    continue
+                await _compter(courtier, cree)
+                url = None
+                for u in re.split(r"[\s,;]+", f.source_urls or ""):
+                    if u.startswith("http"):
+                        url = u
+                        break
+                _, liee = await lier_annonce(
+                    db, courtier,
+                    source_url=url or f"analyse:{f.id}", adresse=f.address,
+                    ville=f.city, nb_units=f.nb_logements,
+                    prix=float(f.asking_price) if f.asking_price is not None else None,
+                    lead_analysis_id=f.id, vue_le=getattr(f, "created_at", None),
+                )
+                rapport["annonces_liees"] += int(liee)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("scan courtiers : fiche %s ignorée", f.id, exc_info=True)
+            rapport["erreurs"].append(
+                f"Fiche d'analyse #{f.id} ({f.courtier_nom}) ignorée : "
+                f"{type(exc).__name__}: {str(exc)[:120]}"
+            )
 
     # 3. VPS : liste Centris 6+ puis détails ≥ seuil -------------------
     if utiliser_vps:
@@ -570,30 +594,38 @@ async def scan(
                         info = parser_courtier_html(
                             detail.get("html") or "", detail.get("broker_name")
                         )
-                        if row is not None:
-                            if info.get("nom") and not row.broker_name:
-                                row.broker_name = info["nom"][:255]
-                            if info.get("telephone") and not row.broker_phone:
-                                row.broker_phone = info["telephone"]
                         if not info.get("nom"):
                             continue
-                        courtier, cree = await upsert_courtier(
-                            db, nom=info["nom"], agence=info.get("agence"),
-                            courriel=info.get("courriel"),
-                            telephone=info.get("telephone"), source="centris",
-                            secteur=(row.city if row is not None else None),
-                        )
-                        if courtier is None:
-                            continue
-                        await _compter(courtier, cree)
-                        L = next((x for x in listings if x.get("source_url") == url), {})
-                        _, liee = await lier_annonce(
-                            db, courtier, source_url=url, mls_id=L.get("mls_id"),
-                            adresse=L.get("address"), ville=L.get("city"),
-                            nb_units=L.get("nb_units"), prix=L.get("price"),
-                            centris_listing_id=(row.id if row is not None else None),
-                        )
-                        rapport["annonces_liees"] += int(liee)
+                        try:
+                            async with db.begin_nested():
+                                if row is not None:
+                                    if info.get("nom") and not row.broker_name:
+                                        row.broker_name = info["nom"][:255]
+                                    if info.get("telephone") and not row.broker_phone:
+                                        row.broker_phone = info["telephone"]
+                                courtier, cree = await upsert_courtier(
+                                    db, nom=info["nom"], agence=info.get("agence"),
+                                    courriel=info.get("courriel"),
+                                    telephone=info.get("telephone"), source="centris",
+                                    secteur=(row.city if row is not None else None),
+                                )
+                                if courtier is None:
+                                    continue
+                                await _compter(courtier, cree)
+                                L = next(
+                                    (x for x in listings if x.get("source_url") == url), {}
+                                )
+                                _, liee = await lier_annonce(
+                                    db, courtier, source_url=url, mls_id=L.get("mls_id"),
+                                    adresse=L.get("address"), ville=L.get("city"),
+                                    nb_units=L.get("nb_units"), prix=L.get("price"),
+                                    centris_listing_id=(row.id if row is not None else None),
+                                )
+                                rapport["annonces_liees"] += int(liee)
+                        except Exception as exc:  # noqa: BLE001
+                            rapport["erreurs"].append(
+                                f"Centris {url} : {type(exc).__name__}: {str(exc)[:120]}"
+                            )
             else:
                 rapport["erreurs"].append(
                     "VPS de scraping non configuré : Centris non lu (les annonces "
