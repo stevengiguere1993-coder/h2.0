@@ -265,7 +265,10 @@ _UNITES_RES = (
 
 _PLEX_URL_RE = re.compile(
     r"centris\.ca/(?:fr|en)/(duplex|triplex|quadruplex|quintuplex|maison|condo|"
-    r"terrain|chalet|commercial|propriete-commerciale|bureau|local)[~/-]",
+    r"terrain|chalet|commercial|propriete-commerciale|bureau|local|"
+    r"batisse-commerciale|immeuble-commercial|local-commercial|"
+    r"terrain-commercial|entreprise|industriel|batisse-industrielle|"
+    r"fermette|ferme|stationnement)[~/-]",
     re.IGNORECASE,
 )
 _PLEX_TAILLES = {"duplex": 2, "triplex": 3, "quadruplex": 4, "quintuplex": 5}
