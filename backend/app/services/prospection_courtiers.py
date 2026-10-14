@@ -25,7 +25,9 @@ humain : aucun cron n'appelle l'envoi.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
 import re
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
@@ -74,9 +76,18 @@ SIGNATURE_DEFAUT = (
 
 DEFAUTS: dict[str, Any] = {
     "seuil_logements": 20,
-    "pages_centris": 5,
-    "max_details_par_scan": 40,
+    # Centris repère vite les robots (Phil 2026-10-14) : peu de pages, peu
+    # de fiches par passage, et une pause « humaine » entre deux fiches.
+    "pages_centris": 3,
+    "max_details_par_scan": 10,
+    "pause_centris_s": 12,
     "relance_jours": 14,
+    #: Recherche automatique du courriel des courtiers sans courriel après
+    #: chaque scan (Phil 2026-10-14 : « il faut que ça soit automatique »).
+    "recherche_courriels_auto": True,
+    "max_courriels_par_scan": 20,
+    "recherche_courriel_ttl_jours": 30,
+    "recherche_moteurs": "gemini,duckduckgo,bing",
     "sujet": GABARIT_SUJET_DEFAUT,
     "corps_html": GABARIT_CORPS_DEFAUT,
     "signature": SIGNATURE_DEFAUT,
@@ -105,7 +116,11 @@ def fusionner_config(cfg: Optional[dict[str, Any]]) -> dict[str, Any]:
         out["seuil_logements"] = max(1, int(out["seuil_logements"]))
         out["pages_centris"] = max(1, min(10, int(out["pages_centris"])))
         out["max_details_par_scan"] = max(0, int(out["max_details_par_scan"]))
+        out["pause_centris_s"] = max(0, min(120, int(out["pause_centris_s"])))
         out["relance_jours"] = max(1, int(out["relance_jours"]))
+        out["max_courriels_par_scan"] = max(0, min(200, int(out["max_courriels_par_scan"])))
+        out["recherche_courriel_ttl_jours"] = max(1, int(out["recherche_courriel_ttl_jours"]))
+        out["recherche_courriels_auto"] = bool(out["recherche_courriels_auto"])
     except (TypeError, ValueError):
         pass
     return out
@@ -704,6 +719,12 @@ async def scan(
                             or (row.nb_units is not None and row.nb_units < seuil)
                         ):
                             continue
+                        if ouverts > 0:
+                            # Rythme humain entre deux fiches (± 40 %) : Centris
+                            # repère vite les lectures en rafale.
+                            base_pause = float(config.get("pause_centris_s") or 0)
+                            if base_pause > 0:
+                                await asyncio.sleep(base_pause * random.uniform(0.6, 1.4))
                         ouverts += 1
                         _dire(f"Centris (VPS) : fiche {ouverts}/{min(maxd, len(candidats))} — {url}")
                         try:

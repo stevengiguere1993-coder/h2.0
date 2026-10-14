@@ -30,6 +30,11 @@ type Config = {
   pages_centris: number;
   max_details_par_scan: number;
   relance_jours: number;
+  pause_centris_s: number;
+  recherche_courriels_auto: boolean;
+  max_courriels_par_scan: number;
+  recherche_courriel_ttl_jours: number;
+  recherche_moteurs: string;
   sujet: string;
   corps_html: string;
   signature: string;
@@ -300,6 +305,26 @@ export default function ParametresCourtiersPage() {
                   </p>
                 </div>
                 <div>
+                  <label className="label">Pause entre deux fiches (s)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={120}
+                    className="input"
+                    value={cfg.pause_centris_s}
+                    onChange={(e) =>
+                      update(
+                        "pause_centris_s",
+                        Math.max(0, Number(e.target.value) || 0)
+                      )
+                    }
+                  />
+                  <p className="mt-1 text-[11px] text-white/40">
+                    Rythme humain : Centris repère vite les lectures en
+                    rafale.
+                  </p>
+                </div>
+                <div>
                   <label className="label">Relance après (jours)</label>
                   <input
                     type="number"
@@ -316,6 +341,81 @@ export default function ParametresCourtiersPage() {
                   />
                   <p className="mt-1 text-[11px] text-white/40">
                     Date de relance posée après chaque envoi.
+                  </p>
+                </div>
+              </div>
+            </section>
+
+            {/* ── Recherche automatique des courriels ── */}
+            <section className="card space-y-4">
+              <h2 className="text-base font-semibold text-white">
+                Recherche automatique des courriels
+              </h2>
+              <p className="text-sm text-white/60">
+                Pour chaque courtier sans courriel, Kratos cherche sur le web
+                (site de l&apos;agence, site personnel, annuaires de
+                courtiers), lit la page, et n&apos;écrit le courriel que
+                s&apos;il correspond au nom du courtier — avec la source et
+                un niveau de confiance. Centris n&apos;est jamais utilisé
+                pour ça.
+              </p>
+              <label className="inline-flex items-center gap-2 text-sm text-white/80">
+                <input
+                  type="checkbox"
+                  checked={cfg.recherche_courriels_auto}
+                  onChange={(e) =>
+                    update("recherche_courriels_auto", e.target.checked)
+                  }
+                />
+                Chercher automatiquement après chaque scan
+              </label>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div>
+                  <label className="label">Courtiers cherchés par scan</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={200}
+                    className="input"
+                    value={cfg.max_courriels_par_scan}
+                    onChange={(e) =>
+                      update(
+                        "max_courriels_par_scan",
+                        Math.max(0, Number(e.target.value) || 0)
+                      )
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="label">Réessayer après (jours)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    className="input"
+                    value={cfg.recherche_courriel_ttl_jours}
+                    onChange={(e) =>
+                      update(
+                        "recherche_courriel_ttl_jours",
+                        Math.max(1, Number(e.target.value) || 1)
+                      )
+                    }
+                  />
+                  <p className="mt-1 text-[11px] text-white/40">
+                    Un courtier sans résultat est recherché de nouveau après
+                    ce délai.
+                  </p>
+                </div>
+                <div>
+                  <label className="label">Moteurs (dans l&apos;ordre)</label>
+                  <input
+                    type="text"
+                    className="input"
+                    value={cfg.recherche_moteurs}
+                    onChange={(e) => update("recherche_moteurs", e.target.value)}
+                  />
+                  <p className="mt-1 text-[11px] text-white/40">
+                    gemini (recherche Google), duckduckgo, bing.
                   </p>
                 </div>
               </div>

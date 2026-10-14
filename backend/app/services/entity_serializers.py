@@ -988,6 +988,7 @@ def serialize_prospection_courtier(obj: Any, level: str = "summary") -> dict:
         "nom": _str(_get(obj, "nom")),
         "agence": _str(_get(obj, "agence")),
         "courriel": _str(_get(obj, "courriel")),
+        "courriel_confiance": _str(_get(obj, "courriel_confiance")),
         "telephone": _str(_get(obj, "telephone")),
         "secteur": _str(_get(obj, "secteur")),
         "statut": _str(_get(obj, "statut")),

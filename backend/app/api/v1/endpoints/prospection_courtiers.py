@@ -50,6 +50,7 @@ from app.models.prospection_courtier import (
     ProspectionCourtierContact,
 )
 from app.services import prospection_courtiers as svc
+from app.services import prospection_courtiers_courriels as courriels
 from app.services.audit import log_action
 from app.services.automation_state import get_automation_config, set_automation_config
 
@@ -125,6 +126,10 @@ class CourtierOut(BaseModel):
     dernier_contact_le: Optional[datetime] = None
     prochaine_relance_le: Optional[date] = None
     nb_relances: int = 0
+    courriel_source: Optional[str] = None
+    courriel_confiance: Optional[str] = None
+    courriel_cherche_le: Optional[datetime] = None
+    courriel_recherche_note: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     # Agrégats calculés
@@ -193,6 +198,10 @@ class ListeOut(BaseModel):
 
 class ParametresIn(BaseModel):
     seuil_logements: Optional[int] = Field(default=None, ge=1, le=1000)
+    recherche_courriels_auto: Optional[bool] = None
+    max_courriels_par_scan: Optional[int] = Field(default=None, ge=0, le=200)
+    recherche_courriel_ttl_jours: Optional[int] = Field(default=None, ge=1, le=365)
+    recherche_moteurs: Optional[str] = Field(default=None, max_length=120)
     pages_centris: Optional[int] = Field(default=None, ge=1, le=10)
     max_details_par_scan: Optional[int] = Field(default=None, ge=0, le=200)
     relance_jours: Optional[int] = Field(default=None, ge=1, le=365)
@@ -221,6 +230,12 @@ class ScanStart(BaseModel):
     job_id: str
     status: str
     deja_en_cours: bool = False
+
+
+class RechercheCourrielsIn(BaseModel):
+    courtier_ids: List[int] = []
+    max: int = Field(default=20, ge=1, le=200)
+    forcer: bool = False
 
 
 class ApercuIn(BaseModel):
@@ -589,6 +604,18 @@ async def _scan_worker(job_id: str, user_id: Optional[int], utiliser_vps: bool) 
             rapport = await svc.scan(
                 db, config=config, utiliser_vps=utiliser_vps, progres=_progres
             )
+            # Courriels manquants : automatique après chaque scan (Phil
+            # 2026-10-14), plafonné par les réglages ; fiche par fiche.
+            if config.get("recherche_courriels_auto") and int(config.get("max_courriels_par_scan") or 0) > 0:
+                try:
+                    rapport["courriels"] = await courriels.enrichir_courriels(
+                        db, config=config,
+                        max_courtiers=int(config.get("max_courriels_par_scan") or 20),
+                        progres=_progres,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("enrichissement courriels après scan en échec", exc_info=True)
+                    rapport["erreurs"].append(f"Recherche des courriels : {type(exc).__name__}: {str(exc)[:120]}")
             user = await db.get(User, user_id) if user_id else None
             details = {k: v for k, v in rapport.items() if k != "erreurs"}
             details["nb_erreurs"] = len(rapport.get("erreurs") or [])
@@ -607,6 +634,73 @@ async def _scan_worker(job_id: str, user_id: Optional[int], utiliser_vps: bool) 
         job["erreur"] = f"{type(exc).__name__}: {str(exc)[:400]}"
     finally:
         job["termine_a"] = datetime.now(timezone.utc).isoformat()
+
+
+async def _courriels_worker(
+    job_id: str, user_id: Optional[int], ids: list[int], maximum: int, forcer: bool
+) -> None:
+    job = _SCAN_JOBS.get(job_id)
+    if job is None:
+        return
+    try:
+        from app.models.user import User
+
+        factory = _session_factory_jobs()
+        config = await svc.charger_config()
+        async with factory() as db:
+            def _progres(msg: str) -> None:
+                job["etape"] = msg
+
+            rapport = await courriels.enrichir_courriels(
+                db, config=config, courtier_ids=ids or None, max_courtiers=maximum,
+                forcer=forcer, progres=_progres,
+            )
+            user = await db.get(User, user_id) if user_id else None
+            await log_action(
+                db, user=user, action="prospection.courtiers.courriels_recherches",
+                entity_type="prospection_courtier", entity_id=None,
+                details={k: v for k, v in rapport.items() if k not in ("details", "erreurs")}
+                | {"nb_erreurs": len(rapport.get("erreurs") or [])},
+            )
+            await db.commit()
+        job["resultat"] = {"courriels": rapport}
+        job["status"] = "termine"
+        job["etape"] = "Terminé"
+    except Exception as exc:  # noqa: BLE001
+        log.exception("recherche courriels %s en échec", job_id)
+        job["status"] = "erreur"
+        job["erreur"] = f"{type(exc).__name__}: {str(exc)[:400]}"
+    finally:
+        job["termine_a"] = datetime.now(timezone.utc).isoformat()
+
+
+@router.post(
+    "/courriels/chercher", response_model=ScanStart,
+    summary="Chercher automatiquement les courriels manquants (tâche de fond)",
+)
+async def chercher_courriels(payload: RechercheCourrielsIn, user: RequireManager) -> ScanStart:
+    _purger_jobs()
+    deja = _job_en_cours()
+    if deja is not None:
+        return ScanStart(job_id=deja["job_id"], status="en_cours", deja_en_cours=True)
+    job_id = secrets.token_urlsafe(12)
+    uid = getattr(user, "id", None)
+    _SCAN_JOBS[job_id] = {
+        "job_id": job_id,
+        "status": "en_cours",
+        "user_id": uid,
+        "kind": "courriels",
+        "etape": "Démarrage…",
+        "demarre_a": datetime.now(timezone.utc).isoformat(),
+        "termine_a": None,
+        "resultat": None,
+        "erreur": None,
+        "_t0": time.monotonic(),
+    }
+    _SCAN_JOBS[job_id]["_task"] = asyncio.create_task(
+        _courriels_worker(job_id, uid, list(dict.fromkeys(payload.courtier_ids)), payload.max, payload.forcer)
+    )
+    return ScanStart(job_id=job_id, status="en_cours")
 
 
 @router.post("/scan", response_model=ScanStart, summary="Construire / mettre à jour le registre")
@@ -831,6 +925,11 @@ async def modifier_courtier(
         data.pop("nom")
     if "courriel" in data and data["courriel"] is not None:
         data["courriel"] = data["courriel"].strip().lower() or None
+        if data["courriel"] and data["courriel"] != (c.courriel or ""):
+            # Saisi ou corrigé à la main par un humain : c'est la référence.
+            c.courriel_source = "saisi à la main"
+            c.courriel_confiance = "verifie"
+            c.courriel_recherche_note = None
     for k, v in data.items():
         if isinstance(v, str):
             v = v.strip() or None
@@ -846,6 +945,38 @@ async def modifier_courtier(
     out = await _charger_out(db, c.id)
     assert out is not None
     return out
+
+
+@router.post(
+    "/{courtier_id}/chercher-courriel", response_model=CourtierDetail,
+    summary="Chercher le courriel de ce courtier maintenant",
+)
+async def chercher_courriel_fiche(
+    courtier_id: int, db: DBSession, user: RequireManager
+) -> CourtierDetail:
+    c = await _get_or_404(db, courtier_id)
+    config = await svc.charger_config()
+    res = await courriels.chercher_courriel(c, config=config)
+    c.courriel_cherche_le = datetime.now(timezone.utc)
+    c.courriel_recherche_note = (res.get("note") or "")[:500] or None
+    if res.get("courriel") and not c.courriel:
+        c.courriel = res["courriel"]
+        c.courriel_source = (str(res.get("source") or ""))[:500] or None
+        c.courriel_confiance = res.get("confiance")
+    elif res.get("courriel") and c.courriel and res["courriel"] != c.courriel:
+        c.courriel_recherche_note = (f"trouvé aussi : {res['courriel']} — " + (res.get("note") or ""))[:500]
+    if res.get("telephone") and not c.telephone:
+        c.telephone = svc._telephone_propre(str(res["telephone"]))
+    if res.get("site_web") and not c.site_web and str(res["site_web"]).startswith("http"):
+        c.site_web = str(res["site_web"])[:500]
+    await db.flush()
+    await log_action(
+        db, user=user, action="prospection.courtier.courriel_recherche",
+        entity_type="prospection_courtier", entity_id=c.id,
+        details={"courriel": res.get("courriel"), "confiance": res.get("confiance"),
+                 "source": res.get("source"), "methode": res.get("methode")},
+    )
+    return await lire_courtier(courtier_id, db, user)
 
 
 @router.delete("/{courtier_id}", status_code=204, summary="Supprimer un courtier")

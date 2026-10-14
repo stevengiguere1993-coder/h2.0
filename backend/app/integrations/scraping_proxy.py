@@ -131,6 +131,37 @@ async def scrape_centris_search_complet(
         return data
 
 
+async def scrape_web_search(requete: str, max_results: int = 8) -> Optional[List[dict]]:
+    """Résultats web [{url, titre, extrait}] rendus par le navigateur du
+    VPS (quand DuckDuckGo / Bing bloquent le serveur) — recherche du
+    courriel des courtiers 2026-10-14."""
+    if not vps_available():
+        return None
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+        r = await client.post(
+            f"{VPS_URL}/scrape/web-search",
+            headers=_headers(),
+            json={"query": requete, "max_results": max_results},
+        )
+        r.raise_for_status()
+        return r.json().get("results", [])
+
+
+async def scrape_page_text(url: str) -> Optional[dict]:
+    """Texte visible + liens mailto d'une page rendue par le navigateur du
+    VPS : {texte, mailtos, title}."""
+    if not vps_available():
+        return None
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+        r = await client.post(
+            f"{VPS_URL}/scrape/page-text",
+            headers=_headers(),
+            json={"url": url},
+        )
+        r.raise_for_status()
+        return r.json()
+
+
 async def scrape_centris_detail(
     listing_url: str, *, timeout_s: Optional[float] = None
 ) -> Optional[dict]:
