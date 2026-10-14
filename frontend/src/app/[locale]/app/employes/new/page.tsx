@@ -23,6 +23,7 @@ export default function NewEmployePage() {
   const [billingRate, setBillingRate] = useState("");
   const [isPartner, setIsPartner] = useState(false);
   const [dinerAuto, setDinerAuto] = useState(false);
+  const [cnesstActif, setCnesstActif] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,7 +39,8 @@ export default function NewEmployePage() {
       const payload: Record<string, unknown> = {
         full_name: fullName.trim(),
         is_partner: isPartner,
-        diner_auto: dinerAuto
+        diner_auto: dinerAuto,
+        cnesst_actif: cnesstActif
       };
       if (email.trim()) payload.email = email.trim();
       if (phone.trim()) payload.phone = phone.trim();
@@ -232,6 +234,22 @@ export default function NewEmployePage() {
               Pour l&apos;employé qui reste punché pendant son dîner : 30
               minutes sont retirées de ses heures, une fois par jour, quand sa
               journée punchée dépasse 5 h.
+            </p>
+          </div>
+
+          <div>
+            <label className="flex items-center gap-2 text-sm text-white/80">
+              <input
+                type="checkbox"
+                checked={cnesstActif}
+                onChange={(e) => setCnesstActif(e.target.checked)}
+              />
+              Prime CNESST
+            </label>
+            <p className="mt-1 text-xs text-white/60">
+              Le taux global de Paramètres → Prime CNESST s&apos;ajoute à son
+              coût horaire. Un taux différent se règle sur la fiche de
+              l&apos;employé, une fois créé.
             </p>
           </div>
 

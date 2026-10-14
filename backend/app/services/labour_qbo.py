@@ -28,6 +28,7 @@ from app.models.employe import Employe
 from app.models.project import Project
 from app.models.punch import Punch
 from app.models.qbo_account_map import QboAccountMap
+from app.services.cnesst import charger_bareme_cnesst
 from app.services.employe_rates import load_rate_periods, resolve_real_cost
 
 log = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ async def compute_project_labour_cost_ht(
     )
     emp_ids = [p.employe_id for p in punches if p.employe_id]
     rate_periods = await load_rate_periods(db, emp_ids)
+    cnesst = await charger_bareme_cnesst(db)
     emp_cache: dict[int, object] = {}
     cost = 0.0
     for p in punches:
@@ -76,7 +78,7 @@ async def compute_project_labour_cost_ht(
         pdate = p.started_at.date() if p.started_at is not None else None
         cph = resolve_real_cost(
             rate_periods.get(p.employe_id or -1, []), pdate, emp, avg_rate,
-            regime=getattr(p, "regime", None),
+            regime=getattr(p, "regime", None), cnesst=cnesst,
         )
         cost += float(p.hours or 0) * cph
     return round(cost, 2), round(hours, 2)

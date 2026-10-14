@@ -297,12 +297,19 @@ async def _compute_finances(
     avg_rate_stmt = select(func.coalesce(func.avg(Employe.hourly_rate), 35.0))
     avg_rate = float((await db.execute(avg_rate_stmt)).scalar_one() or 35.0)
 
+    # Taux CNESST global (Paramètres → Prime CNESST), daté.
+    from app.services.cnesst import charger_bareme_cnesst, taux_cnesst
+
+    bareme_cnesst = await charger_bareme_cnesst(db)
+
     def _real_cost_for_employe(emp: Optional[Employe]) -> float:
         """Coût horaire réel = base × (1 + cnesst + ccq actif)."""
         if emp is None:
             return float(avg_rate)
         base = float(emp.hourly_rate or avg_rate)
-        cnesst = float(emp.cnesst_rate or 0)
+        cnesst = taux_cnesst(
+            getattr(emp, "cnesst_actif", True), emp.cnesst_rate, bareme_cnesst, None
+        )
         ccq = float(emp.ccq_rate or 0) if bool(emp.is_ccq) else 0.0
         return round(base * (1.0 + cnesst + ccq), 2)
 
@@ -606,6 +613,7 @@ async def _compute_finances(
             emp,
             float(avg_rate),
             regime=getattr(p, "regime", None),
+            cnesst=bareme_cnesst,
         )
         actual_labour_cost += float(p.hours or 0) * cost_per_hour
     actual_labour_cost = round(actual_labour_cost, 2)

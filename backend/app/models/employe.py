@@ -44,11 +44,20 @@ class Employe(Base, TimestampUpdateMixin):
     # ---- CCQ + paie ----
     # Si l'employé est CCQ, le coût horaire réel est majoré (cotisations
     # CCQ : assurance, fonds de formation, vacances, RVER…). En plus,
-    # la prime CNESST s'ajoute systématiquement (rate de l'unité d'emploi
-    # × salaire imposable). Stocké comme % en décimal — ex. 0.085 = 8,5 %.
+    # la prime CNESST s'ajoute (rate de l'unité d'emploi × salaire
+    # imposable). Stocké comme % en décimal — ex. 0.085 = 8,5 %.
     is_ccq: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # ---- Prime CNESST (Steven, 2026-10-14) ----
+    #: Case « Prime CNESST » : décochée → aucune prime pour cet employé.
+    #: Cochée (défaut) → taux personnalisé ``cnesst_rate`` s'il est saisi,
+    #: sinon le taux global de Paramètres → Prime CNESST
+    #: (``app/services/cnesst.py``).
+    cnesst_actif: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    #: Taux CNESST PERSONNALISÉ de l'employé ; NULL = taux global.
     cnesst_rate: Mapped[Optional[float]] = mapped_column(
         Numeric(6, 4), nullable=True
     )
