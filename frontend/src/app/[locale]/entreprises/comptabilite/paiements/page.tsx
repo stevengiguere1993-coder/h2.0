@@ -12,13 +12,17 @@
         chaque virement Interac ;
      4. les paiements sont inscrits dans QuickBooks.
 
+   Paiement automatique (Steven 2026-10-05, « comme Plooto ») : une
+   entreprise qui l'active dans ses réglages fait payer ses lots par VoPay ;
+   après la dernière approbation, Kratos fait les étapes 3 et 4 tout seul.
+
    Les coordonnées de paiement des fournisseurs (compte bancaire ou
    destinataire Interac) suivent la même règle : saisies par l'une,
    approuvées par une autre. Le connecteur IA n'a aucun accès à ces
    routes. */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Building2, Loader2 } from "lucide-react";
+import { AlertTriangle, Building2, Loader2, Zap } from "lucide-react";
 
 import { CLE_ENTREPRISE } from "../_shared";
 import { CARTE, type EntreprisePaiement, type ModePaiement, type Moi, message, obtenir } from "./_api";
@@ -190,7 +194,20 @@ export default function PaiementsPage() {
                 ) : (
                   <span className="badge badge-rose">QuickBooks non connecté</span>
                 )}
-                {entreprise.depot_direct_pret ? (
+                {entreprise.paiement_auto ? (
+                  <button
+                    type="button"
+                    className={`badge inline-flex items-center gap-1 hover:underline ${
+                      entreprise.auto_environnement === "test" ? "badge-amber" : "badge-emerald"
+                    }`}
+                    onClick={() => changerVue("reglages")}
+                  >
+                    <Zap className="h-3 w-3" />
+                    {entreprise.auto_environnement === "test"
+                      ? "Paiement automatique (test)"
+                      : "Paiement automatique"}
+                  </button>
+                ) : entreprise.depot_direct_pret ? (
                   <span className="badge badge-emerald">Dépôt direct prêt</span>
                 ) : (
                   <button
@@ -310,10 +327,15 @@ export default function PaiementsPage() {
                 son propre travail.
               </li>
               <li>
-                Un approbateur crée le fichier de dépôt direct et le transmet lui-même dans AccèsD Affaires,
-                ou y envoie lui-même chaque virement Interac.
+                Paiement automatique (si l&apos;entreprise l&apos;a activé) : Kratos fait tout le reste par
+                VoPay, comme Plooto. Il prélève le total dans le compte de l&apos;entreprise, paie chaque
+                fournisseur et inscrit les paiements dans QuickBooks.
               </li>
-              <li>Les paiements sont ensuite inscrits dans QuickBooks.</li>
+              <li>
+                Sinon, un approbateur crée le fichier de dépôt direct et le transmet lui-même dans AccèsD
+                Affaires, ou y envoie lui-même chaque virement Interac ; les paiements sont ensuite inscrits
+                dans QuickBooks.
+              </li>
             </ol>
           </section>
           {vue === "securite" ? <Securite moi={moi} onChange={() => void chargerMoi()} /> : null}

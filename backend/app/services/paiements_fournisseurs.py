@@ -26,6 +26,14 @@ AccèsD Affaires au destinataire approuvé, puis l'indique dans Kratos. Le
 destinataire (courriel ou cellulaire) suit la même règle qu'un compte
 bancaire : saisi par l'une, approuvé par une autre.
 
+Paiement automatique (Steven, 2026-10-05 : « l'idée est de ne pas faire
+les virements nous-mêmes. Juste approuver et que tout se fasse par la
+suite ! ») : une entreprise qui l'active dans ses réglages fait payer ses
+lots par VoPay, sans fichier ni virement dans AccèsD. À la dernière
+approbation, le lot est confié à ``paiements_auto`` : prélèvement du total
+dans le compte Desjardins de l'entreprise le jour du lot, paiement de
+chaque fournisseur, puis inscription dans QuickBooks.
+
 Garde-fous : coordonnées bancaires chiffrées, jamais renvoyées en clair
 (sauf dans le fichier) ; une coordonnée n'est utilisée qu'approuvée ; si
 elle change après la soumission, le fichier (ou l'envoi Interac) est
@@ -40,8 +48,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
@@ -58,6 +68,7 @@ from app.models.paiement_fournisseur import (
     LotPaiementApprobation,
     LotPaiementLigne,
     PaiementEvenement,
+    PaiementOperation,
     PaiementReglage,
     Utilisateur2FA,
 )
@@ -92,7 +103,13 @@ MODES = ("depot_direct", "interac")
 #: 25 000 $ par virement et par période de 24 heures (AccèsD Affaires).
 LIMITE_INTERAC_CENTS = 2_500_000
 
-STATUTS_ACTIFS = ("brouillon", "soumis", "approuve", "fichier_cree", "a_envoyer", "transmis")
+#: Paiement automatique : « prelevement » (compte de l'entreprise en cours
+#: de prélèvement), « envoi » (fournisseurs en cours de paiement) et
+#: « echec » (prélèvement refusé, aucun argent n'a bougé).
+STATUTS_ACTIFS = (
+    "brouillon", "soumis", "approuve", "fichier_cree", "a_envoyer", "transmis",
+    "prelevement", "envoi", "echec",
+)
 LIBELLES_STATUT = {
     "brouillon": "Brouillon",
     "soumis": "À approuver",
@@ -103,8 +120,19 @@ LIBELLES_STATUT = {
     "paye": "Payé",
     "refuse": "Refusé",
     "annule": "Annulé",
+    "prelevement": "Prélèvement en cours",
+    "envoi": "Paiements en cours",
+    "echec": "Prélèvement refusé",
 }
 LIBELLES_STATUT_INTERAC = {**LIBELLES_STATUT, "transmis": "Virements envoyés"}
+LIBELLES_STATUT_AUTO = {
+    **LIBELLES_STATUT,
+    "approuve": "Paiement prévu",
+    "transmis": "Fournisseurs payés",
+}
+#: Lots payés automatiquement que Kratos ne peut plus arrêter : l'argent
+#: est en route.
+STATUTS_AUTO_EN_ROUTE = ("prelevement", "envoi")
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -213,14 +241,17 @@ def _verifier_date_depot(jour: date, *, maintenant: Optional[datetime] = None) -
         )
 
 
-def _verifier_date(mode: str, jour: date) -> None:
-    """Dépôt direct : règles de Desjardins pour le fichier. Interac : la
-    date prévue de l'envoi ne peut pas être passée."""
-    if mode != "interac":
+def _verifier_date(mode: str, jour: date, *, auto: bool = False) -> None:
+    """Dépôt direct : règles de Desjardins pour le fichier. Interac, ou
+    paiement automatique (Kratos lance le paiement ce jour-là) : la date ne
+    peut pas être passée."""
+    if mode != "interac" and not auto:
         _verifier_date_depot(jour)
     elif jour < _aujourdhui():
         raise PaiementErreur(
-            "La date prévue de l'envoi est passée : choisis aujourd'hui ou plus tard."
+            "La date du paiement est passée : choisis aujourd'hui ou plus tard."
+            if auto
+            else "La date prévue de l'envoi est passée : choisis aujourd'hui ou plus tard."
         )
 
 
@@ -250,6 +281,35 @@ def destinataire_interac(valeur: Any) -> str:
             "Destinataire Interac : un courriel, ou un numéro de cellulaire à 10 chiffres."
         )
     return chiffres
+
+
+_PROVINCES = {"AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE", "QC", "SK", "YT"}
+_NOMS_PROVINCES = {
+    "quebec": "QC", "pq": "QC", "que": "QC", "ontario": "ON", "alberta": "AB",
+    "colombie-britannique": "BC", "british columbia": "BC", "manitoba": "MB",
+    "nouveau-brunswick": "NB", "new brunswick": "NB", "terre-neuve-et-labrador": "NL",
+    "newfoundland and labrador": "NL", "nouvelle-ecosse": "NS", "nova scotia": "NS",
+    "territoires du nord-ouest": "NT", "northwest territories": "NT", "nunavut": "NU",
+    "ile-du-prince-edouard": "PE", "prince edward island": "PE", "saskatchewan": "SK",
+    "yukon": "YT",
+}
+_CODE_POSTAL = re.compile(r"[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z]\d[ABCEGHJ-NPRSTV-Z]\d")
+
+
+def province_canadienne(valeur: Any) -> Optional[str]:
+    """« QC », « Québec », « Quebec »… → code de deux lettres (ou None)."""
+    s = unicodedata.normalize("NFKD", str(valeur or "")).encode("ascii", "ignore").decode()
+    s = re.sub(r"[\s.]+", " ", s).strip().lower()
+    compact = s.replace(" ", "")
+    if compact.upper() in _PROVINCES:
+        return compact.upper()
+    return _NOMS_PROVINCES.get(s) or _NOMS_PROVINCES.get(s.replace(" ", "-")) or _NOMS_PROVINCES.get(compact)
+
+
+def code_postal_canadien(valeur: Any) -> Optional[str]:
+    """« h2x1y4 » → « H2X 1Y4 » (ou None si ce n'est pas un code postal)."""
+    s = re.sub(r"[\s\-]", "", str(valeur or "")).upper()
+    return f"{s[:3]} {s[3:]}" if _CODE_POSTAL.fullmatch(s) else None
 
 
 def destinataire_lisible(destinataire: Optional[str]) -> str:
@@ -500,7 +560,7 @@ async def _notifier(db: AsyncSession, user_ids: Iterable[Optional[int]], titre: 
 
 def _manque_fichier(r: Optional[PaiementReglage]) -> List[str]:
     if r is None:
-        return ["numéro d'organisme", "nom court", "nom long", "compte de retour"]
+        return ["numéro d'organisme", "nom court", "nom long", "compte bancaire de l'entreprise"]
     manque = []
     if not r.numero_organisme:
         manque.append("numéro d'organisme")
@@ -509,7 +569,32 @@ def _manque_fichier(r: Optional[PaiementReglage]) -> List[str]:
     if not r.nom_long:
         manque.append("nom long")
     if not (r.retour_institution and r.retour_transit and r.retour_compte):
-        manque.append("compte de retour")
+        manque.append("compte bancaire de l'entreprise")
+    return manque
+
+
+def auto_actif(r: Optional[PaiementReglage]) -> bool:
+    """Paiement automatique par VoPay activé pour l'entreprise."""
+    return bool(r is not None and r.auto_actif)
+
+
+def manque_auto(r: Optional[PaiementReglage], *, interac: bool = False) -> List[str]:
+    """Ce qu'il manque pour payer automatiquement (``interac`` : un lot payé
+    par virements Interac)."""
+    if r is None:
+        manque = ["clés VoPay", "compte bancaire de l'entreprise", "adresse de l'entreprise", "compte bancaire QuickBooks"]
+        return manque + (["question et réponse Interac"] if interac else [])
+    manque = []
+    if not (r.vopay_account_id and r.vopay_cle_chiffree and r.vopay_secret_chiffre):
+        manque.append("clés VoPay")
+    if not (r.retour_institution and r.retour_transit and r.retour_compte):
+        manque.append("compte bancaire de l'entreprise")
+    if not (r.adresse and r.ville and province_canadienne(r.province) and code_postal_canadien(r.code_postal)):
+        manque.append("adresse de l'entreprise")
+    if not r.qbo_compte_banque_id:
+        manque.append("compte bancaire QuickBooks")
+    if interac and not (r.interac_question and r.interac_reponse_chiffree):
+        manque.append("question et réponse Interac")
     return manque
 
 
@@ -547,6 +632,8 @@ async def entreprises(db: AsyncSession) -> List[Dict[str, Any]]:
     for e in base:
         eid = e["entreprise_id"]
         e["depot_direct_pret"] = not _manque_fichier(reglages.get(eid))
+        e["paiement_auto"] = auto_actif(reglages.get(eid))
+        e["auto_environnement"] = (reglages[eid].auto_environnement or "test") if e["paiement_auto"] else None
         e["lots_a_approuver"] = int(lots.get(eid, 0))
         e["comptes_a_approuver"] = int(comptes.get(eid, 0))
     return base
@@ -568,6 +655,21 @@ def _reglage_dict(r: Optional[PaiementReglage]) -> Dict[str, Any]:
         "qbo_compte_banque_nom": r.qbo_compte_banque_nom if r else None,
         "manque": _manque_fichier(r),
         "modifie_le": _iso(r.updated_at) if r else None,
+        # Paiement automatique (VoPay). Les clés et la réponse Interac ne
+        # sont jamais renvoyées : seulement si elles sont saisies.
+        "auto_actif": auto_actif(r),
+        "auto_environnement": (r.auto_environnement if r else None) or "test",
+        "vopay_account_id": r.vopay_account_id if r else None,
+        "vopay_cles": bool(r and r.vopay_cle_chiffree and r.vopay_secret_chiffre),
+        "vopay_sous_compte": r.vopay_sous_compte if r else None,
+        "adresse": r.adresse if r else None,
+        "ville": r.ville if r else None,
+        "province": r.province if r else "QC",
+        "code_postal": r.code_postal if r else None,
+        "interac_question": r.interac_question if r else None,
+        "interac_reponse": bool(r and r.interac_reponse_chiffree),
+        "auto_manque": manque_auto(r),
+        "auto_manque_interac": manque_auto(r, interac=True),
     }
 
 
@@ -632,6 +734,85 @@ class ReglagesIn(BaseModel):
     prochain_numero_fichier: int = Field(default=1, ge=1, le=9999)
     qbo_compte_banque_id: Optional[str] = Field(default=None, max_length=64)
     code_2fa: Optional[str] = Field(default=None, max_length=12)
+    #: Paiement automatique (VoPay). Un champ absent ne change rien. Les
+    #: clés et la réponse Interac ne sont jamais renvoyées : vides, elles
+    #: sont gardées ; ``vopay_effacer`` retire le compte VoPay.
+    auto_actif: Optional[bool] = None
+    auto_environnement: Optional[str] = None
+    vopay_account_id: Optional[str] = Field(default=None, max_length=64)
+    vopay_cle: Optional[str] = Field(default=None, max_length=256)
+    vopay_secret: Optional[str] = Field(default=None, max_length=256)
+    vopay_sous_compte: Optional[str] = Field(default=None, max_length=64)
+    vopay_effacer: bool = False
+    adresse: Optional[str] = Field(default=None, max_length=120)
+    ville: Optional[str] = Field(default=None, max_length=60)
+    province: Optional[str] = Field(default=None, max_length=40)
+    code_postal: Optional[str] = Field(default=None, max_length=10)
+    interac_question: Optional[str] = Field(default=None, max_length=40)
+    interac_reponse: Optional[str] = Field(default=None, max_length=25)
+
+    @field_validator("auto_environnement")
+    @classmethod
+    def _environnement(cls, v: Optional[str]) -> Optional[str]:
+        s = (v or "").strip().lower()
+        if not s:
+            return None
+        if s not in ("test", "production"):
+            raise ValueError("Environnement VoPay : « test » ou « production ».")
+        return s
+
+    @field_validator("vopay_account_id", "vopay_sous_compte")
+    @classmethod
+    def _identifiant(cls, v: Optional[str]) -> Optional[str]:
+        s = (v or "").strip()
+        if not s:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9_.@\-]{1,64}", s):
+            raise ValueError("Identifiant de compte VoPay invalide.")
+        return s
+
+    @field_validator("vopay_cle", "vopay_secret")
+    @classmethod
+    def _cle(cls, v: Optional[str]) -> Optional[str]:
+        s = (v or "").strip()
+        if s and (len(s) < 8 or re.search(r"\s", s)):
+            raise ValueError("Clé VoPay invalide : colle-la telle quelle depuis le portail VoPay.")
+        return s or None
+
+    @field_validator("adresse", "ville", "interac_question")
+    @classmethod
+    def _texte(cls, v: Optional[str]) -> Optional[str]:
+        return re.sub(r"\s+", " ", v or "").strip() or None
+
+    @field_validator("province")
+    @classmethod
+    def _province(cls, v: Optional[str]) -> Optional[str]:
+        if not (v or "").strip():
+            return None
+        p = province_canadienne(v)
+        if not p:
+            raise ValueError("Province : code de deux lettres (QC, ON…).")
+        return p
+
+    @field_validator("code_postal")
+    @classmethod
+    def _code_postal(cls, v: Optional[str]) -> Optional[str]:
+        if not (v or "").strip():
+            return None
+        c = code_postal_canadien(v)
+        if not c:
+            raise ValueError("Code postal canadien invalide (ex. H2X 1Y4).")
+        return c
+
+    @field_validator("interac_reponse")
+    @classmethod
+    def _reponse(cls, v: Optional[str]) -> Optional[str]:
+        s = (v or "").strip()
+        if not s:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9]{3,25}", s):
+            raise ValueError("Réponse Interac : de 3 à 25 lettres ou chiffres, sans espace ni accent.")
+        return s
 
     @field_validator("numero_organisme")
     @classmethod
@@ -675,18 +856,99 @@ class ReglagesIn(BaseModel):
         return cpa005.texte(v or "", longueur).strip() or None
 
 
+#: Colonnes du paiement automatique dans les réglages.
+_COLONNES_AUTO = (
+    "auto_actif", "auto_environnement", "vopay_account_id", "vopay_cle_chiffree",
+    "vopay_secret_chiffre", "vopay_sous_compte", "adresse", "ville", "province",
+    "code_postal", "interac_question", "interac_reponse_chiffree",
+)
+#: Changer l'une d'elles pendant qu'un paiement est en route empêcherait
+#: Kratos de le suivre chez VoPay.
+_CONNEXION_VOPAY = ("auto_environnement", "vopay_account_id", "vopay_sous_compte")
+
+
+def _chiffrer(valeur: str) -> str:
+    try:
+        return encrypt_secret(valeur)
+    except VaultNotConfigured as exc:
+        raise PaiementErreur(
+            "Aucune clé de chiffrement n'est configurée sur le serveur : impossible "
+            "d'enregistrer les clés VoPay.",
+            503,
+        ) from exc
+
+
+def _en_clair(valeur: Optional[str]) -> str:
+    try:
+        return decrypt_secret(valeur or "")
+    except (VaultNotConfigured, ValueError) as exc:
+        raise PaiementErreur(
+            "La clé de chiffrement de Kratos est absente ou a changé : saisis de nouveau "
+            "les clés VoPay.",
+            409,
+        ) from exc
+
+
+def _ancien_secret(valeur: Optional[str]) -> Optional[str]:
+    """Secret enregistré, en clair (None s'il est illisible) : ressaisir la
+    même clé n'est pas un changement."""
+    if not valeur:
+        return None
+    try:
+        return decrypt_secret(valeur)
+    except (VaultNotConfigured, ValueError):
+        return None
+
+
+def _meme(colonne: str, a: Any, b: Any) -> bool:
+    if colonne == "auto_actif":
+        return bool(a) == bool(b)
+    if colonne == "auto_environnement":
+        return (a or "test") == (b or "test")
+    return a == b
+
+
+async def _paiements_en_route(db: AsyncSession, entreprise_id: int) -> List[int]:
+    """Lots dont un paiement automatique est en route chez VoPay."""
+    lots = set(
+        (
+            await db.execute(
+                select(LotPaiement.id).where(
+                    LotPaiement.entreprise_id == entreprise_id,
+                    LotPaiement.envoi_auto.is_(True),
+                    LotPaiement.statut.in_(STATUTS_AUTO_EN_ROUTE),
+                )
+            )
+        ).scalars().all()
+    )
+    lots |= set(
+        (
+            await db.execute(
+                select(PaiementOperation.lot_id).where(
+                    PaiementOperation.entreprise_id == entreprise_id,
+                    PaiementOperation.statut.in_(("a_envoyer", "envoi", "incertain", "a_verifier", "en_cours")),
+                )
+            )
+        ).scalars().all()
+    )
+    return sorted(lots)
+
+
 async def modifier_reglages(
     db: AsyncSession, entreprise_id: int, user: User, donnees: ReglagesIn
 ) -> Dict[str, Any]:
     """Réglages des paiements : approbateur + double authentification
-    (le compte de retour reçoit les dépôts refusés, il ne doit pas pouvoir
-    être détourné). Les autres approbateurs sont prévenus."""
+    (le compte de l'entreprise reçoit les dépôts refusés et, en paiement
+    automatique, il est prélevé : il ne doit pas pouvoir être détourné).
+    Les autres approbateurs sont prévenus."""
     e = await _entreprise(db, entreprise_id)
     await exiger_2fa(db, user, donnees.code_2fa)
     r = await _reglage(db, e.id, verrou=True)
+    # Une nouvelle ligne n'est ajoutée qu'une fois tout vérifié : un refus
+    # ne laisse pas de réglages à moitié remplis.
+    nouveau = r is None
     if r is None:
         r = PaiementReglage(entreprise_id=e.id)
-        db.add(r)
     avant = _reglage_dict(r) if r.id else {}
 
     banque_nom = r.qbo_compte_banque_nom
@@ -717,24 +979,105 @@ async def modifier_reglages(
         "qbo_compte_banque_nom": banque_nom,
     }
     changes = [k for k, v in champs.items() if avant.get(k) != v and k != "qbo_compte_banque_nom"]
+
+    # Paiement automatique : état visé, vérifié avant de toucher aux réglages.
+    fournis = donnees.model_fields_set
+    apres: Dict[str, Any] = {k: getattr(r, k) for k in _COLONNES_AUTO}
+    for k in ("vopay_account_id", "vopay_sous_compte", "adresse", "ville", "province", "code_postal", "interac_question"):
+        if k in fournis:
+            apres[k] = getattr(donnees, k)
+    if donnees.auto_environnement:
+        apres["auto_environnement"] = donnees.auto_environnement
+    if donnees.auto_actif is not None:
+        apres["auto_actif"] = donnees.auto_actif
+    en_clair: Dict[str, str] = {}
+    if donnees.vopay_effacer:
+        apres.update(
+            auto_actif=False, vopay_account_id=None, vopay_cle_chiffree=None,
+            vopay_secret_chiffre=None, vopay_sous_compte=None,
+        )
+    else:
+        for champ, colonne in (("vopay_cle", "vopay_cle_chiffree"), ("vopay_secret", "vopay_secret_chiffre")):
+            valeur = getattr(donnees, champ)
+            if valeur and valeur != _ancien_secret(getattr(r, colonne)):
+                apres[colonne] = _chiffrer(valeur)
+                en_clair[champ] = valeur
+    if donnees.interac_reponse and donnees.interac_reponse != _ancien_secret(r.interac_reponse_chiffree):
+        apres["interac_reponse_chiffree"] = _chiffrer(donnees.interac_reponse)
+    changes_auto = [k for k in _COLONNES_AUTO if not _meme(k, apres[k], getattr(r, k))]
+
+    if r.id and (
+        donnees.vopay_effacer
+        or any(k in changes_auto for k in _CONNEXION_VOPAY)
+        or any(k in changes for k in ("retour_institution", "retour_transit", "retour_compte"))
+    ):
+        en_route = await _paiements_en_route(db, e.id)
+        if en_route:
+            raise PaiementErreur(
+                "Des paiements VoPay sont en route (lot "
+                + ", ".join(f"n° {i}" for i in en_route)
+                + ") : attends qu'ils soient terminés avant de changer le compte VoPay, "
+                "son environnement ou le compte bancaire de l'entreprise.",
+                409,
+            )
+    if apres["auto_actif"]:
+        vise = {**apres, **champs}
+        manque = manque_auto(SimpleNamespace(**vise))  # type: ignore[arg-type]
+        if manque:
+            raise PaiementErreur(
+                "Pour activer le paiement automatique, il manque : " + ", ".join(manque) + ".",
+                422,
+                manque_auto=manque,
+            )
+        if not r.auto_actif or any(
+            k in changes_auto for k in (*_CONNEXION_VOPAY, "vopay_cle_chiffree", "vopay_secret_chiffre")
+        ):
+            # Les clés doivent fonctionner avant qu'un lot ne s'en serve.
+            from app.services import paiements_auto
+
+            await paiements_auto.verifier_connexion(
+                apres["vopay_account_id"],
+                en_clair.get("vopay_cle") or _en_clair(apres["vopay_cle_chiffree"]),
+                en_clair.get("vopay_secret") or _en_clair(apres["vopay_secret_chiffre"]),
+                apres["auto_environnement"] or "test",
+                apres["vopay_sous_compte"],
+            )
+
+    if nouveau:
+        db.add(r)
     for k, v in champs.items():
         setattr(r, k, v)
+    for k in changes_auto:
+        setattr(r, k, apres[k])
     r.modifie_par_user_id = user.id
-    if changes:
+    if changes or changes_auto:
         libelles = {
             "numero_organisme": "numéro d'organisme",
             "centre_traitement": "centre de traitement",
             "code_transaction": "code de transaction",
             "nom_court": "nom court",
             "nom_long": "nom long",
-            "retour_institution": "compte de retour",
-            "retour_transit": "compte de retour",
-            "retour_compte": "compte de retour",
+            "retour_institution": "compte bancaire de l'entreprise",
+            "retour_transit": "compte bancaire de l'entreprise",
+            "retour_compte": "compte bancaire de l'entreprise",
             "approbations_requises": "approbations requises",
             "prochain_numero_fichier": "numéro du prochain fichier",
             "qbo_compte_banque_id": "compte QuickBooks",
+            "auto_actif": "paiement automatique " + ("activé" if r.auto_actif else "désactivé"),
+            "auto_environnement": "VoPay en "
+            + ("production (argent réel)" if r.auto_environnement == "production" else "environnement de test"),
+            "vopay_account_id": "compte VoPay",
+            "vopay_sous_compte": "compte VoPay",
+            "vopay_cle_chiffree": "clés VoPay",
+            "vopay_secret_chiffre": "clés VoPay",
+            "adresse": "adresse de l'entreprise",
+            "ville": "adresse de l'entreprise",
+            "province": "adresse de l'entreprise",
+            "code_postal": "adresse de l'entreprise",
+            "interac_question": "question Interac",
+            "interac_reponse_chiffree": "réponse Interac",
         }
-        quoi = ", ".join(dict.fromkeys(libelles[k] for k in changes))
+        quoi = ", ".join(dict.fromkeys(libelles[k] for k in (*changes, *changes_auto)))
         await _evenement(db, "reglages_modifies", user=user, entreprise_id=e.id, detail=quoi)
         await db.flush()
         await _notifier(
@@ -1147,6 +1490,7 @@ def _devise(bill: Dict[str, Any]) -> str:
 
 async def factures_a_payer(db: AsyncSession, entreprise_id: int) -> Dict[str, Any]:
     e, scope, etat = await _entreprise_qbo(db, entreprise_id)
+    auto = auto_actif(await _reglage(db, e.id))
     bills = await _factures_ouvertes(scope)
     comptes_f = await _comptes_par_fournisseur(db, e.id, ("approuve", "en_attente"))
     interac_f = await _comptes_par_fournisseur(db, e.id, ("approuve", "en_attente"), "interac")
@@ -1191,9 +1535,11 @@ async def factures_a_payer(db: AsyncSession, entreprise_id: int) -> Dict[str, An
     return {
         "entreprise": {"entreprise_id": e.id, "name": e.name, "qbo_company_name": etat.get("company_name")},
         "factures": out,
-        "premiere_date": premiere_date_possible().isoformat(),
+        # Paiement automatique : Kratos paie le jour choisi, dès aujourd'hui.
+        "premiere_date": (_aujourdhui() if auto else premiere_date_possible()).isoformat(),
         "aujourdhui": _aujourdhui().isoformat(),
         "limite_interac": dollars(LIMITE_INTERAC_CENTS),
+        "paiement_auto": auto,
     }
 
 
@@ -1314,9 +1660,9 @@ def _totaux(lot: LotPaiement, lignes: Sequence[LotPaiementLigne]) -> None:
 async def creer_lot(db: AsyncSession, entreprise_id: int, user: User, donnees: LotIn) -> Dict[str, Any]:
     e, scope, _ = await _entreprise_qbo(db, entreprise_id)
     mode = donnees.mode or "depot_direct"
-    _verifier_date(mode, donnees.date_paiement)
-    lignes = await _construire_lignes(db, e.id, scope, donnees)
     r = await _reglage(db, e.id)
+    _verifier_date(mode, donnees.date_paiement, auto=auto_actif(r))
+    lignes = await _construire_lignes(db, e.id, scope, donnees)
     lot = LotPaiement(
         entreprise_id=e.id,
         statut="brouillon",
@@ -1346,7 +1692,7 @@ async def modifier_lot(db: AsyncSession, lot_id: int, user: User, donnees: LotIn
         raise PaiementErreur("Seul un brouillon se modifie : remets d'abord le lot en brouillon.", 409)
     _, scope, _ = await _entreprise_qbo(db, lot.entreprise_id)
     mode = donnees.mode or lot.mode
-    _verifier_date(mode, donnees.date_paiement)
+    _verifier_date(mode, donnees.date_paiement, auto=auto_actif(await _reglage(db, lot.entreprise_id)))
     lignes = await _construire_lignes(db, lot.entreprise_id, scope, donnees, sauf_lot=lot.id)
     await db.execute(delete(LotPaiementLigne).where(LotPaiementLigne.lot_id == lot.id))
     for l in lignes:
@@ -1380,7 +1726,7 @@ def _verifier_limite_interac(lignes: Sequence[LotPaiementLigne]) -> None:
     )
     if trop:
         raise PaiementErreur(
-            f"Desjardins limite un virement Interac à {_argent(LIMITE_INTERAC_CENTS)} : paie "
+            f"Un virement Interac est limité à {_argent(LIMITE_INTERAC_CENTS)} : paie "
             + ", ".join(trop)
             + " par dépôt direct, ou réduis le montant.",
             409,
@@ -1398,7 +1744,8 @@ async def soumettre(db: AsyncSession, lot_id: int, user: User) -> Dict[str, Any]
     lignes = await _lignes(db, lot.id)
     if not lignes:
         raise PaiementErreur("Le lot est vide.")
-    _verifier_date(lot.mode, lot.date_paiement)
+    r = await _reglage(db, lot.entreprise_id)
+    _verifier_date(lot.mode, lot.date_paiement, auto=auto_actif(r))
     bills = await _factures_ouvertes(scope)
     _verifier_lignes_contre_qbo(
         [(l.qbo_bill_id, int(l.montant_cents)) for l in lignes],
@@ -1421,7 +1768,6 @@ async def soumettre(db: AsyncSession, lot_id: int, user: User) -> Dict[str, Any]
     for l in lignes:
         l.compte_bancaire_id = approuves[l.qbo_vendor_id].id
         l.solde_cents = cents(bills[l.qbo_bill_id].get("Balance"))
-    r = await _reglage(db, lot.entreprise_id)
     lot.statut = "soumis"
     lot.soumis_par_user_id = user.id
     lot.soumis_le = _maintenant()
@@ -1440,12 +1786,18 @@ async def soumettre(db: AsyncSession, lot_id: int, user: User) -> Dict[str, Any]
 
 async def remettre_en_brouillon(db: AsyncSession, lot_id: int, user: User) -> Dict[str, Any]:
     lot = await _lot(db, lot_id, verrou=True)
-    if lot.statut not in ("soumis", "refuse", "approuve"):
+    if lot.statut not in ("soumis", "refuse", "approuve", "echec"):
         raise PaiementErreur("Ce lot ne peut plus revenir en brouillon.", 409)
-    if lot.statut == "approuve" and not await peut_approuver(db, user):
+    if lot.statut in ("approuve", "echec") and not await peut_approuver(db, user):
         raise PaiementErreur("Seul un approbateur peut remettre en brouillon un lot approuvé.", 403)
     lot.statut = "brouillon"
     lot.approuve_le = None
+    # Paiement automatique : redécidé à la prochaine approbation.
+    lot.envoi_auto = None
+    lot.auto_environnement = None
+    lot.auto_erreur = None
+    lot.auto_prochain_essai = None
+    lot.auto_tentatives = None
     for l in await _lignes(db, lot.id):
         l.compte_bancaire_id = None
     await db.execute(delete(LotPaiementApprobation).where(LotPaiementApprobation.lot_id == lot.id))
@@ -1498,9 +1850,12 @@ async def approuver(
     if complet:
         lot.statut = "approuve"
         lot.approuve_le = _maintenant()
+        # Paiement automatique : décidé ici, selon les réglages du moment.
+        lot.envoi_auto = auto_actif(await _reglage(db, lot.entreprise_id)) or None
     await _evenement(
         db, "lot_approuve", user=user, entreprise_id=lot.entreprise_id, lot_id=lot.id,
-        detail=f"approbation {nb} sur {lot.approbations_requises}",
+        detail=f"approbation {nb} sur {lot.approbations_requises}"
+        + (", paiement automatique par VoPay" if complet and lot.envoi_auto else ""),
     )
     e = await db.get(Entreprise, lot.entreprise_id)
     await _notifier(
@@ -1508,9 +1863,15 @@ async def approuver(
         [lot.cree_par_user_id, lot.soumis_par_user_id],
         "Paiements approuvés" if complet else "Paiements : une approbation reçue",
         f"{e.name if e else 'Lot'} : {_argent(lot.total_cents)}, approuvé par {user.display_name}"
-        + ("." if complet else f" ({nb} sur {lot.approbations_requises})."),
+        + ("." if complet else f" ({nb} sur {lot.approbations_requises}).")
+        + (f" Kratos paie les fournisseurs à partir du {_date_lisible(lot.date_paiement)}." if complet and lot.envoi_auto else ""),
     )
     await db.commit()
+    if complet and lot.envoi_auto:
+        # Le prélèvement part tout de suite si la date du lot est arrivée.
+        from app.services import paiements_auto
+
+        await paiements_auto.demarrer(db, lot.id)
     return await detail_lot(db, lot.id, user)
 
 
@@ -1650,6 +2011,8 @@ async def creer_fichier(
     authentification). Le premier appel lui donne son numéro ; les appels
     suivants redonnent exactement le même fichier."""
     lot = await _lot(db, lot_id, verrou=True)
+    if lot.envoi_auto:
+        raise PaiementErreur("Ce lot est payé automatiquement par VoPay : il n'a pas de fichier de dépôt.", 409)
     if lot.mode == "interac":
         raise PaiementErreur("Ce lot se paie par virements Interac : il n'a pas de fichier de dépôt.", 409)
     if lot.statut not in ("approuve", "fichier_cree"):
@@ -1771,6 +2134,8 @@ async def preparer_envoi(
     lui-même dans AccèsD Affaires : Desjardins n'accepte pas de fichier
     pour Interac."""
     lot = await _lot(db, lot_id, verrou=True)
+    if lot.envoi_auto:
+        raise PaiementErreur("Ce lot est payé automatiquement par VoPay : Kratos envoie les virements.", 409)
     if lot.mode != "interac":
         raise PaiementErreur("Ce lot se paie par dépôt direct : crée plutôt son fichier.", 409)
     if lot.statut != "approuve":
@@ -1896,20 +2261,31 @@ async def retirer_virement(
     return await detail_lot(db, lot.id, user)
 
 
-async def enregistrer_qbo(db: AsyncSession, lot_id: int, user: User) -> Dict[str, Any]:
+async def _paiements_vopay_reussis(db: AsyncSession, lot_id: int) -> Dict[str, PaiementOperation]:
+    """Paiement automatique : dernier paiement réussi de chaque fournisseur."""
+    rows = (
+        await db.execute(
+            select(PaiementOperation)
+            .where(
+                PaiementOperation.lot_id == lot_id,
+                PaiementOperation.sorte == "paiement",
+                PaiementOperation.statut == "reussi",
+            )
+            .order_by(PaiementOperation.id)
+        )
+    ).scalars().all()
+    return {op.qbo_vendor_id or "": op for op in rows}
+
+
+async def inscrire_qbo(db: AsyncSession, lot: LotPaiement, user: Optional[User]) -> List[LotPaiementLigne]:
     """Un paiement de facture QuickBooks par fournisseur, depuis le compte
     bancaire choisi dans les réglages. Reprend là où il s'est arrêté : un
     paiement déjà créé (même numéro de document) n'est pas recréé. Un
-    virement Interac est daté du jour où il a été envoyé."""
-    lot = await _lot(db, lot_id, verrou=True)
+    virement Interac est daté du jour où il a été envoyé ; un paiement
+    automatique, du jour où VoPay l'a confirmé. Rend les lignes qui restent
+    à inscrire ; le lot passe à « payé » quand il n'en reste plus. Ne valide
+    pas la transaction."""
     interac = lot.mode == "interac"
-    if lot.statut != "transmis":
-        raise PaiementErreur(
-            "Les virements Interac doivent d'abord être envoyés."
-            if interac
-            else "Le fichier doit avoir été transmis à Desjardins.",
-            409,
-        )
     r = await _reglage(db, lot.entreprise_id)
     if r is None or not r.qbo_compte_banque_id:
         raise PaiementErreur(
@@ -1918,18 +2294,32 @@ async def enregistrer_qbo(db: AsyncSession, lot_id: int, user: User) -> Dict[str
     _, scope, _ = await _entreprise_qbo(db, lot.entreprise_id)
     qbo = _qbo(scope)
     lignes = await _lignes(db, lot.id)
+    vopay = await _paiements_vopay_reussis(db, lot.id) if lot.envoi_auto else {}
     groupes: Dict[str, List[LotPaiementLigne]] = {}
     for l in lignes:
         if not l.qbo_bill_payment_id:
             groupes.setdefault(l.qbo_vendor_id, []).append(l)
     for vid, groupe in groupes.items():
-        doc = f"{'INT' if interac else 'DRD'}-{lot.id}-{vid}"[:21]
-        if interac:
+        if lot.envoi_auto:
+            op = vopay.get(vid)
+            if op is None:
+                for l in groupe:
+                    l.erreur_qbo = "Le paiement VoPay de ce fournisseur n'est pas confirmé."
+                continue
+            doc = f"VOP-{lot.id}-{vid}"[:21]
+            date_txn = (_utc(op.termine_le) or _maintenant()).astimezone(TZ).date()
+            note = (
+                f"Paiement VoPay ({'virement Interac' if interac else 'dépôt direct'}), "
+                f"lot Kratos n° {lot.id}, transaction VoPay {op.transaction_id or '—'}"
+            )
+        elif interac:
+            doc = f"INT-{lot.id}-{vid}"[:21]
             envoye = _utc(groupe[0].envoye_le) or _maintenant()
             date_txn = envoye.astimezone(TZ).date()
             ref = groupe[0].reference_interac
             note = f"Virement Interac, lot Kratos n° {lot.id}" + (f", référence {ref}" if ref else "")
         else:
+            doc = f"DRD-{lot.id}-{vid}"[:21]
             date_txn = lot.date_paiement
             note = (
                 f"Dépôt direct Desjardins, lot Kratos n° {lot.id}, "
@@ -1982,20 +2372,54 @@ async def enregistrer_qbo(db: AsyncSession, lot_id: int, user: User) -> Dict[str
     if not restantes:
         lot.statut = "paye"
         lot.paye_le = _maintenant()
-    await _evenement(
-        db, "qbo_enregistre" if not restantes else "qbo_partiel", user=user,
-        entreprise_id=lot.entreprise_id, lot_id=lot.id,
-        detail=None if not restantes else f"{len(restantes)} facture(s) à reprendre",
-    )
+    # Les reprises automatiques ne remplissent pas le journal : l'erreur est
+    # affichée sur le lot.
+    if user is not None or not restantes:
+        await _evenement(
+            db, "qbo_enregistre" if not restantes else "qbo_partiel", user=user,
+            entreprise_id=lot.entreprise_id, lot_id=lot.id,
+            detail=None if not restantes else f"{len(restantes)} facture(s) à reprendre",
+        )
+    return restantes
+
+
+async def enregistrer_qbo(db: AsyncSession, lot_id: int, user: User) -> Dict[str, Any]:
+    """Inscrit (ou reprend) les paiements du lot dans QuickBooks."""
+    lot = await _lot(db, lot_id, verrou=True)
+    interac = lot.mode == "interac"
+    if lot.statut != "transmis":
+        raise PaiementErreur(
+            "Les fournisseurs doivent d'abord être payés."
+            if lot.envoi_auto
+            else "Les virements Interac doivent d'abord être envoyés."
+            if interac
+            else "Le fichier doit avoir été transmis à Desjardins.",
+            409,
+        )
+    if lot.envoi_auto and lot.auto_environnement == "test":
+        raise PaiementErreur("Lot payé dans l'environnement de test VoPay : rien n'est inscrit dans QuickBooks.", 409)
+    await inscrire_qbo(db, lot, user)
+    if lot.envoi_auto and lot.statut == "paye":
+        lot.auto_erreur = None
+        lot.auto_prochain_essai = None
     await db.commit()
     return await detail_lot(db, lot.id, user)
 
 
 async def annuler(db: AsyncSession, lot_id: int, user: User, motif: Optional[str]) -> Dict[str, Any]:
     lot = await _lot(db, lot_id, verrou=True)
-    if lot.statut not in ("brouillon", "soumis", "refuse", "approuve", "fichier_cree", "a_envoyer"):
+    # Un lot de test (environnement de test VoPay, aucun argent réel) peut
+    # être abandonné en cours de route.
+    test_en_route = bool(lot.envoi_auto) and lot.auto_environnement == "test" and lot.statut in STATUTS_AUTO_EN_ROUTE
+    if lot.statut in STATUTS_AUTO_EN_ROUTE and not test_en_route:
+        raise PaiementErreur(
+            "Le paiement de ce lot est en route chez VoPay : il ne peut plus être annulé. "
+            "Un paiement refusé peut être retiré du lot.",
+            409,
+        )
+    if lot.statut not in ("brouillon", "soumis", "refuse", "approuve", "fichier_cree", "a_envoyer", "echec") and not test_en_route:
         raise PaiementErreur("Ce lot ne peut plus être annulé dans Kratos.", 409)
-    if lot.statut in ("approuve", "fichier_cree", "a_envoyer") and not await peut_approuver(db, user):
+    if (lot.statut in ("approuve", "fichier_cree", "a_envoyer", "echec") or test_en_route) and not await peut_approuver(db, user):
         raise PaiementErreur("Seul un approbateur peut annuler un lot approuvé.", 403)
     if lot.statut == "a_envoyer" and any(l.envoye_le for l in await _lignes(db, lot.id)):
         raise PaiementErreur(
@@ -2006,6 +2430,12 @@ async def annuler(db: AsyncSession, lot_id: int, user: User, motif: Optional[str
         raise PaiementErreur("Indique pourquoi tu annules un lot dont le fichier est créé.")
     if lot.statut == "a_envoyer" and not motif:
         raise PaiementErreur("Indique pourquoi tu annules ces virements.")
+    if test_en_route and not motif:
+        raise PaiementErreur("Indique pourquoi tu abandonnes ce lot de test.")
+    if test_en_route:
+        from app.services import paiements_auto
+
+        await paiements_auto.annuler_operations_test(db, lot)
     lot.statut = "annule"
     lot.annule_par_user_id = user.id
     lot.annule_le = _maintenant()
@@ -2023,13 +2453,23 @@ async def annuler(db: AsyncSession, lot_id: int, user: User, motif: Optional[str
 
 
 def _lot_resume(lot: LotPaiement, noms: Dict[int, str]) -> Dict[str, Any]:
-    libelles = LIBELLES_STATUT_INTERAC if lot.mode == "interac" else LIBELLES_STATUT
+    if lot.envoi_auto:
+        libelles = LIBELLES_STATUT_AUTO
+    else:
+        libelles = LIBELLES_STATUT_INTERAC if lot.mode == "interac" else LIBELLES_STATUT
+    libelle = libelles.get(lot.statut, lot.statut)
+    if lot.envoi_auto and lot.auto_environnement == "test" and lot.statut in ("transmis", "paye"):
+        libelle = "Terminé (test)"
     return {
         "id": lot.id,
         "entreprise_id": lot.entreprise_id,
         "mode": lot.mode,
         "statut": lot.statut,
-        "statut_libelle": libelles.get(lot.statut, lot.statut),
+        "statut_libelle": libelle,
+        "envoi_auto": bool(lot.envoi_auto),
+        "auto_environnement": lot.auto_environnement,
+        "auto_erreur": lot.auto_erreur,
+        "preleve_le": _iso(lot.preleve_le),
         "date_paiement": lot.date_paiement.isoformat(),
         "total": dollars(lot.total_cents),
         "nb_lignes": lot.nb_lignes,
@@ -2114,6 +2554,18 @@ async def detail_lot(db: AsyncSession, lot_id: int, user: User) -> Dict[str, Any
     s = lot.statut
     interac = lot.mode == "interac"
     envoyes = any(l.envoye_le for l in lignes)
+    # Paiement automatique (VoPay).
+    r = await _reglage(db, lot.entreprise_id)
+    auto = bool(lot.envoi_auto)
+    test = auto and lot.auto_environnement == "test"
+    suivi_auto: Optional[Dict[str, Any]] = None
+    if auto:
+        from app.services import paiements_auto
+
+        suivi_auto = await paiements_auto.detail(db, lot, lignes, approbateur)
+    ops_ouvertes = bool(
+        suivi_auto and any(o["statut"] in ("a_envoyer", "envoi", "incertain", "en_cours") for o in suivi_auto["operations"])
+    )
     virements: List[Dict[str, Any]] = []
     if interac:
         # Un virement par fournisseur, vers le destinataire figé à la
@@ -2186,22 +2638,33 @@ async def detail_lot(db: AsyncSession, lot_id: int, user: User) -> Dict[str, Any
                 {"action": ev.action, "detail": ev.detail, "par": noms.get(ev.user_id or 0), "le": _iso(ev.created_at)}
                 for ev in evenements
             ],
-            "virements": virements,
+            "virements": virements if not auto else [],
             "limite_interac": dollars(LIMITE_INTERAC_CENTS),
+            # Paiement automatique : réglage actuel de l'entreprise (pour un
+            # lot pas encore approuvé) et suivi du lot payé par VoPay.
+            "auto_entreprise": auto_actif(r),
+            "auto_environnement_entreprise": ((r.auto_environnement if r else None) or "test") if auto_actif(r) else None,
+            "auto_erreur": lot.auto_erreur,
+            "auto_prochain_essai": _iso(lot.auto_prochain_essai) if lot.auto_erreur else None,
+            "auto": suivi_auto,
             "actions": {
                 "modifier": s == "brouillon",
                 "soumettre": s == "brouillon",
-                "remettre_en_brouillon": s in ("soumis", "refuse") or (s == "approuve" and approbateur),
+                "remettre_en_brouillon": s in ("soumis", "refuse") or (s in ("approuve", "echec") and approbateur),
                 "approuver": s == "soumis" and approbateur and not a_prepare and not a_decide,
                 "refuser": s == "soumis" and approbateur and not a_prepare,
-                "creer_fichier": not interac and s in ("approuve", "fichier_cree") and approbateur,
-                "marquer_transmis": not interac and s == "fichier_cree" and approbateur,
-                "preparer_envoi": interac and s == "approuve" and approbateur,
-                "marquer_envoye": interac and s == "a_envoyer" and approbateur,
-                "enregistrer_qbo": s == "transmis",
+                "creer_fichier": not auto and not interac and s in ("approuve", "fichier_cree") and approbateur,
+                "marquer_transmis": not auto and not interac and s == "fichier_cree" and approbateur,
+                "preparer_envoi": not auto and interac and s == "approuve" and approbateur,
+                "marquer_envoye": not auto and interac and s == "a_envoyer" and approbateur,
+                "enregistrer_qbo": s == "transmis" and not test,
                 "annuler": s in ("brouillon", "soumis", "refuse")
-                or (s in ("approuve", "fichier_cree") and approbateur)
-                or (s == "a_envoyer" and approbateur and not envoyes),
+                or (s in ("approuve", "fichier_cree", "echec") and approbateur)
+                or (s == "a_envoyer" and approbateur and not envoyes)
+                or (test and s in STATUTS_AUTO_EN_ROUTE and approbateur),
+                "reessayer_auto": auto and approbateur and (s == "echec" or (s == "approuve" and bool(lot.auto_erreur))),
+                "verifier_auto": auto
+                and (s in STATUTS_AUTO_EN_ROUTE or ops_ouvertes or (s in ("approuve", "transmis") and bool(lot.auto_erreur))),
             },
             "a_prepare": a_prepare,
         }

@@ -1,7 +1,9 @@
 "use client";
 
 /* Paiements → « Journal » : chaque geste sur les paiements de
-   l'entreprise (coordonnées, lots, fichiers, réglages), par qui et quand. */
+   l'entreprise (coordonnées, lots, fichiers, réglages), par qui et quand.
+   Les étapes du paiement automatique, faites par Kratos lui-même, n'ont
+   pas d'auteur. */
 
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
@@ -74,7 +76,7 @@ export function Journal({
                   </button>
                 ) : null}
               </span>
-              <span className="text-xs text-[var(--qg-text-muted)]">{e.par ?? "—"}</span>
+              <span className="text-xs text-[var(--qg-text-muted)]">{e.par ?? "Kratos"}</span>
             </li>
           ))}
         </ul>
