@@ -589,7 +589,10 @@ export default function ProspectionCourtiersPage() {
         analyses_examinees?: number;
         vps_utilise?: boolean;
         vps_annonces_lues?: number;
+        vps_sans_taille?: number;
         vps_details_lus?: number;
+        vps_sous_seuil?: number;
+        vps_sans_courtier?: number;
         erreurs?: string[];
       }
     | null
@@ -830,7 +833,7 @@ export default function ProspectionCourtiersPage() {
                     connues examinées, {rapport.analyses_examinees ?? 0} fiches
                     d&apos;analyse
                     {rapport.vps_utilise
-                      ? ` · Centris lu par le VPS : ${rapport.vps_annonces_lues ?? 0} annonces, ${rapport.vps_details_lus ?? 0} fiches détaillées`
+                      ? ` · Centris lu par le VPS : ${rapport.vps_annonces_lues ?? 0} annonces (${rapport.vps_sans_taille ?? 0} sans taille sur la vignette), ${rapport.vps_details_lus ?? 0} fiches ouvertes, ${rapport.vps_sous_seuil ?? 0} sous le seuil, ${rapport.vps_sans_courtier ?? 0} sans courtier lisible`
                       : " · Centris non lu (VPS non utilisé)"}
                   </p>
                 ) : null}
