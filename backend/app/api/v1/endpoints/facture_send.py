@@ -27,11 +27,13 @@ async def _autopush_to_qbo(facture_id: int) -> None:
     l'envoi du courriel."""
     from app.db.session import AsyncSessionLocal
     from app.services.facture_qbo import sync_facture_to_qbo
+    from app.services.qbo_auto_sync import verrou_facture
 
     try:
-        async with AsyncSessionLocal() as db:
-            res = await sync_facture_to_qbo(db, facture_id)
-            await db.commit()
+        async with verrou_facture(facture_id):
+            async with AsyncSessionLocal() as db:
+                res = await sync_facture_to_qbo(db, facture_id)
+                await db.commit()
         if isinstance(res, dict) and res.get("sync_warning"):
             log.error(
                 "Auto-push QBO facture %s : avertissement : %s",
@@ -107,7 +109,10 @@ async def send_facture_endpoint(
         )
 
     # Auto-push vers QBO Invoice après l'envoi (background pour ne
-    # pas ralentir la réponse).
+    # pas ralentir la réponse). Commit AVANT : les tâches d'arrière-plan
+    # tournent avant la validation de la session de la requête, et le
+    # push relirait sinon la facture encore en brouillon (ignorée).
+    await db.commit()
     background.add_task(_autopush_to_qbo, fa.id)
 
     return FactureRead.model_validate(fa)

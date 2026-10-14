@@ -271,6 +271,10 @@ async def create_payment(
         prepared = await _prepare_statement_email(db, facture_id)
         if prepared is not None:
             background.add_task(_send_statement_email, *prepared)
+    # Commit AVANT les tâches d'arrière-plan : elles tournent avant la
+    # validation de la session de la requête, et le push QB ne voyait
+    # pas encore ce paiement (seul le filet horaire le rattrapait).
+    await db.commit()
     return PaymentRead.model_validate(p)
 
 
@@ -306,8 +310,10 @@ async def update_payment(
     await db.flush()
     await db.refresh(p)
     # Reflète l'état à jour des paiements dans QB (paiements seuls).
+    # Commit AVANT : la tâche d'arrière-plan relit les paiements.
     from app.services.qbo_auto_sync import push_facture_payments_now
 
+    await db.commit()
     background.add_task(push_facture_payments_now, facture_id)
     return PaymentRead.model_validate(p)
 
