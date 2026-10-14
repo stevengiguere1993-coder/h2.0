@@ -71,6 +71,30 @@ configurée » après une réinstallation (2026-09-29).
 3. Si l'annonce est rentable au calculateur, h2.0 crée un lead
    automatiquement avec le tag `centris-interessant`.
 
+### Projets QuickBooks (1.3.0)
+
+Kratos crée un SOUS-CLIENT QuickBooks pour chaque projet, mais Intuit ne
+permet pas de le convertir en PROJET par API sans palier partenaire
+Silver (Steven, 2026-10-14 : « nous ne serons pas en silver »). La
+conversion se fait donc dans le QuickBooks ouvert de la technicienne,
+par l'extension :
+
+1. Dans Kratos → Entreprises → Comptabilité → **Projets QB**, la liste
+   des sous-clients à convertir (et l'extension se configure toute seule
+   en ouvrant la page).
+2. Ouvre QuickBooks (compagnie Construction) → **Projets**. Le panneau
+   Horizon en bas à droite liste les mêmes sous-clients.
+3. **Convertir maintenant** : l'extension ouvre « Nouveau projet ▾ →
+   Convertir depuis un sous-client », coche EXACTEMENT les noms attendus
+   (jamais « tout sélectionner »), confirme, puis rend compte à Kratos.
+   Kratos vérifie ensuite par l'API que le sous-client est bien devenu
+   un projet et raye la ligne.
+4. Case **Automatique** (désactivée par défaut) : la conversion part
+   d'elle-même à l'ouverture de la page Projets, une fois par liste. La
+   première fois, regarde-la faire : les écrans de QuickBooks changent.
+5. Sans extension : les 4 étapes manuelles restent dans la page Kratos
+   et dans le courriel envoyé à la technicienne.
+
 ## Côté serveur
 
 Set la variable d'environnement `EXTENSION_API_KEY` sur le backend
@@ -96,6 +120,11 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
   Centris (mls_id + détails)
 - `GET /api/v1/extension/centris-listing/{mls_id}` — récupère une
   annonce du cache
+- `POST /api/v1/extension/qbo-conversions` — sous-clients QuickBooks à
+  convertir en projet (noms exacts + compagnie attendue)
+- `POST /api/v1/extension/qbo-conversions/resultat` — compte rendu de
+  la conversion (`resultats[{project_id, ok, detail}]`) ; Kratos
+  constate ensuite par l'API
 
 ## Troubleshooting
 

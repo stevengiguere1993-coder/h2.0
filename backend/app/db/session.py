@@ -300,6 +300,12 @@ async def ensure_critical_columns() -> None:
         # Dernière erreur de synchro QBO d'une facture — affichée sur la
         # fiche pour rendre les échecs de push visibles sans les logs.
         ("factures", "qbo_sync_error", "VARCHAR(500)"),
+        # Conversion du sous-client QB en projet (Steven 2026-10-14) :
+        # nom QB du sous-client, état, compte rendu, date.
+        ("projects", "qbo_job_name", "VARCHAR(255)"),
+        ("projects", "qbo_conversion_etat", "VARCHAR(16)"),
+        ("projects", "qbo_conversion_detail", "TEXT"),
+        ("projects", "qbo_conversion_le", "TIMESTAMP WITH TIME ZONE"),
         # Reçu sans projet/BT rattaché directement à un CLIENT (CustomerRef
         # QB = client mère).
         ("achats", "client_id", "INTEGER"),
