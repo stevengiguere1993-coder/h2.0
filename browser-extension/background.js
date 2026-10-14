@@ -360,18 +360,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(sendResponse);
     return true;
   }
-  // 1.3.0 — projets QuickBooks (content-qbo.js) : liste des sous-clients
-  // que Kratos a créés et qu'il reste à convertir en projet, puis compte
-  // rendu de la conversion faite dans le QuickBooks ouvert.
-  if (message.type === "QBO_CONVERSIONS_LIST") {
-    postJson("/api/v1/extension/qbo-conversions", {}).then(sendResponse);
-    return true;
-  }
-  if (message.type === "QBO_CONVERSIONS_RESULT") {
-    postJson("/api/v1/extension/qbo-conversions/resultat", message.payload || {})
-      .then(sendResponse);
-    return true;
-  }
   if (message.type === "OPEN_EVALWEB_BACKGROUND") {
     // Ouvre montreal.ca dans un onglet en arrière-plan (active=false
     // → le focus reste sur l'onglet h2.0). L'extension va piloter le

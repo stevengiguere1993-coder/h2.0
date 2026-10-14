@@ -38,9 +38,7 @@ const ONGLETS: Array<{
     href: "/entreprises/comptabilite/banque-de-recus",
     label: "Banque de reçus",
     precision: "(Drive)"
-  },
-  // Sous-clients QuickBooks à convertir en projet (Steven 2026-10-14).
-  { href: "/entreprises/comptabilite/projets-quickbooks", label: "Projets QB" }
+  }
 ];
 
 export default function ComptabiliteLayout({

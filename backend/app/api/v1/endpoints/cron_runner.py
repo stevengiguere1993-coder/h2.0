@@ -865,19 +865,6 @@ async def trigger_all_daily(
 
     await _safe("qbo-recus-drive", _run_qbo_recus_drive, details)
 
-    # Sous-clients QB à convertir en projet (Steven 2026-10-14) : constate
-    # par l'API les conversions faites (extension Chrome ou à la main) et
-    # raye les lignes de Comptabilité → Projets QB.
-    async def _run_qbo_projets_conversion():
-        from app.services.qbo_projets_conversion import verifier_pour_cron
-
-        async with AsyncSessionLocal() as db:
-            r = await verifier_pour_cron(db)
-            await db.commit()
-            return r
-
-    await _safe("qbo-projets-conversion", _run_qbo_projets_conversion, details)
-
     # Validation bancaire des loyers : import QBO (lecture seule) des
     # écritures « Loyer à remettre » + rapprochement déterministe.
     # Inerte tant que la feature n'est pas activée dans Paramètres.
