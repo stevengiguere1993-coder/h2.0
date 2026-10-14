@@ -29,9 +29,6 @@ type Employe = {
   emergency_contact_name: string | null;
   emergency_contact_phone: string | null;
   is_ccq: boolean;
-  // Case « Prime CNESST » (cochée par défaut) ; cnesst_rate = taux
-  // personnalisé, null = taux global de Paramètres → Prime CNESST.
-  cnesst_actif: boolean;
   cnesst_rate: number | string | null;
   ccq_rate: number | string | null;
   // Taux horaire de base sous régime CCQ (null = même que hourly_rate).
@@ -52,10 +49,7 @@ type RateHistoryEntry = {
   effective_date: string;
   hourly_rate: number | string;
   billing_rate: number | string | null;
-  cnesst_actif?: boolean;
   cnesst_rate: number | string | null;
-  // Prime CNESST appliquée à la date du palier (globale ou personnalisée).
-  cnesst_taux_effectif?: number | null;
   ccq_rate: number | string | null;
   is_ccq: boolean;
   hourly_rate_ccq?: number | string | null;
@@ -76,13 +70,6 @@ function decimalFromPct(pct: string): number | null {
   const n = Number(pct);
   if (!pct || !Number.isFinite(n)) return null;
   return Math.round((n / 100) * 1e8) / 1e8;
-}
-// Taux DÉCIMAL → « 2.16 % » (même écriture que le reste de la fiche).
-function fmtPct(v: number): string {
-  const p = Math.round(v * 100 * 1e4) / 1e4;
-  // 2 décimales, plus seulement si le taux en a davantage (2.1625 %).
-  const deux = Math.abs(p - Math.round(p * 100) / 100) < 1e-9;
-  return `${deux ? p.toFixed(2) : String(p)} %`;
 }
 
 function fmtRateDate(iso: string): string {
@@ -124,11 +111,7 @@ export default function EmployeDetailPage() {
   const [emergencyName, setEmergencyName] = useState("");
   const [emergencyPhone, setEmergencyPhone] = useState("");
   const [isCcq, setIsCcq] = useState(false);
-  const [cnesstActif, setCnesstActif] = useState(true);
-  // Taux CNESST PERSONNALISÉ (%) ; vide = taux global.
   const [cnesstRate, setCnesstRate] = useState("");
-  // Taux CNESST global en vigueur (DÉCIMAL), Paramètres → Prime CNESST.
-  const [cnesstGlobal, setCnesstGlobal] = useState<number | null>(null);
   const [ccqRate, setCcqRate] = useState("");
   const [hourlyRateCcq, setHourlyRateCcq] = useState("");
   const [employeurDUrl, setEmployeurDUrl] = useState("");
@@ -142,7 +125,6 @@ export default function EmployeDetailPage() {
   const [rcDate, setRcDate] = useState("");
   const [rcHourly, setRcHourly] = useState("");
   const [rcBilling, setRcBilling] = useState("");
-  const [rcCnesstActif, setRcCnesstActif] = useState(true);
   const [rcCnesst, setRcCnesst] = useState("");
   const [rcCcq, setRcCcq] = useState("");
   const [rcIsCcq, setRcIsCcq] = useState(false);
@@ -174,7 +156,6 @@ export default function EmployeDetailPage() {
         setEmergencyName(data.emergency_contact_name || "");
         setEmergencyPhone(data.emergency_contact_phone || "");
         setIsCcq(Boolean(data.is_ccq));
-        setCnesstActif(data.cnesst_actif !== false);
         setCnesstRate(pctFromDecimal(data.cnesst_rate));
         setCcqRate(pctFromDecimal(data.ccq_rate));
         setHourlyRateCcq(data.hourly_rate_ccq != null ? String(data.hourly_rate_ccq) : "");
@@ -197,25 +178,6 @@ export default function EmployeDetailPage() {
       cancelled = true;
     };
   }, [id]);
-
-  // Taux CNESST global (pour le coût réel et l'aide de la case). Un échec
-  // laisse simplement le taux global inconnu.
-  useEffect(() => {
-    let cancelled = false;
-    authedFetch("/api/v1/construction/cnesst")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d: { taux_actuel?: number } | null) => {
-        if (!cancelled && d && d.taux_actuel != null) {
-          setCnesstGlobal(Number(d.taux_actuel));
-        }
-      })
-      .catch(() => {
-        /* taux global inconnu */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   async function reloadRateHistory() {
     try {
@@ -243,7 +205,6 @@ export default function EmployeDetailPage() {
       emergencyName !== (emp.emergency_contact_name || "") ||
       emergencyPhone !== (emp.emergency_contact_phone || "") ||
       isCcq !== Boolean(emp.is_ccq) ||
-      cnesstActif !== (emp.cnesst_actif !== false) ||
       cnesstRate !== pctFromDecimal(emp.cnesst_rate) ||
       ccqRate !== pctFromDecimal(emp.ccq_rate) ||
       hourlyRateCcq !== (emp.hourly_rate_ccq != null ? String(emp.hourly_rate_ccq) : "") ||
@@ -266,21 +227,12 @@ export default function EmployeDetailPage() {
     emergencyName,
     emergencyPhone,
     isCcq,
-    cnesstActif,
     cnesstRate,
     ccqRate,
     hourlyRateCcq,
     employeurDUrl,
     dinerAuto
   ]);
-
-  // Prime CNESST appliquée, en POURCENTAGE : 0 si la case est décochée,
-  // le taux personnalisé s'il est saisi, sinon le taux global.
-  const cnesstPct = useMemo(() => {
-    if (!cnesstActif) return 0;
-    if (cnesstRate !== "") return Number(cnesstRate) || 0;
-    return cnesstGlobal != null ? Math.round(cnesstGlobal * 100 * 1e6) / 1e6 : 0;
-  }, [cnesstActif, cnesstRate, cnesstGlobal]);
 
   // Salaire coûtant calculé : taux horaire de base + primes CNESST et
   // CCQ. La CNESST est un % du salaire imposable (souvent 1-7 %), la
@@ -289,11 +241,11 @@ export default function EmployeDetailPage() {
   const realCost = useMemo(() => {
     const base = Number(hourlyRate || 0);
     if (base <= 0) return null;
-    // cnesstPct / ccqRate sont en POURCENTAGE → /100.
-    const cnesst = cnesstPct / 100;
+    // cnesstRate / ccqRate sont en POURCENTAGE dans le state → /100.
+    const cnesst = (Number(cnesstRate || 0)) / 100;
     const ccq = isCcq ? (Number(ccqRate || 0)) / 100 : 0;
     return +(base * (1 + cnesst + ccq)).toFixed(2);
-  }, [hourlyRate, cnesstPct, isCcq, ccqRate]);
+  }, [hourlyRate, cnesstRate, isCcq, ccqRate]);
 
   async function saveAll() {
     if (!emp) return;
@@ -315,8 +267,7 @@ export default function EmployeDetailPage() {
         emergency_contact_name: emergencyName.trim() || null,
         emergency_contact_phone: emergencyPhone.trim() || null,
         is_ccq: isCcq,
-        cnesst_actif: cnesstActif,
-        cnesst_rate: cnesstActif ? decimalFromPct(cnesstRate) : null,
+        cnesst_rate: decimalFromPct(cnesstRate),
         ccq_rate: decimalFromPct(ccqRate),
         hourly_rate_ccq: hourlyRateCcq ? Number(hourlyRateCcq) : null,
         employeur_d_url: employeurDUrl.trim() || null,
@@ -332,11 +283,6 @@ export default function EmployeDetailPage() {
       }
       const updated = (await res.json()) as Employe;
       setEmp(updated);
-      // Case décochée → le serveur efface le taux personnalisé.
-      setCnesstActif(updated.cnesst_actif !== false);
-      setCnesstRate(pctFromDecimal(updated.cnesst_rate));
-      // Un changement de prime CNESST s'applique aussi au palier en vigueur.
-      void reloadRateHistory();
     } catch (err) {
       setError(`Sauvegarde échouée : ${(err as Error).message}`);
     } finally {
@@ -392,8 +338,7 @@ export default function EmployeDetailPage() {
         effective_date: rcDate,
         hourly_rate: Number(rcHourly),
         billing_rate: rcBilling ? Number(rcBilling) : null,
-        cnesst_actif: rcCnesstActif,
-        cnesst_rate: rcCnesstActif ? decimalFromPct(rcCnesst) : null,
+        cnesst_rate: decimalFromPct(rcCnesst),
         ccq_rate: decimalFromPct(rcCcq),
         is_ccq: rcIsCcq,
         hourly_rate_ccq: rcHourlyCcq ? Number(rcHourlyCcq) : null,
@@ -419,7 +364,6 @@ export default function EmployeDetailPage() {
             data.billing_rate != null ? String(data.billing_rate) : ""
           );
           setIsCcq(Boolean(data.is_ccq));
-          setCnesstActif(data.cnesst_actif !== false);
           setCnesstRate(pctFromDecimal(data.cnesst_rate));
           setCcqRate(pctFromDecimal(data.ccq_rate));
           setHourlyRateCcq(data.hourly_rate_ccq != null ? String(data.hourly_rate_ccq) : "");
@@ -430,7 +374,6 @@ export default function EmployeDetailPage() {
       setRcDate("");
       setRcHourly("");
       setRcBilling("");
-      setRcCnesstActif(true);
       setRcCnesst("");
       setRcCcq("");
       setRcIsCcq(false);
@@ -675,59 +618,21 @@ export default function EmployeDetailPage() {
                         : ""}
                     </p>
                   </div>
-                  <div className="sm:col-span-2 rounded-lg border border-brand-800 bg-brand-950/40 p-3">
-                    <label className="flex items-center gap-2 text-sm text-white/80">
-                      <input
-                        type="checkbox"
-                        checked={cnesstActif}
-                        onChange={(e) => setCnesstActif(e.target.checked)}
-                      />
-                      Prime CNESST
+                  <div>
+                    <label htmlFor="e_cnesst" className="label">
+                      Prime CNESST (% — ex. 2,16 pour 2,16 %)
                     </label>
-                    {cnesstActif ? (
-                      <div className="mt-3 sm:max-w-xs">
-                        <label htmlFor="e_cnesst" className="label">
-                          Taux personnalisé (%)
-                        </label>
-                        <input
-                          id="e_cnesst"
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          max="100"
-                          value={cnesstRate}
-                          onChange={(e) => setCnesstRate(e.target.value)}
-                          placeholder={
-                            cnesstGlobal != null
-                              ? `Vide = taux global (${fmtPct(cnesstGlobal)})`
-                              : "Vide = taux global"
-                          }
-                          className="input"
-                        />
-                      </div>
-                    ) : null}
-                    <p className="mt-2 text-xs text-white/60">
-                      {!cnesstActif ? (
-                        "Aucune prime CNESST n'est ajoutée au coût de cet employé."
-                      ) : cnesstRate !== "" ? (
-                        "Ce taux remplace le taux global pour cet employé."
-                      ) : (
-                        <>
-                          Le taux global
-                          {cnesstGlobal != null ? ` (${fmtPct(cnesstGlobal)})` : ""}{" "}
-                          s&apos;applique, réglable dans{" "}
-                          <Link
-                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                            href={"/parametres/cnesst" as any}
-                            className="text-accent-500 underline hover:text-accent-400"
-                          >
-                            Paramètres → Prime CNESST
-                          </Link>
-                          . Remplis le taux personnalisé seulement si cet
-                          employé a un taux différent.
-                        </>
-                      )}
-                    </p>
+                    <input
+                      id="e_cnesst"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="100"
+                      value={cnesstRate}
+                      onChange={(e) => setCnesstRate(e.target.value)}
+                      placeholder="Ex. 2.16"
+                      className="input"
+                    />
                   </div>
                   <div>
                       <label htmlFor="e_ccq" className="label">
@@ -780,7 +685,7 @@ export default function EmployeDetailPage() {
                       </p>
                       <p className="mt-0.5 text-[11px] text-amber-100/70">
                         Base {Number(hourlyRate).toFixed(2)} $ + CNESST{" "}
-                        {cnesstPct.toFixed(2)} %
+                        {(Number(cnesstRate) || 0).toFixed(2)} %
                         {isCcq
                           ? ` + CCQ ${(Number(ccqRate) || 0).toFixed(2)} %`
                           : ""}
@@ -788,13 +693,13 @@ export default function EmployeDetailPage() {
                         régimes ; depuis, chaque punch coûte selon son régime :
                         hors décret = {Number(hourlyRate).toFixed(2)} $ × (1 +
                         CNESST) = {(
-                          Number(hourlyRate) * (1 + cnesstPct / 100)
+                          Number(hourlyRate) * (1 + (Number(cnesstRate) || 0) / 100)
                         ).toFixed(2)} $/h ; CCQ ={" "}
                         {(Number(hourlyRateCcq) || Number(hourlyRate)).toFixed(2)} $ × (1 +
                         CNESST + CCQ {(Number(ccqRate) || 0).toFixed(2)} %) ={" "}
                         {(
                           (Number(hourlyRateCcq) || Number(hourlyRate)) *
-                          (1 + cnesstPct / 100 + (Number(ccqRate) || 0) / 100)
+                          (1 + (Number(cnesstRate) || 0) / 100 + (Number(ccqRate) || 0) / 100)
                         ).toFixed(2)} $/h.
                       </p>
                     </div>
@@ -817,8 +722,7 @@ export default function EmployeDetailPage() {
                           // doit pas effacer un taux non retapé.
                           setRcHourly(hourlyRate);
                           setRcBilling(billingRate);
-                          setRcCnesstActif(cnesstActif);
-                          setRcCnesst(cnesstActif ? cnesstRate : "");
+                          setRcCnesst(cnesstRate);
                           setRcCcq(ccqRate);
                           setRcIsCcq(isCcq);
                           setRcHourlyCcq(hourlyRateCcq);
@@ -885,32 +789,20 @@ export default function EmployeDetailPage() {
                         />
                       </div>
                       <div>
-                        <label className="flex items-center gap-2 text-sm text-white/80">
-                          <input
-                            type="checkbox"
-                            checked={rcCnesstActif}
-                            onChange={(e) => setRcCnesstActif(e.target.checked)}
-                          />
-                          Prime CNESST à cette date
+                        <label htmlFor="rc_cnesst" className="label">
+                          Prime CNESST (% — ex. 2,16)
                         </label>
-                        {rcCnesstActif ? (
-                          <>
-                            <label htmlFor="rc_cnesst" className="label mt-2">
-                              Taux CNESST personnalisé (%)
-                            </label>
-                            <input
-                              id="rc_cnesst"
-                              type="number"
-                              step="0.01"
-                              min="0"
-                              max="100"
-                              value={rcCnesst}
-                              onChange={(e) => setRcCnesst(e.target.value)}
-                              placeholder="Vide = taux global"
-                              className="input"
-                            />
-                          </>
-                        ) : null}
+                        <input
+                          id="rc_cnesst"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max="100"
+                          value={rcCnesst}
+                          onChange={(e) => setRcCnesst(e.target.value)}
+                          placeholder="Ex. 2.16"
+                          className="input"
+                        />
                       </div>
                       <div>
                         <label htmlFor="rc_hourly_ccq" className="label">
@@ -1017,11 +909,7 @@ export default function EmployeDetailPage() {
                       <tbody>
                         {[...rateHistory].reverse().map((r) => {
                           const base = Number(r.hourly_rate || 0);
-                          // Prime appliquée à la date du palier (le serveur
-                          // résout le taux global) ; ancien serveur → taux saisi.
-                          const cn = Number(
-                            r.cnesst_taux_effectif ?? r.cnesst_rate ?? 0
-                          );
+                          const cn = Number(r.cnesst_rate || 0);
                           const cq = r.is_ccq ? Number(r.ccq_rate || 0) : 0;
                           const rc = base * (1 + cn + cq);
                           return (
@@ -1046,11 +934,9 @@ export default function EmployeDetailPage() {
                                   : "—"}
                               </td>
                               <td className="py-2 pr-3">
-                                {r.cnesst_actif === false
-                                  ? "Aucune"
-                                  : r.cnesst_rate != null
-                                    ? `${(cn * 100).toFixed(2)} %`
-                                    : `Globale ${(cn * 100).toFixed(2)} %`}
+                                {r.cnesst_rate != null
+                                  ? `${(cn * 100).toFixed(2)} %`
+                                  : "—"}
                               </td>
                               <td className="py-2 pr-3">
                                 {r.is_ccq && r.ccq_rate != null

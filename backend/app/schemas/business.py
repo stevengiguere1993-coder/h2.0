@@ -27,9 +27,6 @@ class EmployeCreate(BaseModel):
     emergency_contact_name: Optional[str] = Field(default=None, max_length=255)
     emergency_contact_phone: Optional[str] = Field(default=None, max_length=50)
     is_ccq: bool = False
-    #: Case « Prime CNESST » (cochée par défaut) ; ``cnesst_rate`` = taux
-    #: personnalisé, vide = taux global de Paramètres → Prime CNESST.
-    cnesst_actif: bool = True
     cnesst_rate: Optional[float] = Field(default=None, ge=0, le=1)
     ccq_rate: Optional[float] = Field(default=None, ge=0, le=1)
     hourly_rate_ccq: Optional[float] = Field(default=None, ge=0)
@@ -54,10 +51,6 @@ class EmployeUpdate(BaseModel):
     emergency_contact_name: Optional[str] = None
     emergency_contact_phone: Optional[str] = None
     is_ccq: Optional[bool] = None
-    #: Décochée → aucune prime CNESST (le taux personnalisé est effacé).
-    #: La fiche porte la config courante : elle est recopiée sur le palier
-    #: de taux en vigueur (voir ``aligner_paliers_cnesst``).
-    cnesst_actif: Optional[bool] = None
     cnesst_rate: Optional[float] = Field(default=None, ge=0, le=1)
     ccq_rate: Optional[float] = Field(default=None, ge=0, le=1)
     hourly_rate_ccq: Optional[float] = Field(default=None, ge=0)
@@ -84,7 +77,6 @@ class EmployeRead(_Base):
     emergency_contact_name: Optional[str] = None
     emergency_contact_phone: Optional[str] = None
     is_ccq: bool = False
-    cnesst_actif: bool = True
     cnesst_rate: Optional[float] = None
     ccq_rate: Optional[float] = None
     hourly_rate_ccq: Optional[float] = None

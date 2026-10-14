@@ -13,10 +13,7 @@ moment du tout premier changement, datée de son embauche, pour que
 tous les punchs antérieurs au 1er changement gardent le bon taux.
 
 Les taux `cnesst_rate` / `ccq_rate` sont stockés en DÉCIMAL
-(0.0216 = 2,16 %), comme sur le modèle Employe. Comme sur la fiche,
-`cnesst_rate` est un taux CNESST personnalisé (NULL = taux global de
-Paramètres → Prime CNESST à la date du punch) et `cnesst_actif` décoché
-retire la prime.
+(0.0216 = 2,16 %), comme sur le modèle Employe.
 """
 
 from datetime import date
@@ -52,9 +49,6 @@ class EmployeRateHistory(Base, TimestampMixin):
         Numeric(10, 2), nullable=True
     )
     # Majorations en décimal.
-    cnesst_actif: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
-    )
     cnesst_rate: Mapped[Optional[float]] = mapped_column(
         Numeric(6, 4), nullable=True
     )

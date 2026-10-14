@@ -36,7 +36,6 @@ from app.api.v1.endpoints import (
     blog,
     calendar,
     clients,
-    cnesst,
     cockpit,
     construction_bon_defaults,
     devlog,
@@ -420,8 +419,6 @@ api_router.include_router(bon_send.router, dependencies=DEP_CONSTRUCTION_IMMO)
 api_router.include_router(bons_refs.router, dependencies=DEP_CONSTRUCTION_IMMO)
 api_router.include_router(bons_router, dependencies=DEP_CONSTRUCTION_IMMO)
 api_router.include_router(construction_bon_defaults.router, dependencies=DEP_CONSTRUCTION)
-# Prime CNESST : taux global (Paramètres), exceptions sur la fiche employé.
-api_router.include_router(cnesst.router, dependencies=DEP_CONSTRUCTION)
 # punch_ops FIRST so its literal paths (/me, /debug, /weekly, ...)
 # are matched before the generic /{item_id} from punch_router, which
 # would otherwise try to coerce "me"/"debug"/"weekly" to an int and

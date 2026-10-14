@@ -80,25 +80,23 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning("schema_check failed during startup: %s", exc)
 
-    # Prime CNESST (2026-10-14) : à la première mise en ligne du taux
-    # global, il est créé à partir des taux déjà saisis sur les fiches (le
-    # plus fréquent) et les fiches sont converties sans changer le coût de
-    # quiconque avait un taux. Après les colonnes (cnesst_actif) ;
-    # idempotent : rien à faire quand le barème existe.
+    # Retour arrière de la prime CNESST globale (PR #1819) : réécrit sur
+    # chaque fiche le taux que le réglage appliquait, sinon le code d'avant
+    # lirait les taux vides comme 0 % (app/services/cnesst_retour.py).
+    # No-op si le réglage n'a jamais tourné.
     try:
         from app.db.session import AsyncSessionLocal as _CnesstSession
-        from app.services.cnesst import initialiser_cnesst_global
+        from app.services.cnesst_retour import defaire_cnesst_global
 
         async with _CnesstSession() as session:
-            taux = await initialiser_cnesst_global(session)
-            if taux is not None:
+            n = await defaire_cnesst_global(session)
+            if n is not None:
                 await session.commit()
-                logger.info(
-                    "Startup : taux CNESST global créé à %.4f (fiches converties)",
-                    taux,
+                logger.warning(
+                    "Startup : prime CNESST globale retirée, %d taux réécrits", n
                 )
     except Exception as exc:
-        logger.warning("initialisation du taux CNESST global failed: %s", exc)
+        logger.warning("retour arrière de la prime CNESST failed: %s", exc)
 
     # STAGING : premier compte owner sur base vide (no-op partout ailleurs).
     try:

@@ -6,9 +6,8 @@ coûté au taux en vigueur à D, pas au taux courant de l'employé.
 Usage typique (costing de rentabilité d'un projet) ::
 
     periods = await load_rate_periods(db, employe_ids)
-    cnesst = await charger_bareme_cnesst(db)
     cost = resolve_real_cost(
-        periods.get(emp.id, []), punch_date, emp, avg_rate, cnesst=cnesst
+        periods.get(emp.id, []), punch_date, emp, avg_rate
     )
 """
 
@@ -23,7 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.employe import Employe
 from app.models.employe_rate_history import EmployeRateHistory
-from app.services.cnesst import BaremeCnesst, taux_cnesst
 
 
 @dataclass
@@ -33,15 +31,11 @@ class RatePeriod:
     effective_date: date
     hourly_rate: float
     billing_rate: Optional[float]
-    #: Taux CNESST personnalisé du palier ; None = taux global
-    #: (Paramètres → Prime CNESST) en vigueur à la date du punch.
-    cnesst_rate: Optional[float]
+    cnesst_rate: float
     ccq_rate: float
     is_ccq: bool
     #: Taux de base sous régime CCQ (None = hourly_rate).
     hourly_rate_ccq: Optional[float] = None
-    #: Case « Prime CNESST » du palier (décochée = aucune prime).
-    cnesst_actif: bool = True
 
 
 #: Régimes d'un punch (retour Phil 2026-09-26). Le coût suit le régime du
@@ -105,11 +99,7 @@ async def load_rate_periods(
                     if r.billing_rate is not None
                     else None
                 ),
-                cnesst_rate=(
-                    float(r.cnesst_rate)
-                    if r.cnesst_rate is not None
-                    else None
-                ),
+                cnesst_rate=float(r.cnesst_rate or 0),
                 ccq_rate=float(r.ccq_rate or 0),
                 is_ccq=bool(r.is_ccq),
                 hourly_rate_ccq=(
@@ -117,7 +107,6 @@ async def load_rate_periods(
                     if getattr(r, "hourly_rate_ccq", None) is not None
                     else None
                 ),
-                cnesst_actif=getattr(r, "cnesst_actif", True) is not False,
             )
         )
     return out
@@ -189,7 +178,6 @@ def resolve_real_cost(
     emp: Optional[Employe],
     avg_rate: float,
     regime: Optional[str] = None,
-    cnesst: Optional[BaremeCnesst] = None,
 ) -> float:
     """Coût horaire réel à appliquer à un punch daté `on_date`.
 
@@ -202,10 +190,7 @@ def resolve_real_cost(
     ``regime`` (2026-09-26) : « ccq » → taux de base CCQ (sinon le taux
     courant) + majoration CCQ ; « hors_decret » → taux courant, sans
     majoration CCQ ; None → suit la fiche employé à la date (comme avant).
-    La CNESST s'applique dans tous les cas, sauf case « Prime CNESST »
-    décochée : taux personnalisé de la période / fiche, sinon le taux
-    global de ``cnesst`` à `on_date` (``charger_bareme_cnesst`` ; None =
-    aucun taux global).
+    La CNESST s'applique dans tous les cas.
     """
     reg = regime_effectif(periods, on_date, emp, regime)
     is_ccq = reg == REGIME_CCQ          # majoration CCQ (fiche ou punch)
@@ -218,15 +203,12 @@ def resolve_real_cost(
                 t = _taux_ccq_periode(p, periods, emp)
                 if t is not None:
                     base = t
-            cn = taux_cnesst(p.cnesst_actif, p.cnesst_rate, cnesst, on_date)
-            return real_cost(base, cn, p.ccq_rate, is_ccq)
+            return real_cost(base, p.cnesst_rate, p.ccq_rate, is_ccq)
     if emp is not None:
         base = float(emp.hourly_rate or avg_rate)
         if explicite_ccq and getattr(emp, "hourly_rate_ccq", None) is not None:
             base = float(emp.hourly_rate_ccq)
-        cn = taux_cnesst(
-            getattr(emp, "cnesst_actif", True), emp.cnesst_rate, cnesst, on_date
-        )
+        cnesst = float(emp.cnesst_rate or 0)
         ccq = float(emp.ccq_rate or 0)
-        return real_cost(base, cn, ccq, is_ccq)
+        return real_cost(base, cnesst, ccq, is_ccq)
     return round(float(avg_rate), 2)
