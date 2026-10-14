@@ -358,6 +358,57 @@ def test_parametres_et_acces(client, auth_headers, employee_headers):
     ).status_code == 403
 
 
+def test_url_tres_longue_rescannee_sans_doublon(run):
+    """Bug prod 2026-10-14 : une URL de fiche > 500 car. était insérée
+    tronquée au 1er scan puis non retrouvée au 2e → IntegrityError."""
+    from app.models.prospection_courtier import ProspectionCourtierAnnonce
+    from sqlalchemy import func, select
+
+    url = "https://exemple.test/annonce?" + "x" * 600
+
+    async def _deux_fois():
+        async with TestSessionLocal() as s:
+            c, _ = await svc.upsert_courtier(s, nom="Ursula Longurl", source="analyse")
+            await svc.lier_annonce(s, c, source_url=url, nb_units=25)
+            await svc.lier_annonce(s, c, source_url=url, nb_units=26)
+            await s.flush()
+            n = (
+                await s.execute(
+                    select(func.count()).select_from(ProspectionCourtierAnnonce).where(
+                        ProspectionCourtierAnnonce.courtier_id == c.id
+                    )
+                )
+            ).scalar_one()
+            await s.rollback()
+            return n
+
+    assert run(_deux_fois()) == 1
+
+
+def test_scan_tolere_une_fiche_cassee(run, monkeypatch):
+    """Une fiche qui fait planter la liaison (ici lier_annonce lève) est
+    notée dans le rapport ; les autres courtiers sont quand même créés."""
+    original = svc.lier_annonce
+
+    async def _casse(db, courtier, **kw):
+        if "Gallico" in courtier.nom:
+            raise RuntimeError("boum fiche")
+        return await original(db, courtier, **kw)
+
+    monkeypatch.setattr(svc, "lier_annonce", _casse)
+
+    async def _scan():
+        async with TestSessionLocal() as s:
+            rapport = await svc.scan(s, config=dict(svc.DEFAUTS), utiliser_vps=False)
+            await s.rollback()
+            return rapport
+
+    rapport = run(_scan())
+    assert rapport["analyses_examinees"] >= 3
+    assert any("Gallico" in e and "boum fiche" in e for e in rapport["erreurs"]), rapport["erreurs"]
+    assert rapport["courtiers_mis_a_jour"] + rapport["courtiers_crees"] >= 2
+
+
 def test_scan_vps_vide_explique_pourquoi(run, monkeypatch):
     """Le VPS répond 200 mais n'a lu aucune annonce (Centris bloque) : le
     rapport le dit, avec le diagnostic du VPS, sans planter le scan."""
