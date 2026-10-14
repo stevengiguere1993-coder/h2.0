@@ -58,6 +58,15 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "bons_travail",
     "cadence_steps",
     "centris_listings",
+    #: Registre des courtiers (Prospection, 2026-10-14) : qui vend les
+    #: gros parcs de logements + annonces liées + journal des contacts.
+    #: Lecture IA : kratos_list_entities(courtiers) + détail
+    #: prospection_courtier (activity.py) ; API complète sous
+    #: /api/v1/prospection/courtiers (catalogue). Les envois de
+    #: courriel restent un geste humain (bouton), jamais un cron.
+    "prospection_courtiers",
+    "prospection_courtier_annonces",
+    "prospection_courtier_contacts",
     "client_documents",
     "clients",
     "contact_hides",
