@@ -291,6 +291,14 @@ async def ensure_critical_columns() -> None:
         # Lien facture_item → soumission_item (facturation progressive
         # par item). Table préexistante → create_all ne l'ajoute pas.
         ("facture_items", "soumission_item_id", "INTEGER"),
+        # Heures / achats importés hors soumission de base sans être des
+        # « extras » (2026-10-14) — lu par les calculs du contrat et les
+        # finances projet.
+        (
+            "facture_items",
+            "hors_soumission",
+            "BOOLEAN NOT NULL DEFAULT FALSE",
+        ),
         ("qbo_account_maps", "labour_expense_account", "VARCHAR(255)"),
         ("qbo_account_maps", "labour_clearing_account", "VARCHAR(255)"),
         # Feuille de temps QBO liée à un punch (heures → suivi de projet QB

@@ -22,6 +22,11 @@ from app.models.project_subcontractor_contract import (
 from app.models.punch import Punch
 from app.models.soumission import Soumission, SoumissionStatus
 from app.models.soumission_item import SoumissionItem
+from app.services.facture_lignes import (
+    KIND_SERVICE,
+    kind_ligne_achat,
+    projet_a_soumission,
+)
 
 
 # Taux plancher à l'IMPORT des heures sur une facture client (modifiable
@@ -149,6 +154,9 @@ async def import_into_facture(
     pos = (max(existing) + 1) if existing else 0
 
     added = 0
+    # Heures et achats importés : vrai type (Service / Matériaux), hors
+    # soumission de base si le projet de la facture en a une.
+    imports_hors_soumission = await projet_a_soumission(db, fa.project_id)
 
     # 1) Soumission items
     if data.include_soumission:
@@ -302,7 +310,8 @@ async def import_into_facture(
                     quantity=b_hours,
                     unit_price=round(b_amount / b_hours, 2),
                     total=b_amount,
-                    kind="extra",
+                    kind=KIND_SERVICE,
+                    hors_soumission=imports_hors_soumission,
                 )
                 db.add(item)
                 items_by_key[key] = item
@@ -407,6 +416,11 @@ async def import_into_facture(
                     else billed
                 ),
                 total=billed,
+                # Même règle que la création depuis le projet : achats
+                # hors soumission de base (ils ne comptaient jusqu'ici
+                # comme « service » que par oubli de ce chemin).
+                kind=kind_ligne_achat(ac.kind),
+                hors_soumission=imports_hors_soumission,
             )
             db.add(item)
             if not is_hourly:
@@ -566,6 +580,9 @@ async def import_bon_into_facture(
     pos = (max(existing) + 1) if existing else 0
     added = 0
     now = datetime.now(timezone.utc)
+    # Heures et achats du bon : vrai type (Service / Matériaux), hors
+    # soumission de base si le projet de la FACTURE en a une.
+    imports_hors_soumission = await projet_a_soumission(db, fa.project_id)
 
     # 1) Heures punchées du bon (approuvées, pas encore facturées) —
     #    pointées sur le bon directement ou sur son projet lié.
@@ -622,7 +639,8 @@ async def import_bon_into_facture(
                 quantity=b_hours,
                 unit_price=round(b_amount / b_hours, 2),
                 total=b_amount,
-                kind="extra",
+                kind=KIND_SERVICE,
+                hors_soumission=imports_hors_soumission,
             )
             db.add(item)
             await db.flush()
@@ -727,7 +745,8 @@ async def import_bon_into_facture(
             quantity=qty,
             unit_price=up,
             total=billed,
-            kind="extra",
+            kind=kind_ligne_achat(ac.kind),
+            hors_soumission=imports_hors_soumission,
         )
         db.add(item)
         await db.flush()
