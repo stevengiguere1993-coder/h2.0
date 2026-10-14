@@ -1,7 +1,7 @@
 """Scraper Centris : tentative HTTP + parser HTML.
 
 URL pattern de recherche multi-logements :
-- Multiplex 2-5 unités : `/fr/multiplex~immeuble-residentiel-a-vendre`
+- Plex 2-5 unités : `/fr/plex~a-vendre` (ancienne URL multiplex~immeuble-residentiel-a-vendre → 404 depuis 2026-10)
 - Immeuble résidentiel 6+ : pareil avec filtre #units
 """
 
@@ -23,10 +23,14 @@ log = logging.getLogger(__name__)
 # peut filtrer par grande ville.
 SEARCH_URLS = {
     "multiplex_2_5": (
-        "https://www.centris.ca/fr/multiplex~immeuble-residentiel-a-vendre"
+        # Centris 2026-10 : « Plex à vendre » (2 à 5 logements).
+        "https://www.centris.ca/fr/plex~a-vendre"
     ),
     "immeuble_residentiel_6_plus": (
-        "https://www.centris.ca/fr/immeuble-residentiel-a-vendre"
+        # Centris 2026-10 : « Multifamilial à vendre » (6 logements et plus).
+        # L'ancienne URL immeuble-residentiel-a-vendre répond 404 (constaté
+        # par le diagnostic du scan du registre des courtiers, 2026-10-14).
+        "https://www.centris.ca/fr/immeuble-a-revenus~a-vendre"
     ),
 }
 
