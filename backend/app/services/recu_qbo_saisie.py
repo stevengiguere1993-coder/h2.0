@@ -28,6 +28,12 @@ Décisions (proposition acceptée le 2026-10-04) :
   fournisseur : si elle existe, on demande confirmation.
 - Copie vers le Drive : la nuit, par la copie existante (aucun appel au
   Drive ici).
+
+Classe « Kratos » (Steven, 2026-10-14) : chaque reçu porte la classe QB
+``settings.qbo_recus_class_name``, créée dans la compagnie si absente,
+pour que les techniciennes comptables repèrent ce qui vient de Kratos. La
+classe ne bloque jamais un reçu : si QB la refuse (suivi des classes
+désactivé), le reçu part sans classe et la page le signale.
 """
 
 from __future__ import annotations
@@ -663,11 +669,16 @@ def construire_transaction(
     ht: float,
     taxes: List[Tuple[str, float, float]],
     note: str,
+    classe_id: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """(« Purchase » | « Bill », payload QBO) du reçu."""
     detail: Dict[str, Any] = {"AccountRef": {"value": recu.categorie_id}}
     if recu.code_taxe_id:
         detail["TaxCodeRef"] = {"value": recu.code_taxe_id}
+    # Une Dépense ou une Facture fournisseur ne porte la classe que sur
+    # ses lignes (pas de ClassRef d'en-tête dans l'API).
+    if classe_id:
+        detail["ClassRef"] = {"value": classe_id}
     ligne: Dict[str, Any] = {
         "DetailType": "AccountBasedExpenseLineDetail",
         "Amount": cents(ht),
@@ -765,19 +776,63 @@ def _est_taux_refuse(exc: Exception) -> bool:
     return "invalid tax rate" in msg or "taux de taxe non valide" in msg
 
 
+def _est_classe_refusee(exc: Exception) -> bool:
+    # « class » couvre ClassRef, Class et « classe » (QB en français).
+    return "class" in str(exc).lower()
+
+
+def _retirer_classe(payload: Dict[str, Any]) -> bool:
+    """Enlève la classe des lignes. Vrai s'il y en avait une."""
+    retiree = False
+    for ligne in payload.get("Line") or []:
+        detail = ligne.get("AccountBasedExpenseLineDetail") or {}
+        if detail.pop("ClassRef", None) is not None:
+            retiree = True
+    return retiree
+
+
+async def _classe_recus(qbo: Any) -> Optional[str]:
+    """Id de la classe QB des reçus (« Kratos »), créée si absente. None
+    si aucune classe n'est configurée ou si QB la refuse : le reçu part
+    alors sans classe plutôt que pas du tout."""
+    nom = (settings.qbo_recus_class_name or "").strip()
+    if not nom:
+        return None
+    try:
+        classe = await qbo.ensure_class(name=nom)
+    except Exception as exc:  # noqa: BLE001 — la classe ne bloque jamais le reçu
+        log.warning("Reçu QB : classe « %s » indisponible : %s", nom, exc)
+        return None
+    return str(classe["Id"]) if classe and classe.get("Id") else None
+
+
+def classe_de(txn: Dict[str, Any]) -> Optional[str]:
+    """Classe que QB a gardée sur le reçu créé (None : aucune, p. ex.
+    suivi des classes désactivé dans la compagnie)."""
+    for ligne in txn.get("Line") or []:
+        ref = (ligne.get("AccountBasedExpenseLineDetail") or {}).get("ClassRef") or {}
+        if ref.get("value"):
+            return (ref.get("name") or "").strip() or settings.qbo_recus_class_name
+    return None
+
+
 async def _creer(qbo: Any, entite: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     from app.integrations.quickbooks import QuickBooksError
 
     creer = qbo.create_purchase if entite == "Purchase" else qbo.create_bill
-    try:
-        return await creer(payload)
-    except QuickBooksError as exc:
-        if _est_taux_refuse(exc) and payload.pop("TxnTaxDetail", None) is not None:
-            # Même repli que les achats Construction : QBO calcule la taxe
-            # sur le hors-taxes (au plus un cent d'écart).
-            log.warning("Reçu QB : taxes exactes refusées → calcul QBO (%s)", exc)
+    while True:
+        try:
             return await creer(payload)
-        raise
+        except QuickBooksError as exc:
+            if _est_taux_refuse(exc) and payload.pop("TxnTaxDetail", None) is not None:
+                # Même repli que les achats Construction : QBO calcule la
+                # taxe sur le hors-taxes (au plus un cent d'écart).
+                log.warning("Reçu QB : taxes exactes refusées → calcul QBO (%s)", exc)
+                continue
+            if _est_classe_refusee(exc) and _retirer_classe(payload):
+                log.warning("Reçu QB : classe refusée → reçu sans classe (%s)", exc)
+                continue
+            raise
 
 
 async def _joindre(
@@ -919,6 +974,8 @@ async def envoyer(
     out["fournisseur"] = infos["fournisseur"]
     out["montant"] = infos["montant"]
     out["date"] = infos["date"].isoformat() if infos["date"] else None
+    if (settings.qbo_recus_class_name or "").strip():
+        out["classe"] = classe_de(txn)
     return out
 
 
@@ -980,6 +1037,7 @@ async def _envoyer_dans_qbo(qbo: Any, recu: RecuIn, user: User) -> Tuple[str, Di
         ht=ht,
         taxes=taxes,
         note=note,
+        classe_id=await _classe_recus(qbo),
     )
     txn = await _creer(qbo, entite, payload)
     if not txn.get("Id"):

@@ -103,6 +103,11 @@ class _FakeQbo:
         self.pieces: List[Dict[str, Any]] = []
         self.refuser_taxes_exactes = False
         self.refuser_piece = False
+        self.classes: List[Dict[str, Any]] = []
+        #: Suivi des classes désactivé : ensure_class ne rend rien.
+        self.classes_desactivees = False
+        #: QB refuse la classe sur la transaction (erreur de validation).
+        self.refuser_classe = False
 
     # ── Lectures ──
     async def query_all(self, sql: str) -> List[Dict[str, Any]]:
@@ -151,6 +156,33 @@ class _FakeQbo:
         self.vendors.append(v)
         return v
 
+    async def ensure_class(self, *, name: str) -> Optional[Dict[str, Any]]:
+        if self.classes_desactivees:
+            return None
+        c = next((c for c in self.classes if c["Name"] == name), None)
+        if c is None:
+            c = {"Id": str(5000 + len(self.classes)), "Name": name}
+            self.classes.append(c)
+        return c
+
+    def _valider_classe(self, payload: Dict[str, Any], chemin: str) -> None:
+        if self.refuser_classe and any(
+            "ClassRef" in (ln.get("AccountBasedExpenseLineDetail") or {}) for ln in payload["Line"]
+        ):
+            raise QuickBooksError(
+                "QBO refus : Invalid Reference Id : Classes element id 5000 not found "
+                f"— QBO POST {chemin} failed: 400"
+            )
+
+    def _txn(self, payload: Dict[str, Any], txn_id: str) -> Dict[str, Any]:
+        """Transaction telle que QB la renvoie : copie, nom de la classe."""
+        txn = {**json.loads(json.dumps(payload)), "Id": txn_id, "TotalAmt": self._total(payload)}
+        for ln in txn["Line"]:
+            ref = (ln.get("AccountBasedExpenseLineDetail") or {}).get("ClassRef")
+            if ref:
+                ref["name"] = next(c["Name"] for c in self.classes if c["Id"] == ref["value"])
+        return txn
+
     def _total(self, payload: Dict[str, Any]) -> float:
         net = sum(float(ln["Amount"]) for ln in payload["Line"])
         tax = float((payload.get("TxnTaxDetail") or {}).get("TotalTax") or 0)
@@ -164,21 +196,19 @@ class _FakeQbo:
     async def create_purchase(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         if self.refuser_taxes_exactes and "TxnTaxDetail" in payload:
             raise QuickBooksError("QBO refus : Invalid tax rate id — QBO POST /purchase failed: 400")
+        self._valider_classe(payload, "/purchase")
         self.creations.append(("Purchase", json.loads(json.dumps(payload))))
-        txn = {**payload, "Id": str(500 + len(self.creations)), "TotalAmt": self._total(payload)}
+        txn = self._txn(payload, str(500 + len(self.creations)))
         if payload.get("EntityRef"):
             txn["EntityRef"] = {**payload["EntityRef"], "name": self._nom(payload["EntityRef"])}
         self.purchases.append(txn)
         return txn
 
     async def create_bill(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        self._valider_classe(payload, "/bill")
         self.creations.append(("Bill", json.loads(json.dumps(payload))))
-        txn = {
-            **payload,
-            "Id": str(800 + len(self.creations)),
-            "TotalAmt": self._total(payload),
-            "VendorRef": {**payload["VendorRef"], "name": self._nom(payload["VendorRef"])},
-        }
+        txn = self._txn(payload, str(800 + len(self.creations)))
+        txn["VendorRef"] = {**payload["VendorRef"], "name": self._nom(payload["VendorRef"])}
         self.bills.append(txn)
         return txn
 
@@ -373,10 +403,14 @@ def test_depense_payee_creee_avec_taxes_exactes_et_photo(client, owner_headers, 
     assert payload["GlobalTaxCalculation"] == "TaxExcluded"
     ligne = payload["Line"][0]
     assert ligne["Amount"] == 100.0  # hors taxes
+    # Classe « Kratos » créée dans la compagnie et posée sur la ligne.
+    kratos = next(c for c in fake_qbo.classes if c["Name"] == "Kratos")
     assert ligne["AccountBasedExpenseLineDetail"] == {
         "AccountRef": {"value": "61"},
         "TaxCodeRef": {"value": "5"},
+        "ClassRef": {"value": kratos["Id"]},
     }
+    assert out["classe"] == "Kratos"
     taxe = payload["TxnTaxDetail"]
     assert taxe["TotalTax"] == 14.98
     assert [(t["TaxLineDetail"]["TaxRateRef"]["value"], t["Amount"]) for t in taxe["TaxLine"]] == [
@@ -474,6 +508,11 @@ def test_facture_a_payer_nouveau_fournisseur(client, owner_headers, inc, fake_qb
     assert payload["SalesTermRef"] == {"value": "3"}
     assert payload["DueDate"] == "2026-11-02"
     assert payload["Line"][0]["Amount"] == 450.0
+    # Une facture à payer porte aussi la classe « Kratos ».
+    assert payload["Line"][0]["AccountBasedExpenseLineDetail"]["ClassRef"] == {
+        "value": fake_qbo.classes[0]["Id"]
+    }
+    assert r.json()["classe"] == "Kratos"
     assert "TxnTaxDetail" not in payload  # exonéré : aucune taxe
     assert "AccountRef" not in payload and "PaymentType" not in payload
     assert fake_qbo.pieces[-1]["file_name"] == "2026-10-03 Plomberie Roy 450,00$.pdf"
@@ -603,6 +642,54 @@ def test_comptabilite_reservee_aux_proprietaires(client, run, inc, fake_qbo, own
     assert acces(invite) is True
     r = client.get("/api/v1/recus-qbo/entreprises", headers=invite)
     assert r.status_code == 200, r.text
+
+
+# ── Classe « Kratos » (Steven, 2026-10-14) ──────────────────────────
+
+
+def test_classe_kratos_creee_une_fois_puis_reutilisee(client, owner_headers, inc, fake_qbo):
+    """Chaque reçu porte la classe « Kratos » : créée la première fois
+    dans la compagnie de l'inc, réutilisée ensuite."""
+    for total in (114.98, 229.95):
+        r = _envoyer(client, owner_headers, inc["id"], _recu(total=total, taxes=None))
+        assert r.status_code == 200, r.text
+        assert r.json()["classe"] == "Kratos"
+    assert [c["Name"] for c in fake_qbo.classes] == ["Kratos"]
+    assert {
+        p["Line"][0]["AccountBasedExpenseLineDetail"]["ClassRef"]["value"]
+        for _, p in fake_qbo.creations
+    } == {fake_qbo.classes[0]["Id"]}
+
+
+def test_suivi_des_classes_desactive_recu_part_sans_classe(client, owner_headers, inc, fake_qbo):
+    fake_qbo.classes_desactivees = True
+    r = _envoyer(client, owner_headers, inc["id"], _recu())
+    assert r.status_code == 200, r.text
+    assert r.json()["classe"] is None  # la page le signale
+    _, payload = fake_qbo.creations[-1]
+    assert "ClassRef" not in payload["Line"][0]["AccountBasedExpenseLineDetail"]
+
+
+def test_classe_refusee_par_quickbooks_repli_sans_classe(client, owner_headers, inc, fake_qbo):
+    fake_qbo.refuser_classe = True
+    fake_qbo.refuser_taxes_exactes = True  # les deux replis se cumulent
+    r = _envoyer(client, owner_headers, inc["id"], _recu())
+    assert r.status_code == 200, r.text
+    assert r.json()["classe"] is None
+    assert len(fake_qbo.creations) == 1
+    _, payload = fake_qbo.creations[-1]
+    assert "ClassRef" not in payload["Line"][0]["AccountBasedExpenseLineDetail"]
+    assert "TxnTaxDetail" not in payload
+
+
+def test_sans_classe_configuree_aucune_classe(client, owner_headers, inc, fake_qbo, monkeypatch):
+    monkeypatch.setattr("app.services.recu_qbo_saisie.settings.qbo_recus_class_name", "")
+    r = _envoyer(client, owner_headers, inc["id"], _recu())
+    assert r.status_code == 200, r.text
+    assert "classe" not in r.json()
+    assert fake_qbo.classes == []
+    _, payload = fake_qbo.creations[-1]
+    assert "ClassRef" not in payload["Line"][0]["AccountBasedExpenseLineDetail"]
 
 
 def test_trace_sans_montant_ni_fournisseur():
