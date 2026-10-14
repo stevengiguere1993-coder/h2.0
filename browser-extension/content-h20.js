@@ -4,17 +4,22 @@
 // on transmet à background.js qui ouvre montreal.ca dans un onglet
 // en arrière-plan. Depuis la 1.2.0 : messages h2_batch_* pour la
 // COLLECTE EN LOT (démarrer, pause, reprise, arrêt, réessayer, état).
+// Depuis la 1.3.0 : h2_extension_ping → h2_extension_pong {version}, pour
+// que Kratos sache si l'extension installée convertit les sous-clients
+// QuickBooks en projets (content-qbo.js).
 
 (function () {
   "use strict";
 
   const log = (...args) => console.log("[h2.0 Bridge]", ...args);
 
+  const VERSION = "1.3.0";
+
   // Marqueur que l'extension est installée — h2.0 peut le checker
   // pour savoir si elle peut compter sur le scraping auto (et sur la
   // collecte en lot à partir de 1.2.0).
   try {
-    window.__h2_extension = "1.2.1";
+    window.__h2_extension = "1.3.0";
   } catch (_) {}
 
   const BATCH_MESSAGES = {
@@ -31,6 +36,13 @@
     if (event.source !== window) return;
     const data = event.data;
     if (!data || typeof data !== "object") return;
+
+    // 1.3.0 — Kratos demande la version installée (page Comptabilité →
+    // Projets QB : « extension à mettre à jour » si elle est trop vieille).
+    if (data.type === "h2_extension_ping") {
+      window.postMessage({ type: "h2_extension_pong", version: VERSION }, "*");
+      return;
+    }
 
     if (data.type === "h2_open_evalweb" && data.matricule) {
       log("Demande d'ouverture EvalWeb en arrière-plan:", data.matricule);

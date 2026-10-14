@@ -153,6 +153,7 @@ async def ensure_project_qbo_job(db: AsyncSession, proj: Project) -> dict:
             "pas lié."
         )
     job_name = ""
+    row = None
     try:
         row = await qbo.get_customer(job_id)
         job_name = (
@@ -162,6 +163,13 @@ async def ensure_project_qbo_job(db: AsyncSession, proj: Project) -> dict:
         )
     except Exception:  # noqa: BLE001
         job_name = ""
+    # Sous-client qui vient d'être créé / adopté → à convertir en PROJET
+    # dans QB (Steven 2026-10-14 : Comptabilité → Projets QB, extension
+    # Chrome). Un lien déjà en place n'y entre que s'il y était déjà.
+    if action in ("cree", "adopte") or proj.qbo_conversion_etat is not None:
+        from app.services import qbo_projets_conversion as conversion
+
+        conversion.demander(proj, row if isinstance(row, dict) else None)
     log.info(
         "Projet %s « %s » : sous-client QB %s (%s) sous %s — %s",
         proj.id, proj.name, job_id, job_name, client.name, action,
