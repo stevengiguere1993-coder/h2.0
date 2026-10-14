@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from typing import List, Optional
 
@@ -50,6 +51,12 @@ class OrgNodeRead(BaseModel):
     #: Quotes-parts par détenteur : JSON {"<node_id>": pct} (brut — le
     #: frontend le parse pour l'afficher sur les flèches).
     ownership_json: Optional[str] = None
+    #: Nature forcée d'un détenteur hors groupe (person | company).
+    nature_forced: Optional[str] = None
+    #: Calculé : la bulle ne correspond à rien dans les fiches actives
+    #: (détenteur sans ligne Partenaires & parts, INC fermée) — à
+    #: retirer ou à inscrire dans une fiche.
+    absent_des_fiches: bool = False
     pos_x: Optional[float] = None
     pos_y: Optional[float] = None
     execution_tier: Optional[str] = None
@@ -139,7 +146,7 @@ async def list_nodes(
     if entreprise_id is not None:
         stmt = stmt.where(OrgNode.entreprise_id == entreprise_id)
     rows = (await db.execute(stmt)).scalars().all()
-    return [OrgNodeRead.model_validate(r) for r in rows]
+    return await _lire_avec_absents(db, list(rows))
 
 
 @router.post(
@@ -245,6 +252,7 @@ async def create_version(
                 assignee_user_id=s.assignee_user_id,
                 assignee_external_name=s.assignee_external_name,
                 pos_x=s.pos_x, pos_y=s.pos_y,
+                nature_forced=s.nature_forced,
                 execution_tier=s.execution_tier, state=s.state,
                 state_note=s.state_note,
             )
@@ -373,6 +381,11 @@ async def delete_node(
     ).scalar_one_or_none()
     if n is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Nœud introuvable.")
+    if n.kind in ("company", "person"):
+        # Bulle de DÉTENTION : on détache ce qu'elle détient avant de la
+        # retirer — le FK parent_id est en CASCADE et emporterait les
+        # compagnies détenues (Phil 2026-10-08).
+        await _detacher_partout(db, n)
     await db.delete(n)
     await db.commit()
 
@@ -554,27 +567,325 @@ async def import_entreprises(
     return [OrgNodeRead.model_validate(n) for n in await _all_nodes_sorted(db)]
 
 
+# ─── Sync de la détention depuis les fiches (seule porte d'entrée) ──
+#
+# Retour Phil 2026-10-08 : l'organigramme ne s'édite plus à la main —
+# tout vient des fiches d'entreprises (Partenaires & parts). La sync :
+#   • crée les bulles manquantes (nos INCs actives + leurs détenteurs)
+#     et les place EN BAS du canvas (l'utilisateur les range ensuite) ;
+#   • ne bouge AUCUNE bulle existante ;
+#   • classe chaque détenteur : INC du groupe / compagnie hors groupe /
+#     personne (voir _nature_detenteur) ;
+#   • reconstruit les flèches de détention et les quotes-parts des INCs
+#     qui ont des lignes Partenaires & parts ;
+#   • ne supprime RIEN : les bulles absentes des fiches sont signalées
+#     (absent_des_fiches) et se retirent à la main.
+
+# Géométrie du canvas (= frontend : BUBBLE_W / BUBBLE_H / GRID) pour
+# placer les nouveautés sous les bulles existantes.
+_BUBBLE_W = 210
+_BUBBLE_H = 66
+_GRID = 24
+_NOUVEAUTES_PAR_RANGEE = 8
+
+
+def _snap(v: float) -> float:
+    return float(round(v / _GRID) * _GRID)
+
+
+class _Placeur:
+    """Positions des NOUVELLES bulles : une rangée sous tout ce qui
+    existe déjà, de gauche à droite (8 par rangée)."""
+
+    def __init__(self, nodes: List[OrgNode]) -> None:
+        ys = [float(n.pos_y) for n in nodes if n.pos_y is not None]
+        self.y = (
+            _snap(max(ys) + _BUBBLE_H + 3 * _GRID) if ys else float(_GRID)
+        )
+        self.x = float(_GRID)
+        self.col = 0
+
+    def suivant(self) -> tuple:
+        x, y = self.x, self.y
+        self.col += 1
+        self.x += _BUBBLE_W + 2 * _GRID
+        if self.col >= _NOUVEAUTES_PAR_RANGEE:
+            self.col = 0
+            self.x = float(_GRID)
+            self.y += _BUBBLE_H + 3 * _GRID
+        return x, y
+
+
+# Indices qu'un nom désigne une compagnie (repli quand la case
+# « personne morale » n'est pas cochée) : suffixes légaux, mots
+# d'affaires, ou numéro de compagnie (« 9182-4326 Québec inc. »).
+_MOTS_COMPAGNIE = re.compile(
+    r"(?:^|[\s,.\-(/])(?:inc|ltee|ltée|ltd|limitee|limitée|limited|llc"
+    r"|corp|corporation|s\.?e\.?c|s\.?e\.?n\.?c|senc|cie|compagnie|company"
+    r"|societe|société|groupe|group|holding|holdings|gestion|placements?"
+    r"|investissements?|immobilier|immobiliere|immobilière|capital|enr"
+    r"|fiducie|trust|entreprises?|conseils?|developpement|développement"
+    r"|construction|services?|solutions|technologies?)(?:[\s,.)\-/]|$)",
+    re.IGNORECASE,
+)
+_NUMERO_COMPAGNIE = re.compile(r"^\d{3,}\b")
+
+
+def _ressemble_a_une_compagnie(label: str) -> bool:
+    s = (label or "").strip()
+    if not s:
+        return False
+    if _NUMERO_COMPAGNIE.match(s):
+        return True
+    return bool(_MOTS_COMPAGNIE.search(s))
+
+
+def _nature_detenteur(lignes: list, node: Optional[OrgNode]) -> str:
+    """« person » ou « company » pour un détenteur hors groupe.
+    1. nature forcée sur la bulle (POST /org-nodes/{id}/nature) ;
+    2. compte portail → personne ;
+    3. case « personne morale » cochée sur une de ses lignes → compagnie ;
+    4. indices dans le nom (inc., ltée, 9182-…) → compagnie ;
+    5. sinon personne."""
+    if node is not None and node.nature_forced in ("person", "company"):
+        return node.nature_forced
+    if any(getattr(p, "user_id", None) for p in lignes):
+        return "person"
+    if any(bool(getattr(p, "is_personne_morale", False)) for p in lignes):
+        return "company"
+    label = next(
+        (p.partner_name for p in lignes if getattr(p, "partner_name", None)),
+        "",
+    )
+    return "company" if _ressemble_a_une_compagnie(label) else "person"
+
+
+def _est_bulle_detenteur(n: OrgNode) -> bool:
+    """Bulle d'un détenteur hors groupe : personne ou compagnie sans
+    fiche Kratos (nos INCs ont un entreprise_id)."""
+    return n.kind == "person" or (
+        n.kind == "company" and n.entreprise_id is None
+    )
+
+
+def _effacer_aretes(n: OrgNode) -> None:
+    n.parent_id = None
+    n.co_owner_node_ids = None
+    n.ownership_json = None
+    autres = [
+        ligne
+        for ligne in (n.description or "").splitlines()
+        if not ligne.startswith("Détention : ") and ligne.strip()
+    ]
+    n.description = "\n".join(autres) or None
+
+
+class SyncRapport(BaseModel):
+    """Ce que la sync a changé ou remarqué — affiché à l'utilisateur."""
+
+    crees: List[str] = []
+    reclasses: List[str] = []
+    #: Bulles qui ne correspondent plus à rien dans les fiches actives
+    #: (la sync ne les retire pas elle-même : bouton « Retirer »).
+    absents: List[str] = []
+    #: INCs actives sans aucune ligne Partenaires & parts : leurs liens
+    #: affichés (s'il y en a) ne viennent pas des fiches.
+    sans_lignes: List[str] = []
+
+
+class SyncResult(BaseModel):
+    nodes: List[OrgNodeRead]
+    rapport: SyncRapport
+
+
 @router.post(
     "/sync-detention",
-    response_model=List[OrgNodeRead],
+    response_model=SyncResult,
     summary=(
         "Reconstruit la structure de DÉTENTION depuis les partenaires "
-        "des fiches d'entreprises : un nœud par entreprise active et "
-        "par actionnaire externe, parent = plus gros détenteur, autres "
-        "en co-détenteurs, pourcentages dans la description. Les "
-        "positions du canvas sont conservées. Idempotent."
+        "des fiches d'entreprises : une bulle par entreprise active et "
+        "par détenteur (personne ou compagnie hors groupe), flèches et "
+        "quotes-parts depuis les lignes Partenaires & parts. Les "
+        "nouveautés sont placées en bas du canvas, les bulles existantes "
+        "ne bougent pas et rien n'est supprimé (les bulles absentes des "
+        "fiches sont signalées). Renvoie les nœuds de la version et un "
+        "rapport."
     ),
 )
 async def sync_detention(
     db: DBSession,
     _: CurrentUser,
     version_id: Optional[int] = Query(default=None),
-) -> List[OrgNodeRead]:
-    await _sync_detention_impl(db, version_id=version_id)
+) -> SyncResult:
+    rapport = await _sync_detention_impl(db, version_id=version_id)
     await db.commit()
-    return [
-        OrgNodeRead.model_validate(n) for n in await _all_nodes_sorted(db)
+    rows = (
+        await db.execute(
+            select(OrgNode)
+            .where(
+                OrgNode.version_id.is_(None)
+                if version_id is None
+                else OrgNode.version_id == version_id
+            )
+            .order_by(
+                OrgNode.parent_id.asc().nulls_first(),
+                OrgNode.position.asc(),
+            )
+        )
+    ).scalars().all()
+    return SyncResult(
+        nodes=await _lire_avec_absents(db, list(rows)),
+        rapport=SyncRapport(**rapport),
+    )
+
+
+async def _detacher_partout(db, cible: OrgNode) -> None:
+    """Retire `cible` de toutes les relations de sa version : enfants
+    (parent_id), co-détentions et quotes-parts des autres bulles."""
+    autres = (
+        await db.execute(
+            select(OrgNode).where(
+                OrgNode.version_id.is_(None)
+                if cible.version_id is None
+                else OrgNode.version_id == cible.version_id
+            )
+        )
+    ).scalars().all()
+    for n in autres:
+        if n.id == cible.id:
+            continue
+        if n.parent_id == cible.id:
+            n.parent_id = None
+        try:
+            co = [int(x) for x in json.loads(n.co_owner_node_ids or "[]")]
+        except (TypeError, ValueError):
+            co = []
+        if cible.id in co:
+            co = [c for c in co if c != cible.id]
+            n.co_owner_node_ids = json.dumps(co) if co else None
+        try:
+            own = json.loads(n.ownership_json or "{}")
+        except (TypeError, ValueError):
+            own = {}
+        if isinstance(own, dict) and str(cible.id) in own:
+            own.pop(str(cible.id), None)
+            n.ownership_json = json.dumps(own) if own else None
+    await db.flush()
+
+
+async def _bulles_absentes(db, nodes: List[OrgNode]) -> set:
+    """Ids des bulles qui ne correspondent à rien dans les fiches
+    ACTIVES : détenteur hors groupe cité par aucune ligne Partenaires &
+    parts, ou INC fermée / supprimée. Calculé à la lecture (la sync ne
+    supprime rien : l'utilisateur retire lui-même)."""
+    from app.models.entreprise import Entreprise, EntreprisePartner
+    from app.models.user import User
+
+    entreprises = (
+        await db.execute(
+            select(Entreprise).where(Entreprise.is_active.is_(True))
+        )
+    ).scalars().all()
+    ents_by_id = {e.id: e for e in entreprises}
+    ents_by_name = {(e.name or "").strip().lower() for e in entreprises}
+    partners = [
+        p
+        for p in (
+            await db.execute(select(EntreprisePartner))
+        ).scalars().all()
+        if p.entreprise_id in ents_by_id
     ]
+    user_ids = {p.user_id for p in partners if p.user_id}
+    users = {
+        u.id: u
+        for u in (
+            await db.execute(select(User).where(User.id.in_(user_ids)))
+        ).scalars().all()
+    } if user_ids else {}
+    cites: set = set()
+    for p in partners:
+        if p.partner_entreprise_id and p.partner_entreprise_id in ents_by_id:
+            continue
+        if p.partner_name:
+            lbl = p.partner_name.strip()
+        elif p.user_id and p.user_id in users:
+            lbl = users[p.user_id].display_name
+        else:
+            lbl = f"Partenaire #{p.id}"
+        key = lbl.lower()
+        if key in ents_by_name:
+            continue
+        cites.add(key)
+    absents: set = set()
+    for n in nodes:
+        if _est_bulle_detenteur(n):
+            if (n.label or "").strip().lower() not in cites:
+                absents.add(n.id)
+        elif (
+            n.kind == "company"
+            and n.entreprise_id is not None
+            and n.entreprise_id not in ents_by_id
+        ):
+            absents.add(n.id)
+    return absents
+
+
+async def _lire_avec_absents(db, rows: List[OrgNode]) -> List[OrgNodeRead]:
+    absents = await _bulles_absentes(db, rows)
+    out = []
+    for r in rows:
+        o = OrgNodeRead.model_validate(r)
+        o.absent_des_fiches = r.id in absents
+        out.append(o)
+    return out
+
+
+class NatureIn(BaseModel):
+    nature: str = Field(..., pattern="^(person|company)$")
+
+
+@router.post(
+    "/{node_id}/nature",
+    response_model=OrgNodeRead,
+    summary=(
+        "Corrige la nature d'un détenteur hors groupe (personne ↔ "
+        "compagnie). Répercutée sur ses lignes Partenaires & parts "
+        "(case « personne morale ») — la source de vérité reste la fiche."
+    ),
+)
+async def set_nature(
+    node_id: int, data: NatureIn, db: DBSession, _: CurrentUser
+) -> OrgNodeRead:
+    from app.models.entreprise import EntreprisePartner
+
+    n = (
+        await db.execute(select(OrgNode).where(OrgNode.id == node_id))
+    ).scalar_one_or_none()
+    if n is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Nœud introuvable.")
+    if not _est_bulle_detenteur(n):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Seul un détenteur hors groupe (personne ou compagnie sans "
+            "fiche Kratos) peut changer de nature.",
+        )
+    n.nature_forced = data.nature
+    n.kind = data.nature
+    cle = (n.label or "").strip().lower()
+    lignes = (
+        await db.execute(
+            select(EntreprisePartner).where(
+                EntreprisePartner.user_id.is_(None),
+                EntreprisePartner.partner_entreprise_id.is_(None),
+            )
+        )
+    ).scalars().all()
+    for p in lignes:
+        if (p.partner_name or "").strip().lower() == cle:
+            p.is_personne_morale = data.nature == "company"
+    await db.commit()
+    await db.refresh(n)
+    return OrgNodeRead.model_validate(n)
 
 
 async def resync_detention_entreprise(db, entreprise_id: int) -> None:
@@ -597,10 +908,17 @@ async def _sync_detention_impl(
     db,
     version_id: Optional[int] = None,
     only_entreprise_id: Optional[int] = None,
-) -> None:
+) -> dict:
+    """Voir le commentaire de section. Renvoie le rapport
+    {crees, reclasses, retires, liens_retires} (listes de noms).
+    `only_entreprise_id` = chemin du hook (une seule fiche, pas de
+    nettoyage)."""
     from app.models.entreprise import Entreprise, EntreprisePartner
     from app.models.user import User
 
+    rapport: dict = {
+        "crees": [], "reclasses": [], "absents": [], "sans_lignes": [],
+    }
     nodes = list(
         (
             await db.execute(
@@ -617,14 +935,15 @@ async def _sync_detention_impl(
         for n in nodes
         if n.kind == "company" and n.entreprise_id is not None
     }
-    persons = {
+    detenteurs = {
         (n.label or "").strip().lower(): n
         for n in nodes
-        if n.kind == "person"
+        if _est_bulle_detenteur(n)
     }
     next_pos = max(
         (n.position for n in nodes if n.parent_id is None), default=-1
     ) + 1
+    placeur = _Placeur(nodes)
 
     entreprises = (
         await db.execute(
@@ -634,18 +953,24 @@ async def _sync_detention_impl(
         )
     ).scalars().all()
     ents_by_id = {e.id: e for e in entreprises}
+    ents_by_name = {
+        (e.name or "").strip().lower(): e.id for e in entreprises
+    }
     for e in entreprises:
         if e.id in by_ent:
             continue
+        x, y = placeur.suivant()
         n = OrgNode(
             parent_id=None, position=next_pos, kind="company",
             label=e.name, entreprise_id=e.id, version_id=version_id,
+            pos_x=x, pos_y=y,
         )
         db.add(n)
         await db.flush()
         by_ent[e.id] = n
         nodes.append(n)
         next_pos += 1
+        rapport["crees"].append(e.name)
 
     partners = (
         await db.execute(select(EntreprisePartner))
@@ -664,6 +989,24 @@ async def _sync_detention_impl(
         if p.user_id and p.user_id in users:
             return users[p.user_id].display_name
         return f"Partenaire #{p.id}"
+
+    def _cle(p: EntreprisePartner) -> str:
+        return _holder_label(p).lower()
+
+    def _inc_de(p: EntreprisePartner) -> Optional[OrgNode]:
+        # Ligne liée à une de nos INCs — ou homonyme non liée.
+        if p.partner_entreprise_id and p.partner_entreprise_id in by_ent:
+            return by_ent[p.partner_entreprise_id]
+        ent_id = ents_by_name.get(_cle(p))
+        return by_ent.get(ent_id) if ent_id is not None else None
+
+    # Toutes les lignes d'un même détenteur hors groupe (toutes fiches
+    # confondues) — sa nature se décide sur l'ensemble.
+    lignes_par_cle: dict = {}
+    for p in partners:
+        if _inc_de(p) is not None:
+            continue
+        lignes_par_cle.setdefault(_cle(p), []).append(p)
 
     def _creates_cycle(child: OrgNode, new_parent: OrgNode) -> bool:
         # Remonte les parents depuis le candidat : si on retombe sur
@@ -702,17 +1045,9 @@ async def _sync_detention_impl(
     ):
         child = by_ent.get(only_entreprise_id)
         if child is not None:
-            child.parent_id = None
-            child.co_owner_node_ids = None
-            child.ownership_json = None
-            autres = [
-                ligne
-                for ligne in (child.description or "").splitlines()
-                if not ligne.startswith("Détention : ") and ligne.strip()
-            ]
-            child.description = "\n".join(autres) or None
+            _effacer_aretes(child)
         await db.flush()
-        return
+        return rapport
 
     for ent_id, plist in par_detenue.items():
         child = by_ent.get(ent_id)
@@ -720,25 +1055,31 @@ async def _sync_detention_impl(
             continue
         holders = []
         for p in plist:
-            if (
-                p.partner_entreprise_id
-                and p.partner_entreprise_id in by_ent
-            ):
-                hn = by_ent[p.partner_entreprise_id]
-            else:
+            hn = _inc_de(p)
+            if hn is None:
                 lbl = _holder_label(p)
                 key = lbl.lower()
-                hn = persons.get(key)
+                hn = detenteurs.get(key)
+                nature = _nature_detenteur(
+                    lignes_par_cle.get(key) or [p], hn
+                )
                 if hn is None:
+                    x, y = placeur.suivant()
                     hn = OrgNode(
-                        parent_id=None, position=next_pos, kind="person",
+                        parent_id=None, position=next_pos, kind=nature,
                         label=lbl, version_id=version_id,
+                        pos_x=x, pos_y=y,
                     )
                     db.add(hn)
                     await db.flush()
-                    persons[key] = hn
+                    detenteurs[key] = hn
                     nodes.append(hn)
                     next_pos += 1
+                    rapport["crees"].append(lbl)
+                elif hn.kind != nature:
+                    hn.kind = nature
+                    if hn.label not in rapport["reclasses"]:
+                        rapport["reclasses"].append(hn.label)
             if hn.id == child.id:
                 continue
             holders.append((float(p.ownership_pct or 0.0), hn))
@@ -775,7 +1116,20 @@ async def _sync_detention_impl(
         ]
         child.co_owner_node_ids = json.dumps(co_ids) if co_ids else None
 
+    if only_entreprise_id is None:
+        # Rien n'est supprimé ni déplacé par la sync (Phil 2026-10-08 :
+        # « ça ne bouge pas du tout l'organigramme ») : on SIGNALE.
+        #  • INCs actives sans aucune ligne Partenaires & parts : leurs
+        #    liens affichés (s'il y en a) datent du mode manuel ;
+        #  • bulles absentes des fiches : bouton « Retirer » côté UI.
+        rapport["sans_lignes"] = sorted(
+            n.label for ent_id, n in by_ent.items() if ent_id not in par_detenue
+        )
+        absents = await _bulles_absentes(db, nodes)
+        rapport["absents"] = sorted(n.label for n in nodes if n.id in absents)
+
     await db.flush()
+    return rapport
 
 
 @router.post(

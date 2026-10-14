@@ -82,6 +82,7 @@ _C_RED = "#b91c1c"           # négatif (cashflow < 0)
 # persisté — dupliqués de `lead_analyses._TRI_DEFAULTS` pour garder ce
 # service autonome (cf. RÈGLE « réutilise/duplique la dérivation »).
 _TRI_DEFAULTS = {
+    "taux_actualisation": 0.10,
     "capital": None,
     "pct": 0.5,
     "cr_loyers": 0.03,
@@ -303,6 +304,281 @@ def _styles(rl: Dict[str, Any]):
             textColor=muted, alignment=1,
         ),
     }
+
+
+def _libelle_modes(modes: Optional[dict], pre_achat: Optional[bool]) -> str:
+    """Modes d'optimisation par unité (Phil 2026-10-07) ; repli sur l'ancien
+    « moment » global pour les analyses calculées avant."""
+    if modes:
+        return (
+            f"{modes.get('aucune', 0)} non optimisée(s) · "
+            f"{modes.get('pre_achat', 0)} pré-achat (loyer optimisé dès l'achat) · "
+            f"{modes.get('post_achat', 0)} post-achat (loyer optimisé au refi)"
+        )
+    return (
+        "Pré-achat — financement sur les loyers optimisés"
+        if pre_achat
+        else "Post-achat — loyers actuels à l'achat, optimisation au refi"
+    )
+
+
+def _bloc_unites(rl, results: dict, *, s) -> list:
+    """Unités & optimisation — reflet de la fiche (Phil 2026-10-07) : mode
+    de chaque unité, loyer à l'achat et au refi, totaux."""
+    Paragraph = rl["Paragraph"]
+    Table = rl["Table"]
+    TableStyle = rl["TableStyle"]
+    mm = rl["mm"]
+    colors = rl["colors"]
+    uc = (results or {}).get("unites_calcul")
+    out: list = []
+    if not uc:
+        _un = (results or {}).get("unites")
+        if _un:
+            out.append(Paragraph(
+                f"Optimisation par unité : {_un.get('optimisees')} unité(s) "
+                f"optimisée(s) sur {_un.get('total')}.", s["small_muted"]))
+        return out
+    m = uc.get("modes") or {}
+    out.append(Paragraph(
+        f"Unités : {m.get('aucune', 0)} non optimisée(s), "
+        f"{m.get('pre_achat', 0)} pré-achat, {m.get('post_achat', 0)} post-achat — "
+        f"revenus à l'achat {_money(uc.get('revenus_achat'))}/an, au refi (an "
+        f"{uc.get('h')}) {_money(uc.get('revenus_refi'))}/an (croissance organique "
+        f"{float(uc.get('g') or 0) * 100:.1f} %).", s["small_muted"]))
+    libelles = {"aucune": "Non optimisée", "pre_achat": "Pré-achat", "post_achat": "Post-achat"}
+    data = [[
+        Paragraph(h, s["small"])
+        for h in ("Unité", "Mode", "Actuel", "Optimisé", "À l'achat", f"Au refi (an {uc.get('h')})")
+    ]]
+    for ul in uc.get("unites") or []:
+        data.append([
+            Paragraph(
+                f"{ul.get('numero') or '#' + str(ul.get('index'))} {ul.get('typo') or ''}",
+                s["small"],
+            ),
+            Paragraph(libelles.get(ul.get("mode"), str(ul.get("mode"))), s["small"]),
+            Paragraph(_money(ul.get("loyer_actuel")), s["num"]),
+            Paragraph(_money(ul.get("loyer_optimise")) if ul.get("mode") != "aucune" else "—", s["num"]),
+            Paragraph(_money(ul.get("achat")), s["num"]),
+            Paragraph(_money(ul.get("refi")), s["num"]),
+        ])
+    data.append([
+        Paragraph("<b>Total / mois</b>", s["small"]),
+        "",
+        Paragraph(f"<b>{_money(uc.get('total_actuel_mois'))}</b>", s["num"]),
+        "",
+        Paragraph(f"<b>{_money(uc.get('total_achat_mois'))}</b>", s["num"]),
+        Paragraph(f"<b>{_money(uc.get('total_refi_mois'))}</b>", s["num"]),
+    ])
+    t = Table(data, colWidths=[28 * mm, 26 * mm, "*", "*", "*", "*"], repeatRows=1)
+    t.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor(_C_LINE)),
+        ("LINEBELOW", (0, 1), (-1, -2), 0.25, colors.HexColor(_C_LINE)),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#fafafa")]),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    out.append(t)
+    return out
+
+
+def _bloc_achat_preteur_b(rl, results: dict, *, s) -> list:
+    """Achat prêteur B — cashflow de l'acquisition (Phil 2026-10-12) :
+    reflet de la page Achat de la fiche — au notaire, échéancier de
+    trésorerie (solde à chaque étape), récapitulatif."""
+    Paragraph = rl["Paragraph"]
+    Spacer = rl["Spacer"]
+    Table = rl["Table"]
+    TableStyle = rl["TableStyle"]
+    mm = rl["mm"]
+    colors = rl["colors"]
+    a = (results or {}).get("achat_preteur_b")
+    if not a:
+        return []
+    out = [
+        Paragraph(
+            "Le prêteur retient "
+            + _pct_fraction(a.get("retenue_pct") or 0)
+            + " de tous les frais finançables et les débourse "
+            "progressivement : ce qu'il retient au-delà de sa part est "
+            "exigé d'avance au notaire, et chaque frais finançable est "
+            "avancé de notre poche jusqu'au déboursé suivant. Les frais "
+            "non finançables sont cash définitivement.",
+            s["small_muted"],
+        ),
+    ]
+    tuiles = [
+        ("Sorties au notaire", _money(a.get("cash_notaire"))),
+        ("Jeu d'exploitation pendant les travaux", _money(a.get("exploitation_total"))),
+        ("Besoin de trésorerie maximal", _money(a.get("besoin_max"))),
+        (
+            "Montant des investisseurs"
+            + ("" if a.get("capital_saisi") else " (= besoin, non saisi)"),
+            _money(a.get("capital")),
+        ),
+        ("Cash définitif", _money(a.get("cash_definitif"))),
+    ]
+    out.append(Paragraph(
+        " · ".join(f"{l} : <b>{v}</b>" for l, v in tuiles), s["small"]
+    ))
+    out.append(Spacer(1, 3))
+
+    # Au notaire
+    rows = [
+        ("Prêt du prêteur B engagé (bâtisse + frais financés)", _money(a.get("pret_total"))),
+        (
+            f"− Retenue du prêteur ({_pct_fraction(a.get('retenue_pct') or 0)} des frais finançables {_money(a.get('base_retenue'))}, déboursée progressivement)",
+            _money(-(a.get("retenue") or 0)),
+        ),
+        ("<b>= Avance du prêteur B au notaire</b>", f"<b>{_money(a.get('avance_notaire'))}</b>"),
+        ("Mise de fonds au notaire (prix − avance)", _money(a.get("mdf_notaire"))),
+    ]
+    if (a.get("cashback") or 0) > 0:
+        rows.append(("− Cashback reçu au notaire", _money(-(a.get("cashback") or 0))))
+    if (a.get("balance_vente") or 0) > 0:
+        rows.append(("− Balance de vente", _money(-(a.get("balance_vente") or 0))))
+    for p in a.get("postes", {}).get("notaire", []) or []:
+        lbl = p.get("label") or p.get("cle")
+        if p.get("financable"):
+            lbl += " (finançable — remboursé au 1er déboursé)"
+        rows.append((f"+ {lbl}", _money(p.get("montant"))))
+    rows.append(("<b>= Sorties au jour 0</b>", f"<b>{_money(a.get('cash_notaire'))}</b>"))
+    out.append(Paragraph("<b>Au notaire (jour 0)</b>", s["small"]))
+    tb = _table_two_col(rl, rows, s=s)
+    if tb is not None:
+        out.append(tb)
+    out.append(Spacer(1, 4))
+
+    # Échéancier de trésorerie
+    def _solde(v) -> str:
+        v = float(v or 0)
+        txt = _money(v)
+        return f'<font color="{_C_RED}"><b>{txt}</b></font>' if v < 0 else txt
+
+    data = [[
+        Paragraph("<b>Étape</b>", s["small"]),
+        Paragraph("<b>Sorties</b>", s["num"]),
+        Paragraph("<b>Exploitation nette</b>", s["num"]),
+        Paragraph("<b>Solde avant déboursé</b>", s["num"]),
+        Paragraph("<b>Déboursé du prêteur</b>", s["num"]),
+        Paragraph("<b>Solde après</b>", s["num"]),
+    ]]
+    pb = (a.get("point_bas") or {}).get("etape")
+    idx_pb = None
+    for i, e in enumerate(a.get("echeancier") or []):
+        if e.get("etape") == pb:
+            idx_pb = i + 1
+        # Détail poste par poste sous le libellé (Phil 2026-10-12 : « il
+        # faut voir quel montant est combien »).
+        det = e.get("details") or {}
+        lignes_det = []
+        for d in det.get("sorties") or []:
+            lignes_det.append(f"{d.get('label')} : {_money(d.get('montant'))}")
+        for d in det.get("exploitation") or []:
+            lignes_det.append(f"{d.get('label')} : {_money(d.get('montant'))}")
+        for d in det.get("debourse") or []:
+            lignes_det.append(f"{d.get('label')} : +{_money(d.get('montant'))}")
+        libelle = f"<b>{e.get('libelle') or ''}</b>"
+        if lignes_det:
+            libelle += '<br/><font size="6.5" color="' + _C_MUTED + '">' + " · ".join(lignes_det) + "</font>"
+        data.append([
+            Paragraph(libelle, s["small"]),
+            Paragraph(_money(e.get("sorties")), s["num"]),
+            Paragraph(_solde(e.get("exploitation")), s["num"]),
+            Paragraph(_solde(e.get("solde_avant")), s["num"]),
+            Paragraph(_money(e.get("debourse")), s["num"]),
+            Paragraph(_solde(e.get("solde_apres")), s["num"]),
+        ])
+    tbl = Table(data, colWidths=[66 * mm, "*", "*", "*", "*", "*"], repeatRows=1)
+    style = [
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(_C_AMBER_SOFT)),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.75, colors.HexColor(_C_AMBER_LINE)),
+        ("LINEBELOW", (0, 1), (-1, -2), 0.25, colors.HexColor(_C_LINE)),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#fafafa")]),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]
+    if idx_pb is not None:
+        style.append(("BACKGROUND", (0, idx_pb), (-1, idx_pb), colors.HexColor(_C_AMBER_SOFT)))
+    tbl.setStyle(TableStyle(style))
+    out.append(Paragraph(
+        "<b>Échéancier de trésorerie</b> — solde du compte à partir du "
+        "montant des investisseurs ; la ligne surlignée est le point bas.",
+        s["small"],
+    ))
+    out.append(tbl)
+    out.append(Spacer(1, 3))
+    recap = (
+        f"Point bas du compte : <b>{_money((a.get('point_bas') or {}).get('solde'))}</b>"
+        f" ({(a.get('point_bas') or {}).get('libelle', '')}) · "
+        f"solde à la fin des travaux : <b>{_money(a.get('solde_fin_travaux'))}</b> · "
+        f"après le refinancement : <b>{_money(a.get('solde_fin'))}</b>. "
+        f"Jeu d'exploitation pendant les travaux : <b>{_money(a.get('exploitation_total'))}</b> "
+        f"(revenus nets {_money(a.get('revenus_nets_projet'))} − intérêts de portage "
+        f"{_money(a.get('interets_portage'))}"
+        + (f" − intérêts BV {_money(a.get('interets_bv'))}" if (a.get("interets_bv") or 0) > 0 else "")
+        + ")."
+    )
+    if (a.get("manque") or 0) > 0:
+        recap += (
+            f' <font color="{_C_RED}"><b>Il manque {_money(a.get("manque"))} : '
+            f"demander au moins {_money(a.get('besoin_max'))} aux investisseurs.</b></font>"
+        )
+    out.append(Paragraph(recap, s["small"]))
+    return out
+
+
+def _bloc_cout_projet(rl, results: dict, *, s) -> list:
+    """Coût du projet (Phil 2026-10-07) — reflet de la carte de la fiche :
+    coût total (revente pour revenir à 0 $) et cash total nécessaire."""
+    Paragraph = rl["Paragraph"]
+    c = (results or {}).get("cout_projet")
+    if not c:
+        return []
+    rows = [("Prix d'achat", _money(c.get("prix_achat")))]
+    if (c.get("cashback") or 0) > 0:
+        rows.append(("− Cashback reçu au notaire", _money(-(c.get("cashback") or 0))))
+        rows.append(("= Coût réel", _money(c.get("prix_reel"))))
+    rows.append((
+        "+ Frais de démarrage (tous)",
+        f"{_money(c.get('frais_total'))} — cash {_money(c.get('frais_cash'))}, "
+        f"financés {_money(c.get('frais_finances'))}",
+    ))
+    if (c.get("prime_assurance") or 0) > 0:
+        rows.append(("+ Prime d'assurance prêt (financée)", _money(c.get("prime_assurance"))))
+    rows.append((
+        "<b>= Coût total du projet — prix de revente pour revenir à 0 $</b>",
+        f"<b>{_money(c.get('cout_total'))}</b>",
+    ))
+    rows.append(("Prêt accordé", _money(c.get("pret"))))
+    if (c.get("balance_vente") or 0) > 0:
+        rows.append(("+ Balance de vente", _money(c.get("balance_vente"))))
+    if (c.get("frais_finances_hors_pret") or 0) > 0:
+        rows.append(("+ Frais financés hors prêt (remboursés au refi)", _money(c.get("frais_finances_hors_pret"))))
+    rows.append((
+        "<b>+ Cash total nécessaire (mise de fonds nette + frais payés cash)</b>",
+        f"<b>{_money(c.get('cash_total'))}</b> — MDF nette {_money(c.get('mdf_nette'))} + frais {_money(c.get('frais_cash'))}",
+    ))
+    out = [
+        Paragraph("<b>Coût du projet</b>", s["small"]),
+        Paragraph(
+            "Coût total = ce qu'il faudrait revendre pour revenir à 0 $ "
+            "(avant frais de vente) ; cash total = ce qu'il faut sortir "
+            "de sa poche.",
+            s["small_muted"],
+        ),
+    ]
+    t = _table_two_col(rl, rows, s=s)
+    if t is not None:
+        out.append(t)
+    return out
 
 
 def _table_two_col(rl, rows, *, s):
@@ -695,10 +971,8 @@ def _residentiel_section(rl, r: dict, *, s):
         ("Cash à sortir (MDF nette + frais)", _money(r.get("mdf_cash"))),
         ("Total dépensé (coût réel + frais)", _money(r.get("total_depense"))),
         (
-            "Moment de l'optimisation",
-            "Pré-achat — financement sur les loyers optimisés"
-            if r.get("optimisation_pre_achat")
-            else "Post-achat — loyers actuels à l'achat",
+            "Optimisation des unités",
+            _libelle_modes(r.get("unites_modes"), r.get("optimisation_pre_achat")),
         ),
     ]
     rc = r.get("rendement_cash_optimise")
@@ -879,10 +1153,8 @@ def _traditionnel_section(rl, trad: dict, *, s):
         ("Prêt accordé à l'achat", _money(trad.get("pret_retenu"))),
         ("Cash à sortir (MDF nette + frais)", _money(trad.get("mdf_cash"))),
         (
-            "Moment de l'optimisation",
-            "Pré-achat — financement initial sur les loyers optimisés"
-            if trad.get("optimisation_pre_achat")
-            else "Post-achat — achat sur les loyers actuels, optimisation au refi",
+            "Optimisation des unités",
+            _libelle_modes(trad.get("unites_modes"), trad.get("optimisation_pre_achat")),
         ),
         ("Frais d'acquisition", _money(trad.get("frais_demarrage_total"))),
         ("Dette à rembourser à l'an H (solde + BV + frais roulés)",
@@ -1480,7 +1752,15 @@ def _persisted_manual_inputs(rec: LeadAnalysis) -> dict:
         if rec.tri_croissance_depenses is not None
         else _TRI_DEFAULTS["cr_dep"]
     )
-    return {"capital": cap, "pct": pct, "cr_loyers": cr_l, "cr_dep": cr_d}
+    taux_act = (
+        float(getattr(rec, "tri_taux_actualisation", None))
+        if getattr(rec, "tri_taux_actualisation", None) is not None
+        else _TRI_DEFAULTS["taux_actualisation"]
+    )
+    return {
+        "capital": cap, "pct": pct, "cr_loyers": cr_l, "cr_dep": cr_d,
+        "taux_actualisation": taux_act,
+    }
 
 
 def _tri_section(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
@@ -1534,6 +1814,7 @@ def _tri_section(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
             rpv_refi=auto["rpv_refi"],
             cr_loyers=manual["cr_loyers"],
             cr_dep=manual["cr_dep"],
+            taux_actualisation=manual["taux_actualisation"],
             annee_refi=_annee_refi_de(rec),
             taux_achat=amort.get("taux_achat") or None,
             amort_achat=amort.get("amort_achat") or None,
@@ -1663,6 +1944,17 @@ def _tri_section(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
         f"Total cash encaissé (hors vente) sur {hz[-1]} ans : "
         f"<b>{_money(sommaire.get('total_cash_sans_vente'))}</b>",
         s["small"]))
+    mult_inv = tri_data.get("multiple") or {}
+    if mult_inv:
+        # Performance sans taux promis (Phil 2026-10-08) : multiple du
+        # capital = tout ce qui ressort ÷ mise initiale.
+        out.append(Paragraph(
+            "Multiple du capital : "
+            + " · ".join(
+                f"sortie an {h} <b>{(mult_inv.get(f'an{h}') or 0):.2f} ×</b>".replace(".", ",")
+                for h in hz
+            ),
+            s["small"]))
 
     # ── Ligne de temps des flux (scénario de sortie an 12) ───────────
     flux12 = flux.get(str(hz[-1]))
@@ -1701,6 +1993,92 @@ def _tri_section(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
             "An 0 = capital injecté (sortie de fonds) ; années "
             "suivantes = cash encaissé + liquidation des parts à la "
             "sortie.", s["small_muted"]))
+
+    # ── Vue PROJET (Phil 2026-10-08) — miroir de l'onglet TRI ────────
+    # Rendement du projet lui-même : tout l'argent disponible ressort à
+    # chaque refinancement, l'équité entière est liquidée à la sortie,
+    # sans partage de parts. Mêmes intrants (capital, croissances).
+    tri_p = tri_data.get("tri_projet") or {}
+    if tri_p:
+        out.append(Spacer(1, 10))
+        out.append(Paragraph("RENDEMENT DU PROJET (TRI PROJET)", s["section"]))
+        out.append(Paragraph(
+            "Même capital injecté et mêmes croissances, mais rendement du "
+            "projet lui-même : tout l'argent disponible ressort à chaque "
+            "refinancement (un manque est une injection) et l'équité "
+            "entière est liquidée à la sortie — sans partage de parts.",
+            s["small_muted"]))
+        out.append(Spacer(1, 6))
+        cp2, cp7, cp12 = [
+            _tri_cell(f"Sortie an {h}", tri_p.get(f"an{h}")) for h in hz
+        ]
+        vedette_p = Table(
+            [[cp2, "", cp7, "", cp12]],
+            colWidths=[col_w, gap, col_w, gap, col_w])
+        vedette_p.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        out.append(vedette_p)
+        out.append(Spacer(1, 8))
+        out.append(Paragraph(
+            "Argent sorti du projet et équité par horizon", s["subsection"]))
+        rows_p = [[
+            Paragraph("Horizon", s["th_left"]),
+            Paragraph("Valeur immeuble", s["th"]),
+            Paragraph("Prêt max refi", s["th"]),
+            Paragraph("Argent sorti du projet", s["th"]),
+            Paragraph("Équité", s["th"]),
+            Paragraph("Patrimoine du projet", s["th"]),
+        ]]
+        for h in [str(x) for x in hz]:
+            hd = horizons.get(h) or {}
+            rows_p.append([
+                Paragraph(f"An {h}", s["small"]),
+                Paragraph(_money(hd.get("valeur_immeuble")), s["num"]),
+                Paragraph(_money(hd.get("pret_max_refi")), s["num"]),
+                Paragraph(_money(hd.get("cash_projet")), s["num"]),
+                Paragraph(_money(hd.get("equite")), s["num"]),
+                Paragraph(
+                    f"<b>{_money(hd.get('patrimoine_projet'))}</b>",
+                    s["num_b"]),
+            ])
+        tp = Table(
+            rows_p, colWidths=[20 * mm, "*", "*", "*", "*", "*"],
+            repeatRows=1)
+        tp.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(_C_AMBER_SOFT)),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.75,
+             colors.HexColor(_C_AMBER_LINE)),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+             [colors.white, colors.HexColor("#fafafa")]),
+            ("BACKGROUND", (-1, 1), (-1, -1), colors.HexColor(_C_GREEN_SOFT)),
+            ("BOX", (0, 0), (-1, -1), 0.25, colors.HexColor(_C_LINE)),
+            ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor(_C_LINE)),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        out.append(tp)
+        out.append(Spacer(1, 4))
+        out.append(Paragraph(
+            f"Total sorti du projet (hors vente) sur {hz[-1]} ans : "
+            f"<b>{_money(sommaire.get('total_cash_projet_sans_vente'))}</b>",
+            s["small"]))
+        mult_p = tri_data.get("multiple_projet") or {}
+        if mult_p:
+            out.append(Paragraph(
+                "Multiple du capital (projet) : "
+                + " · ".join(
+                    f"sortie an {h} <b>{(mult_p.get(f'an{h}') or 0):.2f} ×</b>".replace(".", ",")
+                    for h in hz
+                ),
+                s["small"]))
 
     return out
 
@@ -2226,11 +2604,31 @@ def _render_bytes(
         if getattr(rec, "strategie_acquisition", None) == "residentiel"
         else None
     )
+    # Achat prêteur B (Phil 2026-10-12) : page Achat de la fiche —
+    # cashflow de l'acquisition + coût du projet — AVANT le
+    # refinancement, comme à l'écran.
+    _achat_b_pdf = (
+        (results or {}).get("achat_preteur_b")
+        if results and not _mode_direct and not _res_pdf
+        else None
+    )
+    if _achat_b_pdf:
+        story.append(Paragraph(
+            "ACHAT — PRÊTEUR B : CASHFLOW DE L'ACQUISITION", s["section"]
+        ))
+        # Coût du projet EN HAUT de la page Achat (Phil 2026-10-12),
+        # puis le cashflow — reflet de la fiche.
+        story.extend(_bloc_cout_projet(rl, results, s=s))
+        story.append(Spacer(1, 4))
+        story.extend(_bloc_achat_preteur_b(rl, results, s=s))
+
     if _res_pdf:
         story.append(Paragraph(
             "RÉSIDENTIEL — ACHAT POUR LE CASHFLOW", s["section"]
         ))
         story.extend(_residentiel_section(rl, _res_pdf, s=s))
+        story.extend(_bloc_unites(rl, results, s=s))
+        story.extend(_bloc_cout_projet(rl, results, s=s))
     elif _mode_direct:
         _est_as_pdf = (_direct or {}).get("mode") == "assumation"
         story.append(Paragraph(
@@ -2249,12 +2647,8 @@ def _render_bytes(
             "comparés, le retenu pilote la mise de fonds) ; détention "
             "avec croissance organique ; refinancement comparé à "
             "l'horizon choisi.", s["small_muted"]))
-        _un = results.get("unites")
-        if _un:
-            story.append(Paragraph(
-                f"Optimisation par unité : {_un.get('optimisees')} unité(s) "
-                f"optimisée(s) sur {_un.get('total')} — les autres "
-                "croissent depuis leur loyer actuel.", s["small_muted"]))
+        story.extend(_bloc_unites(rl, results, s=s))
+        story.extend(_bloc_cout_projet(rl, results, s=s))
     elif results:
         story.append(Paragraph(
             "SCÉNARIOS DE FINANCEMENT", s["section"]
@@ -2273,13 +2667,11 @@ def _render_bytes(
         story.append(Paragraph(
             "La colonne surlignée en vert est le scénario gagnant "
             "(meilleure équité au refinancement).", s["small_muted"]))
-        _un = results.get("unites")
-        if _un:
-            story.append(Paragraph(
-                f"Optimisation par unité : {_un.get('optimisees')} unité(s) "
-                f"optimisée(s) sur {_un.get('total')} — les unités non "
-                "optimisées gardent leur loyer actuel au refinancement.",
-                s["small_muted"]))
+        story.extend(_bloc_unites(rl, results, s=s))
+        # Coût du projet déplacé dans la section Achat (Phil
+        # 2026-10-12) ; repli ici pour les résultats calculés avant.
+        if not _achat_b_pdf:
+            story.extend(_bloc_cout_projet(rl, results, s=s))
     else:
         story.append(Paragraph(
             "Aucun scénario calculé — lance l'analyse financière "

@@ -200,7 +200,9 @@ const EVENT_LABELS: Record<string, string> = {
   refuse: "Signature refusée",
   complete: "Document complété",
   annule: "Document annulé",
-  expire: "Lien de signature expiré"
+  expire: "Lien de signature expiré",
+  signer_email_change: "Coordonnées du signataire corrigées — nouveau lien envoyé",
+  pdf_final_regenere: "PDF signé régénéré"
 };
 
 function fmtDateTime(iso: string | null): string {
@@ -255,6 +257,7 @@ export default function SignatureDocPage() {
 
   // Modal signataire.
   const [signerModal, setSignerModal] = useState(false);
+  const [editSigner, setEditSigner] = useState<Signer | null>(null);
   const [busySend, setBusySend] = useState(false);
 
   // V2 : observateurs / annexes / modèle.
@@ -531,41 +534,26 @@ export default function SignatureDocPage() {
   }
 
   async function deleteDoc() {
-    // Un document ENVOYÉ doit être annulé avant suppression (le backend
-    // refuse sinon en 409) : on le fait pour l'utilisateur, en une seule
-    // confirmation — « supprimer ne fonctionnait pas » venait de ce 409
-    // silencieux (retour 2026-09-16).
+    // Tout document non signé se supprime en un geste (Phil 2026-10-07) :
+    // le backend accepte brouillon, en cours, refusé, expiré, annulé —
+    // les liens de signature meurent avec le document.
     const enCours = doc?.status === "envoye";
     if (
       !(await confirm({
         title: "Supprimer ce document ?",
         description: enCours
-          ? "Le document est en cours de signature : il sera d'abord " +
-            "ANNULÉ (les liens des signataires cesseront de fonctionner), " +
-            "puis supprimé avec son historique."
+          ? "Le document est en cours de signature : les liens envoyés " +
+            "aux signataires cesseront de fonctionner, puis le PDF et " +
+            "son historique seront supprimés."
           : "Le PDF et son historique seront supprimés.",
         confirmLabel: "Supprimer",
+        cancelLabel: "Retour",
         destructive: true
       }))
     ) {
       return;
     }
     setBanner(null);
-    if (enCours) {
-      const cRes = await authedFetch(
-        `/api/v1/esign/documents/${docId}/cancel`,
-        { method: "POST" }
-      );
-      if (!cRes.ok) {
-        const body = await cRes.json().catch(() => null);
-        setBanner(
-          typeof body?.detail === "string"
-            ? body.detail
-            : "Annulation avant suppression échouée."
-        );
-        return;
-      }
-    }
     const res = await authedFetch(`/api/v1/esign/documents/${docId}`, {
       method: "DELETE"
     });
@@ -814,34 +802,33 @@ export default function SignatureDocPage() {
     }
   }
 
-  // Corriger le COURRIEL d'un signataire APRÈS l'envoi (tant qu'il n'a
-  // pas signé) : le backend renvoie automatiquement l'invitation à la
-  // nouvelle adresse — plus besoin de refaire tout le processus.
-  async function editSignerEmail(s: Signer) {
-    const next = (
-      prompt(
-        `Nouveau courriel pour ${s.first_name} ${s.last_name} :`,
-        s.email
-      ) || ""
-    )
-      .trim()
-      .toLowerCase();
-    if (!next || next === s.email.toLowerCase()) return;
-    if (!next.includes("@")) {
-      alert("Courriel invalide.");
-      return;
-    }
-    const res = await authedFetch(`/api/v1/esign/signers/${s.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ email: next })
+  // Corriger les COORDONNÉES d'un signataire APRÈS l'envoi (tant qu'il
+  // n'a pas signé) : le backend désactive l'ancien lien et renvoie
+  // l'invitation à la nouvelle adresse — plus besoin de refaire tout le
+  // processus (Phil 2026-10-07).
+  function editSignerEmail(s: Signer) {
+    setEditSigner(s);
+  }
+
+  // Renvoyer l'invitation à UN signataire (la relance du document vise
+  // tous les signataires en attente).
+  async function resendSigner(s: Signer) {
+    setBanner(null);
+    const res = await authedFetch(`/api/v1/esign/signers/${s.id}/resend`, {
+      method: "POST"
     });
+    const body = (await res.json().catch(() => null)) as {
+      detail?: string;
+    } | null;
     if (res.ok) {
+      setBanner(`Invitation renvoyée à ${s.email}.`);
       await load();
     } else {
-      const body = (await res.json().catch(() => null)) as {
-        detail?: string;
-      } | null;
-      alert(body?.detail || `Modification échouée (${res.status}).`);
+      setBanner(
+        typeof body?.detail === "string"
+          ? body.detail
+          : `Renvoi échoué (erreur ${res.status}).`
+      );
     }
   }
 
@@ -1013,30 +1000,35 @@ export default function SignatureDocPage() {
                   </button>
                 ) : null}
                 {doc.status === "envoye" ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => void remind()}
-                      className="btn-secondary btn-sm inline-flex items-center gap-1.5"
-                    >
-                      <BellRing className="h-3.5 w-3.5" />
-                      Relancer
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void cancelDoc()}
-                      className="btn-outline-rose btn-sm inline-flex items-center gap-1.5"
-                    >
-                      <Ban className="h-3.5 w-3.5" />
-                      Annuler
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    onClick={() => void remind()}
+                    className="btn-secondary btn-sm inline-flex items-center gap-1.5"
+                    title="Relancer tous les signataires en attente"
+                  >
+                    <BellRing className="h-3.5 w-3.5" />
+                    Relancer
+                  </button>
                 ) : null}
-                {doc.status === "annule" ? (
+                {doc.status === "envoye" ||
+                doc.status === "refuse" ||
+                doc.status === "expire" ? (
+                  <button
+                    type="button"
+                    onClick={() => void cancelDoc()}
+                    className="btn-outline-rose btn-sm inline-flex items-center gap-1.5"
+                    title="Annuler le document (désactive les liens de signature)"
+                  >
+                    <Ban className="h-3.5 w-3.5" />
+                    Annuler
+                  </button>
+                ) : null}
+                {doc.status !== "complete" ? (
                   <button
                     type="button"
                     onClick={deleteDoc}
                     className="btn-outline-rose btn-sm inline-flex items-center gap-1.5"
+                    title="Supprimer le document et son historique"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                     Supprimer
@@ -1237,8 +1229,15 @@ export default function SignatureDocPage() {
                         onMoveUp={() => void moveSigner(s, -1)}
                         onMoveDown={() => void moveSigner(s, 1)}
                         onEditEmail={
-                          !isDraft && !s.signed_at
-                            ? () => void editSignerEmail(s)
+                          doc.status === "envoye" && !s.signed_at
+                            ? () => editSignerEmail(s)
+                            : undefined
+                        }
+                        onResend={
+                          doc.status === "envoye" &&
+                          !s.signed_at &&
+                          !s.declined_at
+                            ? () => void resendSigner(s)
                             : undefined
                         }
                         fieldCount={
@@ -1627,6 +1626,21 @@ export default function SignatureDocPage() {
 
       </div>
 
+      {editSigner ? (
+        <CorrigerSignataireModal
+          signer={editSigner}
+          onClose={() => setEditSigner(null)}
+          onSaved={async (courrielChange) => {
+            setEditSigner(null);
+            setBanner(
+              courrielChange
+                ? "Coordonnées corrigées — l'invitation a été renvoyée à la nouvelle adresse (l'ancien lien est désactivé)."
+                : "Coordonnées du signataire corrigées."
+            );
+            await load();
+          }}
+        />
+      ) : null}
       {signerModal ? (
         <AddSignerModal
           docId={doc.id}
@@ -1644,6 +1658,162 @@ export default function SignatureDocPage() {
 
 /* ========================= Sous-composants ========================= */
 
+/* ---------- Corriger un signataire après l'envoi (Phil 2026-10-07) ---------- */
+
+function CorrigerSignataireModal({
+  signer,
+  onClose,
+  onSaved
+}: {
+  signer: Signer;
+  onClose: () => void;
+  onSaved: (courrielChange: boolean) => void | Promise<void>;
+}) {
+  const [firstName, setFirstName] = useState(signer.first_name);
+  const [lastName, setLastName] = useState(signer.last_name);
+  const [email, setEmail] = useState(signer.email);
+  const [phone, setPhone] = useState(signer.phone || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const courrielChange =
+    email.trim().toLowerCase() !== signer.email.trim().toLowerCase();
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null);
+    if (!email.trim().includes("@")) {
+      setErr("Courriel invalide.");
+      return;
+    }
+    const body: Record<string, string> = {};
+    if (firstName.trim() && firstName.trim() !== signer.first_name)
+      body.first_name = firstName.trim();
+    if (lastName.trim() && lastName.trim() !== signer.last_name)
+      body.last_name = lastName.trim();
+    if (courrielChange) body.email = email.trim().toLowerCase();
+    if (phone.trim() && phone.trim() !== (signer.phone || ""))
+      body.phone = phone.trim();
+    if (Object.keys(body).length === 0) {
+      onClose();
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await authedFetch(`/api/v1/esign/signers/${signer.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => null)) as {
+          detail?: string;
+        } | null;
+        throw new Error(
+          typeof j?.detail === "string"
+            ? j.detail
+            : `Modification échouée (${res.status}).`
+        );
+      }
+      await onSaved(courrielChange);
+    } catch (e2) {
+      setErr(e2 instanceof Error ? e2.message : "Modification échouée.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <form
+        onSubmit={submit}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md space-y-3 rounded-2xl border border-brand-800 bg-brand-900 p-5"
+      >
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-white">
+            Corriger le signataire
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn-ghost btn-xs"
+            disabled={busy}
+          >
+            ✕
+          </button>
+        </div>
+        <p className="text-xs text-white/60">
+          Si le courriel change, un nouveau lien de signature part à la
+          nouvelle adresse et l&apos;ancien lien cesse de fonctionner. Le
+          document reste en cours : rien à recommencer.
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="text-xs text-white/60">
+            Prénom
+            <input
+              className="input mt-1 text-xs"
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+              required
+            />
+          </label>
+          <label className="text-xs text-white/60">
+            Nom
+            <input
+              className="input mt-1 text-xs"
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+              required
+            />
+          </label>
+        </div>
+        <label className="block text-xs text-white/60">
+          Courriel
+          <input
+            type="email"
+            className="input mt-1 text-xs"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+        </label>
+        <label className="block text-xs text-white/60">
+          Téléphone
+          <input
+            className="input mt-1 text-xs"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="Optionnel"
+          />
+        </label>
+        {err ? <p className="text-xs text-rose-400">{err}</p> : null}
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn-ghost btn-sm"
+            disabled={busy}
+          >
+            Retour
+          </button>
+          <button
+            type="submit"
+            className="btn-accent btn-sm inline-flex items-center gap-1.5"
+            disabled={busy}
+          >
+            {busy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Send className="h-3.5 w-3.5" />
+            )}
+            {courrielChange
+              ? "Enregistrer et renvoyer l'invitation"
+              : "Enregistrer"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function SignerRow({
   s,
   color,
@@ -1655,6 +1825,7 @@ function SignerRow({
   onMoveUp,
   onMoveDown,
   onEditEmail,
+  onResend,
   fieldCount
 }: {
   s: Signer;
@@ -1667,6 +1838,7 @@ function SignerRow({
   onMoveUp: () => void;
   onMoveDown: () => void;
   onEditEmail?: () => void;
+  onResend?: () => void;
   fieldCount: number;
 }) {
   return (
@@ -1704,10 +1876,23 @@ function SignerRow({
                   e.stopPropagation();
                   onEditEmail();
                 }}
-                title="Corriger le courriel — l'invitation sera renvoyée à la nouvelle adresse"
+                title="Corriger le nom, le courriel ou le téléphone — si le courriel change, un nouveau lien est envoyé et l'ancien est désactivé"
                 className="ml-1.5 align-middle text-[10px] font-semibold text-accent-500 underline decoration-dotted hover:text-accent-400"
               >
                 corriger
+              </button>
+            ) : null}
+            {onResend ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onResend();
+                }}
+                title="Renvoyer l'invitation à ce signataire seulement"
+                className="ml-1.5 align-middle text-[10px] font-semibold text-accent-500 underline decoration-dotted hover:text-accent-400"
+              >
+                renvoyer
               </button>
             ) : null}
           </p>

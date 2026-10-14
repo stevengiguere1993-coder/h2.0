@@ -654,6 +654,8 @@ _LIST_GENERIC_CHOICES = (
     # Immobilier (2026-09-09) : dossiers TAL et garants/contacts.
     "tal_dossiers",
     "locataire_contacts",
+    # Prospection (2026-10-14) : registre des courtiers (gros parcs).
+    "courtiers",
 )
 
 _LIMIT_PROP = {

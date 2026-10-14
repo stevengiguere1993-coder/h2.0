@@ -1076,7 +1076,7 @@ async def passer_interne(
         )
         numero_lg = lg.numero
         try:
-            await _creer_bail(db, bail_in, lg, user)
+            await _creer_bail(db, bail_in, lg, user, relocation_facturable=False)
         except HTTPException as exc:
             # Le message est bâti AVANT le rollback (les objets expirent).
             detail = f"Unité {numero_lg} : {exc.detail}"
@@ -3655,11 +3655,17 @@ async def delete_locataire(
     db: DBSession,
     user: Annotated[User, Depends(require_capability("locataire.delete"))],
     force: bool = False,
+    purger: bool = False,
 ) -> None:
     """Supprime un locataire. Ses baux (FK RESTRICT) bloquent la
     suppression → 409 avec le compte ; ``force=true`` supprime AUSSI ses
     baux (et en cascade leurs paiements, renouvellements, relances,
-    documents) — retour Phil 2026-07-20 (« je ne peux pas deleter »)."""
+    documents) — retour Phil 2026-07-20 (« je ne peux pas deleter »).
+
+    ``purger=true`` (Phil 2026-10-08 : « impossible de supprimer un
+    locataire non présent et non actif ») : un locataire SANS bail actif
+    peut être supprimé avec ses paiements et frais — confirmation
+    explicite côté UI, journalisée."""
     _require_volet(user)
     obj = await db.get(Locataire, locataire_id)
     if obj is None:
@@ -3687,14 +3693,35 @@ async def delete_locataire(
                 )
             )
         ).scalar_one()
+        actifs = [b for b in baux if b.status == BailStatus.ACTIF.value]
+        if nb_paiements and not (purger and not actifs):
+            if actifs:
+                detail = (
+                    f"{nb_paiements} paiement(s) sont enregistrés sur ses baux "
+                    "et un bail est encore ACTIF — mets d'abord fin au bail."
+                )
+            else:
+                detail = (
+                    f"{nb_paiements} paiement(s) sont enregistrés sur ses baux. "
+                    "Locataire parti : confirme la suppression AVEC ses paiements "
+                    "(purger=true)."
+                )
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
         if nb_paiements:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"{nb_paiements} paiement(s) sont enregistrés sur "
-                    "ses baux — retire-les d'abord (l'historique "
-                    "financier ne se supprime pas en bloc)."
-                ),
+            # Purge explicite : paiements et frais des baux terminés.
+            ids_baux = [b.id for b in baux]
+            nb_frais = 0
+            for mdl in (PaiementLoyer, FraisLocatif):
+                for row in (
+                    await db.execute(select(mdl).where(mdl.bail_id.in_(ids_baux)))
+                ).scalars().all():
+                    if mdl is FraisLocatif:
+                        nb_frais += 1
+                    await db.delete(row)
+            await log_action(
+                db, user=user, action="locataires.purge",
+                entity_type="locataires", entity_id=locataire_id,
+                details={"paiements": int(nb_paiements), "frais": nb_frais, "baux": ids_baux},
             )
     from app.models.immobilier import LocationDossier, LocationVisite
 
@@ -3817,6 +3844,14 @@ async def locataire_dossier(
                     if b.depot_garantie is not None
                     else None
                 ),
+                depot_rendu_le=b.depot_rendu_le,
+                depot_saisi_le=getattr(b, "depot_saisi_le", None),
+                depot_saisi_montant=(
+                    float(b.depot_saisi_montant)
+                    if getattr(b, "depot_saisi_montant", None) is not None
+                    else None
+                ),
+                depot_saisi_motif=getattr(b, "depot_saisi_motif", None),
                 status=b.status,
                 relocation_statut=reloc["statut"] if reloc else None,
                 relocation_dossier_id=(
@@ -4091,11 +4126,24 @@ def _render_etat_de_compte(
         name = (im.name if im else "—")
         if lg and lg.numero:
             name = f"{name} · {lg.numero}"
+        depot_txt = _fmt_money_pdf(b.depot_garantie) if b.depot_garantie else "—"
+        if b.depot_garantie and getattr(b, "depot_saisi_le", None):
+            garde = (
+                float(b.depot_saisi_montant)
+                if getattr(b, "depot_saisi_montant", None) is not None
+                else float(b.depot_garantie)
+            )
+            depot_txt += (
+                " (gardé)" if garde >= float(b.depot_garantie) - 0.005
+                else f" (gardé {_fmt_money_pdf(garde)})"
+            )
+        elif b.depot_garantie and b.depot_rendu_le:
+            depot_txt += " (rendu)"
         bail_rows.append([
             name,
             f"{b.date_debut} → {b.date_fin}",
             _fmt_money_pdf(b.loyer_mensuel),
-            _fmt_money_pdf(b.depot_garantie) if b.depot_garantie else "—",
+            depot_txt,
             b.status,
         ])
     bt = Table(bail_rows, colWidths=[6 * cm, 4 * cm, 2.5 * cm, 2.2 * cm, 2.3 * cm])
@@ -4256,6 +4304,12 @@ class DepotRow(BaseModel):
     depot_recu_le: Optional[date] = None
     depot_detenteur: Optional[str] = None
     depot_rendu_le: Optional[date] = None
+    #: Dépôt GARDÉ (2026-10-08) : date, montant gardé, motif ; « saisi »
+    #: quand tout est gardé, sinon « à rendre » pour le reste.
+    depot_saisi_le: Optional[date] = None
+    depot_saisi_montant: Optional[float] = None
+    depot_saisi_motif: Optional[str] = None
+    reste_a_rendre: float = 0.0
     #: Transfert d'unité : numéro du logement vers lequel le dépôt est
     #: parti (ancien bail) / d'où il vient (nouveau bail).
     transfere_vers_logement: Optional[str] = None
@@ -4271,6 +4325,8 @@ class DepotOverview(BaseModel):
     nb_a_rendre: int = 0
     total_rendu: float = 0.0
     nb_sans_depot: int = 0
+    total_saisi: float = 0.0
+    nb_saisi: int = 0
 
 
 @router.get("/depots/overview", response_model=DepotOverview)
@@ -4397,6 +4453,7 @@ async def depots_overview(
     total_detenu = 0.0
     total_a_rendre = 0.0
     total_rendu = 0.0
+    total_saisi = 0.0
     for b in baux:
         lg = log_by_id.get(b.logement_id)
         im = imm_by_id.get(lg.immeuble_id) if lg else None
@@ -4419,6 +4476,17 @@ async def depots_overview(
             # est toujours sur CE bail (audit 2026-09-15).
             if await db.get(Bail, cible_transfert) is None:
                 cible_transfert = None
+        # Dépôt gardé (2026-10-08) : montant gardé, le reste est à rendre.
+        saisi_le = getattr(b, "depot_saisi_le", None)
+        saisi = 0.0
+        if saisi_le is not None and montant > 0:
+            saisi = (
+                float(b.depot_saisi_montant)
+                if getattr(b, "depot_saisi_montant", None) is not None
+                else montant
+            )
+            saisi = max(0.0, min(saisi, montant))
+        reste = round(montant - saisi, 2)
         if montant <= 0:
             # Bail sans dépôt : on n'affiche que les ACTIFS (et les
             # proposés — audit 2026-09-15 : on saisit souvent le dépôt
@@ -4430,12 +4498,17 @@ async def depots_overview(
             statut = "aucun"
         elif b.depot_rendu_le is not None:
             statut = "rendu"
-            total_rendu += montant
+            total_rendu += reste
+            total_saisi += saisi
         elif cible_transfert:
             # Transfert d'unité : l'argent dort sur le NOUVEAU bail (qui
             # a sa propre ligne « détenu ») — ici, rien à rendre.
             statut = "transfere"
             transfere_vers = await _numero_logement_du_bail(cible_transfert)
+        elif saisi > 0 and reste <= 0.005:
+            # Tout le dépôt est gardé (préavis insuffisant, dommages…).
+            statut = "saisi"
+            total_saisi += saisi
         elif b.status in a_rendre_status and (
             any(
                 nb.id != b.id and nb.locataire_id != b.locataire_id
@@ -4455,12 +4528,14 @@ async def depots_overview(
             # précisément l'oubli que Phil voulait attraper — « il
             # oublie tout le temps de venir l'enlever à la fin ».
             statut = "a_rendre"
-            total_a_rendre += montant
+            total_a_rendre += reste
+            total_saisi += saisi
         else:
             # Bail actif, ou terminé sans relocation (le locataire est
             # probablement encore là) : l'argent est toujours détenu.
             statut = "detenu"
-            total_detenu += montant
+            total_detenu += reste
+            total_saisi += saisi
         loc = loc_by_id.get(b.locataire_id)
         rows.append(DepotRow(
             bail_id=b.id,
@@ -4475,13 +4550,17 @@ async def depots_overview(
             depot_recu_le=b.depot_recu_le,
             depot_detenteur=b.depot_detenteur,
             depot_rendu_le=b.depot_rendu_le,
+            depot_saisi_le=saisi_le,
+            depot_saisi_montant=(saisi if saisi_le is not None else None),
+            depot_saisi_motif=getattr(b, "depot_saisi_motif", None),
+            reste_a_rendre=(reste if statut in ("a_rendre", "detenu") else 0.0),
             transfere_vers_logement=transfere_vers,
             transfere_depuis_logement=transfere_depuis,
             date_debut=b.date_debut,
             date_fin=b.date_fin,
         ))
 
-    rank = {"a_rendre": 0, "detenu": 1, "aucun": 2, "transfere": 3, "rendu": 4}
+    rank = {"a_rendre": 0, "detenu": 1, "aucun": 2, "transfere": 3, "saisi": 4, "rendu": 5}
 
     def _cle_tri(r: DepotRow):
         # Les rendus vont tout en bas, du plus récemment rendu au plus
@@ -4498,6 +4577,8 @@ async def depots_overview(
         nb_a_rendre=sum(1 for r in rows if r.statut == "a_rendre"),
         total_rendu=round(total_rendu, 2),
         nb_sans_depot=sum(1 for r in rows if r.statut == "aucun"),
+        total_saisi=round(total_saisi, 2),
+        nb_saisi=sum(1 for r in rows if r.statut == "saisi"),
     )
 
 
@@ -4548,11 +4629,38 @@ async def list_baux_for_immeuble(
     return out
 
 
-async def _creer_bail(db, payload: BailCreate, log_obj: Logement, user) -> Bail:
+async def _locataire_nouveau_sur_unite(db, bail: Bail) -> bool:
+    """Vrai si ce locataire n'a jamais eu de bail sur ce logement (un
+    renouvellement / une re-signature n'est pas une relocation) et si le
+    bail ne vient pas d'un transfert d'unité."""
+    if getattr(bail, "transfere_depuis_bail_id", None):
+        return False
+    autre = (
+        await db.execute(
+            select(Bail.id).where(
+                Bail.logement_id == bail.logement_id,
+                Bail.locataire_id == bail.locataire_id,
+                Bail.id != bail.id,
+            )
+        )
+    ).first()
+    return autre is None
+
+
+async def _creer_bail(
+    db, payload: BailCreate, log_obj: Logement, user, *, relocation_facturable: bool = True
+) -> Bail:
     """Cœur de la création d'un bail (validations, statut du logement,
     dossier de relocation, PDF orphelin, journal) — partagé par
     ``POST /baux`` et par l'assistant « passer en gestion interne »
-    (Phil 2026-10-02). Pas de commit ici."""
+    (Phil 2026-10-02). Pas de commit ici.
+
+    ``relocation_facturable`` (Phil 2026-10-08 : « lorsqu'une location se
+    fait, 400 $ chambre / 600 $ logement — audite toutes les façons de
+    remplir un logement ») : un NOUVEAU locataire sur l'unité, peu
+    importe la porte (fiche immeuble, logement, locataire, page Baux),
+    laisse un dossier de relocation « reloué » pris en charge → frais au
+    contrat de gestion. False pour l'import de locataires déjà en place."""
     if payload.status not in {s.value for s in BailStatus}:
         raise HTTPException(
             status_code=422, detail="Statut de bail invalide."
@@ -4638,6 +4746,27 @@ async def _creer_bail(db, payload: BailCreate, log_obj: Logement, user) -> Bail:
             # « locataire lié » de la carte « Reloué »).
             _d.nouveau_bail_id = obj.id
             _d.updated_at = _now()
+        # Relocation facturable (2026-10-08) : nouveau locataire sur
+        # l'unité → le dossier (existant ou créé ici) est pris en charge
+        # et « reloué », donc facturable au contrat de gestion.
+        if relocation_facturable and await _locataire_nouveau_sur_unite(db, obj):
+            from app.services.locatif_depart import (
+                marquer_prise_en_charge_humaine,
+            )
+
+            if _d is not None:
+                marquer_prise_en_charge_humaine(_d)
+            else:
+                _d2 = LocationDossier(
+                    logement_id=obj.logement_id,
+                    statut="reloue",
+                    nouveau_bail_id=obj.id,
+                    reloue_le=_now().date(),
+                    notes="Bail créé directement — relocation au contrat de gestion.",
+                )
+                _d2.created_at = _now()
+                _d2.updated_at = _now()
+                db.add(_d2)
 
     # Interconnexion kanban Locations (v16) : un bail « proposé » crée
     # ou rattache le dossier de relocation du logement — la page Baux
@@ -4674,12 +4803,14 @@ async def _creer_bail(db, payload: BailCreate, log_obj: Logement, user) -> Bail:
             dossier.statut = "bail_envoye"
             # M9b : préparer un bail est un geste HUMAIN — un dossier
             # auto-créé (unité vacante) est pris en charge : ses frais
-            # de relocation redeviennent facturables une fois reloué.
+            # de relocation redeviennent facturables une fois reloué
+            # (sauf re-signature du même locataire — 2026-10-08).
             from app.services.locatif_depart import (
                 marquer_prise_en_charge_humaine,
             )
 
-            marquer_prise_en_charge_humaine(dossier)
+            if relocation_facturable and await _locataire_nouveau_sur_unite(db, obj):
+                marquer_prise_en_charge_humaine(dossier)
         dossier.updated_at = _now()
 
     # Règle UNIQUE du statut du logement (audit 2026-09-15) + PDF « bail »
@@ -5390,6 +5521,15 @@ class FraisRow(BaseModel):
     libelle: str
 
 
+class PaiementMoisRow(BaseModel):
+    """Un VERSEMENT du mois (Phil 2026-10-08 : « si 2 dépôts, voir les 2
+    dépôts distincts avec leur date »)."""
+    id: int
+    montant: float
+    paye_le: Optional[date] = None
+    methode: Optional[str] = None
+
+
 class LoyerOverviewRow(BaseModel):
     #: 0 pour une ligne de logement VACANT (aucun bail — même
     #: convention que les lignes de gestion externe côté frontend).
@@ -5448,6 +5588,8 @@ class LoyerOverviewRow(BaseModel):
     document_id: Optional[int] = None
     #: Frais ponctuels du MOIS affiché (retard, etc.) — supprimables.
     frais_mois: List[FraisRow] = []
+    #: Versements du mois, un par ligne (partiels distincts).
+    paiements: List[PaiementMoisRow] = []
     #: SOLDE CUMULATIF dû sur le bail (loyers échus + tous les frais −
     #: tous les paiements), borné à 0. Ex.: juin + juillet impayés → le
     #: solde d'août affiche les 3 mois.
@@ -5970,6 +6112,15 @@ async def loyers_overview(
                 paiement_id=dernier.id if dernier else None,
                 montant_paye=paye_mois if ps else None,
                 paye_le=dernier.paye_le if dernier else None,
+                paiements=[
+                    PaiementMoisRow(
+                        id=p.id,
+                        montant=float(p.montant or 0),
+                        paye_le=p.paye_le,
+                        methode=p.methode,
+                    )
+                    for p in sorted(ps, key=lambda p: (p.paye_le or month_start, p.id))
+                ],
                 etat=etat,
                 document_id=getattr(b, "document_id", None),
                 frais_mois=[
@@ -6108,13 +6259,30 @@ async def create_frais(
     bail = await db.get(Bail, bail_id)
     if bail is None:
         raise HTTPException(status_code=404, detail="Bail introuvable.")
-    # Garde-fou (audit 2026-07-31) : un frais sur un bail non actif
-    # serait invisible dans toutes les vues (dette jamais réclamée).
-    if bail.status != BailStatus.ACTIF.value:
+    # Garde-fou (audit 2026-07-31, assoupli 2026-10-08) : rien sur un
+    # bail proposé ; un bail TERMINÉ/RÉSILIÉ accepte un frais ou un
+    # CRÉDIT pour un mois qu'il couvrait — c'est ainsi qu'on règle le
+    # solde d'un locataire parti (Phil : « crédit de 600 $ → erreur »).
+    if bail.status == BailStatus.PROPOSE.value:
         raise HTTPException(
             status_code=400,
-            detail="Un frais ne s'ajoute que sur un bail actif.",
+            detail="Un frais ne s'ajoute pas sur un bail proposé (pas encore en vigueur).",
         )
+    if bail.status in (BailStatus.RESILIE.value, BailStatus.TERMINE.value):
+        m_frais = payload.mois_couvert.replace(day=1)
+        couvre = (
+            bail.date_debut is not None
+            and bail.date_fin is not None
+            and bail.date_debut.replace(day=1) <= m_frais <= bail.date_fin.replace(day=1)
+        )
+        if not couvre:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Ce bail est terminé — un frais ou un crédit ne peut viser "
+                    f"qu'un mois couvert par le bail ({bail.date_debut} → {bail.date_fin})."
+                ),
+            )
     obj = FraisLocatif(
         bail_id=bail_id,
         mois_couvert=payload.mois_couvert.replace(day=1),

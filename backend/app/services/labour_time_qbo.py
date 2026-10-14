@@ -28,6 +28,7 @@ from app.integrations.quickbooks import QuickBooksError, get_qbo
 from app.models.employe import Employe
 from app.models.project import Project
 from app.models.punch import Punch
+from app.services.cnesst import charger_bareme_cnesst
 from app.services.employe_rates import load_rate_periods, resolve_real_cost
 
 log = logging.getLogger(__name__)
@@ -108,12 +109,13 @@ async def _punch_cost_rate(db: AsyncSession, punch: Punch) -> Optional[float]:
     if emp is None:
         return None
     periods = await load_rate_periods(db, [punch.employe_id])
+    cnesst = await charger_bareme_cnesst(db)
     pdate = punch.started_at.date() if punch.started_at is not None else None
     try:
         rate = resolve_real_cost(
             periods.get(punch.employe_id, []), pdate, emp,
             float(emp.hourly_rate or 0) or 35.0,
-            regime=getattr(punch, "regime", None),
+            regime=getattr(punch, "regime", None), cnesst=cnesst,
         )
         return round(float(rate), 2) if rate else None
     except Exception:  # noqa: BLE001

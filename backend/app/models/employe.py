@@ -1,8 +1,9 @@
 """Employee / staff member (internal + partners)."""
 
+from datetime import date
 from typing import Optional
 
-from sqlalchemy import Boolean, Numeric, String
+from sqlalchemy import Boolean, Date, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -43,11 +44,20 @@ class Employe(Base, TimestampUpdateMixin):
     # ---- CCQ + paie ----
     # Si l'employé est CCQ, le coût horaire réel est majoré (cotisations
     # CCQ : assurance, fonds de formation, vacances, RVER…). En plus,
-    # la prime CNESST s'ajoute systématiquement (rate de l'unité d'emploi
-    # × salaire imposable). Stocké comme % en décimal — ex. 0.085 = 8,5 %.
+    # la prime CNESST s'ajoute (rate de l'unité d'emploi × salaire
+    # imposable). Stocké comme % en décimal — ex. 0.085 = 8,5 %.
     is_ccq: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # ---- Prime CNESST (Steven, 2026-10-14) ----
+    #: Case « Prime CNESST » : décochée → aucune prime pour cet employé.
+    #: Cochée (défaut) → taux personnalisé ``cnesst_rate`` s'il est saisi,
+    #: sinon le taux global de Paramètres → Prime CNESST
+    #: (``app/services/cnesst.py``).
+    cnesst_actif: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    #: Taux CNESST PERSONNALISÉ de l'employé ; NULL = taux global.
     cnesst_rate: Mapped[Optional[float]] = mapped_column(
         Numeric(6, 4), nullable=True
     )
@@ -67,3 +77,16 @@ class Employe(Base, TimestampUpdateMixin):
     employeur_d_url: Mapped[Optional[str]] = mapped_column(
         String(500), nullable=True
     )
+
+    # ---- Dîner non payé (Steven, 2026-10-05) ----
+    #: Coché : 30 min de dîner sont retirées de ses heures de punch, une
+    #: fois par jour, quand la journée punchée dépasse 5 h (voir
+    #: ``app/services/punch_diner.py``). Pour les employés qui ne
+    #: dépunchent pas pour dîner.
+    diner_auto: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    #: Jour où la case a été cochée : le retrait ne s'applique qu'aux
+    #: journées à partir de cette date (les heures déjà punchées avant ne
+    #: changent pas). NULL quand la case est décochée.
+    diner_depuis: Mapped[Optional[date]] = mapped_column(Date, nullable=True)

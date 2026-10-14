@@ -529,14 +529,11 @@ async def transcribe_audio(
             "configurée côté serveur."
         )
 
-    cascade = [
-        m.strip()
-        for m in (
-            _os.getenv("GEMINI_MODEL_CASCADE")
-            or "gemini-2.5-flash,gemini-2.5-pro,gemini-2.0-flash"
-        ).split(",")
-        if m.strip()
-    ]
+    # Catalogue Google à chaud (modèles retirés ignorés) — même
+    # résolution que l'extraction Prospection (2026-10-07).
+    from app.services.lead_extraction import resolve_gemini_cascade
+
+    cascade = await resolve_gemini_cascade(provider.api_key)
     last_err: Exception | None = None
     for model in cascade:
         try:

@@ -190,6 +190,49 @@ def _normalize_ocr_text(text: str) -> str:
     return out
 
 
+#: Photo au-delà de ces bornes → réduite avant l'envoi à l'IA. Une photo
+#: iPhone (12 Mpx, 4-8 Mo) devenait 10 Mo en base64 : envoi très long
+#: (budget de temps Gemini épuisé) et refus Groq (HTTP 413).
+_IMAGE_MAX_PX = 2000
+_IMAGE_MAX_OCTETS = 1_500_000
+
+
+def preparer_image_pour_ia(mime: str, blob: bytes) -> Tuple[str, bytes]:
+    """Réduit une image lourde (≤ 2000 px sur le grand côté, JPEG 85) —
+    parfaitement lisible pour l'IA, envoi ~10× plus court. Une image
+    déjà petite est renvoyée telle quelle ; en cas d'erreur, l'originale."""
+    if not blob:
+        return mime, blob
+    try:
+        from PIL import Image  # type: ignore
+
+        img = Image.open(io.BytesIO(blob))
+        w, h = img.size
+        if len(blob) <= _IMAGE_MAX_OCTETS and max(w, h) <= _IMAGE_MAX_PX:
+            return mime, blob
+        img.load()
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        ratio = min(1.0, _IMAGE_MAX_PX / float(max(w, h)))
+        if ratio < 1.0:
+            img = img.resize(
+                (max(1, int(w * ratio)), max(1, int(h * ratio))), Image.LANCZOS
+            )
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=85, optimize=True)
+        data = out.getvalue()
+        if len(data) < len(blob):
+            log.info(
+                "Image réduite pour l'IA : %d → %d octets (%dx%d → %dx%d)",
+                len(blob), len(data), w, h, img.size[0], img.size[1],
+            )
+            return "image/jpeg", data
+        return mime, blob
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Réduction d'image impossible (%s) — originale envoyée", exc)
+        return mime, blob
+
+
 def _check_tesseract_status() -> str:
     """Vérifie si Tesseract est installé et lit la version. Pour
     diagnostic dans les warnings utilisateur quand l'OCR retourne
@@ -386,17 +429,456 @@ _GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 # saturé. Si encore en quota après 3 tentatives, on bascule au
 # modèle suivant de la cascade (cf. _gemini_extract_cascade).
 _GEMINI_RETRY_BACKOFFS = (1.0, 5.0, 30.0)
+#: Budget de temps d'une cascade complète (s) : au-delà, on n'essaie
+#: pas un modèle de plus (Render coupe les requêtes à 100 s ; la tâche
+#: de fond n'a pas cette contrainte mais l'utilisateur attend). 2026-10-08 :
+#: 90 s (deux appels de 45 s au plus) — au-delà, relais Groq.
+_GEMINI_BUDGET_S = 90.0
+#: Modèles toujours essayés, budget ou pas (un premier modèle lent en
+#: erreur ne doit pas priver les autres de leur chance).
+_GEMINI_MODELES_MIN = 2
+_GEMINI_ERREURS_TRANSITOIRES = ("HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504", "injoignable")
+#: Durée maximale d'UN appel Gemini. Phil 2026-10-08 (« 115 s d'IA, pas
+#: normal ») : un ReadTimeout de 60 s sur gemini-3.5-flash + trois 503
+#: sur les modèles plus récents = 131 s pour un Excel de 21 Ko.
+_GEMINI_CALL_TIMEOUT_S = 45.0
+#: Modèles mis en pause après une erreur transitoire (503 saturé,
+#: timeout) ou un quota du jour : {modèle: instant monotonic de fin de
+#: pause}. Le prochain appel va droit à un modèle qui répond, au lieu de
+#: re-payer la même minute d'échecs.
+_GEMINI_PENALITES: Dict[str, float] = {}
+_GEMINI_PAUSE_TRANSITOIRE_S = 600.0
+_GEMINI_PAUSE_QUOTA_JOUR_S = 3600.0
+
+
+def _gemini_en_pause(model: str) -> bool:
+    fin = _GEMINI_PENALITES.get(model)
+    if fin is None:
+        return False
+    if time.monotonic() >= fin:
+        _GEMINI_PENALITES.pop(model, None)
+        return False
+    return True
+
+
+def _mettre_en_pause(model: str, duree_s: float) -> None:
+    _GEMINI_PENALITES[model] = max(
+        _GEMINI_PENALITES.get(model, 0.0), time.monotonic() + duree_s
+    )
+
+
+def modeles_gemini_en_pause() -> Dict[str, int]:
+    """Diagnostic (Paramètres → Outils) : modèles en pause → secondes
+    restantes."""
+    now = time.monotonic()
+    return {
+        m: int(fin - now)
+        for m, fin in list(_GEMINI_PENALITES.items())
+        if fin > now
+    }
 
 
 def _gemini_model_cascade() -> List[str]:
-    """Liste ordonnée des modèles Gemini à essayer. Configurable via
-    l'env GEMINI_MODEL_CASCADE (liste séparée par virgules)."""
-    raw = (
-        getattr(settings, "gemini_model_cascade", None)
-        or "gemini-2.5-flash,gemini-2.5-pro,gemini-2.0-flash"
-    )
-    models = [m.strip() for m in raw.split(",") if m.strip()]
-    return models or ["gemini-2.5-flash"]
+    """PRÉFÉRENCES de modèles Gemini (env GEMINI_MODEL_CASCADE, liste
+    séparée par virgules). La cascade réellement essayée est résolue
+    par ``resolve_gemini_cascade`` à partir du catalogue Google."""
+    raw = getattr(settings, "gemini_model_cascade", None) or ""
+    return [m.strip() for m in raw.split(",") if m.strip()]
+
+
+#: Dernier recours quand ni préférences ni catalogue (clé absente, réseau).
+_GEMINI_SECOURS = ("gemini-2.5-flash", "gemini-2.5-flash-lite")
+
+
+# ── Catalogue Gemini à chaud (2026-10-07) ─────────────────────────
+#
+# Google retire ses modèles sans préavis utile (gemini-2.0-flash et
+# gemini-2.5-pro répondaient 404 en octobre 2026) : une cascade codée en
+# dur finit toujours par ne contenir que des morts. On lit donc le
+# catalogue (ListModels — hors quota generateContent), on garde les
+# modèles texte utilisables, classés stables d'abord, génération la
+# plus récente d'abord, flash > flash-lite > pro, et on y ajoute les
+# préférences configurées en tête quand elles existent encore.
+_GEMINI_MODELS_CACHE: Dict[str, Any] = {"at": 0.0, "models": None}
+_GEMINI_MODELS_TTL = 3600.0
+_GEMINI_MODELS_TTL_ERREUR = 300.0
+_GEMINI_EXCLURE = (
+    "embedding", "tts", "image", "live", "audio", "computer", "robotics",
+    "research", "thinking", "veo", "imagen", "learnlm", "gemma", "aqa",
+)
+_GEMINI_NOM_RE = re.compile(r"^gemini-(\d+)(?:\.(\d+))?-(flash-lite|flash|pro)(.*)$")
+_GEMINI_CASCADE_MAX = 6
+
+
+async def _gemini_list_models(api_key: str) -> Optional[List[Dict[str, Any]]]:
+    """Catalogue brut ``GET /v1beta/models`` (paginé), en cache 1 h ;
+    ``None`` si l'appel échoue (cache 5 min pour ne pas insister)."""
+    now = time.monotonic()
+    cached = _GEMINI_MODELS_CACHE.get("models")
+    ttl = _GEMINI_MODELS_TTL if cached is not None else _GEMINI_MODELS_TTL_ERREUR
+    if _GEMINI_MODELS_CACHE["at"] and now - _GEMINI_MODELS_CACHE["at"] < ttl:
+        return cached
+    modeles: List[Dict[str, Any]] = []
+    token: Optional[str] = None
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            for _ in range(5):
+                params: Dict[str, Any] = {"key": api_key, "pageSize": 200}
+                if token:
+                    params["pageToken"] = token
+                resp = await client.get(f"{_GEMINI_BASE}/models", params=params)
+                if resp.status_code >= 400:
+                    log.warning(
+                        "Gemini ListModels HTTP %s : %s",
+                        resp.status_code, (resp.text or "")[:200],
+                    )
+                    _GEMINI_MODELS_CACHE.update(at=now, models=None)
+                    return None
+                body = resp.json()
+                modeles.extend(
+                    m for m in (body.get("models") or []) if isinstance(m, dict)
+                )
+                token = body.get("nextPageToken")
+                if not token:
+                    break
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Gemini ListModels injoignable : %s", exc)
+        _GEMINI_MODELS_CACHE.update(at=now, models=None)
+        return None
+    _GEMINI_MODELS_CACHE.update(at=now, models=modeles)
+    return modeles
+
+
+def _classer_modele_gemini(nom: str) -> Optional[tuple]:
+    """Clé de tri d'un modèle texte Gemini utilisable (``None`` = exclu :
+    embeddings, TTS, image, live/audio, expérimentaux spécialisés…)."""
+    m = _GEMINI_NOM_RE.match(nom)
+    if not m:
+        return None
+    suffixe = (m.group(4) or "").lower()
+    if any(x in suffixe for x in _GEMINI_EXCLURE):
+        return None
+    if suffixe == "":
+        stabilite = 0
+    elif re.fullmatch(r"-\d{3}", suffixe):
+        stabilite = 1
+    elif suffixe == "-latest":
+        stabilite = 2
+    elif "preview" in suffixe:
+        stabilite = 3
+    elif "exp" in suffixe:
+        stabilite = 4
+    else:
+        stabilite = 5
+    famille = {"flash": 0, "flash-lite": 1, "pro": 2}[m.group(3)]
+    return (stabilite, -int(m.group(1)), -int(m.group(2) or 0), famille, nom)
+
+
+def modeles_gemini_utilisables(modeles: Optional[List[Dict[str, Any]]]) -> List[str]:
+    """Noms des modèles texte (generateContent) du catalogue, classés :
+    stables d'abord, génération la plus récente d'abord, flash >
+    flash-lite > pro."""
+    out: List[tuple] = []
+    for m in modeles or []:
+        nom = str(m.get("name") or "")
+        if nom.startswith("models/"):
+            nom = nom[len("models/"):]
+        if "generateContent" not in (m.get("supportedGenerationMethods") or []):
+            continue
+        cle = _classer_modele_gemini(nom)
+        if cle is None:
+            continue
+        out.append((cle, nom))
+    out.sort()
+    return [nom for _, nom in out]
+
+
+async def resolve_gemini_cascade(api_key: Optional[str] = None) -> List[str]:
+    """Cascade RÉELLE : les préférences configurées qui existent encore,
+    puis les autres modèles texte disponibles (max 6). Sans catalogue
+    (clé absente, réseau) → les préférences telles quelles."""
+    prefs = _gemini_model_cascade()
+    secours = prefs or list(_GEMINI_SECOURS)
+    key = (api_key or getattr(settings, "gemini_api_key", None) or "").strip()
+    if not key:
+        return secours
+    modeles = await _gemini_list_models(key)
+    if modeles is None:
+        return secours
+    disponibles = modeles_gemini_utilisables(modeles)
+    if not disponibles:
+        return secours
+    cascade = [p for p in prefs if p in disponibles]
+    for nom in disponibles:
+        if len(cascade) >= _GEMINI_CASCADE_MAX:
+            break
+        if nom not in cascade:
+            cascade.append(nom)
+    return cascade
+
+
+_RETRY_DELAY_RE = re.compile(r"retryDelay\"?\s*:\s*\"?(\d+)s")
+
+
+def _quota_est_journalier(body_text: str) -> bool:
+    """Quota QUOTIDIEN épuisé (ex. « GenerateRequestsPerDayPerProjectPerModel
+    », « retry in 8h ») — inutile de réessayer dans 30 s : on passe au
+    modèle suivant tout de suite."""
+    low = (body_text or "").lower()
+    if "perday" in low or "per day" in low or "daily" in low:
+        return True
+    m = _RETRY_DELAY_RE.search(body_text or "")
+    return bool(m and int(m.group(1)) > 120)
+
+
+# ── Relais Groq (gratuit) quand Gemini ne répond pas ──────────────
+_GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+_GROQ_MODELS_CACHE: Dict[str, Any] = {"at": 0.0, "models": None}
+
+
+async def _groq_list_models(api_key: str) -> Optional[List[str]]:
+    """Identifiants des modèles Groq accessibles (cache 1 h ; ``None``
+    si l'appel échoue)."""
+    now = time.monotonic()
+    cached = _GROQ_MODELS_CACHE.get("models")
+    ttl = _GEMINI_MODELS_TTL if cached is not None else _GEMINI_MODELS_TTL_ERREUR
+    if _GROQ_MODELS_CACHE["at"] and now - _GROQ_MODELS_CACHE["at"] < ttl:
+        return cached
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(
+                f"{_GROQ_BASE_URL}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        if resp.status_code >= 400:
+            log.warning("Groq ListModels HTTP %s", resp.status_code)
+            _GROQ_MODELS_CACHE.update(at=now, models=None)
+            return None
+        ids = [
+            str(m.get("id"))
+            for m in (resp.json().get("data") or [])
+            if isinstance(m, dict) and m.get("id")
+        ]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Groq ListModels injoignable : %s", exc)
+        _GROQ_MODELS_CACHE.update(at=now, models=None)
+        return None
+    _GROQ_MODELS_CACHE.update(at=now, models=ids)
+    return ids
+
+
+# Modèles Groq qui ne sont pas des modèles de chat (audio, TTS, garde-fous,
+# modération…) — jamais choisis pour l'extraction.
+_GROQ_EXCLURE = (
+    "guard", "whisper", "orpheus", "tts", "safeguard", "embedding", "allam",
+    "moderation", "compound",
+)
+# Préférences pour le texte, dans l'ordre (sous-chaînes d'identifiants).
+# Observé en prod le 2026-10-07 : plus aucun Llama chez Groq, mais
+# openai/gpt-oss-120b, gpt-oss-20b et qwen.
+_GROQ_TEXTE_PREFERENCES = (
+    "gpt-oss-120b", "llama-3.3-70b", "llama-4-maverick", "llama-4-scout",
+    "llama-3.1-70b", "qwen", "gpt-oss-20b", "llama", "mixtral", "gemma",
+)
+_GROQ_VISION_INDICES = ("llama-4", "vision", "-vl", "vl-")
+
+
+def _groq_candidats(disponibles: Optional[List[str]]) -> List[str]:
+    return [
+        m for m in (disponibles or [])
+        if not any(x in m.lower() for x in _GROQ_EXCLURE)
+    ]
+
+
+def _groq_modele_texte(disponibles: Optional[List[str]]) -> Optional[str]:
+    """Modèle Groq texte : celui configuré s'il existe encore, sinon le
+    meilleur du catalogue selon ``_GROQ_TEXTE_PREFERENCES``."""
+    voulu = (getattr(settings, "groq_model", None) or "").strip()
+    if voulu and (disponibles is None or voulu in disponibles):
+        return voulu
+    if disponibles is None:
+        return None
+    cands = _groq_candidats(disponibles)
+    for pref in _GROQ_TEXTE_PREFERENCES:
+        for mid in cands:
+            if pref in mid.lower():
+                return mid
+    return cands[0] if cands else None
+
+
+def _groq_modele_vision(disponibles: Optional[List[str]]) -> Optional[str]:
+    """Modèle Groq capable de lire des images : celui configuré s'il
+    existe encore, sinon le premier du catalogue qui s'annonce vision."""
+    voulu = (getattr(settings, "groq_vision_model", None) or "").strip()
+    if voulu and (disponibles is None or voulu in disponibles):
+        return voulu
+    for mid in _groq_candidats(disponibles):
+        if any(x in mid.lower() for x in _GROQ_VISION_INDICES):
+            return mid
+    return None
+
+
+def _json_lenient(texte: str) -> Any:
+    """JSON strict, sinon sans clôtures ``` ```, sinon le premier bloc
+    { … } ou [ … ] du texte (les modèles sans mode JSON bavardent)."""
+    t = (texte or "").strip()
+    try:
+        return json.loads(t)
+    except ValueError:
+        pass
+    if t.startswith("```"):
+        t = re.sub(r"^```[a-zA-Z]*\s*", "", t)
+        t = re.sub(r"\s*```$", "", t).strip()
+        try:
+            return json.loads(t)
+        except ValueError:
+            pass
+    debuts = [i for i in (t.find("{"), t.find("[")) if i >= 0]
+    if not debuts:
+        raise ValueError("aucun JSON dans la réponse")
+    d = min(debuts)
+    f = max(t.rfind("}"), t.rfind("]"))
+    if f <= d:
+        raise ValueError("JSON incomplet dans la réponse")
+    return json.loads(t[d:f + 1])
+
+
+def _normaliser_sortie_groq(parsed: Any) -> List[Dict[str, Any]]:
+    """Réponse JSON de Groq → liste de fiches au format Gemini (``typology``
+    en dict ; un objet enveloppant une liste est déballé ; vides retirés)."""
+    items: List[Any]
+    if isinstance(parsed, list):
+        items = parsed
+    elif isinstance(parsed, dict):
+        listes = [v for v in parsed.values() if isinstance(v, list) and v and all(isinstance(x, dict) for x in v)]
+        if len(parsed) == 1 and listes:
+            items = listes[0]
+        else:
+            items = [parsed]
+    else:
+        return []
+    out: List[Dict[str, Any]] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        clean = {k: v for k, v in it.items() if v not in (None, "", "null", {}, [])}
+        tj = clean.pop("typology_json", None)
+        if tj and not clean.get("typology"):
+            try:
+                typ = json.loads(tj) if isinstance(tj, str) else tj
+                if isinstance(typ, dict) and typ:
+                    clean["typology"] = typ
+            except (TypeError, ValueError):
+                pass
+        if clean:
+            out.append(clean)
+    return out
+
+
+async def _groq_extract(
+    material: str,
+    images: List[Tuple[str, bytes]],
+    *,
+    system: Optional[str] = None,
+    guide: Optional[str] = None,
+) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], Optional[str]]:
+    """Extraction par Groq (mode JSON) — texte via Llama 3.3 70B, images
+    via un modèle vision (Llama 4 Scout). Retourne ``(data, raison,
+    modèle)``. Les PDF ne sont pas lisibles par Groq."""
+    api_key = (getattr(settings, "groq_api_key", None) or "").strip()
+    if not api_key:
+        return None, "clé GROQ_API_KEY absente du serveur", None
+    images_png = [(m, b) for m, b in images if (m or "").startswith("image/") and b]
+    if not material.strip() and not images_png:
+        return None, "aucune matière lisible par Groq (PDF scanné sans OCR)", None
+    disponibles = await _groq_list_models(api_key)
+    model: Optional[str]
+    contenu: Any
+    if images_png:
+        model = _groq_modele_vision(disponibles)
+        if not model:
+            if not material.strip():
+                return None, "aucun modèle Groq capable de lire des images", None
+            model = _groq_modele_texte(disponibles)
+            contenu = "Sources à analyser :\n\n" + material[:60_000]
+        else:
+            contenu = [
+                {"type": "text", "text": "Sources à analyser :\n\n" + (material[:40_000] or "(voir les images)")}
+            ] + [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{mime};base64,{base64.standard_b64encode(blob).decode('ascii')}"
+                    },
+                }
+                for mime, blob in images_png[:5]
+            ]
+    else:
+        model = _groq_modele_texte(disponibles)
+        contenu = "Sources à analyser :\n\n" + material[:60_000]
+    if not model:
+        return None, "aucun modèle Groq disponible", None
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (system or SYSTEM_PROMPT) + "\n\n" + (guide or SCHEMA_GUIDE)
+                + "\nRéponds avec un objet JSON (ou un tableau JSON si plusieurs immeubles).",
+            },
+            {"role": "user", "content": contenu},
+        ],
+        "temperature": 0,
+        "max_tokens": 4096,
+        "response_format": {"type": "json_object"},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{_GROQ_BASE_URL}/chat/completions",
+                json=payload,
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            if resp.status_code == 400 and "response_format" in payload:
+                # Modèle sans mode JSON → on redemande sans contrainte et
+                # on lit le JSON dans le texte.
+                log.info("Groq[%s] refuse le mode JSON — relance sans", model)
+                payload.pop("response_format", None)
+                resp = await client.post(
+                    f"{_GROQ_BASE_URL}/chat/completions",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+        if resp.status_code == 429:
+            return None, "quota Groq atteint", model
+        if resp.status_code >= 400:
+            log.warning("Groq[%s] HTTP %s : %s", model, resp.status_code, (resp.text or "")[:300])
+            return None, f"erreur Groq HTTP {resp.status_code}", model
+        texte = (((resp.json().get("choices") or [{}])[0].get("message") or {}).get("content") or "")
+        if not texte.strip():
+            return None, "réponse Groq vide", model
+        parsed = _json_lenient(texte)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Groq[%s] extraction échouée : %s", model, exc)
+        return None, f"Groq injoignable ({type(exc).__name__})", model
+    out = _normaliser_sortie_groq(parsed)
+    if not out:
+        return None, "Groq n'a renvoyé aucun champ", model
+    return out, None, model
+
+
+async def _run_groq_safely(
+    material: str,
+    images: List[Tuple[str, bytes]],
+    *,
+    system: Optional[str] = None,
+    guide: Optional[str] = None,
+) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], Optional[str]]:
+    try:
+        return await _groq_extract(material, images, system=system, guide=guide)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Groq extraction a levé : %s (%s)", type(exc).__name__, exc)
+        return None, f"Groq injoignable ({type(exc).__name__})", None
 
 
 def _is_quota_error(status_code: int, body_text: str) -> bool:
@@ -447,6 +929,8 @@ async def _gemini_extract(
     material: str,
     images: List[Tuple[str, bytes]],
     model: Optional[str] = None,
+    system: Optional[str] = None,
+    guide: Optional[str] = None,
 ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], bool, bool]:
     """Extrait les champs immeuble via Gemini.
 
@@ -465,7 +949,7 @@ async def _gemini_extract(
     if not material.strip() and not images:
         return None, None, False, False
 
-    user_parts: List[Dict[str, Any]] = [{"text": SCHEMA_GUIDE}]
+    user_parts: List[Dict[str, Any]] = [{"text": guide or SCHEMA_GUIDE}]
     if material.strip():
         user_parts.append(
             {"text": "Sources à analyser :\n\n" + material[:60_000]}
@@ -483,7 +967,7 @@ async def _gemini_extract(
         )
 
     payload = {
-        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "systemInstruction": {"parts": [{"text": system or SYSTEM_PROMPT}]},
         "contents": [{"role": "user", "parts": user_parts}],
         "generationConfig": {
             "temperature": 0,
@@ -494,17 +978,26 @@ async def _gemini_extract(
     effective_model = (model or EXTRACTION_MODEL).strip()
     url = f"{_GEMINI_BASE}/models/{effective_model}:generateContent"
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=_GEMINI_CALL_TIMEOUT_S) as client:
             resp = await client.post(
                 url, params={"key": api_key}, json=payload
             )
         if _is_quota_error(resp.status_code, resp.text or ""):
+            journalier = _quota_est_journalier(resp.text or "")
             log.warning(
-                "Gemini[%s] : quota/rate-limit atteint (HTTP %s)",
+                "Gemini[%s] : quota %s atteint (HTTP %s)",
                 effective_model,
+                "quotidien" if journalier else "par minute",
                 resp.status_code,
             )
-            return None, "quota Gemini atteint", True, False
+            return (
+                None,
+                "quota quotidien gratuit atteint"
+                if journalier
+                else "quota Gemini atteint (par minute)",
+                True,
+                False,
+            )
         if _is_model_not_found_error(resp.status_code, resp.text or ""):
             log.warning(
                 "Gemini[%s] : modèle déprécié ou introuvable (HTTP %s) "
@@ -572,6 +1065,11 @@ async def _gemini_extract(
 async def _gemini_extract_cascade(
     material: str,
     images: List[Tuple[str, bytes]],
+    *,
+    system: Optional[str] = None,
+    guide: Optional[str] = None,
+    budget_s: Optional[float] = None,
+    preferer_lite: bool = False,
 ) -> Tuple[
     Optional[List[Dict[str, Any]]], Optional[str], Optional[str]
 ]:
@@ -603,14 +1101,38 @@ async def _gemini_extract_cascade(
     if not material.strip() and not images:
         return None, None, None
 
-    cascade = _gemini_model_cascade()
+    cascade = await resolve_gemini_cascade(api_key)
+    if preferer_lite:
+        # Tâche simple (rent roll) : les flash-lite d'abord — plus
+        # rapides, quota séparé, qualité suffisante.
+        cascade = [m for m in cascade if "flash-lite" in m] + [
+            m for m in cascade if "flash-lite" not in m
+        ]
+    # Modèles en pause (erreur récente) ignorés — sauf s'ils le sont
+    # tous : on essaie quand même plutôt que de ne rien faire.
+    actifs = [m for m in cascade if not _gemini_en_pause(m)]
+    en_pause = [m for m in cascade if m not in actifs]
+    if actifs:
+        cascade = actifs
     last_err: Optional[str] = None
     deprecated_models: List[str] = []
     quota_models: List[str] = []
+    # Raison finale par modèle — le diagnostic montré à l'utilisateur
+    # ne cachait que la DERNIÈRE erreur (ex. « gemini-2.0-flash
+    # déprécié ») alors que la vraie cause était le quota du premier.
+    echecs: List[str] = [
+        f"{m} : en pause (erreur récente)" for m in en_pause if actifs
+    ]
+    _deadline = time.monotonic() + (
+        float(budget_s) if budget_s is not None else _GEMINI_BUDGET_S
+    )
     for idx, model in enumerate(cascade):
+        if idx >= _GEMINI_MODELES_MIN and time.monotonic() > _deadline:
+            echecs.append(f"{model} : non essayé (budget de temps épuisé)")
+            continue
         for attempt, backoff in enumerate(_GEMINI_RETRY_BACKOFFS):
             data, err, is_quota, is_not_found = await _gemini_extract(
-                material, images, model=model
+                material, images, model=model, system=system, guide=guide
             )
             if data is not None:
                 # Succès — ajoute « (cascade) » si on n'est pas
@@ -626,14 +1148,45 @@ async def _gemini_extract_cascade(
                 # retry : ce modèle n'existera pas dans 1 s ni dans
                 # 30 s. On le mémorise et on passe au suivant.
                 deprecated_models.append(model)
+                echecs.append(f"{model} : retiré par Google")
+                break
+            if is_quota and "quotidien" in (err or ""):
+                # Quota du JOUR épuisé : attendre 30 s ne change rien, et
+                # le modèle est mis en pause une heure.
+                _mettre_en_pause(model, _GEMINI_PAUSE_QUOTA_JOUR_S)
+                quota_models.append(model)
+                echecs.append(f"{model} : {err}")
                 break
             if not is_quota:
-                # Autre erreur (5xx, réseau, réponse vide…) → pas de
-                # retry, passe au modèle suivant.
+                # Erreur transitoire (modèle saturé 503, timeout) : le
+                # modèle est mis en pause 10 min ; UN nouvel essai après
+                # 3 s seulement s'il n'y a plus d'autre modèle à essayer
+                # (sinon on passe tout de suite au suivant — Phil
+                # 2026-10-08 : « 115 s d'IA, pas normal »).
+                transitoire = any(x in (err or "") for x in _GEMINI_ERREURS_TRANSITOIRES)
+                if transitoire:
+                    _mettre_en_pause(model, _GEMINI_PAUSE_TRANSITOIRE_S)
+                dernier_modele = idx == len(cascade) - 1
+                if (
+                    transitoire
+                    and attempt == 0
+                    and dernier_modele
+                    and time.monotonic() + 3.0 <= _deadline
+                ):
+                    log.info(
+                        "Gemini[%s] erreur transitoire (%s) — nouvel essai dans 3 s",
+                        model, err,
+                    )
+                    await asyncio.sleep(3.0)
+                    continue
+                echecs.append(f"{model} : {err or 'erreur inconnue'}")
                 break
             # Quota / 429 — on attend et on retente sur le même
             # modèle, sauf si c'est la dernière tentative.
-            if attempt < len(_GEMINI_RETRY_BACKOFFS) - 1:
+            if (
+                attempt < len(_GEMINI_RETRY_BACKOFFS) - 1
+                and time.monotonic() + backoff <= _deadline
+            ):
                 log.info(
                     "Gemini[%s] quota — retry dans %.0fs "
                     "(tentative %d/%d)",
@@ -645,15 +1198,18 @@ async def _gemini_extract_cascade(
                 await asyncio.sleep(backoff)
             else:
                 log.warning(
-                    "Gemini[%s] quota persistant après %d retries — "
+                    "Gemini[%s] quota persistant (ou budget de temps) — "
                     "cascade au modèle suivant",
                     model,
-                    len(_GEMINI_RETRY_BACKOFFS),
                 )
                 quota_models.append(model)
+                echecs.append(f"{model} : {err}")
+                break
 
-    # Cascade épuisée — message diagnostic explicite (utile pour Phil
-    # qui voit le warning côté UI au lieu d'un cryptique « HTTP 404 »).
+    # Cascade épuisée — message diagnostic explicite, UNE raison par
+    # modèle (utile pour Phil qui voit le warning côté UI).
+    if echecs:
+        return None, "cascade épuisée — " + " ; ".join(echecs), None
     if deprecated_models and not quota_models:
         if len(deprecated_models) == len(cascade):
             summary = (
@@ -714,6 +1270,9 @@ class ExtractionResult:
     per_source_values: List[Dict[str, Dict[str, Any]]] = field(
         default_factory=list
     )
+    #: PDF téléchargés derrière des liens (nom, type, octets) — joints à la
+    #: fiche par l'endpoint comme des fichiers déposés (Phil 2026-10-07).
+    fichiers_telecharges: List[Tuple[str, str, bytes]] = field(default_factory=list)
 
 
 # ── Helpers numériques ────────────────────────────────────────────
@@ -809,7 +1368,13 @@ def _int_or_none(s: Any) -> Optional[int]:
 # ── Parser texte libre (regex + heuristiques) ─────────────────────
 
 
-_POSTAL_RE = re.compile(r"\b([A-Z]\d[A-Z])\s?(\d[A-Z]\d)\b", re.I)
+# Code postal canadien : les lettres D, F, I, O, Q, U n'existent pas (et
+# W, Z jamais en tête) — évite « I0O 3O1 » lu dans des octets de PDF.
+_POSTAL_RE = re.compile(
+    r"\b([ABCEGHJKLMNPRSTVXY]\d[ABCEGHJKLMNPRSTVWXYZ])\s?"
+    r"(\d[ABCEGHJKLMNPRSTVWXYZ]\d)\b",
+    re.I,
+)
 _PHONE_RE = re.compile(
     r"(?:\+?1[\-.\s]?)?\(?(\d{3})\)?[\-.\s]?(\d{3})[\-.\s]?(\d{4})"
 )
@@ -907,6 +1472,15 @@ def parse_text(text: str) -> Dict[str, Any]:
             typology[key] = max(typology.get(key, 0), qty)
         except ValueError:
             pass
+    # Plausibilité (Phil 2026-10-07, PDF de courtier : « 91 × 4.5 » lu dans
+    # un tableau pour un 12 logements) : une typologie ne peut pas dépasser
+    # le nombre de logements connu.
+    nb_connu = out.get("nb_logements")
+    if typology and isinstance(nb_connu, int) and nb_connu > 0:
+        if not _typologie_plausible(typology, nb_connu):
+            typology = {k: v for k, v in typology.items() if v <= nb_connu}
+            if not _typologie_plausible(typology, nb_connu):
+                typology = {}
     if typology:
         out["typology"] = typology
         # Si nb_logements absent, déduit de la typologie.
@@ -2131,6 +2705,63 @@ async def _fetch_html(url: str) -> Tuple[str, Optional[str]]:
         return "", f"erreur réseau : {exc!s}"
 
 
+_PDF_URL_RE = re.compile(r"\.pdf(?:$|[?#])", re.I)
+_MAX_PDF_URL_OCTETS = 15 * 1024 * 1024
+_UA_NAVIGATEUR = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+)
+
+
+def _url_semble_pdf(url: str) -> bool:
+    """Le lien pointe-t-il vers un PDF (extension, avant ? ou #) ?"""
+    try:
+        return bool(_PDF_URL_RE.search(urlparse(url).path or ""))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _nom_fichier_depuis_url(url: str) -> str:
+    from urllib.parse import unquote
+
+    nom = unquote((urlparse(url).path or "").rsplit("/", 1)[-1]).strip() or "document.pdf"
+    if not nom.lower().endswith(".pdf"):
+        nom += ".pdf"
+    return nom[:255]
+
+
+async def _sonder_pdf(url: str) -> bool:
+    """Un lien sans extension .pdf sert-il quand même un PDF (HEAD) ?"""
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            r = await client.head(url, headers={"User-Agent": _UA_NAVIGATEUR})
+        return "pdf" in (r.headers.get("content-type") or "").lower()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _telecharger_pdf(url: str) -> Tuple[Optional[bytes], Optional[str]]:
+    """Télécharge le PDF derrière un lien (sommaire d'investissement d'un
+    courtier, fiche descriptive…). Retourne ``(octets, erreur)``."""
+    headers = {"User-Agent": _UA_NAVIGATEUR, "Accept": "application/pdf,*/*;q=0.8"}
+    try:
+        async with httpx.AsyncClient(timeout=40.0, follow_redirects=True) as client:
+            r = await client.get(url, headers=headers)
+        if r.status_code >= 400:
+            return None, f"document inaccessible (HTTP {r.status_code})"
+        blob = r.content or b""
+        ct = (r.headers.get("content-type") or "").lower()
+        if blob[:5] != b"%PDF-" and "pdf" not in ct:
+            return None, "le lien ne renvoie pas un PDF"
+        if len(blob) > _MAX_PDF_URL_OCTETS:
+            return None, "PDF trop lourd (max 15 Mo)"
+        return blob, None
+    except httpx.TimeoutException:
+        return None, "timeout après 40 s"
+    except Exception as exc:  # noqa: BLE001
+        return None, f"erreur réseau : {exc!s}"
+
+
 async def _fetch_html_rendered(
     url: str, parser_kind: str
 ) -> Tuple[str, Optional[str]]:
@@ -2251,6 +2882,25 @@ def _looks_like_valid_address(s: Any) -> bool:
     return bool(re.search(r"[A-Za-zÀ-ÿ]{3,}", raw))
 
 
+def _typologie_plausible(typ: Dict[str, Any], nb_logements: int) -> bool:
+    """Une typologie est plausible quand aucun poste ne dépasse le nombre
+    de logements et que la somme ne le dépasse pas non plus."""
+    try:
+        valeurs = [int(v) for v in typ.values()]
+    except (TypeError, ValueError):
+        return False
+    if not valeurs or any(v < 0 for v in valeurs):
+        return False
+    return max(valeurs) <= nb_logements and sum(valeurs) <= nb_logements
+
+
+def _entier(val: Any) -> int:
+    try:
+        return int(float(val))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _merge_local_gemini(
     local: Dict[str, Any],
     gemini: Dict[str, Any],
@@ -2340,6 +2990,25 @@ def _merge_local_gemini(
             merged[k] = v_gem
         # else : aucun n'a la valeur, on n'écrit rien.
 
+    # Garde-fou typologie (Phil 2026-10-07) : jamais plus d'unités que de
+    # logements. Si la fusion (MAX par typologie) est incohérente, on
+    # garde la source plausible ; sinon on retire la typologie plutôt que
+    # de fausser tout le calcul (la fiche l'affiche vide, à saisir).
+    nb_ref = _entier(merged.get("nb_logements"))
+    typ = merged.get("typology")
+    if nb_ref > 0 and isinstance(typ, dict) and typ and not _typologie_plausible(typ, nb_ref):
+        for src in (gemini, local):
+            t2 = src.get("typology")
+            if isinstance(t2, dict) and t2 and _typologie_plausible(t2, nb_ref):
+                merged["typology"] = dict(t2)
+                break
+        else:
+            merged.pop("typology", None)
+        divergence_warnings.append(
+            f"Typologie lue ({typ}) incohérente avec {nb_ref} logement(s) — "
+            + ("source plausible conservée." if merged.get("typology") else "ignorée, à saisir dans la fiche.")
+        )
+
     return merged, divergence_warnings, divergences
 
 
@@ -2422,6 +3091,11 @@ def _select_model_used(
 async def _run_gemini_safely(
     material: str,
     images: List[Tuple[str, bytes]],
+    *,
+    system: Optional[str] = None,
+    guide: Optional[str] = None,
+    budget_s: Optional[float] = None,
+    preferer_lite: bool = False,
 ) -> Tuple[
     Optional[List[Dict[str, Any]]], Optional[str], Optional[str]
 ]:
@@ -2438,7 +3112,10 @@ async def _run_gemini_safely(
     Le caller émet alors un warning visible à l'utilisateur et on
     poursuit avec le résultat du parser local seul."""
     try:
-        return await _gemini_extract_cascade(material, images)
+        return await _gemini_extract_cascade(
+            material, images, system=system, guide=guide,
+            budget_s=budget_s, preferer_lite=preferer_lite,
+        )
     except Exception as exc:  # noqa: BLE001
         log.warning(
             "Gemini extraction a levé inattenduement : %s (%s)",
@@ -2479,6 +3156,12 @@ async def extract_lead_info(
          / ``"local"`` / ``"gemini"`` / ``"none"``).
     """
     warnings: List[str] = []
+    # Alertes OCR (Tesseract absent/muet) : l'image ou le PDF scanné est
+    # de toute façon transmis à l'IA, qui le lit nativement. On ne les
+    # montre que si l'IA n'a rien pu lire non plus.
+    ocr_warnings: List[str] = []
+    # PDF téléchargés derrière des liens — traités comme des fichiers.
+    fichiers_url: List[Tuple[str, str, bytes]] = []
     # Liste de tuples (parser_tag, addr_key, data_dict).
     extracted: List[Tuple[str, str, Dict[str, Any]]] = []
     # Matériel brut consolidé pour l'extraction IA en parallèle
@@ -2493,6 +3176,20 @@ async def extract_lead_info(
             continue
         domain = urlparse(u).netloc
         parser_kind = _parser_for_domain(domain)
+        # Lien vers un PDF (sommaire d'investissement d'un courtier, fiche
+        # descriptive…) : téléchargé et traité comme un fichier joint —
+        # au lieu de lire ses octets comme du HTML (Phil 2026-10-07,
+        # immeublesgloria.com : rien d'extrait, code postal fantaisiste).
+        if _url_semble_pdf(u) or (
+            parser_kind not in ("centris", "duproprio", "realtor")
+            and await _sonder_pdf(u)
+        ):
+            blob_pdf, err_pdf = await _telecharger_pdf(u)
+            if err_pdf or not blob_pdf:
+                warnings.append(f"URL {u} : {err_pdf or 'PDF vide'}")
+                continue
+            fichiers_url.append((_nom_fichier_depuis_url(u), "application/pdf", blob_pdf))
+            continue
         html, fetch_err = await _fetch_html_rendered(u, parser_kind)
         if fetch_err:
             warnings.append(f"URL {u} : {fetch_err}")
@@ -2576,8 +3273,8 @@ async def extract_lead_info(
                 "Texte libre : aucun champ reconnaissable extrait"
             )
 
-    # ── Fichiers ───
-    for filename, content_type, blob in files or []:
+    # ── Fichiers (déposés + PDF téléchargés derrière des liens) ───
+    for filename, content_type, blob in list(fichiers_url) + list(files or []):
         ct = (content_type or "").lower()
         if ct == "application/pdf" or filename.lower().endswith(".pdf"):
             # 1) Couche texte native via pypdf (PDFs descriptifs MLS,
@@ -2601,10 +3298,14 @@ async def extract_lead_info(
                     pdf_text = _normalize_ocr_text(ocr_text)
                     ocr_used = True
             if not pdf_text.strip():
-                warnings.append(
-                    f"PDF « {filename} » : ni texte natif ni OCR "
-                    "exploitable (PDF illisible ou binaires Tesseract/"
-                    "poppler indisponibles sur le serveur)"
+                # PDF scanné sans OCR serveur : transmis tel quel à l'IA
+                # (Gemini lit les PDF nativement) ; le parser local n'y
+                # verra rien.
+                gemini_images.append(("application/pdf", blob))
+                ocr_warnings.append(
+                    f"PDF « {filename} » : aucune couche texte (document "
+                    "scanné) et OCR serveur indisponible — transmis tel "
+                    "quel à l'IA."
                 )
                 continue
             gemini_material_parts.append(
@@ -2625,18 +3326,18 @@ async def extract_lead_info(
         elif ct.startswith("image/") or filename.lower().endswith(
             (".png", ".jpg", ".jpeg", ".heic", ".heif", ".webp", ".tiff", ".bmp")
         ):
-            # Image transmise telle quelle à Gemini (lecture native,
-            # bien meilleure que l'OCR). L'OCR reste calculé comme
-            # filet de secours du parser local.
-            gemini_images.append((ct or "image/png", blob))
+            # Image transmise à l'IA (lecture native, bien meilleure que
+            # l'OCR), RÉDUITE si elle est lourde. L'OCR reste calculé sur
+            # l'originale comme filet de secours du parser local.
+            gemini_images.append(preparer_image_pour_ia(ct or "image/png", blob))
             # Screenshot de tableau Excel, photo de fiche MLS, capture
             # de courriel, photo HEIC iPhone, etc. → OCR Tesseract.
             ocr_text = parse_image_ocr(blob, filename=filename)
             if not ocr_text.strip():
-                tess_status = _check_tesseract_status()
-                warnings.append(
-                    f"Image « {filename} » : OCR n'a rien extrait. "
-                    f"État Tesseract serveur : {tess_status}"
+                ocr_warnings.append(
+                    f"Image « {filename} » : OCR serveur n'a rien extrait "
+                    f"(état Tesseract : {_check_tesseract_status()}) — "
+                    "lecture confiée à l'IA."
                 )
                 continue
             normalized = _normalize_ocr_text(ocr_text)
@@ -2733,35 +3434,49 @@ async def extract_lead_info(
         local_data_list = _finalize_local()
         gemini_data, gemini_err = None, None
 
-    # Warning Gemini indisponible — émis seulement si on l'a tenté
-    # et qu'il a échoué pour une vraie raison (pas la matière vide).
-    # On enrichit le message si c'est un quota : la cascade
-    # multi-modèles a déjà été tentée (cf. _gemini_extract_cascade),
-    # donc en pratique l'utilisateur ne voit ce warning que quand
-    # TOUS les modèles Gemini sont saturés simultanément.
-    if (
-        gemini_data is None
-        and gemini_err
-        and (gemini_material.strip() or gemini_images)
-    ):
-        low_err = (gemini_err or "").lower()
-        if "quota" in low_err or "rate" in low_err:
+    # ── Relais Groq (gratuit) si Gemini n'a rien donné ───
+    # Tier gratuit Google : quelques dizaines de requêtes par jour et
+    # par modèle, partagées par toutes les fonctions IA de Kratos →
+    # Gemini est souvent à sec. Groq (Llama) prend alors le relais :
+    # texte, et images via un modèle vision.
+    ai_data = gemini_data
+    ai_layer = "gemini"
+    groq_err: Optional[str] = None
+    groq_model_used: Optional[str] = None
+    if ai_data is None and (gemini_material.strip() or gemini_images):
+        groq_data, groq_err, groq_model_used = await _run_groq_safely(
+            gemini_material, gemini_images
+        )
+        if groq_data is not None:
+            ai_data = groq_data
+            ai_layer = "groq"
             warnings.append(
-                f"Gemini indisponible ({gemini_err}) — la cascade "
-                "multi-modèles (2.0 Flash, 1.5 Flash, 2.5 Pro, "
-                "1.5 Pro) a été tentée mais TOUS les modèles sont "
-                "saturés. Réessaie dans ~60 secondes (quota par "
-                "minute) ou demain (quota daily). Extraction sur "
-                "parser local seul en attendant."
-            )
-        else:
-            warnings.append(
-                f"Gemini indisponible ({gemini_err}) — extraction "
-                "sur parser local seul."
+                f"Gemini indisponible ({gemini_err or 'aucune réponse'}) "
+                f"— relais pris par Groq ({groq_model_used})."
             )
 
-    # ── Merge local ↔ Gemini par adresse ───
-    gemini_list = gemini_data or []
+    # Alerte IA indisponible — seulement si on l'a tentée et que ni
+    # Gemini ni Groq n'ont répondu. C'est ici (et seulement ici) que
+    # l'état de l'OCR serveur devient utile à l'utilisateur.
+    if ai_data is None and (gemini_material.strip() or gemini_images):
+        if gemini_err:
+            msg = f"Gemini indisponible ({gemini_err})"
+            if groq_err:
+                msg += f" ; relais Groq impossible ({groq_err})"
+            low_err = (gemini_err or "").lower()
+            if "quota" in low_err or "rate" in low_err:
+                msg += (
+                    " — le tier gratuit Google plafonne les requêtes "
+                    "par jour et par modèle, et ce quota est partagé "
+                    "par toutes les fonctions IA de Kratos : réessaie "
+                    "plus tard, ou active la facturation du projet "
+                    "Google AI Studio (quelques cents par extraction)."
+                )
+            warnings.append(msg + " Extraction sur parser local seul.")
+        warnings.extend(ocr_warnings)
+
+    # ── Merge local ↔ IA par adresse ───
+    gemini_list = ai_data or []
     # Indexe Gemini par clé d'adresse pour fusionner avec le bon
     # immeuble local quand il y en a plusieurs.
     gemini_by_addr: Dict[str, Dict[str, Any]] = {}
@@ -2861,6 +3576,13 @@ async def extract_lead_info(
         model_used = _select_model_used(
             n_local_total, n_gemini_total, gemini_skipped=False
         )
+        if ai_layer == "groq" and n_gemini_total > 0:
+            # Relais Groq : « local + groq (modèle) » / « groq (modèle) »
+            # — le badge frontend reconnaît « groq ».
+            model_used = model_used.replace(
+                "gemini", f"groq ({groq_model_used or 'llama'})"
+            )
+            gemini_model_used = None
         # Si Gemini a contribué via la cascade (modèle != défaut ou
         # retry utilisé), on enrichit ``model_used`` avec le nom
         # exact du modèle qui a réussi — utile pour tracer dans la
@@ -2879,6 +3601,7 @@ async def extract_lead_info(
             model_used=model_used,
             warnings=warnings,
             per_source_values=per_source_values_out,
+            fichiers_telecharges=fichiers_url,
         )
 
     if not warnings:
@@ -2887,6 +3610,7 @@ async def extract_lead_info(
         data=[],
         model_used=_select_model_used(0, 0, gemini_skipped=False),
         warnings=warnings,
+        fichiers_telecharges=fichiers_url,
     )
 
 

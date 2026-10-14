@@ -687,10 +687,12 @@ function AssignerBailModal({
             />
             <span className="text-xs text-white/70">
               <span className="font-semibold text-white">
-                Ce bail est déjà en vigueur (signé)
+                Ce bail est déjà en vigueur (signé ou entente verbale)
               </span>{" "}
               — créé directement ACTIF, sans passer par le kanban
-              Locations (le logement passe « occupé »).
+              Locations (le logement passe « occupé »). Sans bail papier,
+              déclare ensuite le motif dans le bandeau « bail sans
+              document ».
             </span>
           </label>
         </div>

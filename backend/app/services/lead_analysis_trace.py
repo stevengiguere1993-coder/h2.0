@@ -127,6 +127,14 @@ def _bareme_effectif(res: FinanceResults) -> Dict[str, float]:
     return b
 
 
+#: Libellés des modes d'optimisation par unité (Phil 2026-10-07).
+LIBELLES_MODE = {
+    "aucune": "non optimisée",
+    "pre_achat": "optimisée pré-achat",
+    "post_achat": "optimisée post-achat",
+}
+
+
 def _section_fiche(res: FinanceResults) -> Dict[str, Any]:
     i = res.inputs
     nb = int(i.nombre_logements or 0)
@@ -185,14 +193,16 @@ def _section_fiche(res: FinanceResults) -> Dict[str, Any]:
     if (i.balance_vente_montant or 0) > 0:
         L.append(ligne("Balance de vente (montant)", None, i.balance_vente_montant, source="fiche"))
         L.append(ligne("Balance de vente (taux)", None, i.balance_vente_taux_pct, source="fiche", unite="%"))
-    if i.unites:
-        opt = sum(1 for u in i.unites if isinstance(u, dict) and u.get("optimiser", True))
+    uc = getattr(res, "unites_calcul", None)
+    if uc:
+        m = uc["modes"]
         L.append(
             ligne(
                 "Unités détaillées",
                 None,
-                f"{len(i.unites)} unité(s), {opt} à optimiser — "
-                + ("optimisation PRÉ-achat" if i.optimisation_pre_achat else "optimisation POST-achat (au refi)"),
+                f"{len(uc['unites'])} unité(s) : {m['aucune']} non optimisée(s), "
+                f"{m['pre_achat']} pré-achat, {m['post_achat']} post-achat "
+                f"(refi à l'an {uc['h']}, croissance {_p(uc['g'])})",
                 source="fiche",
                 unite="txt",
             )
@@ -298,26 +308,39 @@ def _section_typologie(res: FinanceResults) -> Optional[Dict[str, Any]]:
                 t.nouveau_loyer_moyen_pdm,
             )
         )
-    if i.unites:
-        cl = float(i.croissance_loyers or 0.0) if i.chantier_actif else 0.0
-        fac = (1 + cl) ** max(0, int(i.duree_projet_annees or 0))
-        actuel = sum(float(u.get("loyer_actuel") or 0) for u in i.unites if isinstance(u, dict))
-        au_refi = 0.0
-        for u in i.unites:
-            if not isinstance(u, dict):
-                continue
-            if u.get("optimiser", True):
-                au_refi += float(u.get("loyer_cible") or 0) * (fac if i.optimisation_pre_achat else 1.0)
-            else:
-                au_refi += float(u.get("loyer_actuel") or 0) * fac
-        L.append(ligne("Unités — somme des loyers actuels ($/mois)", None, actuel, source="fiche"))
+    uc = getattr(res, "unites_calcul", None)
+    if uc:
+        fac = (1 + float(uc["g"])) ** int(uc["h"])
+        L.append(ligne("Unités — somme des loyers actuels ($/mois)", None, uc["total_actuel_mois"], source="fiche"))
         L.append(
             ligne(
-                "Unités — somme des loyers au refi ($/mois)",
-                f"cible si optimisée, sinon actuel × {_f(fac)} (croissance {_p(cl)} sur {i.duree_projet_annees} an(s))",
-                au_refi,
+                "Unités — somme des loyers à l'achat ($/mois)",
+                "optimisé si pré-achat, sinon actuel",
+                uc["total_achat_mois"],
             )
         )
+        L.append(
+            ligne(
+                f"Unités — somme des loyers au refi, an {uc['h']} ($/mois)",
+                f"non optimisée : actuel × {_f(fac)} ; pré-achat : optimisé × {_f(fac)} ; post-achat : optimisé tel que saisi (croissance {_p(uc['g'])} sur {uc['h']} an(s))",
+                uc["total_refi_mois"],
+            )
+        )
+        for ul in uc["unites"]:
+            L.append(
+                ligne(
+                    f"Unité {ul.get('numero') or '#' + str(ul['index'])} ({ul.get('typo') or '—'}) — {LIBELLES_MODE.get(ul['mode'], ul['mode'])} — au refi ($/mois)",
+                    f"actuel {_m(ul['loyer_actuel'])}"
+                    + (
+                        f", optimisé {_m(ul['loyer_optimise'])}"
+                        + (" (loyer projeté de la typologie)" if ul.get("suit_typologie") else "")
+                        if ul["mode"] != "aucune"
+                        else ""
+                    )
+                    + f" ; à l'achat {_m(ul['achat'])}",
+                    ul["refi"],
+                )
+            )
         if i.nb_logements_ajoutes > 0:
             L.append(
                 ligne(
@@ -458,8 +481,8 @@ def _revenus_lignes(res: FinanceResults, s: ScenarioResult, quel: str) -> List[D
     t = res.typology
     nb = int(s.nb_log)
     if quel == "achat":
-        if i.optimisation_pre_achat and i.unites:
-            form = "somme des unités (cible si optimisée, sinon actuel) × 12"
+        if getattr(res, "unites_calcul", None):
+            form = "somme de la colonne « À l'achat » des unités (optimisé si pré-achat, sinon actuel) × 12"
         else:
             form = "revenus bruts de la fiche"
         L = [ligne("Revenus totaux", form, s.revenus_totaux, source="fiche" if form.startswith("revenus") else "calcul", gras=True)]
@@ -708,6 +731,247 @@ def _section_mdf(res: FinanceResults) -> Dict[str, Any]:
     return section("6 · Mise de fonds et prêt du prêteur B", L)
 
 
+def _section_achat_preteur_b(res: FinanceResults) -> Optional[Dict[str, Any]]:
+    """Achat prêteur B — cashflow de l'acquisition (Phil 2026-10-12) :
+    retenue du prêteur sur tous les frais finançables, avance au notaire,
+    sorties jour 0, premier déboursé, tranches de travaux, refi, solde du
+    compte à partir du montant des investisseurs. Aucun nouveau poste."""
+    a = getattr(res, "achat_preteur_b", None)
+    if not a:
+        return None
+    mdf = a["mdf_pct"]
+
+    def _noms(moment: str, seulement_financables: bool = False) -> str:
+        noms = [
+            p["label"]
+            for p in a["postes"].get(moment, [])
+            if not seulement_financables or p["financable"]
+        ]
+        return ", ".join(noms) if noms else "aucun"
+
+    L = [
+        ligne(
+            "Prêt du prêteur B engagé (bâtisse + frais financés)",
+            "section 6", a["pret_total"],
+        ),
+        ligne(
+            "Base de la retenue : frais finançables du notaire et du projet",
+            f"{_noms('notaire', True)} ; {_noms('projet', True)}",
+            a["base_retenue"],
+        ),
+        ligne(
+            "Retenue du prêteur (déboursée progressivement)",
+            f"{_p(a['retenue_pct'])} × {_m(a['base_retenue'])}",
+            a["retenue"],
+            source="fiche",
+            note="Plafonnée au prêt engagé.",
+        ),
+        ligne(
+            "Part de ces frais financée par le prêteur",
+            f"(1 − {_p(mdf)}) × {_m(a['base_retenue'])}",
+            a["finance_np"],
+        ),
+        ligne(
+            "Manque à combler au notaire (retenue − part financée)",
+            f"{_m(a['retenue'])} − {_m(a['finance_np'])}",
+            a["manque_notaire"],
+        ),
+        ligne(
+            "= Avance du prêteur B au notaire",
+            f"{_m(a['pret_total'])} − {_m(a['retenue'])}",
+            a["avance_notaire"],
+            gras=True,
+        ),
+        ligne(
+            "Mise de fonds au notaire (prix − avance)",
+            f"{_m(a['prix_achat'])} − {_m(a['avance_notaire'])}",
+            a["mdf_notaire"],
+        ),
+    ]
+    if a["cashback"] > 0:
+        L.append(ligne("− Cashback reçu au notaire", None, -a["cashback"], source="fiche"))
+    if a["balance_vente"] > 0:
+        L.append(ligne("− Balance de vente", None, -a["balance_vente"], source="fiche"))
+    L.append(
+        ligne(
+            "+ Frais payés au notaire, montant complet (finançables avancés inclus)",
+            _noms("notaire"),
+            a["frais_notaire"],
+        )
+    )
+    L.append(
+        ligne(
+            "= Sorties au jour 0 (notaire)",
+            f"{_m(a['mdf_notaire'])}"
+            + (f" − {_m(a['cashback'])}" if a["cashback"] > 0 else "")
+            + (f" − {_m(a['balance_vente'])}" if a["balance_vente"] > 0 else "")
+            + f" + {_m(a['frais_notaire'])}",
+            a["cash_notaire"],
+            gras=True,
+        )
+    )
+    L.append(
+        ligne(
+            "Jour 1 — frais payés avec le 1er déboursé",
+            _noms("jour1"),
+            a["frais_jour1"],
+        )
+    )
+    L.append(
+        ligne(
+            "Jour 1 — 1er déboursé : frais finançables de l'achat et du jour 1 remboursés",
+            f"{_p(a['taux_remboursement'])} × ({_noms('notaire', True)} ; {_noms('jour1', True)})",
+            a["remboursement_jour_1"],
+        )
+    )
+    L.append(
+        ligne(
+            "Jeu d'exploitation pendant les travaux (revenus nets − intérêts de portage − intérêts BV)",
+            f"{_m(a['revenus_nets_projet'])} − {_m(a['interets_portage'])} − {_m(a['interets_bv'])}",
+            a["exploitation_total"],
+            note="+ = le bâtiment finance une partie du roulement ; étalé sur les tranches.",
+        )
+    )
+    L.append(
+        ligne(
+            "Nombre de déboursés pendant les travaux", None,
+            a["nb_deboursements"], source="fiche", unite="n",
+        )
+    )
+    for e in a["echeancier"]:
+        if not e["etape"].startswith("tranche_"):
+            continue
+        L.append(
+            ligne(
+                f"{e['libelle']} — sorties",
+                "travaux ÷ nb de déboursés" + (" + postes ponctuels" if e["etape"] == "tranche_1" else ""),
+                e["sorties"],
+            )
+        )
+        L.append(
+            ligne(
+                f"{e['libelle']} — exploitation nette",
+                "(revenus nets − intérêts) ÷ nb de déboursés",
+                e["exploitation"],
+            )
+        )
+        L.append(
+            ligne(
+                f"{e['libelle']} — déboursé du prêteur",
+                f"{_p(a['taux_remboursement'])} × part finançable de la tranche",
+                e["debourse"],
+            )
+        )
+    L.append(
+        ligne(
+            "Au refinancement — frais du refi (le prêt B est remboursé)",
+            _noms("refi"),
+            a["cash_refi"],
+        )
+    )
+    L.append(
+        ligne(
+            "= Cash définitif (Σ sorties − Σ exploitation − Σ déboursés)",
+            "toutes les étapes",
+            a["cash_definitif"],
+            gras=True,
+            note="= mise de fonds prêteur B (section 6).",
+        )
+    )
+    L.append(
+        ligne(
+            "Besoin de trésorerie maximal (exposition la plus haute avant un déboursé)",
+            "max sur l'échéancier de (Σ sorties − Σ exploitation − Σ déboursés)",
+            a["besoin_max"],
+            gras=True,
+        )
+    )
+    L.append(
+        ligne(
+            "Montant demandé aux investisseurs",
+            None if a["capital_saisi"] else "vide → besoin de trésorerie maximal",
+            a["capital"],
+            source="fiche" if a["capital_saisi"] else "calcul",
+        )
+    )
+    if a.get("point_bas"):
+        L.append(
+            ligne(
+                "Point bas du compte",
+                a["point_bas"]["libelle"],
+                a["point_bas"]["solde"],
+                gras=True,
+            )
+        )
+    L.append(ligne("Solde à la fin des travaux", "capital − sorties + déboursés", a["solde_fin_travaux"]))
+    L.append(ligne("Solde après le refinancement", "capital − cash définitif", a["solde_fin"]))
+    return section(
+        "6b · Achat prêteur B — cashflow (notaire, travaux, refinancement)",
+        L,
+        "Aucun nouveau poste : les montants des sections 5 et 6 répartis dans le temps, avec la retenue du prêteur sur tous les frais finançables.",
+    )
+
+
+def _section_cout_projet(res: FinanceResults) -> Optional[Dict[str, Any]]:
+    """Coût du projet (Phil 2026-10-07) : coût total = prix de revente pour
+    revenir à 0 $ ; cash total nécessaire = mise de fonds nette + frais
+    payés cash. Montants déjà établis dans les sections précédentes."""
+    c = getattr(res, "cout_projet", None)
+    if not c:
+        return None
+    L = [ligne("Prix d'achat", None, c["prix_achat"], source="fiche")]
+    if c["cashback"] > 0:
+        L.append(ligne("− Cashback reçu au notaire", None, -c["cashback"], source="fiche"))
+    L.append(ligne("= Coût réel", f"{_m(c['prix_achat'])} − {_m(c['cashback'])}", c["prix_reel"]))
+    L.append(
+        ligne(
+            "+ Frais de démarrage (tous)",
+            f"payés cash {_m(c['frais_cash'])} + financés {_m(c['frais_finances'])}",
+            c["frais_total"],
+        )
+    )
+    if c.get("prime_assurance", 0) > 0:
+        L.append(ligne("+ Prime d'assurance prêt (financée)", "section 8", c["prime_assurance"]))
+    L.append(
+        ligne(
+            "= Coût total du projet (prix de revente pour revenir à 0 $)",
+            f"{_m(c['prix_reel'])} + {_m(c['frais_total'])}"
+            + (f" + {_m(c['prime_assurance'])}" if c.get("prime_assurance", 0) > 0 else ""),
+            c["cout_total"],
+            gras=True,
+            note="Avant les frais de vente (courtier, notaire, pénalité hypothécaire).",
+        )
+    )
+    L.append(ligne("Prêt accordé", None, c["pret"]))
+    if c["balance_vente"] > 0:
+        L.append(ligne("+ Balance de vente", None, c["balance_vente"], source="fiche"))
+    if c["frais_finances_hors_pret"] > 0:
+        L.append(
+            ligne(
+                "+ Frais financés hors prêt (remboursés au refinancement)",
+                None,
+                c["frais_finances_hors_pret"],
+            )
+        )
+    L.append(
+        ligne(
+            "+ Cash total nécessaire (mise de fonds nette + frais payés cash)",
+            f"{_m(c['mdf_nette'])} + {_m(c['frais_cash'])}",
+            c["cash_total"],
+            gras=True,
+        )
+    )
+    L.append(
+        ligne(
+            "Vérification : dette + cash − coût total",
+            f"{_m(c['dette_totale'])} + {_m(c['cash_total'])} − {_m(c['cout_total'])}",
+            c["verification"],
+            note="Vaut 0 (aux arrondis près) : tout le coût est couvert par le prêt, la balance de vente et le cash.",
+        )
+    )
+    return section("6b · Coût du projet", L)
+
+
 def _section_verdict(res: FinanceResults) -> Dict[str, Any]:
     i = res.inputs
     L: List[Dict[str, Any]] = []
@@ -912,6 +1176,12 @@ def construire_trace(res: FinanceResults) -> List[Dict[str, Any]]:
         sections.append(_section_scenario(res, res.refi_aph_100, "4d", "aph100"))
     sections.append(_section_frais(res))
     sections.append(_section_mdf(res))
+    achat_b = _section_achat_preteur_b(res)
+    if achat_b:
+        sections.append(achat_b)
+    cout = _section_cout_projet(res)
+    if cout:
+        sections.append(cout)
     sections.append(_section_verdict(res))
     trad = _section_traditionnel(res)
     if trad:

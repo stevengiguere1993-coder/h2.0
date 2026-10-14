@@ -368,6 +368,11 @@ async def ensure_critical_columns() -> None:
         # Dépôts de garantie opérationnels 2026-07 : date de remise du
         # dépôt au locataire (page Dépôts → « Marquer rendu »).
         ("imm_baux", "depot_rendu_le", "DATE"),
+        # Dépôt gardé (Phil 2026-10-08) — sans ces colonnes, la page
+        # Dépôts et la fin de bail plantent.
+        ("imm_baux", "depot_saisi_le", "DATE"),
+        ("imm_baux", "depot_saisi_montant", "NUMERIC(10, 2)"),
+        ("imm_baux", "depot_saisi_motif", "VARCHAR(255)"),
         # Bail AU MOIS (chambres) : reconduction auto, jamais d'avis de
         # renouvellement, loyers qui courent sans egard a date_fin.
         ("imm_baux", "au_mois", "BOOLEAN"),
@@ -496,6 +501,13 @@ async def ensure_critical_columns() -> None:
         # Reçus QuickBooks → Drive (2026-10-04) : connexion QB à utiliser.
         ("entreprises", "qbo_scope", "VARCHAR(32)"),
         ("qbo_recus_drive", "run_id", "VARCHAR(40)"),
+        # Connexion QuickBooks refusée par Intuit (invalid_grant) : état
+        # « à reconnecter » lu par GET /qbo/status (2026-10-09). Le client
+        # QBO sélectionne ces colonnes à chaque renouvellement du jeton.
+        ("qbo_tokens", "reconnect_required_at", "TIMESTAMP WITH TIME ZONE"),
+        ("qbo_tokens", "last_refresh_error", "VARCHAR(500)"),
+        ("qbo_connections", "reconnect_required_at", "TIMESTAMP WITH TIME ZONE"),
+        ("qbo_connections", "last_refresh_error", "VARCHAR(500)"),
         ("entreprise_partners", "partner_adresse", "VARCHAR(500)"),
         ("entreprise_partners", "partner_naissance", "DATE"),
         ("entreprise_partners", "partner_telephone", "VARCHAR(32)"),
@@ -2139,6 +2151,10 @@ async def init_db() -> None:
             ("lead_analyses", "balance_vente_taux_pct", "NUMERIC(5,3)"),
             ("lead_analyses", "cashback_montant", "NUMERIC(14,2)"),
             ("lead_analyses", "optimisation_moment", "VARCHAR(16)"),
+            # Achat prêteur B — cashflow (Phil 2026-10-12).
+            ("lead_analyses", "retenue_travaux_pct", "NUMERIC(5,2)"),
+            ("lead_analyses", "nb_deboursements_travaux", "INTEGER"),
+            ("lead_analyses", "fonds_roulement_travaux", "NUMERIC(14,2)"),
             ("lead_analyses", "ltv_residentiel_pct", "NUMERIC(5,2)"),
             ("lead_analyses", "amort_residentiel_annees", "INTEGER"),
             # Assumation hypothécaire (Phil 2026-09-29).
@@ -2177,6 +2193,9 @@ async def init_db() -> None:
             # Organigramme : niveau d'exécution (direction / adjoint /
             # adjoint_virtuel) — qui doit faire ce rôle / cette tâche.
             ("org_nodes", "execution_tier", "VARCHAR(24)"),
+            # Organigramme : nature forcée d'un détenteur hors groupe
+            # (person | company) — Phil 2026-10-08.
+            ("org_nodes", "nature_forced", "VARCHAR(16)"),
             # Refacturation des achats — Phase A.
             # `is_billable` indique si l'achat doit être refacturé au
             # client. `markup_percent` : majoration appliquée à
@@ -2628,6 +2647,8 @@ async def init_db() -> None:
             # l'endpoint /tri-inputs renvoie des defauts raisonnables.
             ("lead_analyses", "tri_capital_injecte", "NUMERIC(14, 2)"),
             ("lead_analyses", "tri_pct_investisseur", "NUMERIC(6, 4)"),
+            # Taux d'actualisation du fonds (VAN) — 2026-10-08.
+            ("lead_analyses", "tri_taux_actualisation", "NUMERIC(6, 4)"),
             ("lead_analyses", "tri_croissance_loyers", "NUMERIC(6, 4)"),
             ("lead_analyses", "tri_croissance_depenses", "NUMERIC(6, 4)"),
             # Motif de perte d'un lead construction (juin 2026) : renseigné
@@ -3739,6 +3760,32 @@ async def init_db() -> None:
                     0.5,
                     "inputs_manuels",
                 ),
+                # ── Achat prêteur B — cashflow (Phil 2026-10-12) ──
+                (
+                    "retenue_travaux_pct",
+                    100.0,
+                    "Retenue du prêteur B sur les travaux (%)",
+                    "Part des travaux estimés que le prêteur B retient et "
+                    "débourse progressivement (100 % typique, même s'il "
+                    "n'en finance que 1 − MDF %). Ce qu'il retient au-delà "
+                    "de sa part est exigé d'avance au notaire.",
+                    0.0,
+                    100.0,
+                    1.0,
+                    "inputs_manuels",
+                ),
+                (
+                    "nb_deboursements_travaux",
+                    3.0,
+                    "Nombre de déboursés progressifs (travaux)",
+                    "Nombre de déboursés du prêteur B pendant les travaux. "
+                    "Fonds de roulement = retenue ÷ nombre de déboursés "
+                    "(avance maximale avant remboursement).",
+                    1.0,
+                    24.0,
+                    1.0,
+                    "inputs_manuels",
+                ),
                 (
                     "tga_pct",
                     4.0,
@@ -4336,6 +4383,18 @@ async def init_db() -> None:
                 # Table absente au tout premier boot (create_all n'a
                 # pas encore tourné) — retentera au prochain démarrage.
                 log.warning("init_db: upsert prospection_analysis_defaults (%s) échouée: %s", key, exc)
+
+        # Clés RETIRÉES (Phil 2026-10-08 : « je fais pas de promesse,
+        # enlève le fait de rentrer le % ») — supprimées si présentes.
+        try:
+            await conn.execute(
+                text(
+                    "DELETE FROM prospection_analysis_defaults "
+                    "WHERE key IN ('tri_taux_actualisation_defaut')"
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("init_db: retrait des défauts retirés échoué: %s", exc)
 
         # ── Seed du barème des taxes de bienvenue (juin 2026) ────────
         # Défaut à valeur structurée (``value_json``) : barème progressif

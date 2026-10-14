@@ -25,6 +25,8 @@ type PendingPunch = {
   hours: number | null;
   task: string | null;
   notes: string | null;
+  // Minutes de dîner non payé déjà retirées de `hours`.
+  diner_minutes?: number | null;
 };
 
 function fmtShift(started: string, ended: string | null): string {
@@ -174,6 +176,11 @@ export default function MobileApprobationsPage() {
                     <p className="mt-1 flex items-center gap-1.5 text-xs text-emerald-300">
                       <Timer className="h-3 w-3" />
                       {p.hours != null ? fmtHm(Number(p.hours)) : "—"}
+                      {p.diner_minutes ? (
+                        <span className="text-amber-300">
+                          · dîner −{p.diner_minutes} min
+                        </span>
+                      ) : null}
                     </p>
                     {p.task ? (
                       <p className="mt-1 text-xs text-white/50">

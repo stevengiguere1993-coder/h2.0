@@ -20,6 +20,11 @@ from app.models.calendar_sync import (
     UserCalendarFeed,
 )
 from app.models.centris_listing import CentrisListing
+from app.models.prospection_courtier import (  # noqa: F401
+    ProspectionCourtier,
+    ProspectionCourtierAnnonce,
+    ProspectionCourtierContact,
+)
 from app.models.client import Client
 from app.models.client_document import ClientDocument  # noqa: F401
 from app.models.contact import Contact  # noqa: F401

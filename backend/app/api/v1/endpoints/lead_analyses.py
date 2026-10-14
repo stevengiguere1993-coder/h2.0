@@ -16,7 +16,11 @@ Restreint au volet `prospection`.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import secrets
+import time
+import traceback
 import logging
 import os
 import re
@@ -159,6 +163,9 @@ class LeadAnalysisRead(BaseModel):
     balance_vente_montant: Optional[float] = None
     cashback_montant: Optional[float] = None
     optimisation_moment: Optional[str] = None
+    # Achat prêteur B — cashflow (Phil 2026-10-12).
+    retenue_travaux_pct: Optional[float] = None
+    nb_deboursements_travaux: Optional[int] = None
     ltv_residentiel_pct: Optional[float] = None
     amort_residentiel_annees: Optional[int] = None
     # Assumation hypothécaire (Phil 2026-09-29).
@@ -174,6 +181,9 @@ class LeadAnalysisRead(BaseModel):
     # Croissances annuelles (FRACTIONS, 0.03 = 3 %) — partagées avec
     # le TRI (source unique) et la projection des achats directs.
     tri_croissance_loyers: Optional[float] = None
+    #: Capital injecté du TRI = montant demandé aux investisseurs (page
+    #: Achat prêteur B, Phil 2026-10-12).
+    tri_capital_injecte: Optional[float] = None
     tri_croissance_depenses: Optional[float] = None
     # Phase 3 — optimisation par unité (liste JSON).
     unites_json: Optional[str] = None
@@ -312,6 +322,11 @@ class LeadAnalysisUpdate(BaseModel):
     optimisation_moment: Optional[str] = Field(
         default=None, pattern=r"^(post_achat|pre_achat)$"
     )
+    # Achat prêteur B — cashflow (Phil 2026-10-12) : retenue sur les
+    # travaux (100.0 = 100 %), nombre de déboursés, fonds de roulement
+    # saisi (null = retenue ÷ nombre de déboursés).
+    retenue_travaux_pct: Optional[float] = Field(default=None, ge=0, le=100)
+    nb_deboursements_travaux: Optional[int] = Field(default=None, ge=1, le=60)
     # Mode résidentiel (2026-09-08).
     ltv_residentiel_pct: Optional[float] = Field(default=None, ge=0, le=100)
     amort_residentiel_annees: Optional[int] = Field(default=None, ge=1, le=40)
@@ -339,6 +354,7 @@ class LeadAnalysisUpdate(BaseModel):
     )
     # Croissances annuelles (FRACTIONS, 0.03 = 3 %) — partagées avec
     # le TRI.
+    tri_capital_injecte: Optional[float] = Field(default=None, ge=0)
     tri_croissance_loyers: Optional[float] = Field(
         default=None, ge=0, le=0.3
     )
@@ -488,9 +504,33 @@ def _parse_unites(raw: Optional[str]) -> list[dict]:
         try:
             out.append({
                 "typo": str(u.get("typo") or ""),
+                # Étiquette du logement (rent roll) — affichage seulement.
+                "numero": (
+                    str(u.get("numero")).strip()[:32] or None
+                    if u.get("numero") not in (None, "")
+                    else None
+                ),
                 "loyer_actuel": float(u.get("loyer_actuel") or 0),
-                "loyer_cible": float(u.get("loyer_cible") or 0),
+                # None = l'unité SUIT le loyer projeté de sa typologie
+                # (résolu par le moteur) — Phil 2026-10-07.
+                "loyer_cible": (
+                    float(u["loyer_cible"])
+                    if u.get("loyer_cible") not in (None, "")
+                    else None
+                ),
                 "optimiser": bool(u.get("optimiser", True)),
+                # Format v2 (Phil 2026-10-07) : mode par unité + loyer
+                # optimisé ; absent = ancien format (converti au calcul).
+                "loyer_optimise": (
+                    float(u["loyer_optimise"])
+                    if u.get("loyer_optimise") not in (None, "")
+                    else None
+                ),
+                "mode": (
+                    u.get("mode")
+                    if u.get("mode") in ("aucune", "pre_achat", "post_achat")
+                    else None
+                ),
             })
         except (TypeError, ValueError):
             continue
@@ -528,6 +568,8 @@ _DEFAULTS_FALLBACK: dict = {
     "ajout_wifi": True,
     "loyers_max_abordabilite_json": json.dumps({"abordable": 1090}),
     "mdf_preteur_b_pct": 25.0,
+    "retenue_travaux_pct": 100.0,
+    "nb_deboursements_travaux": 3,
     "projection_horizon_annees": 5,
     "ltv_residentiel_pct": 80.0,
     "amort_residentiel_annees": 25,
@@ -565,6 +607,9 @@ _DB_KEY_TO_FIELD: dict[str, str] = {
     "projection_horizon_annees": "projection_horizon_annees",
     "ltv_residentiel_pct": "ltv_residentiel_pct",
     "amort_residentiel_annees": "amort_residentiel_annees",
+    # Achat prêteur B — cashflow (Phil 2026-10-12).
+    "retenue_travaux_pct": "retenue_travaux_pct",
+    "nb_deboursements_travaux": "nb_deboursements_travaux",
 }
 
 # Champs entiers parmi ceux ci-dessus (les autres sont des floats).
@@ -576,6 +621,7 @@ _DB_KEY_INT_FIELDS: set[str] = {
     "nb_thermopompes_ajoutees",
     "projection_horizon_annees",
     "amort_residentiel_annees",
+    "nb_deboursements_travaux",
 }
 
 
@@ -1104,49 +1150,86 @@ async def _load_frais_registry(db) -> tuple[list[str], list[dict]]:
     return [], []
 
 
-@router.post(
-    "/extract",
-    response_model=ExtractResult,
-    status_code=status.HTTP_201_CREATED,
-    summary="Extraire et créer une ou plusieurs fiches depuis sources.",
-)
-async def extract_and_create(
-    db: DBSession,
-    user: CurrentUser,
-    urls: Optional[str] = Form(default=None),
-    text: Optional[str] = Form(default=None),
-    files: List[UploadFile] = File(default=[]),
+#: Même source ré-extraite dans cette fenêtre → fiche existante renvoyée.
+_FENETRE_DOUBLON_MIN = 10
+
+
+async def _fiche_recente_identique(
+    db,
+    user_id: Optional[int],
+    src_url_str: Optional[str],
+    src_text: Optional[str],
+    file_blobs: list[tuple[str, str, bytes]],
+) -> Optional[LeadAnalysis]:
+    """Même source (URL, texte, fichiers) extraite par le même utilisateur
+    dans les dernières minutes → on renvoie la fiche existante au lieu
+    d'en créer une deuxième (Phil 2026-10-07 : « si je l'extrais à
+    nouveau, elle est là en double »)."""
+    from datetime import timedelta
+
+    depuis = datetime.now(timezone.utc) - timedelta(minutes=_FENETRE_DOUBLON_MIN)
+    stmt = select(LeadAnalysis).where(LeadAnalysis.created_at >= depuis)
+    if user_id is not None:
+        stmt = stmt.where(LeadAnalysis.created_by_user_id == user_id)
+    stmt = (
+        stmt.where(LeadAnalysis.source_urls == src_url_str)
+        if src_url_str
+        else stmt.where(LeadAnalysis.source_urls.is_(None))
+    )
+    stmt = (
+        stmt.where(LeadAnalysis.source_text == src_text)
+        if src_text
+        else stmt.where(LeadAnalysis.source_text.is_(None))
+    )
+    stmt = stmt.order_by(LeadAnalysis.created_at.desc()).limit(5)
+    attendus = sorted((fn[:255], len(b)) for fn, _ct, b in file_blobs)
+    for rec in (await db.execute(stmt)).scalars().all():
+        atts = (
+            await db.execute(
+                select(
+                    LeadAnalysisAttachment.filename,
+                    LeadAnalysisAttachment.size_bytes,
+                ).where(LeadAnalysisAttachment.lead_analysis_id == rec.id)
+            )
+        ).all()
+        if sorted((fn, int(sz)) for fn, sz in atts) == attendus:
+            return rec
+    return None
+
+
+async def _extraire_et_creer(
+    db,
+    user,
+    url_list: list[str],
+    text: Optional[str],
+    file_blobs: list[tuple[str, str, bytes]],
 ) -> ExtractResult:
-    """Reçoit un mix d'URLs (séparées par newline), de texte brut et
-    de fichiers. Lance l'extraction Claude. Crée une `LeadAnalysis`
-    par immeuble distinct détecté (en pratique presque toujours 1)
-    + une `LeadAnalysisAttachment` par fichier."""
-    _require_prospection(user)
-
-    url_list = [u.strip() for u in (urls or "").splitlines() if u.strip()]
-
-    # Lit les fichiers en bytes (limite 10 MB chacun).
-    file_blobs: list[tuple[str, str, bytes]] = []
-    for f in files or []:
-        if not f or not f.filename:
-            continue
-        data = await f.read()
-        if len(data) > _MAX_FILE_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Fichier {f.filename} trop lourd (max 10 MB).",
+    """Cœur de l'extraction — partagé par l'endpoint synchrone et la tâche
+    de fond. Idempotent sur une fenêtre de quelques minutes."""
+    src_url_str_0 = "\n".join(url_list) if url_list else None
+    src_text_0 = (text or "").strip() or None
+    deja = await _fiche_recente_identique(
+        db, getattr(user, "id", None), src_url_str_0, src_text_0, file_blobs
+    )
+    if deja is not None:
+        cnt_deja = (
+            await db.execute(
+                select(func.count(LeadAnalysisAttachment.id)).where(
+                    LeadAnalysisAttachment.lead_analysis_id == deja.id
+                )
             )
-        file_blobs.append(
-            (
-                f.filename,
-                (f.content_type or "application/octet-stream").lower(),
-                data,
-            )
-        )
-
-    if not url_list and not (text and text.strip()) and not file_blobs:
-        raise HTTPException(
-            status_code=400, detail="Aucune source fournie."
+        ).scalar_one()
+        cree = deja.created_at
+        if cree is not None and cree.tzinfo is None:
+            cree = cree.replace(tzinfo=timezone.utc)
+        age = int((datetime.now(timezone.utc) - cree).total_seconds()) if cree else 0
+        return ExtractResult(
+            created=[_to_list_item(deja, int(cnt_deja or 0))],
+            warnings=[
+                f"Cette source a déjà été extraite il y a {age} s — la fiche "
+                "existante est renvoyée (pas de doublon)."
+            ],
+            model_used=deja.model_used,
         )
 
     try:
@@ -1158,6 +1241,12 @@ async def extract_and_create(
         raise HTTPException(
             status_code=502, detail=f"Échec de l'extraction IA : {exc!s}"
         ) from exc
+
+    # PDF téléchargés derrière des liens : joints à la fiche comme des
+    # fichiers déposés.
+    fichiers_url: list[tuple[str, str, bytes]] = list(
+        getattr(res, "fichiers_telecharges", None) or []
+    )
 
     created_records: list[LeadAnalysis] = []
     # On stocke l'URL et le texte d'origine sur la 1re fiche créée
@@ -1231,7 +1320,7 @@ async def extract_and_create(
         # Attache les fichiers seulement sur la 1re fiche (sinon on
         # duplique du gros blob inutilement).
         if idx == 0:
-            for filename, content_type, blob in file_blobs:
+            for filename, content_type, blob in file_blobs + fichiers_url:
                 att = LeadAnalysisAttachment(
                     lead_analysis_id=rec.id,
                     filename=filename[:255],
@@ -1281,7 +1370,7 @@ async def extract_and_create(
         rec.updated_at = now
         db.add(rec)
         await db.flush()
-        for filename, content_type, blob in file_blobs:
+        for filename, content_type, blob in file_blobs + fichiers_url:
             att = LeadAnalysisAttachment(
                 lead_analysis_id=rec.id,
                 filename=filename[:255],
@@ -1312,6 +1401,120 @@ async def extract_and_create(
         warnings=res.warnings,
         model_used=res.model_used,
     )
+
+
+# ─── Extraction en tâche de fond (Phil 2026-10-07) ───────────────────
+#
+# Render coupe les requêtes HTTP à 100 s : une extraction longue (IA,
+# PDF, plusieurs URL) aboutissait côté serveur mais le navigateur
+# recevait une erreur, et le 2e essai créait un doublon. La page lance
+# donc une tâche et la suit. État en mémoire (un seul processus) : un
+# redémarrage pendant l'extraction → 404 au suivi, la page le dit.
+_EXTRACT_JOBS: Dict[str, dict] = {}
+_EXTRACT_JOBS_MAX = 100
+_EXTRACT_JOBS_TTL_S = 3600.0
+
+
+def _session_factory_jobs():
+    """Fabrique de session pour la tâche de fond (indirection pour les
+    tests, qui la remplacent par la base de test)."""
+    from app.db.session import AsyncSessionLocal
+
+    return AsyncSessionLocal
+
+
+def _purger_jobs() -> None:
+    now = time.monotonic()
+    for k in [
+        k for k, j in _EXTRACT_JOBS.items()
+        if now - j["_t0"] > _EXTRACT_JOBS_TTL_S and j.get("status") != "en_cours"
+    ]:
+        _EXTRACT_JOBS.pop(k, None)
+    while len(_EXTRACT_JOBS) > _EXTRACT_JOBS_MAX:
+        _EXTRACT_JOBS.pop(next(iter(_EXTRACT_JOBS)), None)
+
+
+async def _extract_job_worker(
+    job_id: str,
+    user_id: Optional[int],
+    url_list: list[str],
+    text: Optional[str],
+    file_blobs: list[tuple[str, str, bytes]],
+) -> None:
+    job = _EXTRACT_JOBS.get(job_id)
+    if job is None:
+        return
+    try:
+        from app.models.user import User
+
+        factory = _session_factory_jobs()
+        async with factory() as s:
+            user = await s.get(User, user_id) if user_id is not None else None
+            res = await _extraire_et_creer(s, user, url_list, text, file_blobs)
+        job["resultat"] = res.model_dump(mode="json")
+        job["status"] = "termine"
+    except HTTPException as exc:
+        job["erreur"] = str(exc.detail)
+        job["status"] = "erreur"
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Extraction en tâche de fond échouée (%s)", job_id)
+        job["erreur"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        job["status"] = "erreur"
+    finally:
+        job["termine_a"] = datetime.now(timezone.utc).isoformat()
+
+
+class ExtractJobStart(BaseModel):
+    job_id: str
+    status: str
+
+
+@router.post(
+    "/extract",
+    response_model=ExtractResult,
+    status_code=status.HTTP_201_CREATED,
+    summary="Extraire et créer une ou plusieurs fiches depuis sources.",
+)
+async def extract_and_create(
+    db: DBSession,
+    user: CurrentUser,
+    urls: Optional[str] = Form(default=None),
+    text: Optional[str] = Form(default=None),
+    files: List[UploadFile] = File(default=[]),
+) -> ExtractResult:
+    """Reçoit un mix d'URLs (séparées par newline), de texte brut et
+    de fichiers. Lance l'extraction Claude. Crée une `LeadAnalysis`
+    par immeuble distinct détecté (en pratique presque toujours 1)
+    + une `LeadAnalysisAttachment` par fichier."""
+    _require_prospection(user)
+
+    url_list = [u.strip() for u in (urls or "").splitlines() if u.strip()]
+
+    # Lit les fichiers en bytes (limite 10 MB chacun).
+    file_blobs: list[tuple[str, str, bytes]] = []
+    for f in files or []:
+        if not f or not f.filename:
+            continue
+        data = await f.read()
+        if len(data) > _MAX_FILE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Fichier {f.filename} trop lourd (max 10 MB).",
+            )
+        file_blobs.append(
+            (
+                f.filename,
+                (f.content_type or "application/octet-stream").lower(),
+                data,
+            )
+        )
+
+    if not url_list and not (text and text.strip()) and not file_blobs:
+        raise HTTPException(
+            status_code=400, detail="Aucune source fournie."
+        )
+
+    return await _extraire_et_creer(db, user, url_list, text, file_blobs)
 
 
 @router.get(
@@ -1362,6 +1565,140 @@ async def list_analyses(
     counts = {lid: int(c) for lid, c in cnt_rows}
 
     return [_to_list_item(r, counts.get(r.id, 0)) for r in rows]
+
+
+@router.get(
+    "/extraction-health",
+    summary=(
+        "Diagnostic de l'extraction IA : Gemini (cascade réelle), Groq "
+        "(relais), OCR serveur."
+    ),
+)
+async def extraction_health(user: CurrentUser) -> dict:
+    """Déclaré AVANT « /{analysis_id} » : sinon FastAPI tente de lire
+    « extraction-health » comme un entier et répond 422 — c'est ce qui
+    rendait /ocr-health injoignable (2026-10-07). Affiché dans
+    Prospection → Paramètres → Outils."""
+    _require_prospection(user)
+    from app.services.lead_extraction import (
+        _gemini_list_models,
+        _gemini_model_cascade,
+        _groq_list_models,
+        _groq_modele_texte,
+        _groq_modele_vision,
+        modeles_gemini_en_pause,
+        modeles_gemini_utilisables,
+        resolve_gemini_cascade,
+    )
+
+    gemini_key = (getattr(settings, "gemini_api_key", None) or "").strip()
+    gemini: dict = {
+        "cle": bool(gemini_key),
+        "preferences": _gemini_model_cascade(),
+        "cascade": [],
+        "disponibles": [],
+        "catalogue_ok": False,
+        # Modèles mis en pause après une erreur récente (503, timeout,
+        # quota du jour) → secondes restantes.
+        "en_pause": modeles_gemini_en_pause(),
+    }
+    if gemini_key:
+        modeles = await _gemini_list_models(gemini_key)
+        gemini["catalogue_ok"] = modeles is not None
+        gemini["disponibles"] = modeles_gemini_utilisables(modeles) if modeles else []
+        gemini["cascade"] = await resolve_gemini_cascade(gemini_key)
+    groq_key = (getattr(settings, "groq_api_key", None) or "").strip()
+    groq: dict = {
+        "cle": bool(groq_key),
+        "modele_texte": None,
+        "modele_vision": None,
+        "disponibles": [],
+    }
+    if groq_key:
+        dispo = await _groq_list_models(groq_key)
+        groq["disponibles"] = dispo or []
+        groq["modele_texte"] = _groq_modele_texte(dispo)
+        groq["modele_vision"] = _groq_modele_vision(dispo)
+    return {
+        "gemini": gemini,
+        "groq": groq,
+        "ocr": _ocr_health_payload(),
+        # Marqueurs du serveur déployé (sonde post-déploiement sans accès
+        # aux logs Render) : version du code + commit injecté par Render.
+        "version": "2026-10-14",
+        "commit": (os.getenv("RENDER_GIT_COMMIT") or "")[:12] or None,
+    }
+
+
+@router.post(
+    "/extract-jobs",
+    response_model=ExtractJobStart,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary=(
+        "Lance une extraction en tâche de fond (évite la coupure à 100 s "
+        "de Render) ; suivre avec GET /extract-jobs/{job_id}."
+    ),
+)
+async def start_extract_job(
+    user: CurrentUser,
+    urls: Optional[str] = Form(default=None),
+    text: Optional[str] = Form(default=None),
+    files: List[UploadFile] = File(default=[]),
+) -> ExtractJobStart:
+    _require_prospection(user)
+    url_list = [u.strip() for u in (urls or "").splitlines() if u.strip()]
+    file_blobs: list[tuple[str, str, bytes]] = []
+    for f in files or []:
+        if not f or not f.filename:
+            continue
+        data = await f.read()
+        if len(data) > _MAX_FILE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Fichier {f.filename} trop lourd (max 10 MB).",
+            )
+        file_blobs.append(
+            (f.filename, (f.content_type or "application/octet-stream").lower(), data)
+        )
+    if not url_list and not (text and text.strip()) and not file_blobs:
+        raise HTTPException(status_code=400, detail="Aucune source fournie.")
+    _purger_jobs()
+    job_id = secrets.token_urlsafe(12)
+    uid = getattr(user, "id", None)
+    _EXTRACT_JOBS[job_id] = {
+        "job_id": job_id,
+        "status": "en_cours",
+        "user_id": uid,
+        "demarre_a": datetime.now(timezone.utc).isoformat(),
+        "termine_a": None,
+        "resultat": None,
+        "erreur": None,
+        "_t0": time.monotonic(),
+    }
+    # Fire-and-forget : la coroutine survit à la requête HTTP ; on garde
+    # la tâche pour que le ramasse-miettes ne la réclame pas.
+    _EXTRACT_JOBS[job_id]["_task"] = asyncio.create_task(
+        _extract_job_worker(job_id, uid, url_list, text, file_blobs)
+    )
+    return ExtractJobStart(job_id=job_id, status="en_cours")
+
+
+@router.get(
+    "/extract-jobs/{job_id}",
+    summary="État d'une extraction en tâche de fond (en_cours / termine / erreur).",
+)
+async def get_extract_job(job_id: str, user: CurrentUser) -> dict:
+    _require_prospection(user)
+    job = _EXTRACT_JOBS.get(job_id)
+    if job is None or job.get("user_id") != getattr(user, "id", None):
+        raise HTTPException(
+            404,
+            "Extraction introuvable (le serveur a peut-être redémarré). "
+            "Rafraîchis la liste : si la fiche n'y est pas, relance.",
+        )
+    out = {k: v for k, v in job.items() if not k.startswith("_")}
+    out["duree_s"] = round(time.monotonic() - job["_t0"], 1)
+    return out
 
 
 @router.get(
@@ -1458,6 +1795,11 @@ async def update_analysis(
     # décocher un poste « finançable prêteur B » sur une analyse déjà
     # faite ne mettait rien à jour.
     patched = set(payload.model_dump(exclude_unset=True).keys())
+    # Un override saisi dans le tableau des frais sur un poste de la
+    # fiche (travaux, développement, négociation) devient le champ de la
+    # fiche — même donnée, même valeur partout.
+    if _normaliser_overrides_fiche(rec, patched) and "frais_demarrage_overrides_json" in patched:
+        patched |= set(_POSTES_DE_LA_FICHE.values())
     recalc_error: Optional[str] = None
     if (patched & RECALC_INPUT_FIELDS) and rec.analysis_results_json:
         try:
@@ -1490,6 +1832,327 @@ async def delete_analysis(
         return None
     await db.delete(rec)
     await db.commit()
+
+
+class RentRollExtractResult(BaseModel):
+    """Proposition d'unités lues dans un rent roll — le tableau de la
+    fiche n'est remplacé que quand l'utilisateur applique."""
+
+    unites: List[dict]
+    warnings: List[str]
+    model_used: str
+    source: str
+    nb_logements: Optional[int] = None
+    typology: dict = {}
+
+
+@router.post(
+    "/{analysis_id}/unites/extract",
+    response_model=RentRollExtractResult,
+    summary=(
+        "Lit un rent roll (PDF, photo, Excel, texte) et propose les "
+        "unités : loyer actuel par logement."
+    ),
+)
+async def extract_rent_roll(
+    analysis_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    text: Optional[str] = Form(default=None),
+    files: List[UploadFile] = File(default=[]),
+) -> RentRollExtractResult:
+    """Phil 2026-10-07 : même lecture que la section Infos (parser local
+    + Gemini, relais Groq) mais pour la liste des loyers, afin de remplir
+    « Unités & optimisation » unité par unité au lieu de la moyenne
+    revenus bruts ÷ logements. Les fichiers sont joints à la fiche."""
+    _require_prospection(user)
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+    t0 = time.perf_counter()
+    file_blobs: list[tuple[str, str, bytes]] = []
+    for f in files or []:
+        if not f or not f.filename:
+            continue
+        data = await f.read()
+        if len(data) > _MAX_FILE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Fichier {f.filename} trop lourd (max 10 MB).",
+            )
+        file_blobs.append(
+            (f.filename, (f.content_type or "application/octet-stream").lower(), data)
+        )
+    if not file_blobs and not (text and text.strip()):
+        raise HTTPException(status_code=400, detail="Aucune source fournie.")
+    return await _lire_rent_roll_et_attacher(
+        db, user, rec, file_blobs=file_blobs, text=text, t0=t0
+    )
+
+
+async def _lire_rent_roll_et_attacher(
+    db,
+    user,
+    rec: LeadAnalysis,
+    *,
+    file_blobs: list[tuple[str, str, bytes]],
+    text: Optional[str],
+    t0: float,
+) -> "RentRollExtractResult":
+    """Lit le rent roll, attache les fichiers à la fiche (sans doublon),
+    journalise, et renvoie la proposition d'unités.
+
+    Partagé par l'endpoint synchrone et par la tâche de fond (Phil
+    2026-10-08 : « l'importation du rent roll, ça marche presque jamais »
+    — un Excel de 21 Ko prenait 115 s de cascade IA, au-delà de la coupure
+    à 100 s de Render : le navigateur voyait un HTTP 500 alors que le
+    serveur finissait, et la fiche supprimée entre-temps faisait échouer
+    les pièces jointes). Tout est blindé : une erreur devient un 502
+    lisible ET une entrée d'audit « rent_roll_failed » avec la trace."""
+    analysis_id = rec.id
+    noms = [fn for fn, _ct, _b in file_blobs]
+    nb_logements = rec.nb_logements
+    typology_json = rec.typology_json
+    # Identité capturée AVANT : après un rollback, l'objet user est expiré
+    # et le relire déclencherait un chargement hors greenlet.
+    uid = getattr(user, "id", None)
+    uemail = getattr(user, "email", None)
+
+    from app.services.lead_rent_roll import extraire_rent_roll
+
+    try:
+        res = await extraire_rent_roll(files=file_blobs, text=text)
+        warnings_out = [str(w) for w in res.warnings]
+        # La fiche a pu être supprimée pendant la lecture (longue) : on
+        # renvoie quand même les unités, sans pièces jointes ni audit
+        # rattaché à une fiche fantôme.
+        fiche_existe = (
+            await db.execute(
+                select(LeadAnalysis.id).where(LeadAnalysis.id == analysis_id)
+            )
+        ).scalar_one_or_none() is not None
+        if fiche_existe:
+            # Pièces jointes — une seule fois : même nom + même taille
+            # déjà attachés à la fiche = on ne duplique pas (un 2e essai
+            # sur le même PDF ne doit pas empiler des copies de 700 Ko).
+            deja = {
+                (fn, sz)
+                for fn, sz in (
+                    await db.execute(
+                        select(
+                            LeadAnalysisAttachment.filename,
+                            LeadAnalysisAttachment.size_bytes,
+                        ).where(
+                            LeadAnalysisAttachment.lead_analysis_id == analysis_id
+                        )
+                    )
+                ).all()
+            }
+            for filename, content_type, blob in file_blobs:
+                if (filename[:255], len(blob)) in deja:
+                    continue
+                db.add(
+                    LeadAnalysisAttachment(
+                        lead_analysis_id=analysis_id,
+                        filename=filename[:255],
+                        content_type=content_type[:64],
+                        size_bytes=len(blob),
+                        blob=blob,
+                    )
+                )
+            await log_action(
+                db,
+                user=user,
+                action="lead_analysis.rent_roll_extracted",
+                entity_type="lead_analysis",
+                entity_id=analysis_id,
+                details={
+                    "fichiers": noms,
+                    "texte": bool(text and text.strip()),
+                    "unites": len(res.unites),
+                    "model_used": res.model_used,
+                    "source": res.source,
+                    "warnings": warnings_out[:6],
+                    "duree_s": round(time.perf_counter() - t0, 1),
+                },
+            )
+            await db.commit()
+        else:
+            warnings_out.append(
+                "La fiche a été supprimée pendant la lecture : unités "
+                "proposées sans pièce jointe."
+            )
+
+        typo: dict = {}
+        try:
+            raw = json.loads(typology_json or "{}")
+            if isinstance(raw, dict):
+                typo = {str(k): int(float(v)) for k, v in raw.items() if v not in (None, "")}
+        except (TypeError, ValueError):
+            typo = {}
+        reponse = RentRollExtractResult(
+            unites=[dict(u) for u in res.unites],
+            warnings=warnings_out,
+            model_used=str(res.model_used or "none"),
+            source=str(res.source or "none"),
+            nb_logements=int(nb_logements) if nb_logements is not None else None,
+            typology=typo,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Lecture du rent roll échouée (analyse %s)", analysis_id)
+        erreur = f"{type(exc).__name__}: {str(exc)[:300]}"
+        try:
+            from app.models.audit_log import AuditLog as _AuditLog
+
+            await db.rollback()
+            db.add(
+                _AuditLog(
+                    user_id=uid,
+                    user_email=uemail,
+                    action="lead_analysis.rent_roll_failed",
+                    entity_type="lead_analysis",
+                    entity_id=analysis_id,
+                    details_json=json.dumps(
+                        {
+                            "erreur": erreur,
+                            "trace": traceback.format_exc()[-1500:],
+                            "fichiers": noms,
+                            "texte": bool(text and text.strip()),
+                            "duree_s": round(time.perf_counter() - t0, 1),
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    ),
+                )
+            )
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            log.exception("Audit rent_roll_failed impossible")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Lecture du rent roll échouée — {erreur}. Réessaie ; si ça persiste, le détail est dans le journal d'activité.",
+        ) from exc
+    return reponse
+
+
+async def _rent_roll_job_worker(
+    job_id: str,
+    user_id: Optional[int],
+    analysis_id: int,
+    file_blobs: list[tuple[str, str, bytes]],
+    text: Optional[str],
+) -> None:
+    """Tâche de fond : même lecture que l'endpoint synchrone, dans sa
+    propre session (la requête HTTP est déjà repartie avec un 202)."""
+    job = _EXTRACT_JOBS.get(job_id)
+    if job is None:
+        return
+    t0 = time.perf_counter()
+    try:
+        from app.models.user import User
+
+        factory = _session_factory_jobs()
+        async with factory() as s:
+            user = await s.get(User, user_id) if user_id is not None else None
+            rec = await s.get(LeadAnalysis, analysis_id)
+            if rec is None:
+                raise HTTPException(404, "Analyse introuvable.")
+            res = await _lire_rent_roll_et_attacher(
+                s, user, rec, file_blobs=file_blobs, text=text, t0=t0
+            )
+        job["resultat"] = res.model_dump(mode="json")
+        job["status"] = "termine"
+    except HTTPException as exc:
+        job["erreur"] = str(exc.detail)
+        job["status"] = "erreur"
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Lecture du rent roll en tâche de fond échouée (%s)", job_id)
+        job["erreur"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        job["status"] = "erreur"
+    finally:
+        job["termine_a"] = datetime.now(timezone.utc).isoformat()
+
+
+@router.post(
+    "/{analysis_id}/unites/extract-jobs",
+    response_model=ExtractJobStart,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary=(
+        "Lance la lecture d'un rent roll en tâche de fond (évite la coupure "
+        "à 100 s de Render) ; suivre avec GET /unites/extract-jobs/{job_id}."
+    ),
+)
+async def start_rent_roll_job(
+    analysis_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    text: Optional[str] = Form(default=None),
+    files: List[UploadFile] = File(default=[]),
+) -> ExtractJobStart:
+    _require_prospection(user)
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+    file_blobs: list[tuple[str, str, bytes]] = []
+    for f in files or []:
+        if not f or not f.filename:
+            continue
+        data = await f.read()
+        if len(data) > _MAX_FILE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Fichier {f.filename} trop lourd (max 10 MB).",
+            )
+        file_blobs.append(
+            (f.filename, (f.content_type or "application/octet-stream").lower(), data)
+        )
+    if not file_blobs and not (text and text.strip()):
+        raise HTTPException(status_code=400, detail="Aucune source fournie.")
+    _purger_jobs()
+    job_id = secrets.token_urlsafe(12)
+    uid = getattr(user, "id", None)
+    _EXTRACT_JOBS[job_id] = {
+        "job_id": job_id,
+        "status": "en_cours",
+        "user_id": uid,
+        "kind": "rent_roll",
+        "analysis_id": analysis_id,
+        "demarre_a": datetime.now(timezone.utc).isoformat(),
+        "termine_a": None,
+        "resultat": None,
+        "erreur": None,
+        "_t0": time.monotonic(),
+    }
+    _EXTRACT_JOBS[job_id]["_task"] = asyncio.create_task(
+        _rent_roll_job_worker(job_id, uid, analysis_id, file_blobs, text)
+    )
+    return ExtractJobStart(job_id=job_id, status="en_cours")
+
+
+@router.get(
+    "/{analysis_id}/unites/extract-jobs/{job_id}",
+    summary="État d'une lecture de rent roll en tâche de fond.",
+)
+async def get_rent_roll_job(
+    analysis_id: int, job_id: str, user: CurrentUser
+) -> dict:
+    _require_prospection(user)
+    job = _EXTRACT_JOBS.get(job_id)
+    if (
+        job is None
+        or job.get("user_id") != getattr(user, "id", None)
+        or job.get("kind") != "rent_roll"
+        or job.get("analysis_id") != analysis_id
+    ):
+        raise HTTPException(
+            404,
+            "Lecture introuvable (le serveur a peut-être redémarré). Relance l'import.",
+        )
+    out = {k: v for k, v in job.items() if not k.startswith("_")}
+    out["duree_s"] = round(time.monotonic() - job["_t0"], 1)
+    return out
 
 
 @router.post(
@@ -1703,53 +2366,144 @@ async def export_pdf(
 
 
 class OffreInvestissementPhotoIn(BaseModel):
-    """Photo brute pour l'offre (base64 ou ID d'attachment existant)."""
+    """Photo d'un emplacement du deck : base64 (sans préfixe data:) ou
+    pièce jointe existante de la fiche."""
     model_config = ConfigDict(extra="forbid")
 
-    base64_data: Optional[str] = Field(
-        default=None,
-        description=(
-            "Photo encodée base64 (sans préfixe data:image/...). "
-            "Alternative : `attachment_id`."
-        ),
-    )
-    attachment_id: Optional[int] = Field(
-        default=None,
-        description=(
-            "Si fourni, on utilise le blob d'un `LeadAnalysisAttachment` "
-            "déjà uploadé sur cette fiche."
-        ),
-    )
+    base64_data: Optional[str] = None
+    attachment_id: Optional[int] = None
 
 
 class OffreInvestissementRequest(BaseModel):
-    """Inputs du wizard frontend."""
+    """Intrants de l'assistant (schéma ``DeckInputs`` du service
+    ``offre_investissement_deck`` — tout est pré-rempli par l'endpoint
+    ``defaults``) + photos par emplacement (clés de ``PHOTO_SLOTS``)."""
     model_config = ConfigDict(extra="forbid")
 
-    value_add_strategy: Dict[str, Any] = Field(
-        default_factory=dict,
-        description=(
-            "Inputs humains : tagline, bullets, flags value-add, programme "
-            "SCHL, etc. Schéma libre — interprété par "
-            "`offre_investissement_pptx.ValueAddStrategy.from_dict`."
-        ),
+    inputs: Dict[str, Any] = Field(default_factory=dict)
+    photos: Dict[str, OffreInvestissementPhotoIn] = Field(default_factory=dict)
+
+
+async def _photos_du_deck(
+    db, rec: LeadAnalysis, photos: Dict[str, OffreInvestissementPhotoIn]
+) -> dict[str, bytes]:
+    """Résout les photos par emplacement (base64 ou pièce jointe de LA
+    fiche). Une image illisible est ignorée (la pastille neutre du
+    gabarit reste visible)."""
+    import base64 as _b64
+
+    from app.services.offre_investissement_deck import PHOTO_SLOTS
+
+    cles = {k for k, _i, _n, _l in PHOTO_SLOTS}
+    out: dict[str, bytes] = {}
+    ids = {
+        p.attachment_id for k, p in photos.items()
+        if k in cles and p.attachment_id is not None
+    }
+    blobs: dict[int, bytes] = {}
+    if ids:
+        rows = (
+            await db.execute(
+                select(LeadAnalysisAttachment).where(
+                    LeadAnalysisAttachment.id.in_(ids),
+                    LeadAnalysisAttachment.lead_analysis_id == rec.id,
+                )
+            )
+        ).scalars().all()
+        blobs = {a.id: a.blob for a in rows}
+    for k, p in photos.items():
+        if k not in cles:
+            raise HTTPException(400, f"Emplacement de photo inconnu : {k}")
+        if p.base64_data:
+            try:
+                out[k] = _b64.b64decode(p.base64_data)
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(400, f"Photo « {k} » : base64 invalide ({exc})") from exc
+        elif p.attachment_id is not None:
+            if p.attachment_id not in blobs:
+                raise HTTPException(400, f"Photo « {k} » : pièce jointe {p.attachment_id} introuvable sur cette fiche.")
+            out[k] = blobs[p.attachment_id]
+    return out
+
+
+@router.get(
+    "/{analysis_id}/offre-investissement/defaults",
+    summary=(
+        "Intrants proposés, aperçu des chiffres et emplacements de photos "
+        "pour l'assistant du pitch deck (offre d'investissement .pptx)."
+    ),
+)
+async def get_offre_investissement_defaults(
+    analysis_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    investissement_requis: Optional[float] = None,
+    pct_parts: Optional[float] = None,
+) -> dict:
+    """Phil 2026-10-08 : l'assistant est pré-rempli à partir de la fiche,
+    de ses résultats d'analyse et du TRI investisseur ; l'utilisateur
+    n'ajuste que ce qui ne se déduit pas des chiffres. Si l'analyse n'a
+    pas tourné, ``analysis_ready`` est faux avec la raison.
+    ``investissement_requis`` / ``pct_parts`` (fraction) recalculent
+    l'aperçu du TRI avec les valeurs saisies dans l'assistant."""
+    _require_prospection(user)
+    partiels: Dict[str, Any] = {}
+    if investissement_requis is not None and investissement_requis > 0:
+        partiels["investissement_requis"] = investissement_requis
+    if pct_parts is not None and pct_parts > 0:
+        partiels["pct_parts"] = pct_parts
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+    from app.services.offre_investissement_deck import (
+        SERVICE_VERSION,
+        TEMPLATE_VERSION,
+        apercu,
+        get_renovations_catalogue,
+        photo_slots,
+        preparer_deck,
     )
-    photos: Optional[List[OffreInvestissementPhotoIn]] = Field(
-        default=None,
-        description=(
-            "Liste ordonnée des photos (cover, exterieur, carte). MVP : "
-            "3 photos max. Si vide, les photos par défaut du template sont "
-            "conservées."
-        ),
-    )
+
+    atts = (
+        await db.execute(
+            select(
+                LeadAnalysisAttachment.id,
+                LeadAnalysisAttachment.filename,
+                LeadAnalysisAttachment.content_type,
+                LeadAnalysisAttachment.size_bytes,
+            )
+            .where(LeadAnalysisAttachment.lead_analysis_id == analysis_id)
+            .order_by(LeadAnalysisAttachment.id.asc())
+        )
+    ).all()
+    images = [
+        {"id": a.id, "filename": a.filename, "content_type": a.content_type, "size_bytes": a.size_bytes}
+        for a in atts
+        if (a.content_type or "").lower().startswith("image/")
+        or (a.filename or "").lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"))
+    ]
+    base = {
+        "template_version": TEMPLATE_VERSION,
+        "service_version": SERVICE_VERSION,
+        "photos": {"slots": photo_slots(), "attachments": images},
+        "renovations_catalogue": get_renovations_catalogue(),
+    }
+    try:
+        prep = await preparer_deck(db, rec, partiels)
+    except ValueError as exc:
+        return {**base, "analysis_ready": False, "raison": str(exc), "inputs": None, "apercu": None}
+    return {
+        **base,
+        "analysis_ready": True,
+        "raison": None,
+        "inputs": prep["inputs"].to_dict(),
+        "apercu": apercu(prep["donnees"]),
+    }
 
 
 @router.post(
     "/{analysis_id}/offre-investissement",
-    summary=(
-        "Génère un .pptx d'offre d'investissement Horizon "
-        "(template horizon_v1)."
-    ),
+    summary="Génère le pitch deck .pptx (offre d'investissement, gabarit horizon_v3).",
 )
 async def export_offre_investissement(
     analysis_id: int,
@@ -1757,71 +2511,31 @@ async def export_offre_investissement(
     db: DBSession,
     user: CurrentUser,
 ):
-    """Génère à la volée le `.pptx` d'offre d'investissement pour la fiche.
-
-    Combine :
-      * Variables auto (~30 champs depuis la `LeadAnalysis`)
-      * Variables hybrides (résultats du moteur d'analyse financière le
-        plus récent)
-      * Inputs humains du wizard (tagline, bullets, flags value-add)
-      * Jusqu'à 3 photos (uploadées ou choisies parmi les attachments)
-
-    Aucune persistance. Audit log : `lead_analysis.offre_investissement_generated`.
-    """
-    import base64 as _b64
-
+    """Remplit le gabarit par nom de forme à partir de la fiche, de ses
+    résultats d'analyse, du TRI investisseur et des intrants de
+    l'assistant. En-tête ``X-Deck-Misses`` = nombre de cibles du gabarit
+    non trouvées (0 attendu) ; le détail est dans l'audit
+    ``lead_analysis.offre_investissement_generated``."""
     _require_prospection(user)
     rec = await db.get(LeadAnalysis, analysis_id)
     if rec is None:
         raise HTTPException(404, "Analyse introuvable.")
 
-    from app.services.offre_investissement_pptx import (
-        generate_offre_investissement_pptx,
+    from app.services.offre_investissement_deck import (
+        generer_deck,
         offre_investissement_pptx_filename,
     )
 
-    # Resolve photos
-    photo_bytes: list[bytes] = []
-    photo_attachment_ids: list[int] = []
-    if body.photos:
-        for p in body.photos[:3]:  # MVP : max 3 photos
-            if p.base64_data:
-                try:
-                    photo_bytes.append(_b64.b64decode(p.base64_data))
-                except Exception as exc:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Photo base64 invalide : {exc}",
-                    ) from exc
-            elif p.attachment_id is not None:
-                photo_attachment_ids.append(p.attachment_id)
-
+    photos = await _photos_du_deck(db, rec, body.photos or {})
     try:
-        pptx_bytes, template_version = await generate_offre_investissement_pptx(
-            db=db,
-            analysis_id=analysis_id,
-            value_add_strategy=body.value_add_strategy,
-            photos=photo_bytes if photo_bytes else None,
-            photo_attachment_ids=(
-                photo_attachment_ids if photo_attachment_ids else None
-            ),
-        )
+        pptx_bytes, meta = await generer_deck(db, rec, body.inputs, photos)
     except ValueError as exc:
-        log.exception(
-            "Génération offre PPTX fiche %s échouée", analysis_id
-        )
-        raise HTTPException(502, f"Génération PPTX échouée : {exc}") from exc
+        raise HTTPException(409, str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
-        log.exception(
-            "Erreur inattendue lors de la génération de l'offre PPTX %s",
-            analysis_id,
-        )
-        raise HTTPException(
-            500, f"Erreur inattendue : {exc}"
-        ) from exc
+        log.exception("Génération du deck échouée (fiche %s)", analysis_id)
+        raise HTTPException(500, f"Génération du deck échouée : {type(exc).__name__}: {str(exc)[:200]}") from exc
 
     filename = offre_investissement_pptx_filename(rec)
-
     try:
         await log_action(
             db,
@@ -1832,37 +2546,19 @@ async def export_offre_investissement(
             details={
                 "filename": filename,
                 "size_bytes": len(pptx_bytes),
-                "template_version": template_version,
-                # Version logique du service de génération. Bump à
-                # chaque PR qui change la sémantique de substitution
-                # (charts, dates auto-calculées, nouveaux champs
-                # wizard, etc.). v3 = corrections slide-par-slide
-                # (présentation projet, charts dynamiques slides 4/12/13,
-                # dates échéancier auto, totaux rénos depuis fiche,
-                # titre/chart Tendances dynamiques, estimation ROI).
-                # v4 = perfectionnements slides 3-6 (PR #544).
-                # v5a = fixes slides 8/9/10 : nb logements dynamique,
-                # frais autres réels (overrides + total recalculé),
-                # condensation tableau rénos, format équité unifié et
-                # cohérence cellule/callout en équité négative.
-                "service_version": "v5a",
-                "value_add_keys": sorted(
-                    body.value_add_strategy.keys()
-                )
-                if body.value_add_strategy
-                else [],
-                "n_photos": len(photo_bytes) + len(photo_attachment_ids),
+                "template_version": meta.get("template_version"),
+                "service_version": meta.get("service_version"),
+                "misses": list(meta.get("misses") or [])[:20],
+                "remplis": meta.get("remplis"),
+                "photos": list(meta.get("photos") or []),
             },
         )
         await db.commit()
     except Exception:  # noqa: BLE001
-        log.exception(
-            "Audit log lead_analysis.offre_investissement_generated échoué"
-        )
+        log.exception("Audit log lead_analysis.offre_investissement_generated échoué")
 
-    # Phase 6 — auto-classement Drive (best-effort, NON bloquant). Dépose
-    # l'offre PPTX dans le sous-dossier « Dossier investisseur » du deal
-    # lié, si une règle est active. N'altère jamais la réponse.
+    # Auto-classement Drive (best-effort, NON bloquant) : dépose le deck
+    # dans le sous-dossier « Dossier investisseur » du deal lié.
     try:
         from app.services.drive_auto_upload_dispatcher import (
             dispatch_auto_upload,
@@ -1892,30 +2588,22 @@ async def export_offre_investissement(
             "presentationml.presentation"
         ),
         headers={
-            "Content-Disposition": (
-                f'attachment; filename="{filename}"'
-            ),
+            "Content-Disposition": f'attachment; filename="{filename}"',
             "Content-Length": str(len(pptx_bytes)),
-            "X-Template-Version": template_version,
+            "X-Template-Version": str(meta.get("template_version") or ""),
+            "X-Deck-Misses": str(len(meta.get("misses") or [])),
         },
     )
 
 
 @router.get(
     "/offre-investissement/catalogue-renovations",
-    summary=(
-        "Retourne le catalogue de rénovations cochables pour la slide 9 "
-        "du template v2 (utilisé par le wizard frontend)."
-    ),
+    summary="Catalogue de rénovations cochables pour la diapo 9 du deck.",
 )
 async def get_offre_renovations_catalogue(user: CurrentUser) -> dict:
-    """Endpoint statique : expose la liste ``RENOVATIONS_CATALOGUE`` du
-    service ``offre_investissement_pptx``. Le wizard l'appelle au mount
-    pour afficher les checkboxes de la section value-add."""
     _require_prospection(user)
-    from app.services.offre_investissement_pptx import (
-        get_renovations_catalogue,
-    )
+    from app.services.offre_investissement_deck import get_renovations_catalogue
+
     return {"items": get_renovations_catalogue()}
 
 
@@ -1951,6 +2639,8 @@ RECALC_INPUT_FIELDS = {
     "depenses_residentiel_json", "depenses_optimisation_supp",
     "balance_vente_taux_pct", "projection_horizon_annees",
     "tri_croissance_loyers", "tri_croissance_depenses", "unites_json",
+    "retenue_travaux_pct", "nb_deboursements_travaux",
+    "tri_capital_injecte",
 }
 
 
@@ -1975,6 +2665,8 @@ _CHAMPS_COMPLETES_PARAMETRES: tuple = (
     "projection_horizon_annees",
     "ltv_residentiel_pct",
     "amort_residentiel_annees",
+    "retenue_travaux_pct",
+    "nb_deboursements_travaux",
 )
 
 
@@ -1996,6 +2688,88 @@ async def _completer_depuis_parametres(rec, db) -> list[str]:
         rec.tri_croissance_depenses = float(tri["cr_dep"])
         completes.append("tri_croissance_depenses")
     return completes
+
+
+def _nettoyer_json(obj: Any, chemin: str = "", trouves: Optional[list] = None) -> Any:
+    """Remplace NaN / ±Infinity par ``None`` (le JSON standard — et donc le
+    navigateur — ne les accepte pas) en notant leur chemin."""
+    if isinstance(obj, float):
+        if obj != obj or obj in (float("inf"), float("-inf")):
+            if trouves is not None:
+                trouves.append(chemin or "racine")
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _nettoyer_json(v, f"{chemin}.{k}" if chemin else str(k), trouves) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_nettoyer_json(v, f"{chemin}[{i}]", trouves) for i, v in enumerate(obj)]
+    return obj
+
+
+def _serialiser_resultats(results_dict: dict, analysis_id: Optional[int] = None) -> str:
+    """JSON des résultats, ENTIER et toujours valide.
+
+    Bug trouvé le 2026-10-07 (fiche 35-Plateau, 35 unités détaillées) : le
+    JSON était tronqué à 80 000 caractères → invalide → la fiche
+    n'affichait plus rien (tuiles à « — », « Lancer l'analyse » sans
+    effet). La colonne est un Text sans limite : on n'ampute plus. Les
+    valeurs non finies sont remplacées par null (JSON strict)."""
+    non_finis: list = []
+    propre = _nettoyer_json(results_dict, trouves=non_finis)
+    if non_finis:
+        log.warning(
+            "Résultats de l'analyse %s : %d valeur(s) non finie(s) remplacée(s) "
+            "par null (%s)", analysis_id, len(non_finis), ", ".join(non_finis[:12]),
+        )
+    return json.dumps(propre, allow_nan=False)
+
+
+#: Postes de frais de démarrage qui ont LEUR champ sur la fiche (onglet
+#: Infos / Analyse). Phil 2026-10-08 (3451 Adam : « je passe de 200k à
+#: 230k de travaux, ça change rien ») : une valeur forcée dans le tableau
+#: des frais masquait le champ de la fiche. Règle : la fiche est la seule
+#: source — un override sur ces clés est reporté dans le champ puis
+#: retiré, et jamais appliqué au calcul.
+_POSTES_DE_LA_FICHE: dict = {
+    "frais_travaux": "travaux_estimes",
+    "frais_developpement": "frais_developpement",
+    "frais_negociations": "frais_negociations",
+}
+
+
+def _normaliser_overrides_fiche(rec, champs_patches: set) -> bool:
+    """Retire du JSON d'overrides toute clé portant sur un poste de la
+    fiche. La valeur n'est reportée dans le champ de la fiche QUE si
+    l'utilisateur vient de saisir l'override (le JSON est dans la
+    requête) sans toucher le champ lui-même — sinon le champ de la
+    fiche, qu'il vient d'éditer ou pas, reste la vérité. Retourne True
+    si le JSON a changé."""
+    raw = getattr(rec, "frais_demarrage_overrides_json", None)
+    if not raw:
+        return False
+    try:
+        j = json.loads(raw)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(j, dict):
+        return False
+    reporter = "frais_demarrage_overrides_json" in champs_patches
+    change = False
+    for cle, champ in _POSTES_DE_LA_FICHE.items():
+        if cle not in j:
+            continue
+        v = j.pop(cle)
+        change = True
+        if not reporter or champ in champs_patches:
+            continue
+        try:
+            if v is not None and str(v).strip() != "":
+                setattr(rec, champ, float(v))
+        except (TypeError, ValueError):
+            pass
+    if change:
+        rec.frais_demarrage_overrides_json = json.dumps(j) if j else None
+    return change
 
 
 async def _compute_and_store(rec, db) -> dict:
@@ -2048,6 +2822,9 @@ async def _compute_and_store(rec, db) -> dict:
                     for k, v in j.items()
                     if v is not None and isinstance(v, (int, float, str))
                     and str(v).replace(".", "", 1).replace("-", "", 1).isdigit()
+                    # Travaux / développement / négociation : la fiche
+                    # est la seule source (jamais masquée par un override).
+                    and k not in _POSTES_DE_LA_FICHE
                 }
         except Exception:  # noqa: BLE001
             frais_overrides = {}
@@ -2144,6 +2921,17 @@ async def _compute_and_store(rec, db) -> dict:
         / 100.0,
         cashback_montant=float(rec.cashback_montant or 0),
         optimisation_pre_achat=(rec.optimisation_moment == "pre_achat"),
+        # Achat prêteur B — cashflow (Phil 2026-10-12) : complétés depuis
+        # Paramètres juste avant (``_completer_depuis_parametres``).
+        retenue_travaux_pct=float(rec.retenue_travaux_pct) / 100.0,
+        nb_deboursements_travaux=int(rec.nb_deboursements_travaux),
+        # Montant demandé aux investisseurs = capital injecté du TRI
+        # (même colonne : l'onglet Achat et l'onglet TRI se lisent).
+        capital_investisseurs=(
+            float(rec.tri_capital_injecte)
+            if rec.tri_capital_injecte is not None
+            else None
+        ),
         # Mode résidentiel (2026-09-08).
         ltv_residentiel=float(rec.ltv_residentiel_pct) / 100.0,
         amort_residentiel_annees=int(rec.amort_residentiel_annees),
@@ -2242,7 +3030,7 @@ async def _compute_and_store(rec, db) -> dict:
     # la fiche) — visibles dans les résultats pour ne rien cacher.
     results_dict["intrants_completes_depuis_parametres"] = champs_completes
 
-    rec.analysis_results_json = json.dumps(results_dict)[:80_000]
+    rec.analysis_results_json = _serialiser_resultats(results_dict, rec.id)
     rec.best_refi_amount = results.best_refi_amount
     rec.best_refi_program = results.best_refi_program
     rec.mdf_preteur_b = results.mdf_preteur_b
@@ -3407,10 +4195,10 @@ def _ocr_health_payload() -> dict:
             )
     else:
         result["error"] = (
-            "tesseract binary not found on PATH — buildpack apt "
-            "non activé sur Render ou Aptfile non pris en compte. "
-            "Va dans Render Dashboard → service h2-0 → Manual Deploy "
-            "→ « Clear build cache & deploy »."
+            "Tesseract absent : le runtime natif Python de Render "
+            "n'installe pas de paquets apt (l'Aptfile n'est pas lu). Les "
+            "images et PDF scannés sont lus directement par l'IA. Un vrai "
+            "OCR serveur demanderait de passer le service en Docker."
         )
     for pkg in ("pytesseract", "pdf2image", "pillow_heif", "PIL"):
         try:
@@ -3421,33 +4209,9 @@ def _ocr_health_payload() -> dict:
     return result
 
 
-@router.get(
-    "/ocr-health",
-    summary="Diagnostic Tesseract serveur (utile si extraction d'image vide).",
-)
-async def ocr_health(user: CurrentUser) -> dict:
-    """Renvoie le statut du binaire Tesseract installé sur le serveur.
-    Format de réponse :
-      { "installed": bool, "version": str|null, "error": str|null,
-        "path": str|null, "tesseract": "OK (vX.Y.Z)" (legacy),
-        "pytesseract_installed": bool, "pdf2image_installed": bool, ... }
-    Si l'extraction d'images retourne vide, hit cet endpoint dans le
-    navigateur ou via Postman pour confirmer si Tesseract est bien là."""
-    _require_prospection(user)
-    return _ocr_health_payload()
-
-
-@router.get(
-    "/check-ocr-health",
-    summary="Alias diagnostic Tesseract (post-deploy Render).",
-)
-async def check_ocr_health(user: CurrentUser) -> dict:
-    """Alias de /ocr-health. Format documenté : {installed: bool,
-    version?: str, error?: str, path?: str}. À hit après un
-    auto-deploy Render pour confirmer que le buildpack apt a bien
-    installé tesseract/poppler."""
-    _require_prospection(user)
-    return _ocr_health_payload()
+# /ocr-health et /check-ocr-health étaient déclarés APRÈS « /{analysis_id} »
+# et donc injoignables (422) : remplacés par GET /lead-analyses/extraction-health
+# (déclaré avant), qui inclut ``_ocr_health_payload()``.
 
 
 # ── TRI investisseur ───────────────────────────────────────────────
@@ -3476,6 +4240,8 @@ _TRI_DEFAULTS = {
     "pct": 0.5,
     "cr_loyers": 0.03,
     "cr_dep": 0.03,
+    # Taux d'actualisation du fonds (VAN) — Phil 2026-10-08.
+    "taux_actualisation": 0.10,
 }
 
 
@@ -3504,6 +4270,9 @@ class TriInputs(BaseModel):
     amortissement_initial: bool = False
     taux_refi: float = 0.0
     amort_refi: int = 0
+    # Taux d'actualisation du fonds pour la VAN (fraction) — manuel,
+    # persisté sur la fiche, défaut configurable (tri_defaults).
+    taux_actualisation: float = 0.0
 
 
 class TriInputsResponse(BaseModel):
@@ -3727,6 +4496,7 @@ async def _load_tri_defaults(db) -> dict:
         "pct": _TRI_DEFAULTS["pct"],
         "cr_loyers": _TRI_DEFAULTS["cr_loyers"],
         "cr_dep": _TRI_DEFAULTS["cr_dep"],
+        "taux_actualisation": _TRI_DEFAULTS["taux_actualisation"],
     }
     key_to_field = {
         "tri_pct_investisseur_defaut": "pct",
@@ -3778,7 +4548,15 @@ def _persisted_manual_inputs(
         if rec.tri_croissance_depenses is not None
         else d["cr_dep"]
     )
-    return {"capital": cap, "pct": pct, "cr_loyers": cr_l, "cr_dep": cr_d}
+    taux_act = (
+        float(getattr(rec, "tri_taux_actualisation", None))
+        if getattr(rec, "tri_taux_actualisation", None) is not None
+        else d["taux_actualisation"]
+    )
+    return {
+        "capital": cap, "pct": pct, "cr_loyers": cr_l, "cr_dep": cr_d,
+        "taux_actualisation": taux_act,
+    }
 
 
 @router.get(
@@ -3829,6 +4607,7 @@ async def get_tri_inputs(
         pct=manual["pct"],
         cr_loyers=manual["cr_loyers"],
         cr_dep=manual["cr_dep"],
+        taux_actualisation=manual["taux_actualisation"],
         annee_refi=_annee_refi_de(rec),
         **amort,
     )
@@ -3884,14 +4663,16 @@ async def compute_tri_endpoint(
         amortissement_initial=payload.amortissement_initial,
         taux_refi=payload.taux_refi or None,
         amort_refi=payload.amort_refi or None,
+        taux_actualisation=payload.taux_actualisation,
     )
 
-    # Persiste les 4 intrants MANUELS sur la fiche (les 8 auto sont
+    # Persiste les intrants MANUELS sur la fiche (les auto sont
     # dérivés à la volée, on ne les stocke pas).
     rec.tri_capital_injecte = payload.capital
     rec.tri_pct_investisseur = payload.pct
     rec.tri_croissance_loyers = payload.cr_loyers
     rec.tri_croissance_depenses = payload.cr_dep
+    rec.tri_taux_actualisation = payload.taux_actualisation
     rec.updated_at = datetime.now(timezone.utc)
     await db.commit()
 

@@ -746,6 +746,17 @@ async def trigger_all_daily(
 
     await _safe("esign-reminders", _run_esign_reminders, details)
 
+    # QuickBooks : chaque connexion est renouvelée une fois par jour.
+    # Aucune n'expire faute d'usage (~100 jours chez Intuit) et une
+    # connexion refusée est signalée « à reconnecter » dès ce matin
+    # (Steven, 2026-10-09). Avant les autres jobs QuickBooks du jour.
+    async def _run_qbo_connexions_vivantes():
+        from app.integrations.quickbooks import garder_connexions_vivantes
+
+        return await garder_connexions_vivantes()
+
+    await _safe("qbo-connexions-vivantes", _run_qbo_connexions_vivantes, details)
+
     # Portail investisseur : avances d'actionnaires QuickBooks →
     # équité + flux (apports/remboursements) de chaque investisseur.
     async def _run_invest_qbo_sync():

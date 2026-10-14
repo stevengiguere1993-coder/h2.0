@@ -27,6 +27,9 @@ type Row = {
   montant_ccq: number;
   montant_hors_decret: number;
   montant_total: number;
+  // Dîners non payés déjà retirés des heures (case « dîner » de la fiche).
+  hours_diner?: number;
+  diners?: number;
 };
 
 type Report = {
@@ -46,6 +49,7 @@ type Report = {
   total_montant_ccq: number;
   total_montant_hors_decret: number;
   total_montant: number;
+  total_hours_diner?: number;
 };
 
 function fmtMoney(n: number): string {
@@ -383,6 +387,15 @@ export default function PaiePage() {
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums font-semibold text-white">
                           {r.total_hours.toFixed(2)} h
+                          {r.hours_diner ? (
+                            <span
+                              className="block text-[11px] font-normal text-amber-300"
+                              title="Dîners non payés déjà retirés du total"
+                            >
+                              dîners −{r.hours_diner.toFixed(2)} h
+                              {r.diners ? ` (${r.diners})` : ""}
+                            </span>
+                          ) : null}
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums text-sky-300">
                           {r.hours_ccq > 0 ? `${r.hours_ccq.toFixed(2)} h` : <span className="text-white/30">—</span>}
@@ -432,6 +445,11 @@ export default function PaiePage() {
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums font-bold text-white">
                         {report.total_hours.toFixed(2)} h
+                        {report.total_hours_diner ? (
+                          <span className="block text-[11px] font-normal text-amber-300">
+                            dîners −{report.total_hours_diner.toFixed(2)} h
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums text-sky-300">
                         {report.total_hours_ccq.toFixed(2)} h

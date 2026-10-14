@@ -21,6 +21,7 @@ import {
   KeyRound,
   Mail,
   Map as MapIcon,
+  Percent,
   Phone,
   Plug,
   Receipt,
@@ -124,6 +125,13 @@ export const SECTIONS: Section[] = [
         href: "/parametres/bons-travail",
         icon: Wrench,
         minRole: "admin"
+      },
+      {
+        title: "Prime CNESST",
+        desc: "Taux ajouté au coût horaire de tous les employés ; exceptions sur la fiche employé.",
+        href: "/parametres/cnesst",
+        icon: Percent,
+        minRole: "manager"
       },
       {
         title: "Agenda — rôles & types de RV",

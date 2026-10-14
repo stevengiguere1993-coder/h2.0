@@ -179,6 +179,11 @@ PAGES: list[PageEntry] = [
        "/prospection/comparables"),
     _p("prospection.kanban", "Kanban Prospection", "prospection", "employee",
        "/prospection/kanban"),
+    # Registre des courtiers (2026-10-14) : qui vend les gros parcs de
+    # logements + courriel de présentation → gestionnaire, comme les
+    # analyses et le pipeline.
+    _p("prospection.courtiers", "Registre des courtiers", "prospection",
+       "manager", "/prospection/courtiers"),
     # ── Gestion immobilière ──
     # Défauts « gestionnaire » (logique métier 2026-07-24) : la gestion
     # locative — immeubles, baux, finances, locataires — est le travail

@@ -7,9 +7,14 @@ Surface:
 - Estimates: create, update (future)
 - Invoices: get, create (future)
 
-Refresh tokens are rotated on every /tokens/bearer call; the new value
-is persisted back to the Render service env var (QBO_REFRESH_TOKEN)
-via the Render API so the next boot picks it up.
+Refresh tokens are rotated by Intuit (about once every 24 h) and the
+previous value then stops working. The reference value lives in the DB
+(qbo_tokens id=1 for Construction, qbo_connections for the other
+scopes): every renewal re-reads it on a locked row (FOR UPDATE) and
+writes the rotated value back before releasing the lock — never a
+per-process copy that another client may have made obsolete (incident
+2026-10-09). The Construction value is also mirrored to the Render env
+var (QBO_REFRESH_TOKEN) as a boot fallback.
 """
 
 from __future__ import annotations
@@ -23,7 +28,7 @@ import re
 import time
 import urllib.parse
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -57,6 +62,35 @@ class QuickBooksError(Exception):
     """Raised by QuickBooksClient helpers when QBO returns a non-2xx."""
 
 
+class QuickBooksReconnexionRequise(QuickBooksError):
+    """Intuit refuse le refresh token enregistré (``invalid_grant``) : la
+    connexion est rompue et seul un administrateur peut la rétablir en se
+    reconnectant à QuickBooks (OAuth). Sous-classe de ``QuickBooksError``
+    : les ``except QuickBooksError`` existants l'attrapent toujours."""
+
+
+def ou_reconnecter(scope: str) -> str:
+    """Où reconnecter, dans Kratos, la compagnie QuickBooks d'un scope."""
+    if scope.startswith("inc:"):
+        return (
+            "Paramètres → Drive → « Reçus QuickBooks → Drive », bouton "
+            "« Reconnecter » de l'entreprise"
+        )
+    if scope in ("entreprise", "immobilier"):
+        return (
+            "Paramètres → Comptabilité → « QuickBooks — autres pôles », "
+            "bouton « Reconnecter »"
+        )
+    return "Paramètres → Comptabilité, bouton « Reconnecter »"
+
+
+async def _rollback_silencieux(db: Any) -> None:
+    try:
+        await db.rollback()
+    except Exception:  # noqa: BLE001 — connexion déjà perdue
+        pass
+
+
 class QuickBooksClient:
     def __init__(self, scope: str = "construction") -> None:
         # "construction" = connexion historique (table qbo_tokens id=1 +
@@ -77,16 +111,42 @@ class QuickBooksClient:
             self.tokens = QBOTokens()
         self.env = (settings.quickbooks_env or "sandbox").lower()
         self.base_url = _PROD_API if self.env == "production" else _SANDBOX_API
-        # Guard so we only read the DB-persisted refresh token once per
-        # process lifetime. If DB has a newer token than the env, use it.
+        # Lecture unique (par processus) de la compagnie et de
+        # l'environnement en base, pour ``ready``. Le refresh token, lui,
+        # est relu en base à CHAQUE renouvellement (voir ``_refresh``).
         self._db_loaded = False
         # Verrou de rotation du refresh_token (créé paresseusement dans
         # _access, une fois la boucle d'événements disponible — l'instance
         # singleton est construite hors boucle via get_qbo). Sérialise les
-        # rafraîchissements concurrents : Intuit rotationne le refresh_token
-        # à chaque appel, donc deux refresh en parallèle persisteraient un
-        # token déjà invalidé par l'autre.
+        # rafraîchissements concurrents du MÊME client ; entre clients et
+        # entre processus, c'est le verrou de ligne pris par ``_refresh``.
         self._refresh_lock: Optional[asyncio.Lock] = None
+
+    def _requete_ligne(self, *, verrou: bool = False) -> Any:
+        """SELECT de la ligne qui porte le refresh token de référence du
+        scope : qbo_tokens id=1 (Construction) ou qbo_connections."""
+        if self.scope == "construction":
+            stmt = select(QboToken).where(QboToken.id == 1)
+        else:
+            stmt = select(QboConnection).where(
+                QboConnection.scope == self.scope
+            )
+        # FOR UPDATE : ignoré par SQLite (tests), effectif sur Postgres.
+        return stmt.with_for_update() if verrou else stmt
+
+    def _adopter(self, row: Any) -> None:
+        """Recopie en mémoire le jeton, la compagnie et l'environnement de
+        la ligne (remplis par le callback OAuth) : le client cible la bonne
+        compagnie + le bon environnement."""
+        if row.refresh_token:
+            self.tokens.refresh_token = row.refresh_token
+        if row.realm_id:
+            self.realm_id = row.realm_id
+        if row.environment:
+            self.env = row.environment.lower()
+            self.base_url = (
+                _PROD_API if self.env == "production" else _SANDBOX_API
+            )
 
     async def _load_refresh_from_db(self) -> None:
         """Pull refresh_token + realm_id + environment from the DB (set
@@ -96,35 +156,11 @@ class QuickBooksClient:
             return
         try:
             async with AsyncSessionLocal() as db:
-                if self.scope == "construction":
-                    row = (
-                        await db.execute(
-                            select(QboToken).where(QboToken.id == 1)
-                        )
-                    ).scalar_one_or_none()
-                else:
-                    row = (
-                        await db.execute(
-                            select(QboConnection).where(
-                                QboConnection.scope == self.scope
-                            )
-                        )
-                    ).scalar_one_or_none()
+                row = (
+                    await db.execute(self._requete_ligne())
+                ).scalar_one_or_none()
                 if row:
-                    if row.refresh_token:
-                        self.tokens.refresh_token = row.refresh_token
-                    # La connexion via OAuth remplit ces deux champs;
-                    # on les réutilise pour que le client cible la
-                    # bonne compagnie + le bon environnement.
-                    if row.realm_id:
-                        self.realm_id = row.realm_id
-                    if row.environment:
-                        self.env = row.environment.lower()
-                        self.base_url = (
-                            _PROD_API
-                            if self.env == "production"
-                            else _SANDBOX_API
-                        )
+                    self._adopter(row)
         except Exception as exc:
             log.warning("Could not load QBO refresh token from DB: %s", exc)
         finally:
@@ -146,8 +182,79 @@ class QuickBooksClient:
         )
 
     async def _refresh(self) -> None:
-        if not self.ready:
+        """Renouvelle l'access token auprès d'Intuit.
+
+        Le refresh token de RÉFÉRENCE est celui de la base : relu à CHAQUE
+        renouvellement sur la ligne verrouillée (FOR UPDATE), le jeton
+        tourné y est réécrit avant de rendre le verrou. Intuit fait tourner
+        le refresh token (environ une fois par 24 h) et l'ancien cesse
+        alors de fonctionner. Incident 2026-10-09 (« QBO refresh token
+        invalide », détail invalid_grant, sur la fiche du projet 155 avenue
+        Joubert) : le client partagé lisait la base UNE fois par processus.
+        Depuis le 2026-10-04, la copie des reçus vers le Drive d'Horizon
+        passe par la connexion Construction avec son PROPRE client ; dès
+        qu'elle faisait tourner le jeton, le client partagé gardait
+        l'ancien et Intuit répondait invalid_grant à tout le reste de
+        Kratos (sous-clients de projet, factures, achats…) jusqu'au
+        redémarrage. Le verrou de ligne sérialise aussi les renouvellements
+        entre clients et entre processus : personne ne présente un jeton
+        déjà remplacé.
+        """
+        if not (self.client_id and self.client_secret):
             raise RuntimeError("QuickBooks client is not configured")
+        utilise: Optional[str] = None
+        nouveau: Optional[str] = None
+        async with AsyncSessionLocal() as db:
+            row: Any = None
+            base_ok = True
+            try:
+                row = (
+                    await db.execute(self._requete_ligne(verrou=True))
+                ).scalar_one_or_none()
+            except Exception as exc:  # noqa: BLE001 — base injoignable
+                base_ok = False
+                log.warning(
+                    "QBO %s : refresh token illisible en base (%s) — "
+                    "copie mémoire utilisée.",
+                    self.scope,
+                    exc,
+                )
+                await _rollback_silencieux(db)
+            if row is not None:
+                self._adopter(row)
+                self._db_loaded = True
+            elif base_ok and self.scope != "construction":
+                # Connexion supprimée entre-temps (déconnexion) : la copie
+                # mémoire n'a plus de légitimité.
+                self.tokens = QBOTokens()
+            if not self.ready:
+                raise RuntimeError("QuickBooks client is not configured")
+            utilise = self.tokens.refresh_token
+            try:
+                data = await self._echanger(utilise)
+            except QuickBooksReconnexionRequise as exc:
+                self.tokens.access_token = None
+                self.tokens.access_expires_at = 0.0
+                if row is not None:
+                    await self._noter_reconnexion(db, row, str(exc))
+                raise
+            self.tokens.access_token = data["access_token"]
+            self.tokens.access_expires_at = time.time() + int(
+                data.get("expires_in", 3600)
+            )
+            nouveau = data.get("refresh_token") or utilise
+            self.tokens.refresh_token = nouveau
+            if base_ok:
+                await self._enregistrer(db, row, nouveau)
+            else:
+                await self._enregistrer_hors_verrou(nouveau)
+        if nouveau and nouveau != utilise:
+            await self._miroir_render(nouveau)
+
+    async def _echanger(self, jeton: Optional[str]) -> Dict[str, Any]:
+        """POST /tokens/bearer (grant refresh_token). Lève
+        ``QuickBooksReconnexionRequise`` sur invalid_grant (jeton refusé
+        pour de bon), ``QuickBooksError`` sur tout autre refus."""
         basic = base64.b64encode(
             f"{self.client_id}:{self.client_secret}".encode()
         ).decode("ascii")
@@ -161,78 +268,119 @@ class QuickBooksClient:
                 },
                 data={
                     "grant_type": "refresh_token",
-                    "refresh_token": self.tokens.refresh_token,
+                    "refresh_token": jeton,
                 },
             )
-            if r.status_code >= 400:
-                try:
-                    body = r.json()
-                except Exception:
-                    body = {"error": r.text}
-                log.error(
-                    "QBO token refresh failed: %s %s", r.status_code, body
-                )
-                err = str(body.get("error") or r.text)
-                raise QuickBooksError(
-                    "QBO refresh token invalide ou expiré. "
-                    "Refais l'autorisation dans QuickBooks et utilise "
-                    "POST /api/v1/qbo/refresh-token pour enregistrer "
-                    f"le nouveau token. (détail: {err})"
-                )
-            data = r.json()
-
-        self.tokens.access_token = data["access_token"]
-        self.tokens.refresh_token = data.get("refresh_token") or self.tokens.refresh_token
-        self.tokens.access_expires_at = time.time() + int(data.get("expires_in", 3600))
-
-        new_refresh = data.get("refresh_token")
-        if new_refresh:
-            # Primary: persist to DB so the rotated refresh token
-            # survives backend restarts without any external service.
+        if r.status_code >= 400:
             try:
-                async with AsyncSessionLocal() as db:
-                    if self.scope == "construction":
-                        row = (
-                            await db.execute(
-                                select(QboToken).where(QboToken.id == 1)
-                            )
-                        ).scalar_one_or_none()
-                        if row is None:
-                            db.add(QboToken(id=1, refresh_token=new_refresh))
-                        else:
-                            row.refresh_token = new_refresh
-                    else:
-                        conn_row = (
-                            await db.execute(
-                                select(QboConnection).where(
-                                    QboConnection.scope == self.scope
-                                )
-                            )
-                        ).scalar_one_or_none()
-                        if conn_row is not None:
-                            conn_row.refresh_token = new_refresh
-                    await db.commit()
-            except Exception as exc:
-                log.warning("Could not save rotated QBO refresh token to DB: %s", exc)
+                body = r.json()
+            except Exception:
+                body = {"error": r.text}
+            log.error(
+                "QBO token refresh failed (%s): %s %s",
+                self.scope,
+                r.status_code,
+                body,
+            )
+            err = str(
+                (body.get("error") if isinstance(body, dict) else None)
+                or r.text
+                or r.status_code
+            )
+            if err == "invalid_grant":
+                raise QuickBooksReconnexionRequise(
+                    "Connexion QuickBooks expirée : Intuit refuse le jeton "
+                    "enregistré. Un administrateur doit la reconnecter "
+                    f"dans {ou_reconnecter(self.scope)}. "
+                    "(détail: invalid_grant)"
+                )
+            raise QuickBooksError(
+                "QuickBooks refuse le renouvellement du jeton "
+                f"(HTTP {r.status_code}). (détail: {err})"
+            )
+        return r.json()
 
-            # Secondary (optional): mirror it into the Render env var
-            # so a fresh boot still has a valid value before the DB
-            # read is wired in (e.g. during local dev). Construction
-            # seulement — la var env appartient à cette connexion.
-            render_api_key = os.getenv("RENDER_API_KEY")
-            web_service_id = os.getenv("RENDER_WEB_SERVICE_ID")
-            if self.scope != "construction":
-                render_api_key = None
-            if render_api_key and web_service_id:
-                try:
-                    async with httpx.AsyncClient(timeout=15.0) as http:
-                        await http.put(
-                            f"https://api.render.com/v1/services/{web_service_id}/env-vars/QBO_REFRESH_TOKEN",
-                            headers={"Authorization": f"Bearer {render_api_key}"},
-                            json={"value": new_refresh},
-                        )
-                except Exception as exc:
-                    log.warning("Could not persist rotated QBO refresh token to Render: %s", exc)
+    async def _noter_reconnexion(self, db: Any, row: Any, message: str) -> None:
+        """Marque la connexion « à reconnecter » (affiché dans Paramètres →
+        Comptabilité), sous le verrou pris par ``_refresh``."""
+        try:
+            if row.reconnect_required_at is None:
+                row.reconnect_required_at = datetime.now(timezone.utc)
+            row.last_refresh_error = message[:500]
+            await db.commit()
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "QBO %s : état « à reconnecter » non enregistré : %s",
+                self.scope,
+                exc,
+            )
+            await _rollback_silencieux(db)
+
+    async def _enregistrer(self, db: Any, row: Any, nouveau: str) -> None:
+        """Écrit le jeton (tourné ou non) dans la ligne verrouillée et lève
+        l'état « à reconnecter ». Le commit rend le verrou. Sans
+        changement, aucun UPDATE n'est émis."""
+        try:
+            if row is None:
+                if self.scope == "construction":
+                    db.add(QboToken(id=1, refresh_token=nouveau))
+            else:
+                row.refresh_token = nouveau
+                row.reconnect_required_at = None
+                row.last_refresh_error = None
+            await db.commit()
+        except Exception as exc:  # noqa: BLE001
+            log.error(
+                "QBO %s : jeton renouvelé NON enregistré (%s) — 2e essai.",
+                self.scope,
+                exc,
+            )
+            await _rollback_silencieux(db)
+            await self._enregistrer_hors_verrou(nouveau)
+
+    async def _enregistrer_hors_verrou(self, nouveau: str) -> None:
+        """Dernier recours (base indisponible pendant le verrou) : session
+        fraîche, sans verrou. Best-effort."""
+        try:
+            async with AsyncSessionLocal() as db:
+                row = (
+                    await db.execute(self._requete_ligne())
+                ).scalar_one_or_none()
+                if row is None:
+                    if self.scope != "construction":
+                        return
+                    db.add(QboToken(id=1, refresh_token=nouveau))
+                else:
+                    row.refresh_token = nouveau
+                    row.reconnect_required_at = None
+                    row.last_refresh_error = None
+                await db.commit()
+        except Exception as exc:  # noqa: BLE001
+            log.error(
+                "Could not save rotated QBO refresh token to DB (%s): %s",
+                self.scope,
+                exc,
+            )
+
+    async def _miroir_render(self, nouveau: str) -> None:
+        """Secondary (optional): mirror the rotated token into the Render
+        env var so a fresh boot without DB row still has a valid value.
+        Construction seulement — la var env appartient à cette connexion."""
+        if self.scope != "construction":
+            return
+        render_api_key = os.getenv("RENDER_API_KEY")
+        web_service_id = os.getenv("RENDER_WEB_SERVICE_ID")
+        if not (render_api_key and web_service_id):
+            return
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as http:
+                await http.put(
+                    f"https://api.render.com/v1/services/{web_service_id}/env-vars/QBO_REFRESH_TOKEN",
+                    headers={"Authorization": f"Bearer {render_api_key}"},
+                    json={"value": nouveau},
+                )
+        except Exception as exc:
+            log.warning("Could not persist rotated QBO refresh token to Render: %s", exc)
 
     async def _access(self) -> str:
         # Fast-path hors verrou : token encore valide → on le rend tel quel
@@ -245,17 +393,24 @@ class QuickBooksClient:
             self._refresh_lock = asyncio.Lock()
         # Section critique sérialisée : une seule coroutine rafraîchit à la
         # fois, pour ne pas rejouer deux rotations concurrentes du
-        # refresh_token (la seconde persisterait un token déjà invalidé).
+        # refresh_token (la seconde présenterait un jeton déjà remplacé).
         async with self._refresh_lock:
             # Double-checked : une autre coroutine a pu rafraîchir pendant
             # qu'on attendait le verrou → le token est de nouveau valide, on
             # évite un refresh inutile (et une rotation superflue).
             if self.tokens.access_token and time.time() < self.tokens.access_expires_at - 60:
                 return self.tokens.access_token
-            await self._load_refresh_from_db()
             await self._refresh()
             assert self.tokens.access_token is not None
             return self.tokens.access_token
+
+    async def forcer_renouvellement(self) -> None:
+        """Renouvelle l'access token MAINTENANT (bouton Diagnostic), sous le
+        même verrou que les renouvellements normaux."""
+        if self._refresh_lock is None:
+            self._refresh_lock = asyncio.Lock()
+        async with self._refresh_lock:
+            await self._refresh()
 
     async def _request(
         self,
@@ -1536,6 +1691,42 @@ def reset_qbo(scope: str) -> None:
         _qbo = None
     else:
         _qbo_by_scope.pop(scope, None)
+
+
+async def garder_connexions_vivantes() -> Dict[str, str]:
+    """Renouvelle une fois par jour (cron all-daily) le jeton de CHAQUE
+    connexion QuickBooks enregistrée : Construction (qbo_tokens id=1) et
+    qbo_connections (autres pôles, inc).
+
+    Intuit périme un refresh token resté inutilisé environ 100 jours : une
+    connexion peu servie (pôle Immobilier, auto-sync coupée…) n'expire
+    donc plus faute d'usage (Steven, 2026-10-09 : « faire en sorte qu'elle
+    n'expire jamais »). Une connexion qu'Intuit refuse est marquée « à
+    reconnecter » dès ce passage, visible dans Paramètres, plutôt qu'au
+    premier envoi raté. Les connexions déjà marquées sont sautées : un
+    jeton refusé ne revient pas, seule une reconnexion les rétablit.
+    """
+    scopes: List[str] = []
+    async with AsyncSessionLocal() as db:
+        tok = (
+            await db.execute(select(QboToken).where(QboToken.id == 1))
+        ).scalar_one_or_none()
+        if tok and tok.refresh_token and tok.reconnect_required_at is None:
+            scopes.append("construction")
+        for c in (await db.execute(select(QboConnection))).scalars().all():
+            if c.refresh_token and c.reconnect_required_at is None:
+                scopes.append(c.scope)
+    out: Dict[str, str] = {}
+    for scope in scopes:
+        try:
+            await get_qbo(scope).forcer_renouvellement()
+            out[scope] = "ok"
+        except QuickBooksReconnexionRequise:
+            out[scope] = "à reconnecter"
+        except Exception as exc:  # noqa: BLE001 — n'arrête pas les autres
+            log.warning("QBO %s : maintien de la connexion échoué : %s", scope, exc)
+            out[scope] = f"erreur : {str(exc)[:200]}"
+    return out
 
 
 # Avoid an unused-import warning in tight environments:

@@ -1,7 +1,7 @@
 """Scraper Centris : tentative HTTP + parser HTML.
 
 URL pattern de recherche multi-logements :
-- Multiplex 2-5 unités : `/fr/multiplex~immeuble-residentiel-a-vendre`
+- Plex 2-5 unités : `/fr/plex~a-vendre` (ancienne URL multiplex~immeuble-residentiel-a-vendre → 404 depuis 2026-10)
 - Immeuble résidentiel 6+ : pareil avec filtre #units
 """
 
@@ -23,10 +23,14 @@ log = logging.getLogger(__name__)
 # peut filtrer par grande ville.
 SEARCH_URLS = {
     "multiplex_2_5": (
-        "https://www.centris.ca/fr/multiplex~immeuble-residentiel-a-vendre"
+        # Centris 2026-10 : « Plex à vendre » (2 à 5 logements).
+        "https://www.centris.ca/fr/plex~a-vendre"
     ),
     "immeuble_residentiel_6_plus": (
-        "https://www.centris.ca/fr/immeuble-residentiel-a-vendre"
+        # Centris 2026-10 : « Multifamilial à vendre » (6 logements et plus).
+        # L'ancienne URL immeuble-residentiel-a-vendre répond 404 (constaté
+        # par le diagnostic du scan du registre des courtiers, 2026-10-14).
+        "https://www.centris.ca/fr/immeuble-a-revenus~a-vendre"
     ),
 }
 
@@ -342,10 +346,26 @@ async def upsert_listings(
     updated = 0
     now = datetime.now(timezone.utc)
 
+    # Une même URL peut revenir deux fois dans un lot (chevauchement des
+    # pages Centris). La session est en autoflush=False : la 2e occurrence
+    # ne verrait pas l'insert en attente et violerait l'index unique. On
+    # fusionne donc les doublons (le premier gagne, les champs manquants
+    # sont complétés par les suivants) — bug prod registre des courtiers
+    # 2026-10-14.
+    uniques: dict[str, dict] = {}
     for L in listings:
-        url = L.get("source_url")
+        url = (L.get("source_url") or "").strip()
         if not url:
             continue
+        if url in uniques:
+            for k, v in L.items():
+                if uniques[url].get(k) in (None, "") and v not in (None, ""):
+                    uniques[url][k] = v
+        else:
+            uniques[url] = dict(L, source_url=url)
+
+    for L in uniques.values():
+        url = L["source_url"]
         existing = (
             await db.execute(
                 select(CentrisListing).where(

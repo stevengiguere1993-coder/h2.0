@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -38,7 +38,14 @@ class Punch(Base, TimestampUpdateMixin):
 
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Heures PAYÉES du punch, dîner déjà retiré (voir ``diner_minutes``).
     hours: Mapped[Optional[float]] = mapped_column(Numeric(6, 2), nullable=True)
+    #: Minutes de dîner non payé retirées de ce punch (Steven,
+    #: 2026-10-05) : ``hours`` = durée punchée − ces minutes. Posé
+    #: automatiquement à la fermeture du punch pour un employé dont la
+    #: fiche a la case « dîner » cochée, ou à la main dans la gestion des
+    #: punchs. NULL ou 0 = aucun retrait.
+    diner_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     task: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     geolocation: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)  # 'lat,lng'

@@ -32,7 +32,11 @@ from playwright.async_api import (
 from pydantic import BaseModel, Field
 
 from evalweb import scrape_owners_via_browser
-from centris import scrape_listings_via_browser, scrape_detail_via_browser
+from centris import (
+    LAST_SEARCH_DIAGNOSTIC,
+    scrape_detail_via_browser,
+    scrape_listings_via_browser,
+)
 from numeriq_journal import scrape_comparables_via_browser
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -174,6 +178,9 @@ class CentrisListingMini(BaseModel):
 
 class CentrisSearchResponse(BaseModel):
     listings: List[CentrisListingMini]
+    #: Rempli seulement quand la liste est vide : pourquoi (titre de la
+    #: page, captcha détecté, extrait) — registre des courtiers 2026-10-14.
+    diagnostic: Optional[dict] = None
 
 
 @app.post(
@@ -196,7 +203,12 @@ async def centris_search(req: CentrisSearchRequest):
         log.exception("centris scrape failed: %s", exc)
         raise HTTPException(502, f"Échec scrape Centris : {exc}")
     return CentrisSearchResponse(
-        listings=[CentrisListingMini(**l) for l in listings]
+        listings=[CentrisListingMini(**l) for l in listings],
+        diagnostic=(
+            dict(LAST_SEARCH_DIAGNOSTIC)
+            if not listings and LAST_SEARCH_DIAGNOSTIC
+            else None
+        ),
     )
 
 

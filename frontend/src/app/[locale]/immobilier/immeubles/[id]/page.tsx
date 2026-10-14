@@ -71,8 +71,10 @@ import {
   CelluleLoyer,
   CorrectionOptions,
   duMois,
+  FraisCreditModal,
   moisCouvertPourPaiement,
   montantMarquerPaye,
+  type PaiementMois,
   RENOUVELLEMENT_BADGES
 } from "@/components/immobilier/paiements-actions";
 import {
@@ -3510,6 +3512,7 @@ type LoyerRow = {
   bail_statut?: string;
   bail_termine_le?: string | null;
   frais_mois?: { id: number; montant: number; libelle: string }[];
+  paiements?: PaiementMois[];
   solde_total?: number;
   solde_anterieur?: boolean;
   transfert_bascule?: boolean;
@@ -3652,42 +3655,29 @@ function PaiementsMoisSection({
     await enregistrerPaiement(row, Math.round(montant * 100) / 100);
   }
 
-  // Frais (positif) OU crédit (négatif) qui s'ajoute au solde — même
-  // règle que la page Paiements (retour Phil 2026-08-31).
+  // Frais OU crédit — même fenêtre partagée que la page Paiements et la
+  // fiche locataire (Phil 2026-10-08 : « sélectionner l'un ou l'autre »).
+  const [fraisPour, setFraisPour] = useState<LoyerRow | null>(null);
   async function ajouterFrais(row: LoyerRow) {
-    const saisie = window.prompt(
-      `Frais ou crédit (mois ${mois}) ?\n` +
-        "Montant en $ — positif = frais (ex. 20), NÉGATIF = crédit " +
-        "qui réduit le loyer dû (ex. -50) :",
-      "20"
+    setFraisPour(row);
+  }
+  async function confirmerFrais(montant: number, libelle: string) {
+    if (!fraisPour) return;
+    const r = await authedFetch(
+      `/api/v1/immobilier/baux/${fraisPour.bail_id}/frais`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          mois_couvert: `${mois}-01`,
+          montant,
+          libelle
+        })
+      }
     );
-    if (saisie == null) return;
-    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
-    if (!Number.isFinite(montant) || montant === 0) {
-      setErr("Montant invalide (positif = frais, négatif = crédit).");
-      return;
-    }
-    const defLibelle = montant < 0 ? "Crédit" : "Frais de retard";
-    const libelle =
-      window.prompt("Libellé :", defLibelle) || defLibelle;
-    try {
-      const r = await authedFetch(
-        `/api/v1/immobilier/baux/${row.bail_id}/frais`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            mois_couvert: `${mois}-01`,
-            montant,
-            libelle
-          })
-        }
-      );
-      if (!r.ok)
-        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
-      await load();
-    } catch (e) {
-      setErr(`Ajout du frais échoué : ${(e as Error).message}`);
-    }
+    if (!r.ok)
+      throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+    setFraisPour(null);
+    await load();
   }
 
   // « Ouvrir un dossier TAL » — même geste que la page Paiements : crée
@@ -3865,6 +3855,13 @@ function PaiementsMoisSection({
 
   return (
     <Section title={`Paiements — ${moisLisible}`}>
+      <FraisCreditModal
+        open={fraisPour != null}
+        mois={mois}
+        locataireName={fraisPour?.locataire_name}
+        onClose={() => setFraisPour(null)}
+        onConfirm={confirmerFrais}
+      />
       {relanceApercu ? (
         <ApercuEnvoiModal
           titre="Relance de loyer"
@@ -4149,6 +4146,7 @@ function PaiementsMoisSection({
                         fmt={fmtCurrency}
                         echeance={echeanceLabel(r.jour_echeance)}
                         frais={r.frais_mois}
+                        paiements={r.paiements}
                         onSupprimerFrais={(id) => void supprimerFrais(id)}
                       />
                     )}

@@ -691,6 +691,17 @@ class Bail(Base, TimestampUpdateMixin):
     # Date de REMISE du dépôt au locataire (bail terminé → dépôt rendu).
     # NULL = toujours détenu (ou à rendre si le bail est terminé/résilié).
     depot_rendu_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    #: Dépôt GARDÉ (Phil 2026-10-08, messages de Kyle : « il perd son
+    #: dépôt ») : date, montant gardé (≤ dépôt — le reste est à rendre)
+    #: et motif (préavis insuffisant, dommages, loyers impayés…).
+    #: Colonnes additives → ``ensure_critical_columns`` (imm_baux).
+    depot_saisi_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    depot_saisi_montant: Mapped[Optional[float]] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
+    depot_saisi_motif: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
     #: TRANSFERT D'UNITÉ (retour Phil 2026-09-09) : le dépôt de ce bail a
     #: SUIVI le locataire sur son nouveau bail — il n'est ni « à rendre »
     #: ni « rendu », il dort maintenant sur l'autre bail. Colonne

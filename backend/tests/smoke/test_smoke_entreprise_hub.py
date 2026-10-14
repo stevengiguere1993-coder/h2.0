@@ -291,7 +291,7 @@ def test_sync_detention_organigramme(client, auth_headers):
         "/api/v1/org-nodes/sync-detention", headers=auth_headers
     )
     assert r.status_code == 200, r.text
-    nodes = r.json()
+    nodes = r.json()["nodes"]
     n_hold = next(n for n in nodes if n["entreprise_id"] == holding)
     n_fil = next(n for n in nodes if n["entreprise_id"] == filiale)
     n_sam = next(
@@ -309,7 +309,7 @@ def test_sync_detention_organigramme(client, auth_headers):
     # Idempotent : un second sync ne duplique ni nœud ni personne.
     nodes2 = client.post(
         "/api/v1/org-nodes/sync-detention", headers=auth_headers
-    ).json()
+    ).json()["nodes"]
     assert (
         len(
             [

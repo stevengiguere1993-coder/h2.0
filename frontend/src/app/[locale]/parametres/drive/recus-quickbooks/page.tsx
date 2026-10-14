@@ -46,6 +46,8 @@ type EntrepriseEtat = {
   name: string;
   qbo_scope: string;
   qbo_connectee: boolean;
+  // Intuit refuse le jeton enregistré : connexion à refaire (2026-10-09).
+  qbo_reconnexion_requise?: boolean;
   qbo_company_name: string | null;
   // La connexion Construction (Horizon) est disponible comme alternative.
   qbo_construction_disponible: boolean;
@@ -632,7 +634,25 @@ export default function RecusQuickbooksPage() {
                         </span>
                       </td>
                       <td className="px-3 py-2 text-xs">
-                        {e.qbo_connectee ? (
+                        {e.qbo_connectee && e.qbo_reconnexion_requise ? (
+                          <span className="inline-flex flex-wrap items-center gap-1">
+                            <span className="badge badge-rose">
+                              Connexion expirée
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => void connecterQbo(e)}
+                              disabled={connecting === e.entreprise_id}
+                              className="btn-outline-accent btn-xs"
+                              title={`QuickBooks refuse le jeton enregistré de ${e.qbo_company_name || "cette compagnie"} : refais l'autorisation`}
+                            >
+                              {connecting === e.entreprise_id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : null}
+                              Reconnecter
+                            </button>
+                          </span>
+                        ) : e.qbo_connectee ? (
                           <span className="inline-flex flex-wrap items-center gap-1 text-white">
                             <Check className="h-3.5 w-3.5 text-emerald-600" />
                             {e.qbo_company_name || "Connectée"}

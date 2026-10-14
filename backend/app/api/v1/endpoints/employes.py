@@ -25,6 +25,13 @@ from app.core.security import get_password_hash
 from app.models.employe import Employe
 from app.models.user import User, UserRole
 from app.schemas.business import EmployeCreate, EmployeRead, EmployeUpdate
+from app.services.cnesst import (
+    aligner_paliers_cnesst,
+    charger_bareme_cnesst,
+    config_cnesst,
+    taux_cnesst,
+)
+from app.services.punch_diner import aujourd_hui_local
 
 
 log = logging.getLogger(__name__)
@@ -124,6 +131,12 @@ async def create_employe(
     data: EmployeCreate, db: DBSession, _: RequireManager
 ) -> EmployeCreatedRead:
     e = Employe(**data.model_dump(exclude_unset=True))
+    if e.diner_auto:
+        # Case « dîner » : le retrait vaut à partir d'aujourd'hui.
+        e.diner_depuis = aujourd_hui_local()
+    if e.cnesst_actif is False:
+        # Case « Prime CNESST » décochée : pas de taux personnalisé.
+        e.cnesst_rate = None
     db.add(e)
     await db.flush()
     await db.refresh(e)
@@ -199,9 +212,29 @@ async def update_employe(
     if e is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Employé introuvable.")
     was_active = bool(e.active)
+    was_diner = bool(e.diner_auto)
+    cnesst_avant = config_cnesst(e)
     patch = data.model_dump(exclude_unset=True)
+    if "diner_auto" in patch and patch["diner_auto"] is None:
+        patch.pop("diner_auto")
+    if "cnesst_actif" in patch and patch["cnesst_actif"] is None:
+        patch.pop("cnesst_actif")
     for field, value in patch.items():
         setattr(e, field, value)
+    # Case « Prime CNESST » : décochée → pas de taux personnalisé. Un
+    # changement s'applique aussi au palier de taux en vigueur, sinon il
+    # resterait sans effet pour un employé qui a un historique de taux.
+    if e.cnesst_actif is False:
+        e.cnesst_rate = None
+    if config_cnesst(e) != cnesst_avant:
+        await aligner_paliers_cnesst(db, e)
+    # Case « dîner » : cochée → le retrait vaut à partir d'aujourd'hui
+    # (les heures déjà punchées ne changent pas) ; décochée → plus rien.
+    if "diner_auto" in patch:
+        if not e.diner_auto:
+            e.diner_depuis = None
+        elif not was_diner and "diner_depuis" not in patch:
+            e.diner_depuis = aujourd_hui_local()
     await db.flush()
     # Détection désactivation : si on passe de actif → inactif ET que
     # l'employé avait des assignations futures (phase, tâche, agenda),
@@ -334,11 +367,37 @@ class RateHistoryRead(BaseModel):
     effective_date: _Date
     hourly_rate: float
     billing_rate: Optional[float]
+    #: Case « Prime CNESST » du palier et taux personnalisé (vide = taux
+    #: global) ; ``cnesst_taux_effectif`` = prime appliquée à la date du
+    #: palier (DÉCIMAL).
+    cnesst_actif: bool = True
     cnesst_rate: Optional[float]
+    cnesst_taux_effectif: float = 0.0
     ccq_rate: Optional[float]
     is_ccq: bool
     hourly_rate_ccq: Optional[float] = None
     note: Optional[str]
+
+
+async def _paliers_lus(db, employe_id: int) -> List[RateHistoryRead]:
+    """Paliers de l'employé (du plus ancien au plus récent), avec la prime
+    CNESST effective à la date de chacun."""
+    rows = (
+        await db.execute(
+            select(EmployeRateHistory)
+            .where(EmployeRateHistory.employe_id == employe_id)
+            .order_by(EmployeRateHistory.effective_date.asc())
+        )
+    ).scalars().all()
+    bareme = await charger_bareme_cnesst(db)
+    out: List[RateHistoryRead] = []
+    for r in rows:
+        lu = RateHistoryRead.model_validate(r)
+        lu.cnesst_taux_effectif = taux_cnesst(
+            r.cnesst_actif, r.cnesst_rate, bareme, r.effective_date
+        )
+        out.append(lu)
+    return out
 
 
 class RateChangeCreate(BaseModel):
@@ -348,6 +407,8 @@ class RateChangeCreate(BaseModel):
     hourly_rate: float = Field(..., ge=0)
     billing_rate: Optional[float] = Field(default=None, ge=0)
     # CNESST / CCQ en DÉCIMAL (0.0216 = 2,16 %) — le frontend convertit.
+    # Prime CNESST : case + taux personnalisé (vide = taux global).
+    cnesst_actif: bool = True
     cnesst_rate: Optional[float] = Field(default=None, ge=0, le=1)
     ccq_rate: Optional[float] = Field(default=None, ge=0, le=1)
     is_ccq: bool = False
@@ -364,14 +425,7 @@ class RateChangeCreate(BaseModel):
 async def list_rate_history(
     employe_id: int, db: DBSession, _: CurrentUser
 ) -> List[RateHistoryRead]:
-    rows = (
-        await db.execute(
-            select(EmployeRateHistory)
-            .where(EmployeRateHistory.employe_id == employe_id)
-            .order_by(EmployeRateHistory.effective_date.asc())
-        )
-    ).scalars().all()
-    return [RateHistoryRead.model_validate(r) for r in rows]
+    return await _paliers_lus(db, employe_id)
 
 
 @router.post(
@@ -424,6 +478,7 @@ async def add_rate_change(
                     if emp.billing_rate is not None
                     else None
                 ),
+                cnesst_actif=emp.cnesst_actif is not False,
                 cnesst_rate=(
                     float(emp.cnesst_rate)
                     if emp.cnesst_rate is not None
@@ -451,13 +506,16 @@ async def add_rate_change(
             "Un palier de taux existe déjà à cette date.",
         )
 
+    # Case « Prime CNESST » décochée : pas de taux personnalisé.
+    cnesst_perso = data.cnesst_rate if data.cnesst_actif else None
     db.add(
         EmployeRateHistory(
             employe_id=employe_id,
             effective_date=data.effective_date,
             hourly_rate=data.hourly_rate,
             billing_rate=data.billing_rate,
-            cnesst_rate=data.cnesst_rate,
+            cnesst_actif=data.cnesst_actif,
+            cnesst_rate=cnesst_perso,
             ccq_rate=data.ccq_rate,
             is_ccq=data.is_ccq,
             # Palier sans taux CCQ retapé → on garde le taux CCQ courant
@@ -475,7 +533,8 @@ async def add_rate_change(
     # Employe reste la « photo actuelle » utilisée par les prévisions).
     emp.hourly_rate = data.hourly_rate
     emp.billing_rate = data.billing_rate
-    emp.cnesst_rate = data.cnesst_rate
+    emp.cnesst_actif = data.cnesst_actif
+    emp.cnesst_rate = cnesst_perso
     emp.ccq_rate = data.ccq_rate
     emp.is_ccq = data.is_ccq
     if data.hourly_rate_ccq is not None:
@@ -498,14 +557,7 @@ async def add_rate_change(
         },
     )
 
-    rows = (
-        await db.execute(
-            select(EmployeRateHistory)
-            .where(EmployeRateHistory.employe_id == employe_id)
-            .order_by(EmployeRateHistory.effective_date.asc())
-        )
-    ).scalars().all()
-    return [RateHistoryRead.model_validate(r) for r in rows]
+    return await _paliers_lus(db, employe_id)
 
 
 @router.delete(

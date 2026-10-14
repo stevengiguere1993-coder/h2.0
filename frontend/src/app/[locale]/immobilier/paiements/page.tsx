@@ -36,8 +36,10 @@ import {
   CelluleLoyer,
   CorrectionOptions,
   duMois,
+  FraisCreditModal,
   moisCouvertPourPaiement,
-  montantMarquerPaye
+  montantMarquerPaye,
+  type PaiementMois
 } from "@/components/immobilier/paiements-actions";
 import {
   CrochetFilBancaire,
@@ -83,6 +85,8 @@ type Row = {
   paiement_id: number | null;
   montant_paye: number | null;
   paye_le: string | null;
+  //: Versements du mois (paiements partiels distincts).
+  paiements?: PaiementMois[];
   etat: string; // "retard" | "attente" | "paye" | "partiel" | "vacant"
   /** Ligne de logement VACANT (bail_id vaut 0) : statut exact du
    *  logement ("vacant" ou "reserve") pour l'étiquette. */
@@ -177,6 +181,7 @@ function externeToRow(x: RowExterne): Row {
     paiement_id: null,
     montant_paye: x.montant_paye,
     paye_le: x.paye_le,
+    paiements: [],
     etat: x.etat,
     frais_mois: [],
     solde_total: x.solde_total,
@@ -361,23 +366,14 @@ export default function PaiementsPage() {
     await enregistrerPaiement(row, Math.round(montant * 100) / 100);
   }
 
-  // Frais ponctuel qui S'AJOUTE au solde (ex. 20 $ payé après le 15).
+  // Frais OU crédit — fenêtre partagée (Phil 2026-10-08).
+  const [fraisPour, setFraisPour] = useState<Row | null>(null);
   async function ajouterFrais(row: Row) {
-    const saisie = window.prompt(
-      `Frais ou crédit pour ${row.locataire_name || "ce locataire"} (mois ${mois}) ?\n` +
-        "Montant en $ — positif = frais (ex. 20), NÉGATIF = crédit qui " +
-        "réduit le loyer dû (ex. -50) :",
-      "20"
-    );
-    if (saisie == null) return;
-    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
-    if (!Number.isFinite(montant) || montant === 0) {
-      setError("Montant invalide (positif = frais, négatif = crédit).");
-      return;
-    }
-    const defLibelle = montant < 0 ? "Crédit" : "Frais de retard";
-    const libelle =
-      window.prompt("Libellé :", defLibelle) || defLibelle;
+    setFraisPour(row);
+  }
+  async function confirmerFrais(montant: number, libelle: string) {
+    const row = fraisPour;
+    if (!row) return;
     try {
       const r = await authedFetch(
         `/api/v1/immobilier/baux/${row.bail_id}/frais`,
@@ -392,6 +388,7 @@ export default function PaiementsPage() {
       );
       if (!r.ok)
         throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      setFraisPour(null);
       flash(
         montant < 0
           ? `Crédit appliqué au solde : ${libelle} (${fmtMoney(montant)})`
@@ -1316,6 +1313,7 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                             fmt={fmtMoney}
                             echeance={echeanceLabel(r.jour_echeance)}
                             frais={r.frais_mois}
+                            paiements={r.paiements}
                             onSupprimerFrais={(id) => void supprimerFrais(id)}
                           />
                         )}
@@ -1557,6 +1555,13 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
         </p>
       </div>
 
+      <FraisCreditModal
+        open={fraisPour != null}
+        mois={mois}
+        locataireName={fraisPour?.locataire_name}
+        onClose={() => setFraisPour(null)}
+        onConfirm={confirmerFrais}
+      />
       {toast ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[1100] flex justify-center px-3">
           <div className="pointer-events-auto flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm text-emerald-100 shadow-lg">

@@ -498,6 +498,11 @@ class BailUpdate(BaseModel):
     depot_detenteur: Optional[str] = Field(default=None, max_length=120)
     # Date de remise du dépôt (page Dépôts → « Marquer rendu »).
     depot_rendu_le: Optional[date] = None
+    #: Dépôt GARDÉ (page Dépôts → « Garder », fin de bail) : date,
+    #: montant gardé (vide = tout le dépôt) et motif. null = annuler.
+    depot_saisi_le: Optional[date] = None
+    depot_saisi_montant: Optional[float] = Field(default=None, ge=0)
+    depot_saisi_motif: Optional[str] = Field(default=None, max_length=255)
     chauffage_inclus: Optional[bool] = None
     eau_chaude_inclus: Optional[bool] = None
     electricite_inclus: Optional[bool] = None
@@ -522,6 +527,9 @@ class BailRead(BailBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     depot_rendu_le: Optional[date] = None
+    depot_saisi_le: Optional[date] = None
+    depot_saisi_montant: Optional[float] = None
+    depot_saisi_motif: Optional[str] = None
     #: Transfert d'unité : le dépôt a suivi le locataire sur ce bail-là.
     depot_transfere_vers_bail_id: Optional[int] = None
     #: Ce bail vient d'un transfert d'unité (bail d'origine).
@@ -781,6 +789,11 @@ class DossierBail(BaseModel):
     date_fin: date
     loyer_mensuel: float
     depot_garantie: Optional[float] = None
+    #: Suivi du dépôt (miroir de la page Dépôts) : rendu / gardé.
+    depot_rendu_le: Optional[date] = None
+    depot_saisi_le: Optional[date] = None
+    depot_saisi_montant: Optional[float] = None
+    depot_saisi_motif: Optional[str] = None
     status: str
     #: Statut du dossier de relocation ACTIF lié (kanban Locations) :
     #: par le bail ENTRANT (bail_envoye = bail en signature) OU par le

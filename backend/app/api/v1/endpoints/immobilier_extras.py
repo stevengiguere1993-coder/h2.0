@@ -1097,6 +1097,12 @@ class ResilierIn(BaseModel):
     #: v15 — transmettre au locataire un AVIS de fin de bail (lettre
     #: PDF par courriel) ; False = fin immédiate sans avis.
     envoyer_avis: bool = False
+    #: Décision sur le dépôt de garantie (Phil 2026-10-08, messages de
+    #: Kyle) : « rendre » (à rendre — suivi page Dépôts), « garder »
+    #: (gardé, montant + motif), « deja_rendu ». None = rien de décidé.
+    depot_decision: Optional[str] = None
+    depot_montant_garde: Optional[float] = None
+    depot_motif: Optional[str] = None
 
 
 class ResilierResult(BaseModel):
@@ -1337,6 +1343,34 @@ async def annuler_depart(
     )
 
 
+def _appliquer_decision_depot(bail: Bail, payload: "ResilierIn") -> None:
+    """Décision sur le dépôt au moment du départ (fin immédiate)."""
+    from datetime import date as _date
+
+    montant = float(bail.depot_garantie or 0)
+    decision = (payload.depot_decision or "").strip()
+    if montant <= 0 or not decision:
+        return
+    quand = min(payload.date_fin, _date.today())
+    if decision == "garder":
+        garde = (
+            float(payload.depot_montant_garde)
+            if payload.depot_montant_garde is not None
+            else montant
+        )
+        bail.depot_saisi_le = quand
+        bail.depot_saisi_montant = round(max(0.0, min(garde, montant)), 2)
+        bail.depot_saisi_motif = (payload.depot_motif or "").strip()[:255] or None
+        bail.depot_rendu_le = None
+    elif decision == "deja_rendu":
+        bail.depot_rendu_le = quand
+        bail.depot_saisi_le = None
+        bail.depot_saisi_montant = None
+        bail.depot_saisi_motif = None
+    # « rendre » : rien à écrire — la page Dépôts le signale « à rendre »
+    # dès que le départ est acté.
+
+
 @router.post("/baux/{bail_id}/resilier", response_model=ResilierResult)
 async def resilier_bail(
     bail_id: int,
@@ -1423,11 +1457,13 @@ async def resilier_bail(
         source="Résiliation immédiate",
         ouvrir_dossier=payload.ouvrir_relocation,
     )
+    _appliquer_decision_depot(bail, payload)
     await log_action(
         db, user=user, action="baux.resilie",
         entity_type="baux", entity_id=bail_id,
         details={"date_fin": payload.date_fin, "status": bail.status,
-                 "relocation_ouverte": payload.ouvrir_relocation},
+                 "relocation_ouverte": payload.ouvrir_relocation,
+                 "depot_decision": payload.depot_decision},
     )
     await db.commit()
     log.info(

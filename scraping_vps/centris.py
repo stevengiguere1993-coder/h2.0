@@ -21,12 +21,51 @@ log = logging.getLogger(__name__)
 
 CATEGORY_URLS = {
     "multiplex_2_5": (
-        "https://www.centris.ca/fr/multiplex~immeuble-residentiel-a-vendre"
+        # Centris 2026-10 : « Plex à vendre » (2 à 5 logements).
+        "https://www.centris.ca/fr/plex~a-vendre"
     ),
     "immeuble_residentiel_6_plus": (
-        "https://www.centris.ca/fr/immeuble-residentiel-a-vendre"
+        # Centris 2026-10 : « Multifamilial à vendre » (6 logements et plus).
+        # L'ancienne URL immeuble-residentiel-a-vendre répond 404 (constaté
+        # par le diagnostic du scan du registre des courtiers, 2026-10-14).
+        "https://www.centris.ca/fr/immeuble-a-revenus~a-vendre"
     ),
 }
+
+
+#: Pourquoi la dernière recherche n'a rien lu (page de vérification
+#: anti-robot, page vide…) — renvoyé par /scrape/centris-search quand la
+#: liste est vide, pour que Kratos puisse l'afficher (registre des
+#: courtiers, 2026-10-14).
+LAST_SEARCH_DIAGNOSTIC: dict = {}
+
+_MARQUEURS_BLOCAGE = (
+    "datadome", "captcha-delivery", "captcha", "cf-chl", "access denied",
+    "accès refusé", "verify you are human", "vérifier que vous êtes",
+)
+
+
+async def _diagnostic_page(page, page_num: int, html: str) -> dict:
+    """Décrit la page qui n'a donné aucune annonce (sans lever)."""
+    try:
+        title = await page.title()
+    except Exception:  # noqa: BLE001
+        title = None
+    try:
+        texte = await page.evaluate(
+            "document.body ? document.body.innerText : ''"
+        )
+    except Exception:  # noqa: BLE001
+        texte = ""
+    bas = (html or "").lower()
+    return {
+        "page": page_num,
+        "url": page.url,
+        "title": title,
+        "html_len": len(html or ""),
+        "extrait": " ".join((texte or "").split())[:300],
+        "captcha": any(m in bas for m in _MARQUEURS_BLOCAGE),
+    }
 
 
 async def scrape_listings_via_browser(
@@ -42,6 +81,7 @@ async def scrape_listings_via_browser(
     base_url = CATEGORY_URLS.get(category)
     if not base_url:
         raise ValueError(f"Catégorie inconnue : {category}")
+    LAST_SEARCH_DIAGNOSTIC.clear()
 
     context = await browser.new_context(
         locale="fr-CA",
@@ -79,6 +119,14 @@ async def scrape_listings_via_browser(
                 log.warning(
                     "Centris page %d : 0 listings parsés", page_num
                 )
+                if page_num == 1:
+                    diag = await _diagnostic_page(page, page_num, html)
+                    LAST_SEARCH_DIAGNOSTIC.update(diag)
+                    log.warning(
+                        "Centris : page vide — titre=%r captcha=%s extrait=%r",
+                        diag.get("title"), diag.get("captcha"),
+                        (diag.get("extrait") or "")[:120],
+                    )
                 break
             listings.extend(page_listings)
     finally:

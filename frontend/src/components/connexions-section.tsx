@@ -32,6 +32,8 @@ type QboStatus = {
   active_environment?: string | null;
   env_mismatch?: boolean;
   connected_at?: string | null;
+  // Intuit refuse le jeton enregistré : la connexion est à refaire.
+  needs_reconnect?: boolean;
 };
 
 type ConnectionStatus = "connected" | "disconnected" | "automatic" | "manual" | "loading";
@@ -239,7 +241,10 @@ export function ConnexionsSection({
   function statusFor(id: string): ConnectionStatus {
     if (id === "qbo") {
       if (loadingQbo) return "loading";
-      return qbo?.connected ? "connected" : "disconnected";
+      // Connexion refusée par Intuit = à refaire (bouton « Reconnecter »).
+      return qbo?.connected && !qbo.needs_reconnect
+        ? "connected"
+        : "disconnected";
     }
     if (id === "mtl_roles" || id === "req" || id === "cmhc") return "manual";
     if (id === "calendar_ics") return "manual"; // Per-user, faut connecter

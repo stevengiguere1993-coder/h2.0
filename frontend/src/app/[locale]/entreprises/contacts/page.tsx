@@ -81,7 +81,10 @@ const KIND_LABEL: Record<string, string> = {
   subcontractor: "Sous-traitant",
   devlog_subcontractor: "Sous-traitant dev",
   supplier: "Fournisseur",
-  partner_employee: "Partenaire employé"
+  partner_employee: "Partenaire employé",
+  employee: "Employé",
+  staff: "Équipe",
+  signer: "Signataire"
 };
 
 const KIND_ICON: Record<string, React.ComponentType<{ className?: string }>> = {

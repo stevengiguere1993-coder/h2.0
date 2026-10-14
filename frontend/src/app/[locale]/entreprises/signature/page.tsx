@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "@/i18n/navigation";
 import {
+  Ban,
   CheckCircle2,
   Clock,
   Eye,
@@ -24,6 +25,7 @@ import {
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 import { QGTopbar, useEntreprisesLayout } from "../layout";
 
 type SignerLite = {
@@ -166,6 +168,7 @@ export default function SignaturePage() {
   const [uploadEnt, setUploadEnt] = useState<string>("");
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadErr, setUploadErr] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -189,6 +192,70 @@ export default function SignaturePage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Annuler / supprimer directement depuis la liste (Phil 2026-10-07 :
+  // « des documents en cours que finalement on ne signe pas, je ne peux
+  // pas les annuler et supprimer »).
+  async function cancelDoc(d: DocumentItem) {
+    if (
+      !(await confirm({
+        title: `Annuler « ${d.title} » ?`,
+        description:
+          "Les liens de signature seront désactivés. Le document reste " +
+          "visible sous « Tous » et pourra ensuite être supprimé.",
+        confirmLabel: "Oui, annuler le document",
+        cancelLabel: "Retour",
+        destructive: true
+      }))
+    ) {
+      return;
+    }
+    const res = await authedFetch(`/api/v1/esign/documents/${d.id}/cancel`, {
+      method: "POST"
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      setError(
+        typeof body?.detail === "string"
+          ? body.detail
+          : `Annulation échouée (erreur ${res.status}).`
+      );
+      return;
+    }
+    await load();
+  }
+
+  async function deleteDoc(d: DocumentItem) {
+    const enCours = d.status === "envoye";
+    if (
+      !(await confirm({
+        title: `Supprimer « ${d.title} » ?`,
+        description: enCours
+          ? "Le document est en cours de signature : les liens envoyés " +
+            "aux signataires cesseront de fonctionner, puis le PDF et " +
+            "son historique seront supprimés."
+          : "Le PDF et son historique seront supprimés.",
+        confirmLabel: "Supprimer",
+        cancelLabel: "Retour",
+        destructive: true
+      }))
+    ) {
+      return;
+    }
+    const res = await authedFetch(`/api/v1/esign/documents/${d.id}`, {
+      method: "DELETE"
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      setError(
+        typeof body?.detail === "string"
+          ? body.detail
+          : `Suppression échouée (erreur ${res.status}).`
+      );
+      return;
+    }
+    await load();
+  }
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -374,6 +441,9 @@ export default function SignaturePage() {
                     <th className="px-4 py-3 font-medium">Signataires</th>
                     <th className="px-4 py-3 font-medium">Statut</th>
                     <th className="px-4 py-3 font-medium">Activité</th>
+                    <th className="px-4 py-3 text-right font-medium">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -441,6 +511,40 @@ export default function SignaturePage() {
                             : d.sent_at
                             ? `Envoyé le ${fmtDate(d.sent_at)}`
                             : `Créé le ${fmtDate(d.created_at)}`}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center justify-end gap-1">
+                            {d.status === "envoye" ||
+                            d.status === "refuse" ||
+                            d.status === "expire" ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void cancelDoc(d);
+                                }}
+                                title="Annuler le document (désactive les liens de signature)"
+                                aria-label="Annuler"
+                                className="rounded p-1.5 text-[var(--qg-text-soft)] transition hover:text-amber-500"
+                              >
+                                <Ban className="h-4 w-4" />
+                              </button>
+                            ) : null}
+                            {d.status !== "complete" ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void deleteDoc(d);
+                                }}
+                                title="Supprimer le document et son historique"
+                                aria-label="Supprimer"
+                                className="rounded p-1.5 text-[var(--qg-text-soft)] transition hover:text-rose-500"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            ) : null}
+                          </div>
                         </td>
                       </tr>
                     );

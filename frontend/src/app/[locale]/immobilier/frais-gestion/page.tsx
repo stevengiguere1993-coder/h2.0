@@ -76,11 +76,16 @@ type Historique = {
   created_at?: string | null;
   complement?: boolean;
   type_ligne?: string;
+  //: Relocation ignorée (ligne à 0 $ — la poubelle la rétablit).
+  ignoree?: boolean;
 };
 
 type Overview = {
   rows: Row[];
   historique?: Historique[];
+  //: Frais de relocation par défaut (chambre / logement) quand
+  //: l'immeuble n'a pas sa propre valeur (Réglages).
+  defauts_relocation?: { logement: number; chambre: number };
 };
 
 type QboOptions = {
@@ -196,6 +201,39 @@ export default function FacturationImmoPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch)
     });
+    await load();
+  };
+
+  /** Défauts globaux des frais de relocation (Phil 2026-10-08 : 600 $
+   *  logement / 400 $ chambre) — surchargés par immeuble. */
+  const patchDefauts = async (patch: { logement?: number; chambre?: number }) => {
+    const r = await authedFetch("/api/v1/immobilier/frais-gestion/defauts", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch)
+    });
+    if (!r.ok) {
+      setMsg({ ok: false, text: `Défauts non enregistrés (HTTP ${r.status}).` });
+    }
+    await load();
+  };
+
+  /** Frais de relocation jugé non approprié : ignoré (ligne à 0 $ dans
+   *  l'historique, rétablissable avec la poubelle). */
+  const ignorerRelocation = async (dossierId: number) => {
+    if (
+      !window.confirm(
+        "Ignorer ce frais de relocation ? Il n'apparaîtra plus à facturer (une ligne « ignorée » reste dans l'historique, la poubelle la rétablit)."
+      )
+    )
+      return;
+    const r = await authedFetch(
+      `/api/v1/immobilier/frais-gestion/relocations/${dossierId}/ignorer`,
+      { method: "POST" }
+    );
+    if (!r.ok) {
+      setMsg({ ok: false, text: `Impossible d'ignorer (HTTP ${r.status}).` });
+    }
     await load();
   };
 
@@ -957,6 +995,17 @@ export default function FacturationImmoPage() {
                                         <Plus className="h-3.5 w-3.5" />
                                         Ajouter
                                       </button>
+                                      {tx.type === "relocation" && tx.dossier_id != null && (
+                                        <button
+                                          className="rounded-lg p-1.5 text-white/40 transition hover:bg-rose-500/10 hover:text-rose-400"
+                                          title="Ignorer ce frais de relocation (non approprié) — rétablissable depuis l'historique"
+                                          onClick={() =>
+                                            void ignorerRelocation(tx.dossier_id!)
+                                          }
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                        </button>
+                                      )}
                                       {tx.type === "manuel" && (
                                         <button
                                           className="rounded-lg p-1.5 text-white/40 transition hover:bg-rose-500/10 hover:text-rose-400"
@@ -1047,6 +1096,14 @@ export default function FacturationImmoPage() {
                                 manuel
                               </span>
                             )}
+                            {h.ignoree && (
+                              <span
+                                className="badge badge-amber ml-2"
+                                title="Frais de relocation ignoré (non approprié) — la poubelle le rétablit"
+                              >
+                                ignorée
+                              </span>
+                            )}
                           </td>
                           <td className="px-3 py-2.5 text-right tabular-nums text-white">
                             {money(h.montant)}
@@ -1102,6 +1159,46 @@ export default function FacturationImmoPage() {
                 </span>
               </button>
 
+              {showConfig && data && (
+                <div className="mt-4 flex flex-wrap items-end gap-3 rounded-xl border border-brand-800 bg-brand-950/40 px-3.5 py-3 text-xs">
+                  <span className="font-semibold text-white/80">
+                    Frais de relocation par défaut
+                  </span>
+                  <span className="text-white/45">
+                    facturés quand un nouveau locataire entre (peu importe la
+                    porte : fiche, page Baux, kanban) ; chaque immeuble peut
+                    avoir son propre tarif ci-dessous.
+                  </span>
+                  <label className="flex items-center gap-1.5 text-white/70">
+                    Logement
+                    <input
+                      inputMode="decimal"
+                      defaultValue={String(data.defauts_relocation?.logement ?? 600)}
+                      onBlur={(e) => {
+                        const v = parseFloat(e.target.value.replace(",", "."));
+                        if (!isNaN(v) && v >= 0 && v !== (data.defauts_relocation?.logement ?? 600))
+                          void patchDefauts({ logement: v });
+                      }}
+                      className="w-20 rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-right text-white outline-none focus:border-accent-500"
+                    />
+                    $
+                  </label>
+                  <label className="flex items-center gap-1.5 text-white/70">
+                    Chambre
+                    <input
+                      inputMode="decimal"
+                      defaultValue={String(data.defauts_relocation?.chambre ?? 400)}
+                      onBlur={(e) => {
+                        const v = parseFloat(e.target.value.replace(",", "."));
+                        if (!isNaN(v) && v >= 0 && v !== (data.defauts_relocation?.chambre ?? 400))
+                          void patchDefauts({ chambre: v });
+                      }}
+                      className="w-20 rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-right text-white outline-none focus:border-accent-500"
+                    />
+                    $
+                  </label>
+                </div>
+              )}
               {showConfig && data && (
                 <div className="mt-4 overflow-x-auto">
                   <table className="w-full min-w-[820px] text-sm">
@@ -1218,7 +1315,7 @@ export default function FacturationImmoPage() {
                                   ? String(row.frais_relocation_logement)
                                   : ""
                               }
-                              placeholder="0"
+                              placeholder={String(data.defauts_relocation?.logement ?? 600)}
                               onBlur={(e) => {
                                 const raw = e.target.value.trim();
                                 const v = raw
@@ -1243,7 +1340,7 @@ export default function FacturationImmoPage() {
                                   ? String(row.frais_relocation_chambre)
                                   : ""
                               }
-                              placeholder="0"
+                              placeholder={String(data.defauts_relocation?.chambre ?? 400)}
                               onBlur={(e) => {
                                 const raw = e.target.value.trim();
                                 const v = raw

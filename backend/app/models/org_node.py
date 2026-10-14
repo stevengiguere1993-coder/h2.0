@@ -78,6 +78,15 @@ class OrgNode(Base, TimestampUpdateMixin):
         Text, nullable=True
     )
 
+    #: Nature FORCÉE d'un détenteur hors groupe ("person" | "company",
+    #: NULL = déduite des lignes Partenaires & parts — voir
+    #: _nature_detenteur dans org_nodes.py). Posée par
+    #: POST /org-nodes/{id}/nature (Phil 2026-10-08). Colonne →
+    #: ensure_critical_columns.
+    nature_forced: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True
+    )
+
     # Hiérarchie : nœud parent ou racine (NULL = top-level).
     parent_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("org_nodes.id", ondelete="CASCADE"),

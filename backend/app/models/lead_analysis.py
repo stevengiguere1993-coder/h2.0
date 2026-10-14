@@ -344,6 +344,20 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
     optimisation_moment: Mapped[Optional[str]] = mapped_column(
         String(16), nullable=True
     )
+    # Achat prêteur B — cashflow de l'acquisition (Phil 2026-10-12) :
+    # part des travaux RETENUE par le prêteur et déboursée
+    # progressivement (100.0 = 100 %), nombre de déboursés, fonds de
+    # roulement saisi (NULL = retenue ÷ nombre de déboursés). Pré-remplis
+    # depuis Paramètres → Analyse. Colonnes → ensure_critical_columns.
+    retenue_travaux_pct: Mapped[Optional[float]] = mapped_column(
+        Numeric(5, 2), nullable=True
+    )
+    nb_deboursements_travaux: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    fonds_roulement_travaux: Mapped[Optional[float]] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
     # Mode RÉSIDENTIEL (2026-09-08) : ratio prêt-valeur (80.0 = 80 %),
     # amortissement, lignes de dépenses réelles libres
     # ``[{label, montant}]`` et dépenses ajoutées par l'optimisation.
@@ -412,6 +426,13 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
         Numeric(6, 4), nullable=True
     )
     # Croissance annuelle des dépenses (0.03 = 3 %).
+    #: Taux d'actualisation du fonds (VAN des flux du TRI — Phil
+    #: 2026-10-08 : « je dois savoir la VAN pour calculer le rendement de
+    #: notre fonds »). Fraction (0.10 = 10 %). Colonne additive →
+    #: ``ensure_critical_columns``.
+    tri_taux_actualisation: Mapped[Optional[float]] = mapped_column(
+        Numeric(6, 4), nullable=True
+    )
     tri_croissance_depenses: Mapped[Optional[float]] = mapped_column(
         Numeric(6, 4), nullable=True
     )

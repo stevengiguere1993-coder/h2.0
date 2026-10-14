@@ -40,6 +40,10 @@ type QboStatus = {
   realm_id: string | null;
   company_name: string | null;
   connected_at: string | null;
+  // Intuit refuse le jeton enregistré (invalid_grant) : la connexion
+  // existe mais ne marche plus → « Reconnecter » (2026-10-09).
+  needs_reconnect?: boolean;
+  reconnect_required_at?: string | null;
 };
 
 function QuickBooksSection() {
@@ -47,6 +51,7 @@ function QuickBooksSection() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
   const [diag, setDiag] = useState<Record<string, unknown> | null>(null);
   const [diagBusy, setDiagBusy] = useState(false);
 
@@ -141,8 +146,9 @@ function QuickBooksSection() {
         url.searchParams.delete("qbo");
         window.history.replaceState({}, "", url.toString());
         if (qbo === "connected") {
-          // Déjà rechargé plus haut — on affichera le toast via err state
+          // Statut déjà rechargé plus haut ; on confirme le retour.
           setErr(null);
+          setOkMsg("Connexion QuickBooks établie : les envois reprennent.");
         } else if (qbo.startsWith("error:")) {
           setErr(`Connexion QuickBooks échouée : ${qbo.slice(6)}`);
         }
@@ -187,6 +193,7 @@ function QuickBooksSection() {
   }
 
   const connected = !!status?.connected;
+  const expiree = connected && !!status?.needs_reconnect;
   const env = status?.environment || "sandbox";
   const envLabel = env === "production" ? "Production" : "Sandbox (test)";
   const envClass =
@@ -220,6 +227,11 @@ function QuickBooksSection() {
           {err}
         </p>
       ) : null}
+      {okMsg ? (
+        <p className="mt-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+          {okMsg}
+        </p>
+      ) : null}
 
       {loading ? (
         <div className="mt-4 flex items-center gap-2 text-xs text-white/50">
@@ -227,11 +239,37 @@ function QuickBooksSection() {
         </div>
       ) : connected ? (
         <div className="mt-4 space-y-3">
-          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-4 py-3">
-            <p className="flex items-center gap-2 text-sm font-semibold text-emerald-200">
-              <CheckCircle2 className="h-4 w-4" />
-              Connecté à {status?.company_name || "QuickBooks"}
-            </p>
+          <div
+            className={
+              expiree
+                ? "rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3"
+                : "rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-4 py-3"
+            }
+          >
+            {expiree ? (
+              <>
+                <p className="flex items-center gap-2 text-sm font-semibold text-rose-200">
+                  <AlertCircle className="h-4 w-4" />
+                  Connexion expirée — {status?.company_name || "QuickBooks"}
+                </p>
+                <p className="mt-1 text-xs text-rose-200">
+                  QuickBooks refuse le jeton enregistré
+                  {status?.reconnect_required_at
+                    ? ` depuis le ${new Date(
+                        status.reconnect_required_at
+                      ).toLocaleString("fr-CA")}`
+                    : ""}
+                  . Clique « Reconnecter », connecte-toi avec ton compte
+                  QuickBooks et autorise Kratos : les envois reprennent
+                  ensuite tout seuls.
+                </p>
+              </>
+            ) : (
+              <p className="flex items-center gap-2 text-sm font-semibold text-emerald-200">
+                <CheckCircle2 className="h-4 w-4" />
+                Connecté à {status?.company_name || "QuickBooks"}
+              </p>
+            )}
             <dl className="mt-2 grid grid-cols-1 gap-1 text-xs text-white/60 sm:grid-cols-2">
               <div>
                 <dt className="text-white/40">Environnement</dt>
@@ -258,7 +296,7 @@ function QuickBooksSection() {
               type="button"
               onClick={connect}
               disabled={busy}
-              className="btn-secondary text-xs"
+              className={expiree ? "btn-accent text-xs" : "btn-secondary text-xs"}
             >
               <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
               Reconnecter
@@ -739,6 +777,7 @@ function QboScopeCard({
   }
 
   const connected = !!status?.connected;
+  const expiree = connected && !!status?.needs_reconnect;
 
   return (
     <div className="rounded-xl border border-brand-800 bg-brand-950/40 px-4 py-3">
@@ -748,6 +787,8 @@ function QboScopeCard({
             {label}
             {loading ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin text-white/40" />
+            ) : expiree ? (
+              <span className="badge badge-rose">Expirée — à reconnecter</span>
             ) : connected ? (
               <span className="badge badge-emerald">Connecté</span>
             ) : (
@@ -768,7 +809,7 @@ function QboScopeCard({
             type="button"
             onClick={connect}
             disabled={busy}
-            className="btn-secondary text-xs"
+            className={expiree ? "btn-accent text-xs" : "btn-secondary text-xs"}
           >
             <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
             {connected ? "Reconnecter" : "Connecter"}

@@ -46,6 +46,15 @@ class QboConnection(Base):
     connected_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Intuit a refusé le refresh token (invalid_grant) : connexion à
+    # refaire (bouton « Reconnecter »). Remis à NULL au prochain
+    # renouvellement réussi et à la reconnexion OAuth (2026-10-09).
+    reconnect_required_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_refresh_error: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True
+    )
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

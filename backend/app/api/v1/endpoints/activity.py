@@ -53,6 +53,7 @@ from app.models.project import Project
 from app.models.materiau import Materiau
 from app.models.projet_materiau import ProjetMateriau
 from app.models.project_task import ProjectTask
+from app.models.prospection_courtier import ProspectionCourtier
 from app.models.prospection_deal import ProspectionDeal
 from app.models.prospection_deal_task import ProspectionDealTask
 from app.models.sales_task import SalesTask, sales_task_assignees
@@ -1577,6 +1578,15 @@ _DETAIL_ENTITIES: dict[str, tuple] = {
         LeadAnalysis, "prospection", "lead_analysis",
         "prospection:analyses:read",
     ),
+    # Registre des courtiers (2026-10-14).
+    "prospection_courtier": (
+        ProspectionCourtier, "prospection", "prospection_courtier",
+        "prospection:analyses:read",
+    ),
+    "courtier": (
+        ProspectionCourtier, "prospection", "prospection_courtier",
+        "prospection:analyses:read",
+    ),
     # Tâches : chaque modèle a son slug de pôle et sa capacité <pole>:tasks:read.
     "devlog_project_task": (
         DevlogProjectTask, "devlog", "devlog_project_task",
@@ -1932,6 +1942,16 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         list_cap="comptabilite:lots_paiement:list",
         order_attr="updated_at", stage_attr="statut", supports_active=False,
     ),
+    # Prospection (2026-10-14) — registre des courtiers qui vendent les
+    # gros parcs de logements ; `stage` filtre le statut de la relation
+    # (a_contacter | contacte | repondu | partenaire | ignorer). Même
+    # capacité que les analyses : données d'acquisition.
+    "courtiers": _ListSpec(
+        model=ProspectionCourtier, pole="prospection",
+        entity_type="prospection_courtier",
+        list_cap="prospection:analyses:list",
+        order_attr="updated_at", stage_attr="statut", supports_active=False,
+    ),
 }
 
 #: Alias supplémentaires (noms « complets ») vers les mêmes specs, pour que
@@ -1958,6 +1978,10 @@ _LIST_ALIASES: dict[str, str] = {
     "lot_paiement": "lots_paiement",
     "paiements_lots": "lots_paiement",
     "lots_paiements": "lots_paiement",
+    "courtier": "courtiers",
+    "prospection_courtier": "courtiers",
+    "prospection_courtiers": "courtiers",
+    "registre_courtiers": "courtiers",
 }
 
 
