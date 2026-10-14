@@ -1,0 +1,690 @@
+"""Registre des courtiers — recherche automatique du courriel (Phil
+2026-10-14 : « il faut que ça soit automatique, trouver le courriel d'un
+courtier est très facile »).
+
+On fait en machine ce qu'un humain fait : chercher « Prénom Nom courtier
+immobilier Agence » sur le web, ouvrir la page de son agence ou son site,
+lire le courriel, vérifier qu'il correspond au nom, et l'écrire dans la
+fiche AVEC la source et un niveau de confiance :
+
+- ``verifie``   : le courriel correspond au nom ET a été lu sur une page
+                  où le nom du courtier apparaît ;
+- ``probable``  : le courriel correspond au nom (initiale + nom, prénom.nom…)
+                  mais n'a pas pu être relu sur une page ;
+- rien          : aucun courriel qui corresponde au nom → la fiche reste
+                  vide, les candidats écartés (info@, admin@…) sont notés.
+
+Sources, dans l'ordre : Gemini avec recherche Google (si clé), puis
+DuckDuckGo et Bing (HTML direct), puis le VPS de scraping (Playwright)
+quand un moteur ou une page nous bloque. Chaque fonction réseau est un
+point d'entrée unique (``_http_get``) remplaçable dans les tests.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import random
+import re
+import unicodedata
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Optional
+from urllib.parse import parse_qs, quote_plus, urlparse
+
+import httpx
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
+from app.models.prospection_courtier import ProspectionCourtier
+
+log = logging.getLogger(__name__)
+
+UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+_TIMEOUT_PAGE_S = 12.0
+_MAX_PAGE_BYTES = 400_000
+_MAX_PAGES_PAR_COURTIER = 6
+_BUDGET_PAR_COURTIER_S = 75.0
+
+_MAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", re.IGNORECASE)
+#: Parties locales génériques : jamais le courriel d'une personne.
+_LOCAUX_GENERIQUES = {
+    "info", "contact", "admin", "administration", "bureau", "office", "reception",
+    "ventes", "sales", "noreply", "no-reply", "support", "service", "courtier",
+    "courtiers", "agence", "equipe", "team", "hello", "bonjour", "marketing",
+    "webmaster", "communications", "rh", "hr", "jobs", "careers", "privacy",
+    "location", "rental", "comptabilite", "accounting", "media", "presse",
+}
+#: Domaines où l'on ne trouve jamais le courriel d'un courtier (ou qui
+#: bloquent les robots) : on ne les ouvre pas.
+_DOMAINES_EXCLUS = (
+    "centris.ca", "duproprio.com", "realtor.ca", "facebook.com", "instagram.com",
+    "linkedin.com", "youtube.com", "twitter.com", "x.com", "pinterest.", "google.",
+    "wikipedia.org", "tiktok.com", "yelp.", "pagesjaunes.ca", "yellowpages.ca",
+    "oaciq.com", "kijiji.ca", "lespac.com", "zillow.com", "apple.com", "bing.com",
+    "duckduckgo.com", "vertexaisearch.cloud.google.com",
+)
+#: Faux positifs fréquents dans le HTML (images, polices, placeholders).
+_DOMAINES_COURRIEL_BIDON = (
+    "example.", "sentry.", "wixpress.", "w3.org", "schema.org", "2x.png", ".png",
+    ".jpg", ".jpeg", ".gif", ".svg", ".webp", "domain.com", "email.com", "test.com",
+    "yoursite", "votresite", "sentry-next", "mailchimp", "googlemail",
+)
+_PARTICULES = {"de", "du", "des", "la", "le", "les", "van", "von", "st", "ste", "d"}
+#: Webmails : n'importe qui peut y créer « cote123@ » — on n'accepte que
+#: prénom + nom ou initiale + nom.
+_DOMAINES_WEBMAIL = (
+    "gmail.", "hotmail.", "yahoo.", "outlook.", "live.", "icloud.", "videotron.",
+    "bell.net", "sympatico.", "me.com", "aol.", "protonmail.", "proton.me", "msn.",
+)
+_MOTS_IGNORES = {
+    "inc", "courtier", "courtiers", "immobilier", "immobiliere", "immobilière",
+    "residentiel", "résidentiel", "commercial", "agree", "agréé", "agréée", "equipe",
+    "équipe", "groupe", "team", "me", "m", "mme",
+}
+
+
+# ─── Nom → jetons ─────────────────────────────────────────────────────
+
+
+def _sans_accents(s: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFD", s or "")
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+def tokens_nom(nom: str) -> list[str]:
+    """« Marc-André Knot » → ['marc', 'andre', 'knot'] ; « Denis Gallico,
+    Maxime Gerard » → jetons de la PREMIÈRE personne (avant la virgule)."""
+    premier = (nom or "").split(",")[0]
+    premier = re.sub(r"\(.*?\)", " ", premier)
+    s = _sans_accents(premier).lower()
+    jetons = [t for t in re.split(r"[^a-z]+", s) if len(t) >= 2]
+    return [t for t in jetons if t not in _MOTS_IGNORES and t not in _PARTICULES]
+
+
+def _jetons_agence(agence: Optional[str]) -> list[str]:
+    s = _sans_accents(agence or "").lower()
+    return [t for t in re.split(r"[^a-z0-9]+", s) if len(t) >= 4 and t not in _MOTS_IGNORES]
+
+
+def courriel_propre(c: Optional[str]) -> Optional[str]:
+    """Normalise et écarte les faux positifs ; None si invalide."""
+    if not c:
+        return None
+    m = _MAIL_RE.search(str(c))
+    if not m:
+        return None
+    v = m.group(0).strip().lower().strip(".")
+    if any(b in v for b in _DOMAINES_COURRIEL_BIDON):
+        return None
+    local, _, domaine = v.partition("@")
+    if not local or "." not in domaine or len(v) > 120:
+        return None
+    if domaine.endswith("centris.ca") or domaine.endswith("duproprio.com"):
+        return None
+    return v
+
+
+def score_courriel(courriel: str, nom: str, agence: Optional[str] = None) -> tuple[int, str]:
+    """0-100 : à quel point le courriel ressemble au courtier.
+    ≥ 55 = correspond au nom (on l'accepte) ; < 55 = écarté."""
+    local, _, domaine = courriel.lower().partition("@")
+    local_a = re.sub(r"[^a-z]", "", _sans_accents(local))
+    jetons = tokens_nom(nom)
+    if not jetons:
+        return 0, "nom vide"
+    prenom = jetons[0]
+    nom_famille = jetons[-1] if len(jetons) > 1 else ""
+    prenoms = jetons[:-1] if len(jetons) > 1 else jetons  # prénom (composé)
+    score = 0
+    raisons: list[str] = []
+    if local_a in _LOCAUX_GENERIQUES or local in _LOCAUX_GENERIQUES:
+        return 10, "adresse générique"
+    nom_ok = len(nom_famille) >= 3 and nom_famille in local_a
+    prenom_ok = len(prenom) >= 3 and prenom in local_a
+    prenom_compose_ok = len(prenoms) >= 2 and all(len(x) >= 3 and x in local_a for x in prenoms)
+    initiale_nom = bool(nom_famille) and bool(
+        re.match(rf"^{re.escape(prenom[0])}[._-]?{re.escape(nom_famille)}", local_a)
+        or local_a == prenom[0] + nom_famille
+    )
+    if nom_ok and prenom_ok:
+        score += 85
+        raisons.append("prénom et nom")
+    elif initiale_nom:
+        score += 70
+        raisons.append("initiale et nom")
+    elif nom_ok:
+        score += 60
+        raisons.append("nom de famille")
+    elif prenom_compose_ok:
+        score += 55
+        raisons.append("prénom composé")
+    elif prenom_ok and len(prenom) >= 5:
+        score += 40
+        raisons.append("prénom seulement")
+    jd = _jetons_agence(agence)
+    dom_a = _sans_accents(domaine).lower()
+    bonus_domaine = False
+    if jd and any(j in dom_a for j in jd):
+        score += 10
+        bonus_domaine = True
+        raisons.append("domaine de l'agence")
+    if any(t in dom_a for t in jetons if len(t) >= 4):
+        score += 10
+        bonus_domaine = True
+        raisons.append("domaine au nom du courtier")
+    fort = raisons and raisons[0] in ("prénom et nom", "initiale et nom")
+    if any(w in dom_a for w in _DOMAINES_WEBMAIL) and not fort:
+        # Webmail avec un nom de famille seul : trop incertain.
+        score = min(score, 45)
+        raisons.append("webmail sans prénom")
+    elif raisons and raisons[0] == "nom de famille" and len(nom_famille) < 5 and not bonus_domaine:
+        # Nom court (Côté, Roy, Gagné…) seul sur un domaine quelconque.
+        score = min(score, 45)
+        raisons.append("nom court sans domaine d'agence")
+    return min(score, 100), ", ".join(raisons) or "aucune correspondance"
+
+
+def _domaine_exclu(url: str) -> bool:
+    try:
+        h = (urlparse(url).hostname or "").lower()
+    except Exception:  # noqa: BLE001
+        return True
+    return not h or any(d in h for d in _DOMAINES_EXCLUS)
+
+
+def extraire_courriels(texte: str, mailtos: Optional[list[str]] = None) -> list[str]:
+    """Courriels d'un texte / d'une liste de liens mailto, dédoublonnés,
+    nettoyés, ordre d'apparition."""
+    vus: list[str] = []
+    for brut in list(mailtos or []) + _MAIL_RE.findall(texte or ""):
+        c = courriel_propre(brut.replace("mailto:", "").split("?")[0])
+        if c and c not in vus:
+            vus.append(c)
+    return vus
+
+
+# ─── Réseau (points d'entrée uniques, remplacés dans les tests) ────────
+
+
+async def _http_get(url: str, *, params: Optional[dict] = None, timeout: float = _TIMEOUT_PAGE_S) -> tuple[int, str]:
+    """GET avec un User-Agent de navigateur ; renvoie (statut, texte)."""
+    async with httpx.AsyncClient(
+        timeout=timeout, follow_redirects=True, headers={"User-Agent": UA, "Accept-Language": "fr-CA,fr;q=0.9,en;q=0.7"}
+    ) as client:
+        r = await client.get(url, params=params)
+        texte = r.text
+        if len(texte) > _MAX_PAGE_BYTES:
+            texte = texte[:_MAX_PAGE_BYTES]
+        return r.status_code, texte
+
+
+def _soup(html: str):
+    from bs4 import BeautifulSoup  # type: ignore
+
+    return BeautifulSoup(html or "", "html.parser")
+
+
+def parser_duckduckgo(html: str) -> list[dict]:
+    """Résultats de html.duckduckgo.com → [{url, titre, extrait}]."""
+    out: list[dict] = []
+    soup = _soup(html)
+    for res in soup.select(".result"):
+        a = res.select_one("a.result__a") or res.select_one("a[href]")
+        if not a:
+            continue
+        href = a.get("href") or ""
+        if "uddg=" in href:
+            q = parse_qs(urlparse(href).query)
+            href = (q.get("uddg") or [href])[0]
+        if not href.startswith("http"):
+            continue
+        sn = res.select_one(".result__snippet")
+        out.append({
+            "url": href,
+            "titre": a.get_text(" ", strip=True),
+            "extrait": sn.get_text(" ", strip=True) if sn else "",
+        })
+    return out
+
+
+def parser_bing(html: str) -> list[dict]:
+    """Résultats de bing.com/search → [{url, titre, extrait}]."""
+    out: list[dict] = []
+    soup = _soup(html)
+    for li in soup.select("li.b_algo"):
+        a = li.select_one("h2 a[href]")
+        if not a:
+            continue
+        href = a.get("href") or ""
+        if not href.startswith("http"):
+            continue
+        p = li.select_one(".b_caption p") or li.select_one("p")
+        out.append({
+            "url": href,
+            "titre": a.get_text(" ", strip=True),
+            "extrait": p.get_text(" ", strip=True) if p else "",
+        })
+    return out
+
+
+def _bloque(html: str, statut: int) -> bool:
+    bas = (html or "").lower()
+    return statut in (202, 403, 429, 503) or "anomaly-modal" in bas or "captcha" in bas[:5000]
+
+
+async def rechercher_web(requete: str, *, moteurs: tuple[str, ...] = ("duckduckgo", "bing")) -> list[dict]:
+    """Résultats web [{url, titre, extrait}] — DuckDuckGo puis Bing en
+    direct ; VPS (Playwright) si les deux bloquent."""
+    for moteur in moteurs:
+        try:
+            if moteur == "duckduckgo":
+                statut, html = await _http_get(
+                    "https://html.duckduckgo.com/html/", params={"q": requete, "kl": "ca-fr"}
+                )
+                if not _bloque(html, statut):
+                    res = parser_duckduckgo(html)
+                    if res:
+                        return res
+            elif moteur == "bing":
+                statut, html = await _http_get(
+                    "https://www.bing.com/search", params={"q": requete, "setlang": "fr", "cc": "CA"}
+                )
+                if not _bloque(html, statut):
+                    res = parser_bing(html)
+                    if res:
+                        return res
+        except Exception as exc:  # noqa: BLE001
+            log.info("recherche web %s en échec : %s", moteur, exc)
+    # Secours : le VPS rend la page de résultats avec un vrai navigateur.
+    try:
+        from app.integrations import scraping_proxy
+
+        if scraping_proxy.vps_available():
+            res = await scraping_proxy.scrape_web_search(requete)
+            if res:
+                return [
+                    {"url": r.get("url") or "", "titre": r.get("titre") or r.get("title") or "",
+                     "extrait": r.get("extrait") or r.get("snippet") or ""}
+                    for r in res if (r.get("url") or "").startswith("http")
+                ]
+    except Exception as exc:  # noqa: BLE001
+        log.info("recherche web VPS en échec : %s", exc)
+    return []
+
+
+async def lire_page(url: str) -> tuple[str, list[str]]:
+    """(texte visible, liens mailto) d'une page — direct, puis VPS si la
+    page nous bloque ou n'a pas de contenu."""
+    texte, mailtos = "", []
+    try:
+        statut, html = await _http_get(url)
+        if statut < 400 and html:
+            soup = _soup(html)
+            for s in soup(["script", "style", "noscript"]):
+                s.decompose()
+            mailtos = [a.get("href", "") for a in soup.select('a[href^="mailto:"]')]
+            texte = soup.get_text(" ", strip=True)
+    except Exception as exc:  # noqa: BLE001
+        log.info("lecture directe %s en échec : %s", url, exc)
+    if len(texte) < 200 and not mailtos:
+        try:
+            from app.integrations import scraping_proxy
+
+            if scraping_proxy.vps_available():
+                d = await scraping_proxy.scrape_page_text(url)
+                if d:
+                    texte = d.get("texte") or d.get("text") or texte
+                    mailtos = list(d.get("mailtos") or []) or mailtos
+        except Exception as exc:  # noqa: BLE001
+            log.info("lecture VPS %s en échec : %s", url, exc)
+    return texte, mailtos
+
+
+# ─── Gemini avec recherche Google ────────────────────────────────────
+
+
+_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+async def _via_gemini(nom: str, agence: Optional[str], secteur: Optional[str]) -> Optional[dict]:
+    """Demande à Gemini (outil google_search) le courriel professionnel.
+    Renvoie {courriel, telephone, site_web, source_url, sources[]} ou None.
+    Le résultat n'est JAMAIS cru sur parole : il est ensuite noté comme
+    tout autre candidat (correspondance au nom, relecture de la page)."""
+    api_key = (getattr(settings, "gemini_api_key", None) or "").strip()
+    if not api_key:
+        return None
+    from app.services.lead_extraction import (
+        _GEMINI_BASE,
+        _gemini_en_pause,
+        _mettre_en_pause,
+        resolve_gemini_cascade,
+    )
+
+    try:
+        cascade = await resolve_gemini_cascade(api_key)
+    except Exception:  # noqa: BLE001
+        cascade = []
+    modeles = [m for m in cascade if not _gemini_en_pause(m)][:2]
+    if not modeles:
+        return None
+    prompt = (
+        "Tu aides une entreprise immobilière du Québec à joindre un courtier immobilier. "
+        f"Trouve l'adresse courriel PROFESSIONNELLE du courtier immobilier « {nom} »"
+        + (f" de l'agence « {agence} »" if agence else "")
+        + (f", qui travaille dans le secteur de {secteur}" if secteur else "")
+        + ". Cherche sur le site de son agence (RE/MAX, Royal LePage, Sutton, Via Capitale, "
+        "Proprio Direct, Century 21, EXP…), son site personnel ou les annuaires de courtiers. "
+        "Réponds UNIQUEMENT par un objet JSON : "
+        '{"courriel": "...", "telephone": "...", "site_web": "...", "source_url": "...", '
+        '"certitude": "haute|moyenne|basse"}. Mets null quand tu ne trouves pas. '
+        "N'invente JAMAIS un courriel : il doit apparaître tel quel sur une page que tu as lue."
+    )
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "tools": [{"google_search": {}}],
+        "generationConfig": {"temperature": 0, "maxOutputTokens": 512},
+    }
+    for modele in modeles:
+        url = f"{_GEMINI_BASE}/models/{modele}:generateContent"
+        try:
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                resp = await client.post(url, params={"key": api_key}, json=payload)
+            if resp.status_code == 429:
+                _mettre_en_pause(modele, 600.0)
+                continue
+            if resp.status_code >= 400:
+                log.info("Gemini[%s] recherche courriel HTTP %s", modele, resp.status_code)
+                if resp.status_code in (500, 502, 503, 504):
+                    _mettre_en_pause(modele, 600.0)
+                continue
+            body = resp.json()
+            cand = (body.get("candidates") or [{}])[0]
+            parts = cand.get("content", {}).get("parts", []) or []
+            texte = " ".join(p.get("text", "") for p in parts if isinstance(p, dict))
+            sources: list[str] = []
+            for ch in (cand.get("groundingMetadata") or {}).get("groundingChunks") or []:
+                uri = ((ch or {}).get("web") or {}).get("uri")
+                if uri:
+                    sources.append(uri)
+            m = _JSON_RE.search(texte or "")
+            data = json.loads(m.group(0)) if m else {}
+            if not isinstance(data, dict):
+                data = {}
+            out = {
+                "courriel": courriel_propre(data.get("courriel")),
+                "telephone": data.get("telephone") or None,
+                "site_web": data.get("site_web") or None,
+                "source_url": data.get("source_url") or None,
+                "certitude": data.get("certitude"),
+                "sources": sources,
+                "modele": modele,
+            }
+            if out["courriel"] or out["site_web"] or sources:
+                return out
+            return None
+        except Exception as exc:  # noqa: BLE001
+            log.info("Gemini[%s] recherche courriel : %s", modele, exc)
+            continue
+    return None
+
+
+# ─── Recherche d'un courtier ─────────────────────────────────────────
+
+
+def _requetes(nom: str, agence: Optional[str], secteur: Optional[str]) -> list[str]:
+    base = f'"{nom}" courtier immobilier'
+    reqs = [base + (f" {agence}" if agence else "") + " courriel"]
+    if agence:
+        reqs.append(base + " courriel")
+    if secteur and secteur.split("(")[0].strip():
+        reqs.append(f'"{nom}" courtier {secteur.split("(")[0].strip()} courriel')
+    return reqs[:2]
+
+
+def _prioriser_pages(resultats: list[dict], nom: str, agence: Optional[str]) -> list[str]:
+    """URLs à ouvrir : agence / nom dans le domaine ou le titre d'abord."""
+    jet = set(t for t in tokens_nom(nom) if len(t) >= 3) | set(_jetons_agence(agence))
+    notes: list[tuple[int, str]] = []
+    vus: set[str] = set()
+    for i, r in enumerate(resultats):
+        url = r.get("url") or ""
+        if not url or url in vus or _domaine_exclu(url):
+            continue
+        vus.add(url)
+        bas = _sans_accents((url + " " + (r.get("titre") or "")).lower())
+        n = sum(1 for t in jet if t in bas) * 10 - i
+        if any(k in bas for k in ("remax", "royallepage", "sutton", "viacapitale", "propriodirect",
+                                   "century21", "exprealty", "kw.com", "courtier", "agent")):
+            n += 5
+        notes.append((n, url))
+    notes.sort(key=lambda x: -x[0])
+    return [u for _, u in notes[:_MAX_PAGES_PAR_COURTIER]]
+
+
+async def chercher_courriel(
+    courtier: ProspectionCourtier, *, config: Optional[dict] = None
+) -> dict[str, Any]:
+    """Cherche le courriel d'UN courtier. Renvoie
+    {courriel, confiance, source, telephone, site_web, note, methode,
+     ecartes: [...]} — courriel None si rien ne correspond au nom."""
+    nom = (courtier.nom or "").strip()
+    agence = (courtier.agence or "").strip() or None
+    secteur = (courtier.secteur or "").strip() or None
+    moteurs = tuple(
+        m.strip() for m in str((config or {}).get("recherche_moteurs") or "gemini,duckduckgo,bing").split(",") if m.strip()
+    )
+    candidats: dict[str, dict] = {}  # courriel → {score, raison, source, verifie}
+    ecartes: list[str] = []
+    telephone: Optional[str] = None
+    site_web: Optional[str] = None
+    methode: list[str] = []
+
+    def _noter(courriel: Optional[str], source: str, texte_page: str = "") -> None:
+        c = courriel_propre(courriel)
+        if not c:
+            return
+        score, raison = score_courriel(c, nom, agence)
+        if score < 55:
+            if c not in ecartes:
+                ecartes.append(c)
+            return
+        verifie = False
+        if texte_page:
+            bas = _sans_accents(texte_page).lower()
+            jet = tokens_nom(nom)
+            nom_famille = jet[-1] if len(jet) > 1 else (jet[0] if jet else "")
+            verifie = c in bas and bool(nom_famille) and nom_famille in bas
+        prev = candidats.get(c)
+        if prev is None or (score, verifie) > (prev["score"], prev["verifie"]):
+            candidats[c] = {"score": score, "raison": raison, "source": source, "verifie": verifie}
+
+    pages_lues: list[str] = []
+
+    async def _lire_et_noter(url: str) -> None:
+        if url in pages_lues or len(pages_lues) >= _MAX_PAGES_PAR_COURTIER or _domaine_exclu(url):
+            return
+        pages_lues.append(url)
+        texte, mailtos = await lire_page(url)
+        for c in extraire_courriels(texte, mailtos):
+            _noter(c, url, texte)
+
+    async def _travail() -> None:
+        nonlocal telephone, site_web
+        # 1. Gemini + recherche Google : propose un courriel et des sources.
+        if "gemini" in moteurs:
+            g = await _via_gemini(nom, agence, secteur)
+            if g:
+                methode.append(f"gemini:{g.get('modele')}")
+                telephone = telephone or g.get("telephone")
+                site_web = site_web or g.get("site_web")
+                if g.get("courriel"):
+                    _noter(g["courriel"], g.get("source_url") or "gemini")
+                for u in ([g.get("source_url")] if g.get("source_url") else []) + list(g.get("sources") or [])[:3]:
+                    if u and u.startswith("http"):
+                        await _lire_et_noter(u)
+                if g.get("site_web") and str(g["site_web"]).startswith("http"):
+                    await _lire_et_noter(str(g["site_web"]))
+            if any(v["verifie"] for v in candidats.values()):
+                return
+        # 2. Moteurs web : extraits puis pages.
+        web_moteurs = tuple(m for m in moteurs if m in ("duckduckgo", "bing")) or ("duckduckgo", "bing")
+        for requete in _requetes(nom, agence, secteur):
+            resultats = await rechercher_web(requete, moteurs=web_moteurs)
+            if resultats:
+                methode.append("web")
+            for r in resultats:
+                for c in extraire_courriels(r.get("extrait") or ""):
+                    _noter(c, r.get("url") or "extrait")
+            for url in _prioriser_pages(resultats, nom, agence):
+                await _lire_et_noter(url)
+                if any(v["verifie"] for v in candidats.values()):
+                    return
+            if candidats:
+                return
+
+    try:
+        await asyncio.wait_for(_travail(), timeout=_BUDGET_PAR_COURTIER_S)
+    except asyncio.TimeoutError:
+        methode.append("budget dépassé")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("recherche courriel %s : %s", nom, exc, exc_info=True)
+        methode.append(f"erreur {type(exc).__name__}")
+
+    meilleur: Optional[tuple[str, dict]] = None
+    for c, v in candidats.items():
+        if meilleur is None or (v["verifie"], v["score"]) > (meilleur[1]["verifie"], meilleur[1]["score"]):
+            meilleur = (c, v)
+    if meilleur:
+        c, v = meilleur
+        return {
+            "courriel": c,
+            "confiance": "verifie" if v["verifie"] else "probable",
+            "source": v["source"],
+            "telephone": telephone,
+            "site_web": site_web,
+            "note": f"{v['raison']} — {len(pages_lues)} page(s) lue(s)" + (f" ; écartés : {', '.join(ecartes[:4])}" if ecartes else ""),
+            "methode": ",".join(methode) or "aucune",
+            "ecartes": ecartes,
+        }
+    return {
+        "courriel": None,
+        "confiance": None,
+        "source": None,
+        "telephone": telephone,
+        "site_web": site_web,
+        "note": (
+            f"aucun courriel au nom du courtier — {len(pages_lues)} page(s) lue(s)"
+            + (f" ; écartés : {', '.join(ecartes[:4])}" if ecartes else "")
+        ),
+        "methode": ",".join(methode) or "aucune",
+        "ecartes": ecartes,
+    }
+
+
+# ─── Enrichissement en lot ───────────────────────────────────────────
+
+
+async def enrichir_courriels(
+    db: AsyncSession,
+    *,
+    config: dict[str, Any],
+    courtier_ids: Optional[list[int]] = None,
+    max_courtiers: int = 20,
+    forcer: bool = False,
+    progres: Optional[Callable[[str], None]] = None,
+) -> dict[str, Any]:
+    """Cherche le courriel des courtiers qui n'en ont pas (ou des ids
+    donnés). Un courtier déjà cherché il y a moins de
+    ``recherche_courriel_ttl_jours`` n'est pas recherché de nouveau (sauf
+    ``forcer``). Enregistre fiche par fiche (commit) : rien n'est perdu si
+    le serveur redémarre. Renvoie un rapport chiffré."""
+    ttl = int(config.get("recherche_courriel_ttl_jours") or 30)
+    limite = datetime.now(timezone.utc) - timedelta(days=ttl)
+    stmt = select(ProspectionCourtier)
+    if courtier_ids:
+        stmt = stmt.where(ProspectionCourtier.id.in_(list(courtier_ids)))
+    else:
+        stmt = stmt.where(
+            (ProspectionCourtier.courriel.is_(None)) | (ProspectionCourtier.courriel == ""),
+            ProspectionCourtier.statut != "ignorer",
+        )
+    stmt = stmt.order_by(ProspectionCourtier.dernier_vu_le.desc().nullslast(), ProspectionCourtier.id.asc())
+    rows = (await db.execute(stmt)).scalars().all()
+    rapport: dict[str, Any] = {
+        "examines": 0, "trouves": 0, "verifies": 0, "probables": 0,
+        "sans_resultat": 0, "sautes_recemment_cherches": 0, "erreurs": [], "details": [],
+    }
+    for c in rows:
+        if rapport["examines"] >= max(0, int(max_courtiers)):
+            break
+        if not forcer and not courtier_ids and c.courriel_cherche_le is not None:
+            cherche = c.courriel_cherche_le
+            if cherche.tzinfo is None:
+                cherche = cherche.replace(tzinfo=timezone.utc)
+            if cherche > limite:
+                rapport["sautes_recemment_cherches"] += 1
+                continue
+        if rapport["examines"] > 0:
+            # Politesse envers les moteurs : 2 à 5 s entre deux courtiers.
+            await asyncio.sleep(random.uniform(2.0, 5.0))
+        rapport["examines"] += 1
+        if progres:
+            try:
+                progres(f"Courriels manquants : {rapport['examines']}/{max_courtiers} — {c.nom}")
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            res = await chercher_courriel(c, config=config)
+            c.courriel_cherche_le = datetime.now(timezone.utc)
+            c.courriel_recherche_note = (res.get("note") or "")[:500] or None
+            if res.get("courriel") and not c.courriel:
+                c.courriel = res["courriel"]
+                c.courriel_source = (str(res.get("source") or ""))[:500] or None
+                c.courriel_confiance = res.get("confiance")
+                rapport["trouves"] += 1
+                rapport["verifies" if res.get("confiance") == "verifie" else "probables"] += 1
+            elif res.get("courriel") and c.courriel:
+                # Déjà un courriel (ids forcés) : on garde le sien, on note.
+                c.courriel_recherche_note = (f"trouvé aussi : {res['courriel']} — " + (res.get("note") or ""))[:500]
+            else:
+                rapport["sans_resultat"] += 1
+            if res.get("telephone") and not c.telephone:
+                from app.services.prospection_courtiers import _telephone_propre
+
+                c.telephone = _telephone_propre(str(res["telephone"]))
+            if res.get("site_web") and not c.site_web and str(res["site_web"]).startswith("http"):
+                c.site_web = str(res["site_web"])[:500]
+            if len(rapport["details"]) < 50:
+                rapport["details"].append({
+                    "id": c.id, "nom": c.nom, "courriel": res.get("courriel"),
+                    "confiance": res.get("confiance"), "source": res.get("source"),
+                    "methode": res.get("methode"),
+                })
+            await db.commit()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("enrichissement courriel %s en échec", c.id, exc_info=True)
+            await db.rollback()
+            rapport["erreurs"].append(f"{c.nom} : {type(exc).__name__}: {str(exc)[:120]}")
+    return rapport
+
+
+__all__ = [
+    "tokens_nom",
+    "courriel_propre",
+    "score_courriel",
+    "extraire_courriels",
+    "parser_duckduckgo",
+    "parser_bing",
+    "rechercher_web",
+    "lire_page",
+    "chercher_courriel",
+    "enrichir_courriels",
+]
