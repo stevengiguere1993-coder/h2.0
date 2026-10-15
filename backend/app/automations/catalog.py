@@ -92,6 +92,20 @@ CATALOG: tuple[Automation, ...] = (
     ),
     # ---- Rapports / alertes ----
     Automation(
+        "brief_matin", "Brief du matin par courriel", "rapport", "cron",
+        "Jours ouvrables · 04h30 (Montréal), depuis l'application",
+        "Envoie par courriel l'état du jour de Kratos (le digest « mon brief ») "
+        "aux utilisateurs qui ont une clé API active — ou à la liste "
+        "« destinataires » configurée. Les routines Claude le lisent dans "
+        "Outlook sans dépendre du connecteur Kratos. Boucle autonome : "
+        "aucun cron externe.",
+        params=(
+            Param("heure", "Heure d'envoi (Montréal)", "int", 4,
+                  "Heure locale à partir de laquelle le brief part (une fois par jour)."),
+            Param("minute", "Minute d'envoi", "int", 30, "Minute de l'heure d'envoi."),
+        ),
+    ),
+    Automation(
         "kratos_problems_daily", "Rapport problèmes Kratos", "rapport",
         "cron", "Tous les jours · 06h00",
         "Synthèse quotidienne des problèmes détectés dans le portail Kratos.",
