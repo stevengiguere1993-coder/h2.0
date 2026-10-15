@@ -415,7 +415,7 @@ export default function ParametresCourtiersPage() {
                     onChange={(e) => update("recherche_moteurs", e.target.value)}
                   />
                   <p className="mt-1 text-[11px] text-white/40">
-                    gemini (recherche Google), duckduckgo, bing.
+                    gemini (recherche Google), google (API Programmable Search), vps (navigateur), duckduckgo, bing.
                   </p>
                 </div>
               </div>

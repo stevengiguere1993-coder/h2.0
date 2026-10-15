@@ -163,6 +163,12 @@ class Settings(BaseSettings):
     # (URLs, texte libre, images, PDFs). Tier gratuit : 1500 req/jour.
     # Générer une clé : https://aistudio.google.com/app/apikey
     gemini_api_key: Optional[str] = None
+    #: Google Programmable Search (recherche du courriel des courtiers,
+    #: 2026-10-15) : clé API + identifiant de moteur (cx). Optionnel ;
+    #: 100 requêtes/jour gratuites. Sans ces deux valeurs, le moteur
+    #: « google » est ignoré.
+    google_cse_key: Optional[str] = None
+    google_cse_id: Optional[str] = None
     # PRÉFÉRENCES de modèles Gemini (liste séparée par virgules). La
     # cascade réelle est résolue à chaud via ListModels
     # (``lead_extraction.resolve_gemini_cascade``) : les préférences qui

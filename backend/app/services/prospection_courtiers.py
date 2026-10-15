@@ -87,7 +87,7 @@ DEFAUTS: dict[str, Any] = {
     "recherche_courriels_auto": True,
     "max_courriels_par_scan": 20,
     "recherche_courriel_ttl_jours": 30,
-    "recherche_moteurs": "gemini,duckduckgo,bing",
+    "recherche_moteurs": "gemini,google,vps,duckduckgo,bing",
     "sujet": GABARIT_SUJET_DEFAUT,
     "corps_html": GABARIT_CORPS_DEFAUT,
     "signature": SIGNATURE_DEFAUT,

@@ -348,43 +348,101 @@ def _bloque(html: str, statut: int) -> bool:
     return statut in (202, 403, 429, 503) or "anomaly-modal" in bas or "captcha" in bas[:5000]
 
 
-async def rechercher_web(requete: str, *, moteurs: tuple[str, ...] = ("duckduckgo", "bing")) -> list[dict]:
-    """Résultats web [{url, titre, extrait}] — DuckDuckGo puis Bing en
-    direct ; VPS (Playwright) si les deux bloquent."""
+def resultats_pertinents(resultats: list[dict], jetons: list[str]) -> list[dict]:
+    """Garde les résultats qui parlent du courtier : un jeton du nom
+    (≥ 3 lettres) dans le titre, l'extrait ou l'URL. Un moteur qui nous
+    prend pour un robot renvoie des pages bidon (NFL, boutiques…) : sans
+    jeton, le lot est jugé vide."""
+    jet = [t for t in jetons if len(t) >= 3]
+    if not jet:
+        return resultats
+    out = []
+    for r in resultats:
+        bas = _sans_accents(
+            " ".join(str(r.get(k) or "") for k in ("titre", "extrait", "url"))
+        ).lower()
+        if any(t in bas for t in jet):
+            out.append(r)
+    return out
+
+
+async def _via_google_cse(requete: str) -> list[dict]:
+    """Google Programmable Search (JSON API) — le plus fiable, si Phil a
+    configuré GOOGLE_CSE_KEY et GOOGLE_CSE_ID (100 requêtes/jour gratuites)."""
+    import os
+
+    cle = (getattr(settings, "google_cse_key", None) or os.getenv("GOOGLE_CSE_KEY") or "").strip()
+    cx = (getattr(settings, "google_cse_id", None) or os.getenv("GOOGLE_CSE_ID") or "").strip()
+    if not cle or not cx:
+        return []
+    statut, texte = await _http_get(
+        "https://www.googleapis.com/customsearch/v1",
+        params={"key": cle, "cx": cx, "q": requete, "num": 8, "hl": "fr", "gl": "ca"},
+        timeout=20.0,
+    )
+    if statut >= 400:
+        log.info("Google CSE HTTP %s : %s", statut, (texte or "")[:200])
+        return []
+    data = json.loads(texte or "{}")
+    return [
+        {"url": it.get("link") or "", "titre": it.get("title") or "", "extrait": it.get("snippet") or ""}
+        for it in (data.get("items") or []) if (it.get("link") or "").startswith("http")
+    ]
+
+
+async def _via_vps(requete: str) -> list[dict]:
+    from app.integrations import scraping_proxy
+
+    if not scraping_proxy.vps_available():
+        return []
+    res = await scraping_proxy.scrape_web_search(requete)
+    return [
+        {"url": r.get("url") or "", "titre": r.get("titre") or r.get("title") or "",
+         "extrait": r.get("extrait") or r.get("snippet") or ""}
+        for r in (res or []) if (r.get("url") or "").startswith("http")
+    ]
+
+
+#: Ordre par défaut des moteurs web : Google (si configuré), le navigateur
+#: du VPS (vraie session, pas flairé comme robot), puis le direct.
+MOTEURS_WEB_DEFAUT = ("google", "vps", "duckduckgo", "bing")
+
+
+async def rechercher_web(
+    requete: str, *, moteurs: tuple[str, ...] = MOTEURS_WEB_DEFAUT,
+    jetons: Optional[list[str]] = None, journal: Optional[list[str]] = None,
+) -> list[dict]:
+    """Résultats web [{url, titre, extrait}] pertinents, du premier moteur
+    qui en donne : google (API, si clé) → vps (navigateur) → duckduckgo →
+    bing (HTML direct)."""
     for moteur in moteurs:
         try:
-            if moteur == "duckduckgo":
+            res: list[dict] = []
+            if moteur == "google":
+                res = await _via_google_cse(requete)
+            elif moteur == "vps":
+                res = await _via_vps(requete)
+            elif moteur == "duckduckgo":
                 statut, html = await _http_get(
                     "https://html.duckduckgo.com/html/", params={"q": requete, "kl": "ca-fr"}
                 )
-                if not _bloque(html, statut):
-                    res = parser_duckduckgo(html)
-                    if res:
-                        return res
+                res = [] if _bloque(html, statut) else parser_duckduckgo(html)
             elif moteur == "bing":
                 statut, html = await _http_get(
                     "https://www.bing.com/search", params={"q": requete, "setlang": "fr", "cc": "CA"}
                 )
-                if not _bloque(html, statut):
-                    res = parser_bing(html)
-                    if res:
-                        return res
+                res = [] if _bloque(html, statut) else parser_bing(html)
+            else:
+                continue
+            pertinents = resultats_pertinents(res, jetons or []) if res else []
+            if journal is not None:
+                journal.append(f"moteur {moteur} : {len(res)} résultat(s), {len(pertinents)} pertinent(s)")
+            if pertinents:
+                return pertinents
         except Exception as exc:  # noqa: BLE001
             log.info("recherche web %s en échec : %s", moteur, exc)
-    # Secours : le VPS rend la page de résultats avec un vrai navigateur.
-    try:
-        from app.integrations import scraping_proxy
-
-        if scraping_proxy.vps_available():
-            res = await scraping_proxy.scrape_web_search(requete)
-            if res:
-                return [
-                    {"url": r.get("url") or "", "titre": r.get("titre") or r.get("title") or "",
-                     "extrait": r.get("extrait") or r.get("snippet") or ""}
-                    for r in res if (r.get("url") or "").startswith("http")
-                ]
-    except Exception as exc:  # noqa: BLE001
-        log.info("recherche web VPS en échec : %s", exc)
+            if journal is not None:
+                journal.append(f"moteur {moteur} : {type(exc).__name__}")
     return []
 
 
@@ -658,9 +716,11 @@ async def chercher_courriel(
             if any(v["verifie"] for v in candidats.values()):
                 return
         # 2. Moteurs web : extraits puis pages.
-        web_moteurs = tuple(m for m in moteurs if m in ("duckduckgo", "bing")) or ("duckduckgo", "bing")
+        web_moteurs = tuple(m for m in moteurs if m in MOTEURS_WEB_DEFAUT) or MOTEURS_WEB_DEFAUT
         for requete in _requetes(nom, agence, secteur):
-            resultats = await rechercher_web(requete, moteurs=web_moteurs)
+            resultats = await rechercher_web(
+                requete, moteurs=web_moteurs, jetons=tokens_nom(nom), journal=journal
+            )
             _j(f"web « {requete} » : {len(resultats)} résultat(s) — " + "; ".join(
                 (r.get("url") or "")[:80] for r in resultats[:6]
             ))
@@ -818,6 +878,8 @@ __all__ = [
     "parser_duckduckgo",
     "parser_bing",
     "rechercher_web",
+    "resultats_pertinents",
+    "MOTEURS_WEB_DEFAUT",
     "lire_page",
     "chercher_courriel",
     "enrichir_courriels",
