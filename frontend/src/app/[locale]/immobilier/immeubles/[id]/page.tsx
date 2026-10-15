@@ -301,7 +301,7 @@ const TABS = [
   // logement (sans locataire).
   { id: "paiements-ext", label: "Paiements", icon: Receipt },
   { id: "baux", label: "Baux & locataires", icon: ClipboardList },
-  { id: "locations", label: "Locations", icon: KeyRound },
+  { id: "locations", label: "Locations & nouveaux baux", icon: KeyRound },
   { id: "hypotheques", label: "Hypothèques", icon: Banknote },
   { id: "evaluations", label: "Évaluations", icon: TrendingUp },
   { id: "cashflow", label: "Cashflow", icon: Wallet },

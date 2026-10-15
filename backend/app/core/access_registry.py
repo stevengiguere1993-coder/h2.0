@@ -204,9 +204,9 @@ PAGES: list[PageEntry] = [
     # est servie à l'URL de son nom.
     _p("immobilier.paiements", "Paiements", "immobilier", "manager",
        "/immobilier/paiements"),
-    _p("immobilier.baux", "Baux", "immobilier", "manager",
+    _p("immobilier.baux", "Baux en vigueur", "immobilier", "manager",
        "/immobilier/baux"),
-    _p("immobilier.locations", "Locations (relocation)", "immobilier",
+    _p("immobilier.locations", "Locations & nouveaux baux", "immobilier",
        "manager", "/immobilier/locations"),
     _p("immobilier.communications", "Communications", "immobilier",
        "manager", "/immobilier/communications"),
