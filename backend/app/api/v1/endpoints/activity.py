@@ -49,6 +49,7 @@ from app.models.entreprise import Entreprise, EntreprisePartner
 from app.models.paiement_fournisseur import LotPaiement
 from app.models.entreprise_tache import EntrepriseTache
 from app.models.immobilier import ImmLocataireContact, ImmTalDossier
+from app.models.tal_bail import TalTransmission
 from app.models.project import Project
 from app.models.materiau import Materiau
 from app.models.projet_materiau import ProjetMateriau
@@ -1618,6 +1619,12 @@ _DETAIL_ENTITIES: dict[str, tuple] = {
         ImmLocataireContact, "immobilier", "imm_locataire_contact",
         "immobilier:locataire_contacts:read",
     ),
+    # Bail officiel TAL (2026-10-15) : transmission = formulaire
+    # 53000BAIL demandé au TAL pour un bail (statut, ShortGuid, PDF).
+    "tal_transmission": (
+        TalTransmission, "immobilier", "tal_transmission",
+        "immobilier:tal_dossiers:read",
+    ),
 }
 
 
@@ -1952,6 +1959,16 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         list_cap="prospection:analyses:list",
         order_attr="updated_at", stage_attr="statut", supports_active=False,
     ),
+    # Immobilier (2026-10-15) : baux officiels demandés au TAL ;
+    # `stage` filtre le statut (brouillon | forme_creee | transmise |
+    # echec | annulee). Lecture seule : la génération coûte 2,99 $ et
+    # reste un clic humain confirmé.
+    "tal_transmissions": _ListSpec(
+        model=TalTransmission, pole="immobilier",
+        entity_type="tal_transmission",
+        list_cap="immobilier:tal_dossiers:list",
+        order_attr="updated_at", stage_attr="statut", supports_active=False,
+    ),
 }
 
 #: Alias supplémentaires (noms « complets ») vers les mêmes specs, pour que
@@ -1982,6 +1999,9 @@ _LIST_ALIASES: dict[str, str] = {
     "prospection_courtier": "courtiers",
     "prospection_courtiers": "courtiers",
     "registre_courtiers": "courtiers",
+    "tal_transmission": "tal_transmissions",
+    "baux_tal": "tal_transmissions",
+    "bail_tal": "tal_transmissions",
 }
 
 

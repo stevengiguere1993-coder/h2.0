@@ -169,6 +169,16 @@ class Settings(BaseSettings):
     #: « google » est ignoré.
     google_cse_key: Optional[str] = None
     google_cse_id: Optional[str] = None
+    #: Bail officiel TAL (2026-10-15) — REPLI par variables d'environnement.
+    #: La connexion normale vit dans Kratos (Paramètres → Gestion locative
+    #: → Bail TAL, table tal_connexion, clé chiffrée). Mode « simulation »
+    #: tant qu'il n'y a pas de clé : aucun appel, PDF marqué, 0 $.
+    tal_mode: str = "simulation"
+    tal_api_url: Optional[str] = None
+    tal_api_key: Optional[str] = None
+    tal_api_entete_cle: Optional[str] = None
+    tal_api_chemin_frw111: Optional[str] = None
+    tal_api_chemin_frw122: Optional[str] = None
     # PRÉFÉRENCES de modèles Gemini (liste séparée par virgules). La
     # cascade réelle est résolue à chaud via ListModels
     # (``lead_extraction.resolve_gemini_cascade``) : les préférences qui
