@@ -24,6 +24,24 @@ from app.services.automation_state import (
 router = APIRouter(prefix="/automations", tags=["automations"])
 
 
+@router.get(
+    "/mcp-journal",
+    summary="Journal des appels au connecteur MCP (diagnostic des routines)",
+)
+async def journal_mcp(user: RequireAdminOrOwner, limite: int = 100) -> dict:
+    """Derniers messages JSON-RPC reçus par le serveur MCP : heure (UTC),
+    méthode, outil, préfixe de clé, utilisateur, client déclaré, durée,
+    succès — pour savoir si une routine claude.ai a seulement essayé de
+    parler à Kratos, et à quelle heure."""
+    from app.api.v1.endpoints.mcp_server import MCP_JOURNAL_KEY
+    from app.services.automation_state import get_automation_config
+
+    cfg = await get_automation_config(MCP_JOURNAL_KEY)
+    entrees = [e for e in (cfg.get("entrees") or []) if isinstance(e, dict)]
+    limite = max(1, min(300, int(limite)))
+    return {"total": len(entrees), "entrees": entrees[-limite:]}
+
+
 @router.post(
     "/brief-matin/envoyer",
     summary="Envoyer le brief du matin maintenant (test ou rattrapage)",
