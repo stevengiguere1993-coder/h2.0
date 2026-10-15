@@ -172,6 +172,10 @@ def score_courriel(courriel: str, nom: str, agence: Optional[str] = None) -> tup
     elif prenom_compose_ok:
         score += 55
         raisons.append("prénom composé")
+    elif prenom_ok and len(nom_famille) >= 4 and nom_famille in _sans_accents(domaine).lower():
+        # daniel@groupe-immosauve.com pour Daniel Sauvé : le nom est le domaine.
+        score += 60
+        raisons.append("prénom, nom dans le domaine")
     elif prenom_ok and len(prenom) >= 5:
         score += 40
         raisons.append("prénom seulement")
@@ -323,6 +327,17 @@ def decoder_redirection_bing(href: str) -> str:
         return href
 
 
+def decoder_redirection(href: str) -> str:
+    """Lien de moteur → URL réelle : DuckDuckGo (/l/?uddg=…) et Bing
+    (ck/a?…&u=a1<base64>)."""
+    h = href or ""
+    if "duckduckgo.com/l/" in h and "uddg=" in h:
+        q = parse_qs(urlparse(h).query)
+        reel = (q.get("uddg") or [""])[0]
+        return reel if reel.startswith("http") else h
+    return decoder_redirection_bing(h)
+
+
 def parser_bing(html: str) -> list[dict]:
     """Résultats de bing.com/search → [{url, titre, extrait}]."""
     out: list[dict] = []
@@ -390,14 +405,16 @@ async def _via_google_cse(requete: str) -> list[dict]:
     ]
 
 
-async def _via_vps(requete: str) -> list[dict]:
+async def _via_vps(requete: str, jetons: Optional[list[str]] = None) -> list[dict]:
     from app.integrations import scraping_proxy
 
     if not scraping_proxy.vps_available():
         return []
-    res = await scraping_proxy.scrape_web_search(requete)
+    res = await scraping_proxy.scrape_web_search(
+        requete, must_contain=[t for t in (jetons or []) if len(t) >= 3]
+    )
     return [
-        {"url": r.get("url") or "", "titre": r.get("titre") or r.get("title") or "",
+        {"url": decoder_redirection(r.get("url") or ""), "titre": r.get("titre") or r.get("title") or "",
          "extrait": r.get("extrait") or r.get("snippet") or ""}
         for r in (res or []) if (r.get("url") or "").startswith("http")
     ]
@@ -421,19 +438,23 @@ async def rechercher_web(
             if moteur == "google":
                 res = await _via_google_cse(requete)
             elif moteur == "vps":
-                res = await _via_vps(requete)
+                res = await _via_vps(requete, jetons)
             elif moteur == "duckduckgo":
                 statut, html = await _http_get(
-                    "https://html.duckduckgo.com/html/", params={"q": requete, "kl": "ca-fr"}
+                    "https://html.duckduckgo.com/html/", params={"q": requete, "kl": "ca-fr"},
+                    timeout=8.0,
                 )
                 res = [] if _bloque(html, statut) else parser_duckduckgo(html)
             elif moteur == "bing":
                 statut, html = await _http_get(
-                    "https://www.bing.com/search", params={"q": requete, "setlang": "fr", "cc": "CA"}
+                    "https://www.bing.com/search", params={"q": requete, "setlang": "fr", "cc": "CA"},
+                    timeout=8.0,
                 )
                 res = [] if _bloque(html, statut) else parser_bing(html)
             else:
                 continue
+            for r in res:
+                r["url"] = decoder_redirection(r.get("url") or "")
             pertinents = resultats_pertinents(res, jetons or []) if res else []
             if journal is not None:
                 journal.append(f"moteur {moteur} : {len(res)} résultat(s), {len(pertinents)} pertinent(s)")
@@ -874,6 +895,7 @@ __all__ = [
     "extraire_courriels",
     "deobfusquer",
     "decoder_redirection_bing",
+    "decoder_redirection",
     "texte_colle_par_bloc",
     "parser_duckduckgo",
     "parser_bing",
