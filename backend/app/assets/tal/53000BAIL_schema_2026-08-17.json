@@ -1,0 +1,6500 @@
+{
+ "typeFormulaire": "53000BAIL",
+ "structurePreRemplissage": {
+  "form": {
+   "nbPieces": "<sélection>",
+   "nbPiecesAutre": "<texte>",
+   "logementLoueFinsHabitation": "<sélection: true|false>",
+   "precisionLocationMixte": "<texte>",
+   "logementCoproprieteDivise": "<sélection: true|false>",
+   "dependancesIncluses": [
+    "<sélection: StationnementExterieur|StationnementInterieur|RemiseOuEspaceRangement>"
+   ],
+   "autresAccessoiresDependances": "<texte>",
+   "appareilsInclusLoyer": "<sélection: true|false>",
+   "listeAppareilsInclusLoyer": [
+    "<sélection: cuisiniere|fourMicroOndes|laveVaisselle|refrigerateur|laveuse|secheuse|autre>"
+   ],
+   "autresAppareilsInclus": "<texte>",
+   "meublesInclusLoyer": "<sélection: true|false>",
+   "listeMeublesInclusLoyer": [
+    "<sélection: tables|chaises|commodes|canapes|fauteuils|lits|autre>"
+   ],
+   "nbTables": "<nombre>",
+   "nbChaises": "<nombre>",
+   "nbCommodes": "<nombre>",
+   "nbCanapes": "<nombre>",
+   "nbFauteuils": "<nombre>",
+   "nbLits": "<nombre>",
+   "formatLits": "<texte>",
+   "autresMeublesInclus": "<texte>",
+   "engagementAvertisseursFumeeLocateur": true,
+   "typeBail": "<sélection: dureeFixe|dureeIndeterminee>",
+   "nbSemainesMoisAnnees": "<texte>",
+   "dateDebutBail": "<date: AAAA-MM-JJ>",
+   "dateFinBail": "<date: AAAA-MM-JJ>",
+   "dateDebutBailDureeIndeterminee": "<date: AAAA-MM-JJ>",
+   "frequenceCoutLoyer": "<sélection: mois|semaine>",
+   "coutLoyer": "<nombre>",
+   "bailIncluServices": "<sélection: true|false>",
+   "coutServices": "<nombre>",
+   "coutTotalLoyer": "<nombre>",
+   "subventionPaiementLoyer": "<sélection: true|false>",
+   "preciserSubventionPaiementLoyer": "<texte>",
+   "premierTermePaiement": "<date: AAAA-MM-JJ>",
+   "termesPaiement": "<sélection: permierJourMois|permierJourSemaine|autre>",
+   "precisionAutresTermes": "<texte>",
+   "modePaiement": "<sélection: argentComptant|cheque|chequePostDate|virementBancaire|autre>",
+   "precisionAutresModePaiement": "<texte>",
+   "locataireAccepteRemiseChequePostdates": true,
+   "lieuPaiement": "<texte>",
+   "possedeRemiseReglementImmeuble": "<sélection: true|false>",
+   "dateRemiseReglementImmeuble": "<date: AAAA-MM-JJ>",
+   "possedeRemiseReglementImmeubleCoproprieteDivise": "<sélection: true|false>",
+   "dateRemiseReglementCoproprieteDivise": "<date: AAAA-MM-JJ>",
+   "possedeReglementImmeubleJointBail": "<sélection: true|false>",
+   "reglementImmeubleJointBail": "<texte>",
+   "travauxReparationsAvantDelivrance": "<texte>",
+   "travauxReparationsEnCoursBail": "<texte>",
+   "possederServiceConciergerie": "<sélection: true|false>",
+   "precisionsServicesConcierge": "<texte>",
+   "typeChauffageLogement": [
+    "<sélection: electricite|gaz|mazout>"
+   ],
+   "responsabiliteChauffage": "<sélection>",
+   "logementSansFumee": "<sélection: true|false>",
+   "precisionLogementSansFumee": "<texte>",
+   "locatairePossedeDroitAccesTerrain": "<sélection: true|false>",
+   "precisionLocatairePossedeDroitAccesTerrain": "<texte>",
+   "locatairePossedeDroitAnimaux": "<sélection: true|false>",
+   "precisionLocatairePossedeDroitAnimaux": "<texte>",
+   "possedeAutresServicesConditionsRestriction": "<sélection: true|false>",
+   "precisionAutresServicesConditionsRestriction": "<texte>",
+   "possedeDocumentsJoindreBail": "<sélection: true|false>",
+   "DescriptionDocumentsJointsBail": "<texte>",
+   "DocumentsJointsBail": "<texte>",
+   "possedeServicesAdditionnelsBail": "<sélection: true|false>",
+   "situationApplicableRestrictionsFixationLoyer": "<sélection: estLogementImmeubleMoins5ans|estLogementImmeubleChangementAffectation5ans|aucun>",
+   "dateImmeublePretHabitation": "<date: AAAA-MM-JJ>",
+   "dateImmeublePretHabitationAffectation": "<date: AAAA-MM-JJ>",
+   "loyerMaximalImeublePretPourUsage": "<nombre>",
+   "situationApplicableAvisNouveauLocataire": "<sélection: loyer|aucunLoyer|residencePriveeAines>",
+   "montantLoyerPlusBasPaye12Mois": "<nombre>",
+   "frequenceLoyerPlusBasPaye12Mois": "<sélection: mois|semaine|autre>",
+   "precisionAutreFrequencePlusBasLoyer": "<texte>",
+   "dateDernierPaiementLoyer": "<date: AAAA-MM-JJ>",
+   "montantDernierLoyerPaye": "<nombre>",
+   "frequenceDernierLoyer": "<sélection: mois|semaine|autre>",
+   "precisionAutreFrequenceDernierLoyer": "<texte>",
+   "montantLoyerBailPrecedent": "<nombre>",
+   "frequenceLoyerBailPrecedent": "<sélection: mois|semaine|autre>",
+   "precisionAutreFrequenceLoyerBailPrecedent": "<texte>",
+   "estMemeBienServicesConditions": "<sélection: true|false>",
+   "modificationsApporteesBienServicesConditions": "<texte>",
+   "confirmationTransmissionAvisNouveauLocataire": true,
+   "estLocatairesEngagementSolidaire": "<sélection: true|false>",
+   "possedeAutresSignataires": "<sélection: true|false>",
+   "locataire1engagementAvertisseursFumeeLocataire": true,
+   "locataire1locataireAccepteRemiseChequePostdates": true,
+   "locataire1locataireConfirmationReglementImmeuble": true,
+   "locataire1confirmationReceptionAvisNouveauLocataire": true,
+   "locataire1confirmationEngagementSolidaireLocataire": true,
+   "locataire1logementResidenceFamiliale": "<sélection: true|false>",
+   "locataire1nomConjoint": "<texte>",
+   "locataire1confirmationAvisResidenceFamiliale": true,
+   "locataire2engagementAvertisseursFumeeLocataire": true,
+   "locataire2locataireAccepteRemiseChequePostdates": true,
+   "locataire2locataireConfirmationReglementImmeuble": true,
+   "locataire2confirmationReceptionAvisNouveauLocataire": true,
+   "locataire2confirmationEngagementSolidaireLocataire": true,
+   "locataire2logementResidenceFamiliale": "<sélection: true|false>",
+   "locataire2nomConjoint": "<texte>",
+   "locataire2confirmationAvisResidenceFamiliale": true,
+   "locataire3engagementAvertisseursFumeeLocataire": true,
+   "locataire3locataireAccepteRemiseChequePostdates": true,
+   "locataire3locataireConfirmationReglementImmeuble": true,
+   "locataire3confirmationReceptionAvisNouveauLocataire": true,
+   "locataire3confirmationEngagementSolidaireLocataire": true,
+   "locataire3logementResidenceFamiliale": "<sélection: true|false>",
+   "locataire3nomConjoint": "<texte>",
+   "locataire3confirmationAvisResidenceFamiliale": true,
+   "locataire4engagementAvertisseursFumeeLocataire": true,
+   "locataire4locataireAccepteRemiseChequePostdates": true,
+   "locataire4locataireConfirmationReglementImmeuble": true,
+   "locataire4confirmationReceptionAvisNouveauLocataire": true,
+   "locataire4confirmationEngagementSolidaireLocataire": true,
+   "locataire4logementResidenceFamiliale": "<sélection: true|false>",
+   "locataire4nomConjoint": "<texte>",
+   "locataire4confirmationAvisResidenceFamiliale": true,
+   "autreSignataire1engagementAvertisseursFumeeLocataire": true,
+   "autreSignataire1locataireAccepteRemiseChequePostdates": true,
+   "autreSignataire1locataireConfirmationReglementImmeuble": true,
+   "autreSignataire1confirmationReceptionAvisNouveauLocataire": true,
+   "autreSignataire1confirmationEngagementSolidaireLocataire": true,
+   "autreSignataire1logementResidenceFamiliale": "<sélection: true|false>",
+   "autreSignataire1nomConjoint": "<texte>",
+   "autreSignataire1confirmationAvisResidenceFamiliale": true,
+   "autreSignataire2engagementAvertisseursFumeeLocataire": true,
+   "autreSignataire2locataireAccepteRemiseChequePostdates": true,
+   "autreSignataire2locataireConfirmationReglementImmeuble": true,
+   "autreSignataire2confirmationReceptionAvisNouveauLocataire": true,
+   "autreSignataire2confirmationEngagementSolidaireLocataire": true,
+   "autreSignataire2logementResidenceFamiliale": "<sélection: true|false>",
+   "autreSignataire2nomConjoint": "<texte>",
+   "autreSignataire2confirmationAvisResidenceFamiliale": true,
+   "locateur1engagementAvertisseursFumeeLocateurs": true,
+   "locateur1confirmationLocateurAvisNouveauLocataire": true,
+   "locateur2engagementAvertisseursFumeeLocateurs": true,
+   "locateur2confirmationLocateurAvisNouveauLocataire": true,
+   "locateur3engagementAvertisseursFumeeLocateurs": true,
+   "locateur3confirmationLocateurAvisNouveauLocataire": true,
+   "motPasseWF": "<texte>",
+   "locateurs": [
+    {
+     "nom": "<texte>",
+     "noTelephone": "<texte>",
+     "autreNoTelephoneCell": "<texte>",
+     "questionRepresentant": "<sélection: true|false>",
+     "representant": "<texte>",
+     "courrielLocateur": "<texte>",
+     "courrielRepresentant": "<texte>",
+     "courrielMandant": "<texte>",
+     "adresse": [
+      {
+       "NoCivique": "<texte>",
+       "Appartement": "<texte>",
+       "CodePostal": "<texte>",
+       "Province": "<texte>",
+       "Municipalite": "<texte>",
+       "Rue": "<texte>",
+       "AdresseComplete": "<texte>"
+      }
+     ]
+    },
+    {
+     "nom": "<texte>",
+     "noTelephone": "<texte>",
+     "autreNoTelephoneCell": "<texte>",
+     "questionRepresentant": "<sélection: true|false>",
+     "representant": "<texte>",
+     "courrielLocateur": "<texte>",
+     "courrielRepresentant": "<texte>",
+     "courrielMandant": "<texte>",
+     "adresse": [
+      {
+       "NoCivique": "<texte>",
+       "Appartement": "<texte>",
+       "CodePostal": "<texte>",
+       "Province": "<texte>",
+       "Municipalite": "<texte>",
+       "Rue": "<texte>",
+       "AdresseComplete": "<texte>"
+      }
+     ]
+    },
+    {
+     "nom": "<texte>",
+     "noTelephone": "<texte>",
+     "autreNoTelephoneCell": "<texte>",
+     "questionRepresentant": "<sélection: true|false>",
+     "representant": "<texte>",
+     "courrielLocateur": "<texte>",
+     "courrielRepresentant": "<texte>",
+     "courrielMandant": "<texte>",
+     "adresse": [
+      {
+       "NoCivique": "<texte>",
+       "Appartement": "<texte>",
+       "CodePostal": "<texte>",
+       "Province": "<texte>",
+       "Municipalite": "<texte>",
+       "Rue": "<texte>",
+       "AdresseComplete": "<texte>"
+      }
+     ]
+    },
+    {
+     "nom": "<texte>",
+     "noTelephone": "<texte>",
+     "autreNoTelephoneCell": "<texte>",
+     "questionRepresentant": "<sélection: true|false>",
+     "representant": "<texte>",
+     "courrielLocateur": "<texte>",
+     "courrielRepresentant": "<texte>",
+     "courrielMandant": "<texte>",
+     "adresse": [
+      {
+       "NoCivique": "<texte>",
+       "Appartement": "<texte>",
+       "CodePostal": "<texte>",
+       "Province": "<texte>",
+       "Municipalite": "<texte>",
+       "Rue": "<texte>",
+       "AdresseComplete": "<texte>"
+      }
+     ]
+    }
+   ],
+   "locataires": [
+    {
+     "nom": "<texte>",
+     "noTelephone": "<texte>",
+     "autreNoTelephoneCell": "<texte>",
+     "questionRepresentant": "<sélection: true|false>",
+     "representant": "<texte>",
+     "courrielLocataire": "<texte>",
+     "courrielRepresentant": "<texte>",
+     "courrielMandant": "<texte>",
+     "adresse": [
+      {
+       "NoCivique": "<texte>",
+       "Appartement": "<texte>",
+       "CodePostal": "<texte>",
+       "Province": "<texte>",
+       "Municipalite": "<texte>",
+       "Rue": "<texte>",
+       "AdresseComplete": "<texte>"
+      }
+     ]
+    },
+    {
+     "nom": "<texte>",
+     "noTelephone": "<texte>",
+     "autreNoTelephoneCell": "<texte>",
+     "questionRepresentant": "<sélection: true|false>",
+     "representant": "<texte>",
+     "courrielLocataire": "<texte>",
+     "courrielRepresentant": "<texte>",
+     "courrielMandant": "<texte>",
+     "adresse": [
+      {
+       "NoCivique": "<texte>",
+       "Appartement": "<texte>",
+       "CodePostal": "<texte>",
+       "Province": "<texte>",
+       "Municipalite": "<texte>",
+       "Rue": "<texte>",
+       "AdresseComplete": "<texte>"
+      }
+     ]
+    },
+    {
+     "nom": "<texte>",
+     "noTelephone": "<texte>",
+     "autreNoTelephoneCell": "<texte>",
+     "questionRepresentant": "<sélection: true|false>",
+     "representant": "<texte>",
+     "courrielLocataire": "<texte>",
+     "courrielRepresentant": "<texte>",
+     "courrielMandant": "<texte>",
+     "adresse": [
+      {
+       "NoCivique": "<texte>",
+       "Appartement": "<texte>",
+       "CodePostal": "<texte>",
+       "Province": "<texte>",
+       "Municipalite": "<texte>",
+       "Rue": "<texte>",
+       "AdresseComplete": "<texte>"
+      }
+     ]
+    },
+    {
+     "nom": "<texte>",
+     "noTelephone": "<texte>",
+     "autreNoTelephoneCell": "<texte>",
+     "questionRepresentant": "<sélection: true|false>",
+     "representant": "<texte>",
+     "courrielLocataire": "<texte>",
+     "courrielRepresentant": "<texte>",
+     "courrielMandant": "<texte>",
+     "adresse": [
+      {
+       "NoCivique": "<texte>",
+       "Appartement": "<texte>",
+       "CodePostal": "<texte>",
+       "Province": "<texte>",
+       "Municipalite": "<texte>",
+       "Rue": "<texte>",
+       "AdresseComplete": "<texte>"
+      }
+     ]
+    }
+   ],
+   "adresseLogement": [
+    {
+     "NoCivique": "<texte>",
+     "Appartement": "<texte>",
+     "CodePostal": "<texte>",
+     "Province": "<texte>",
+     "Municipalite": "<texte>",
+     "Rue": "<texte>",
+     "AdresseComplete": "<texte>"
+    }
+   ],
+   "stationnementExterieur": [
+    {
+     "nbPlaces": "<nombre>",
+     "emplacements": "<texte>"
+    }
+   ],
+   "stationnementInterieur": [
+    {
+     "nbPlaces": "<nombre>",
+     "emplacements": "<texte>"
+    }
+   ],
+   "remiseEspaceRangement": [
+    {
+     "nbPlaces": "<nombre>",
+     "emplacements": "<texte>"
+    }
+   ],
+   "coordonneesConcierge": [
+    {
+     "nomConcierge": "<texte>",
+     "noTelephone": "<texte>",
+     "autreNoTelephoneCell": "<texte>",
+     "adresseCourriel": "<texte>"
+    }
+   ],
+   "responsabiliteServicesTaxesCoutsConsommation": [
+    {
+     "responsabiliteGaz": "<sélection>",
+     "responsabiliteElectricite": "<sélection>",
+     "responsabiliteChauffeEau": "<sélection>",
+     "responsabiliteEauChaude": "<sélection>",
+     "responsabiliteTaxeConsommationEau": "<sélection>",
+     "responsabiliteDeneigementStationnement": "<sélection>",
+     "responsabiliteDeneigementBalcon": "<sélection>",
+     "responsabiliteDeneigementEntree": "<sélection>",
+     "responsabiliteDeneigementEscalier": "<sélection>"
+    }
+   ],
+   "autresSignataires": [
+    {
+     "nom": "<texte>",
+     "qualite": "<texte>",
+     "courriel": "<texte>",
+     "adresse": [
+      {
+       "NoCivique": "<texte>",
+       "Appartement": "<texte>",
+       "CodePostal": "<texte>",
+       "Province": "<texte>",
+       "Municipalite": "<texte>",
+       "Rue": "<texte>",
+       "AdresseComplete": "<texte>"
+      }
+     ]
+    }
+   ],
+   "annexe6TypeResidence": [
+    {
+     "typeResidence": "<sélection: residenceAines|autreLieuHebergement>",
+     "servicesDestinesA": [
+      "<sélection: personnesAutonomes|personnesSemiIndependantes>"
+     ],
+     "precisionLieuHebergement": "<texte>"
+    }
+   ],
+   "annexe6DescriptionLieux": [
+    {
+     "logementOuChambre": "<sélection: logement|chambrePrivee|chambreCommune>",
+     "nbPiecesLogement": "<texte>",
+     "salleBain": "<sélection: privee|commune>",
+     "baresAppuiMainsCourantes": [
+      "<sélection: salleBain|corridor>"
+     ],
+     "annexe6Chauffage": [
+      "<sélection: central|individuel>"
+     ],
+     "annexe6Climatisation": [
+      "<sélection: central|individuel|autorise>"
+     ],
+     "annexe6ClimatisationAutorise": "<texte>",
+     "annexe6Telecommunication": [
+      "<sélection: telephone|cablodistribution|internetSansFil|internet|autres>"
+     ],
+     "annexe6AutresTelecom": "<texte>",
+     "annexe6SystemeAppelAide": [
+      "<sélection: fixeLit|fixeSalleBain|fixeSalleEau|mobile|autres>"
+     ],
+     "annexe6AutresSystemeAppelAide": "<texte>",
+     "annexe6FauteuilRoulant": [
+      "<sélection: logementAccessible>"
+     ],
+     "annexe6MeublesAppareils": [
+      "<sélection: appareilsElectromenagers|televiseur|meubles>"
+     ],
+     "annexe6PrecisionAppareilsElectromenagers": "<texte>",
+     "annexe6PrecisionMeubles": "<texte>",
+     "annexe6Balcon": [
+      "<sélection: prive|commun>"
+     ],
+     "annexe6EspaceRangement": "<texte>",
+     "annexe6SalleLavage": [
+      "<sélection: salleLavageCommuneGratuite|salleLavageCommunePayante>"
+     ],
+     "annexe6Ascenceur": true
+    }
+   ],
+   "annexe6ServicesLoisirs": [
+    {
+     "accesActivitesLoisirs": "<texte>",
+     "annexe6Animateur": true,
+     "annexe6EspacesCommunsInterieurs": [
+      "<sélection: bibliotheque|cuisineCommune|espacePriveVisiteurs|piscine|salleEntrainementPhysique|salleBillard|salleCinemaMaison|salleLoisirsMultifonctionnelle|salleQuilles|salleReception|… (+2 autres)>"
+     ],
+     "annexe6CoutSalleReception": "<nombre>",
+     "annexe6AutresEspacesCommunsInterieurs": "<texte>",
+     "annexe6EspacesCommunsExterieur": [
+      "<sélection: aireJeux|aireRepos|jardin|piscine|autres>"
+     ],
+     "annexe6AutresEspacesCommunsExterieur": "<texte>"
+    }
+   ],
+   "annexe6AutresServicesOfferts": [
+    {
+     "annexe6ActivitesReligieuses": "<texte>",
+     "annexe6SalleAMangerVisiteurs": true,
+     "annexe6ServicesMedicaux": "<texte>",
+     "annexe6soinsInfirmiers": [
+      "<sélection: infirmiere|infirmiereAuxiliaire>"
+     ],
+     "annexe6DetailsInfirmiere": "<texte>",
+     "annexe6HoraireInfirmiere": "<texte>",
+     "annexe6DetailsInfirmiereAuxiliaire": "<texte>",
+     "annexe6HoraireInfirmiereAuxiliaire": "<texte>",
+     "annexe6Prepose": true,
+     "annexe6DetailsPrepose": "<texte>",
+     "annexe6HorairePrepose": "<texte>",
+     "annexe6Securite": true,
+     "annexe6SecuriteHoraire": "<texte>",
+     "annexe6SecuritePersonnel": [
+      "<sélection: infirmiere|infirmiereAuxiliaire|prepose|gardien|receptionniste|autres>"
+     ],
+     "annexe6SecuritePersonnelAutres": "<texte>",
+     "annexe6Transport": [
+      "<sélection: navette|autres>"
+     ],
+     "annexe6DetailsAutresTransport": "<texte>",
+     "annexe6TransportPayantAutres": "<sélection: true|false>",
+     "annexe6AutresServices": "<texte>"
+    }
+   ],
+   "servicesAlimentaires": [
+    {
+     "nbRepasQuotidiens": "<sélection: 0|1|2|3>",
+     "coutDejeuner": "<nombre>",
+     "coutDiner": "<nombre>",
+     "coutSouper": "<nombre>",
+     "coutMenuJour": "<nombre>",
+     "coutMenuChoix": "<nombre>",
+     "coutMenuDiet": "<nombre>",
+     "precisionMenuDiet": "<texte>",
+     "dejeunerDe": "<texte>",
+     "dejeunerA": "<texte>",
+     "dinerDe": "<texte>",
+     "dinerA": "<texte>",
+     "souperDe": "<texte>",
+     "souperA": "<texte>",
+     "nbCollations": "<sélection: 0|1|2|3>",
+     "coutCollations": "<nombre>",
+     "horaireCollations": "<texte>",
+     "lieuRepas": [
+      "<sélection: SalleManger|Cafeteria|Logement>"
+     ],
+     "coutRepasServiceLogement": "<nombre>",
+     "coutMensuelAlimentaire": "<nombre>"
+    }
+   ],
+   "assistancePersonnelle": [
+    {
+     "coutAlimentation": "<nombre>",
+     "precisionAlimentation": "<texte>",
+     "coutHygiene": "<nombre>",
+     "precisionHygiene": "<texte>",
+     "frequenceBain": "<sélection: 0|1|2|3|4|5|6|7>",
+     "coutBain": "<nombre>",
+     "coutHabillage": "<nombre>",
+     "precisionHabillage": "<texte>",
+     "coutAutresServicesAssistancePerso": "<nombre>",
+     "precisionAutreServicesAssistancePerso": "<texte>",
+     "coutDistributionMedicaments": "<nombre>",
+     "coutAdministrationMedicaments": "<nombre>",
+     "precisionAdministration": "<texte>",
+     "coutSoinsInvasifs": "<nombre>",
+     "precisionSoinsInvasifs": "<texte>",
+     "coutMensuelAssistancePersonnelle": "<nombre>"
+    }
+   ],
+   "soinsInfirmiers": [
+    {
+     "coutInfirmier": "<nombre>",
+     "precisionInfirmier": "<texte>",
+     "heuresInfirmier": "<nombre>",
+     "coutInfirmierAuxiliaire": "<nombre>",
+     "precisionAuxiliaire": "<texte>",
+     "heuresAuxiliaire": "<nombre>",
+     "coutPrepose": "<nombre>",
+     "precisionPrepose": "<texte>",
+     "heuresPrepose": "<nombre>",
+     "coutMensuelSoins": "<nombre>"
+    }
+   ],
+   "aideDomestique": [
+    {
+     "frequenceBuanderieLingeMaison": "<sélection: Semaine|Mois|Aucun>",
+     "lingeMaisonNbFoisSemaine": "<nombre>",
+     "lingeMaisonNbFoisMois": "<nombre>",
+     "coutLingeMaison": "<nombre>",
+     "frequenceBuanderieVetements": "<sélection: Semaine|Mois|Aucun>",
+     "vetementsNbFoisSemaine": "<nombre>",
+     "vetementsNbFoisMois": "<nombre>",
+     "coutVetements": "<nombre>",
+     "frequenceMenage": "<sélection: Semaine|Mois|Aucun>",
+     "menageNbFoisSemaine": "<nombre>",
+     "menageNbFoisMois": "<nombre>",
+     "coutMenageLogement": "<nombre>",
+     "precisionMenage": "<texte>",
+     "coutMensuelDomestique": "<nombre>"
+    }
+   ],
+   "autresServices": [
+    {
+     "coutDeplacement": "<nombre>",
+     "precisionDeplacement": "<texte>",
+     "coutAccompagnementMedical": "<nombre>",
+     "coutCourses": "<nombre>",
+     "coutDispositifAlerte": "<nombre>",
+     "precisionAlerte": "<texte>",
+     "coutImpot": "<nombre>",
+     "autresServicesOffertsDetails": "<texte>",
+     "coutAutreServices": "<nombre>",
+     "coutMensuelAutresServices": "<nombre>"
+    }
+   ],
+   "totaux": [
+    {
+     "coutTotalServices": "<nombre>",
+     "montantLoyerBase": "<nombre>",
+     "montantLoyerTotal": "<nombre>"
+    }
+   ],
+   "personneContactCasUrgence": [
+    {
+     "nomAdresseTelephone": "<texte>"
+    }
+   ],
+   "signatureLocataire1": [
+    {
+     "NomComplet": "<texte>",
+     "Initiales": "<texte>",
+     "Courriel": "<texte>",
+     "Date": "<texte>",
+     "Ip": "<texte>",
+     "UserAgent": "<texte>",
+     "SignatureNumerique": "<texte>",
+     "EstSigne": "<texte>"
+    }
+   ],
+   "signatureLocataire2": [
+    {
+     "NomComplet": "<texte>",
+     "Initiales": "<texte>",
+     "Courriel": "<texte>",
+     "Date": "<texte>",
+     "Ip": "<texte>",
+     "UserAgent": "<texte>",
+     "SignatureNumerique": "<texte>",
+     "EstSigne": "<texte>"
+    }
+   ],
+   "signatureLocataire3": [
+    {
+     "NomComplet": "<texte>",
+     "Initiales": "<texte>",
+     "Courriel": "<texte>",
+     "Date": "<texte>",
+     "Ip": "<texte>",
+     "UserAgent": "<texte>",
+     "SignatureNumerique": "<texte>",
+     "EstSigne": "<texte>"
+    }
+   ],
+   "signatureLocataire4": [
+    {
+     "NomComplet": "<texte>",
+     "Initiales": "<texte>",
+     "Courriel": "<texte>",
+     "Date": "<texte>",
+     "Ip": "<texte>",
+     "UserAgent": "<texte>",
+     "SignatureNumerique": "<texte>",
+     "EstSigne": "<texte>"
+    }
+   ],
+   "signatureAutreSignataire1": [
+    {
+     "NomComplet": "<texte>",
+     "Initiales": "<texte>",
+     "Courriel": "<texte>",
+     "Date": "<texte>",
+     "Ip": "<texte>",
+     "UserAgent": "<texte>",
+     "SignatureNumerique": "<texte>",
+     "EstSigne": "<texte>"
+    }
+   ],
+   "signatureAutreSignataire2": [
+    {
+     "NomComplet": "<texte>",
+     "Initiales": "<texte>",
+     "Courriel": "<texte>",
+     "Date": "<texte>",
+     "Ip": "<texte>",
+     "UserAgent": "<texte>",
+     "SignatureNumerique": "<texte>",
+     "EstSigne": "<texte>"
+    }
+   ],
+   "signatureLocateur1": [
+    {
+     "NomComplet": "<texte>",
+     "Initiales": "<texte>",
+     "Courriel": "<texte>",
+     "Date": "<texte>",
+     "Ip": "<texte>",
+     "UserAgent": "<texte>",
+     "SignatureNumerique": "<texte>",
+     "EstSigne": "<texte>"
+    }
+   ],
+   "signatureLocateur2": [
+    {
+     "NomComplet": "<texte>",
+     "Initiales": "<texte>",
+     "Courriel": "<texte>",
+     "Date": "<texte>",
+     "Ip": "<texte>",
+     "UserAgent": "<texte>",
+     "SignatureNumerique": "<texte>",
+     "EstSigne": "<texte>"
+    }
+   ],
+   "signatureLocateur3": [
+    {
+     "NomComplet": "<texte>",
+     "Initiales": "<texte>",
+     "Courriel": "<texte>",
+     "Date": "<texte>",
+     "Ip": "<texte>",
+     "UserAgent": "<texte>",
+     "SignatureNumerique": "<texte>",
+     "EstSigne": "<texte>"
+    }
+   ],
+   "signatureLocateurPrincipal": [
+    {
+     "NomComplet": "<texte>",
+     "Initiales": "<texte>",
+     "Courriel": "<texte>",
+     "Date": "<texte>",
+     "Ip": "<texte>",
+     "UserAgent": "<texte>",
+     "SignatureNumerique": "<texte>",
+     "EstSigne": "<texte>"
+    }
+   ]
+  }
+ },
+ "champs": [
+  {
+   "nom": "nom",
+   "type": "text",
+   "label": {
+    "fr": "Nom",
+    "en": "Name"
+   },
+   "groupe": "locateurs",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "NoCivique",
+   "type": "text",
+   "label": null,
+   "groupe": "locateurs.adresse",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Appartement",
+   "type": "text",
+   "label": null,
+   "groupe": "locateurs.adresse",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "CodePostal",
+   "type": "codepostal",
+   "label": null,
+   "groupe": "locateurs.adresse",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Province",
+   "type": "text",
+   "label": null,
+   "groupe": "locateurs.adresse",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Municipalite",
+   "type": "text",
+   "label": null,
+   "groupe": "locateurs.adresse",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Rue",
+   "type": "text",
+   "label": null,
+   "groupe": "locateurs.adresse",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "AdresseComplete",
+   "type": "text",
+   "label": null,
+   "groupe": "locateurs.adresse",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "noTelephone",
+   "type": "tel",
+   "label": {
+    "fr": "Numéro de téléphone",
+    "en": "Telephone number"
+   },
+   "groupe": "locateurs",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autreNoTelephoneCell",
+   "type": "tel",
+   "label": {
+    "fr": "Autre numéro de téléphone (cellulaire)",
+    "en": "Other telephone number (cell phone)"
+   },
+   "groupe": "locateurs",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "questionRepresentant",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce que le locateur sera représenté pour la signature du bail?",
+    "en": "Will the lessor be represented for the signing of the lease?"
+   },
+   "groupe": "locateurs",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "representant",
+   "type": "text",
+   "label": {
+    "fr": "Représenté par",
+    "en": "Represented by"
+   },
+   "groupe": "locateurs",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "courrielLocateur",
+   "type": "email",
+   "label": {
+    "fr": "Adresse de courriel",
+    "en": "Email address"
+   },
+   "groupe": "locateurs",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "courrielLocateur",
+   "type": "email",
+   "label": {
+    "fr": "Adresse de courriel",
+    "en": "Email address"
+   },
+   "groupe": "locateurs",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "courrielRepresentant",
+   "type": "email",
+   "label": {
+    "fr": "Adresse de courriel du représentant",
+    "en": "Representative's email address"
+   },
+   "groupe": "locateurs",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "courrielRepresentant",
+   "type": "email",
+   "label": {
+    "fr": "Adresse de courriel du représentant",
+    "en": "Representative's email address"
+   },
+   "groupe": "locateurs",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "courrielMandant",
+   "type": "email",
+   "label": {
+    "fr": "Adresse de courriel du locateur",
+    "en": "Lessor's email address"
+   },
+   "groupe": "locateurs",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "nom",
+   "type": "text",
+   "label": {
+    "fr": "Nom",
+    "en": "Name"
+   },
+   "groupe": "locataires",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "NoCivique",
+   "type": "text",
+   "label": null,
+   "groupe": "locataires.adresse",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Appartement",
+   "type": "text",
+   "label": null,
+   "groupe": "locataires.adresse",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "CodePostal",
+   "type": "codepostal",
+   "label": null,
+   "groupe": "locataires.adresse",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Province",
+   "type": "text",
+   "label": null,
+   "groupe": "locataires.adresse",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Municipalite",
+   "type": "text",
+   "label": null,
+   "groupe": "locataires.adresse",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Rue",
+   "type": "text",
+   "label": null,
+   "groupe": "locataires.adresse",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "AdresseComplete",
+   "type": "text",
+   "label": null,
+   "groupe": "locataires.adresse",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "noTelephone",
+   "type": "tel",
+   "label": {
+    "fr": "Numéro de téléphone",
+    "en": "Telephone number"
+   },
+   "groupe": "locataires",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autreNoTelephoneCell",
+   "type": "tel",
+   "label": {
+    "fr": "Autre numéro de téléphone (cellulaire)",
+    "en": "Other telephone number (cell phone)"
+   },
+   "groupe": "locataires",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "questionRepresentant",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce que le locataire sera représenté pour la signature du bail?",
+    "en": "Will the lessee be represented for the signing of the lease?"
+   },
+   "groupe": "locataires",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "representant",
+   "type": "text",
+   "label": {
+    "fr": "Représenté par",
+    "en": "Represented by"
+   },
+   "groupe": "locataires",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "courrielLocataire",
+   "type": "email",
+   "label": {
+    "fr": "Adresse de courriel",
+    "en": "Email address"
+   },
+   "groupe": "locataires",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "courrielRepresentant",
+   "type": "email",
+   "label": {
+    "fr": "Adresse de courriel du représentant",
+    "en": "Representative's email address"
+   },
+   "groupe": "locataires",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "courrielMandant",
+   "type": "email",
+   "label": {
+    "fr": "Adresse de courriel du locataire",
+    "en": "Lessee's email address"
+   },
+   "groupe": "locataires",
+   "repetable": true,
+   "maxOccurrences": 4,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "NoCivique",
+   "type": "text",
+   "label": null,
+   "groupe": "adresseLogement",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Appartement",
+   "type": "text",
+   "label": null,
+   "groupe": "adresseLogement",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "CodePostal",
+   "type": "codepostal",
+   "label": null,
+   "groupe": "adresseLogement",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Province",
+   "type": "text",
+   "label": null,
+   "groupe": "adresseLogement",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Municipalite",
+   "type": "text",
+   "label": null,
+   "groupe": "adresseLogement",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Rue",
+   "type": "text",
+   "label": null,
+   "groupe": "adresseLogement",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "AdresseComplete",
+   "type": "text",
+   "label": null,
+   "groupe": "adresseLogement",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "nbPieces",
+   "type": "listederoulante",
+   "label": {
+    "fr": "Nombre de pièces",
+    "en": "Number of rooms"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": "nombrePieces",
+   "valeursPossibles": {
+    "un": {
+     "fr": "1"
+    },
+    "un-demi": {
+     "fr": "1 ½"
+    },
+    "deux": {
+     "fr": "2"
+    },
+    "deux-demi": {
+     "fr": "2 ½"
+    },
+    "trois": {
+     "fr": "3"
+    },
+    "trois-demi": {
+     "fr": "3 ½"
+    },
+    "quatre": {
+     "fr": "4"
+    },
+    "quatre-demi": {
+     "fr": "4 ½"
+    },
+    "cinq": {
+     "fr": "5"
+    },
+    "cinq-demi": {
+     "fr": "5 ½"
+    },
+    "six": {
+     "fr": "6"
+    },
+    "six-demi": {
+     "fr": "6 ½"
+    },
+    "sept": {
+     "fr": "7"
+    },
+    "sept-demi": {
+     "fr": "7 ½"
+    },
+    "autre": {
+     "fr": "Autre",
+     "en": "Other"
+    }
+   }
+  },
+  {
+   "nom": "nbPiecesAutre",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser le nombre de pièces",
+    "en": "Specify the number of rooms"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "logementLoueFinsHabitation",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce que le logement est loué à des fin d'habitation seulement?",
+    "en": "Is the dwelling leased for residential purposes only?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "precisionLocationMixte",
+   "type": "text",
+   "label": {
+    "fr": "Le logement est loué à des fins mixtes d'habitation et",
+    "en": "The dwelling is rented for mixed residential and"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "logementCoproprieteDivise",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce que le logement est situé dans une unité d’une copropriété divise?",
+    "en": "Is the dwelling located in a unit of a divided co-ownership?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "dependancesIncluses",
+   "type": "checkbox",
+   "label": {
+    "fr": "Veuillez indiquer les autres accessoires et dépendances inclus",
+    "en": "Indicate the included accessories and dependencies in the rent"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "StationnementExterieur": {
+     "fr": "Stationnement extérieur",
+     "en": "Outdoor parking"
+    },
+    "StationnementInterieur": {
+     "fr": "Stationnement intérieur",
+     "en": "Indoor parking"
+    },
+    "RemiseOuEspaceRangement": {
+     "fr": "Remise(s) ou espace(s) de rangement",
+     "en": "Locker(s) or storage space(s)"
+    }
+   }
+  },
+  {
+   "nom": "nbPlaces",
+   "type": "number",
+   "label": {
+    "fr": "Nombre de places",
+    "en": "Number of places"
+   },
+   "groupe": "stationnementExterieur",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "emplacements",
+   "type": "text",
+   "label": {
+    "fr": "Emplacement(s)",
+    "en": "Location(s)"
+   },
+   "groupe": "stationnementExterieur",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "nbPlaces",
+   "type": "number",
+   "label": {
+    "fr": "Nombre de places",
+    "en": "Number of places"
+   },
+   "groupe": "stationnementInterieur",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "emplacements",
+   "type": "text",
+   "label": {
+    "fr": "Emplacement(s)",
+    "en": "Location(s)"
+   },
+   "groupe": "stationnementInterieur",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "nbPlaces",
+   "type": "number",
+   "label": {
+    "fr": "Nombre de places",
+    "en": "Number of places"
+   },
+   "groupe": "remiseEspaceRangement",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "emplacements",
+   "type": "text",
+   "label": {
+    "fr": "Emplacement(s)",
+    "en": "Location(s)"
+   },
+   "groupe": "remiseEspaceRangement",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autresAccessoiresDependances",
+   "type": "text",
+   "label": {
+    "fr": "Autres accessoires et dépendances",
+    "en": "Other accessories and dependencies"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "appareilsInclusLoyer",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce que des appareils sont loués et inclus dans le loyer?",
+    "en": "Are appliances leased and included in the rent?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "listeAppareilsInclusLoyer",
+   "type": "checkbox",
+   "label": {
+    "fr": "Veuillez indiquer les appareils inclus",
+    "en": "Please indicate the included appliances"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "cuisiniere": {
+     "fr": "Cuisinière",
+     "en": "Stove"
+    },
+    "fourMicroOndes": {
+     "fr": "Four à micro-ondes",
+     "en": "Microwave oven"
+    },
+    "laveVaisselle": {
+     "fr": "Lave-vaisselle",
+     "en": "Dishwasher"
+    },
+    "refrigerateur": {
+     "fr": "Réfrigérateur",
+     "en": "Refrigerator"
+    },
+    "laveuse": {
+     "fr": "Laveuse",
+     "en": "Washer"
+    },
+    "secheuse": {
+     "fr": "Sécheuse",
+     "en": "Dryer"
+    },
+    "autre": {
+     "fr": "Autres",
+     "en": "Other"
+    }
+   }
+  },
+  {
+   "nom": "autresAppareilsInclus",
+   "type": "text",
+   "label": {
+    "fr": "Autres appareils inclus",
+    "en": "Other appliances included"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "meublesInclusLoyer",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce que des meubles sont loués et inclus dans le loyer?",
+    "en": "Is furniture leased and included in the rent?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "listeMeublesInclusLoyer",
+   "type": "checkbox",
+   "label": {
+    "fr": "Veuillez indiquer les meubles inclus",
+    "en": "Please indicate the included furniture"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "tables": {
+     "fr": "Table(s)",
+     "en": "Table(s)"
+    },
+    "chaises": {
+     "fr": "Chaise(s)",
+     "en": "Chair(s)"
+    },
+    "commodes": {
+     "fr": "Commode(s)",
+     "en": "Chest(s) of drawers"
+    },
+    "canapes": {
+     "fr": "Canapé(s)",
+     "en": "Couch(es)"
+    },
+    "fauteuils": {
+     "fr": "Fauteuil(s)",
+     "en": "Armchair(s)"
+    },
+    "lits": {
+     "fr": "Lit(s)",
+     "en": "Bed(s)"
+    },
+    "autre": {
+     "fr": "Autres",
+     "en": "Other"
+    }
+   }
+  },
+  {
+   "nom": "nbTables",
+   "type": "number",
+   "label": {
+    "fr": "Nombre de tables incluses",
+    "en": "Number of tables included"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "nbChaises",
+   "type": "number",
+   "label": {
+    "fr": "Nombre de chaises incluses",
+    "en": "Number of chairs included"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "nbCommodes",
+   "type": "number",
+   "label": {
+    "fr": "Nombre de commodes incluses",
+    "en": "Number of dressers included"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "nbCanapes",
+   "type": "number",
+   "label": {
+    "fr": "Nombre de canapés inclus",
+    "en": "Number of couches included"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "nbFauteuils",
+   "type": "number",
+   "label": {
+    "fr": "Nombre de fauteuils inclus",
+    "en": "Number of armchairs included"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "nbLits",
+   "type": "number",
+   "label": {
+    "fr": "Nombre de lits inclus",
+    "en": "Number of beds included"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "formatLits",
+   "type": "text",
+   "label": {
+    "fr": "Formats de lits inclus",
+    "en": "Included bed sizes"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autresMeublesInclus",
+   "type": "text",
+   "label": {
+    "fr": "Autres meubles inclus",
+    "en": "Other furniture included"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "engagementAvertisseursFumeeLocateur",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je m’engage, conformément à mes responsabilités, à respecter la réglementation relative à la présence et au bon fonctionnement des avertisseurs de fumée dans le logement et dans l’immeuble",
+    "en": "I undertake, in accordance with my responsibilities, to comply with all regulations relating to the presence and proper functioning of smoke detectors in the dwelling and the immovable"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "typeBail",
+   "type": "radio",
+   "label": {
+    "fr": "Durée prévue au bail",
+    "en": "Term of lease"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "dureeFixe": {
+     "fr": "Bail à durée fixe",
+     "en": "Fixed-term lease"
+    },
+    "dureeIndeterminee": {
+     "fr": "Durée indéterminée",
+     "en": "Indeterminate term lease"
+    }
+   }
+  },
+  {
+   "nom": "nbSemainesMoisAnnees",
+   "type": "text",
+   "label": {
+    "fr": "Ce bail a une durée de",
+    "en": "The term of lease is"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "dateDebutBail",
+   "type": "date",
+   "label": {
+    "fr": "Date de début",
+    "en": "Start date"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "dateFinBail",
+   "type": "date",
+   "label": {
+    "fr": "Date de fin",
+    "en": "End date"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "dateDebutBailDureeIndeterminee",
+   "type": "date",
+   "label": {
+    "fr": "Date de début",
+    "en": "Start date"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "frequenceCoutLoyer",
+   "type": "radio",
+   "label": {
+    "fr": "Fréquence du loyer",
+    "en": "Rent frequency"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "mois": {
+     "fr": "Par mois",
+     "en": "Per month"
+    },
+    "semaine": {
+     "fr": "Par semaine",
+     "en": "Per week"
+    }
+   }
+  },
+  {
+   "nom": "coutLoyer",
+   "type": "nombre",
+   "label": {
+    "fr": "Le loyer est de",
+    "en": "The rent is"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "bailIncluServices",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce que le loyer inclut des services?",
+    "en": "Does the rent include services?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "coutServices",
+   "type": "nombre",
+   "label": {
+    "fr": "Le coût total des services est de",
+    "en": "The total cost of services is"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutTotalLoyer",
+   "type": "nombre",
+   "label": {
+    "fr": "Le loyer total est de",
+    "en": "The total rent is"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "subventionPaiementLoyer",
+   "type": "radio",
+   "label": {
+    "fr": "Le locataire bénéficie-t-il d’un programme de subvention pour le paiement du loyer?",
+    "en": "Is the lessee a beneficiary of a rent subsidy program?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "preciserSubventionPaiementLoyer",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser de quel programme de subvention il s’agit",
+    "en": "Please specify which subsidy program it is"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "premierTermePaiement",
+   "type": "date",
+   "label": {
+    "fr": "Le paiement du premier terme de loyer sera le",
+    "en": "Payment of the first term of rent will be on"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "termesPaiement",
+   "type": "radio",
+   "label": {
+    "fr": "Le paiement des autres termes de loyer se fera le",
+    "en": "Payment of the other terms of rent will be on"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "permierJourMois": {
+     "fr": "Premier jour du mois",
+     "en": "First day of the month"
+    },
+    "permierJourSemaine": {
+     "fr": "Premier jour de la semaine",
+     "en": "First day of the week"
+    },
+    "autre": {
+     "fr": "Autre",
+     "en": "Other"
+    }
+   }
+  },
+  {
+   "nom": "precisionAutresTermes",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser les termes de loyer",
+    "en": "Specify the terms of payment"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "modePaiement",
+   "type": "radio",
+   "label": {
+    "fr": "Le loyer est payable selon le mode de paiement suivant",
+    "en": "The rent is payable in accordance with the following method of payment"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "argentComptant": {
+     "fr": "Argent comptant",
+     "en": "Cash"
+    },
+    "cheque": {
+     "fr": "Chèque",
+     "en": "Cheque"
+    },
+    "chequePostDate": {
+     "fr": "Chèque postdaté",
+     "en": "Postdated cheque"
+    },
+    "virementBancaire": {
+     "fr": "Virement bancaire électronique",
+     "en": "Electronic bank transfer"
+    },
+    "autre": {
+     "fr": "Autre",
+     "en": "Other"
+    }
+   }
+  },
+  {
+   "nom": "precisionAutresModePaiement",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser le mode de paiement",
+    "en": "Specify the payment method"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataireAccepteRemiseChequePostdates",
+   "type": "checkbox",
+   "label": {
+    "fr": "Le locataire accepte de remettre des chèques postdatés au locateur pour la durée du bail",
+    "en": "The lessee agrees to provide postdated cheques to the lessor for the term of the lease"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "lieuPaiement",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez indiquer le lieu du paiement du loyer",
+    "en": "Please indicate the place of payment of rent"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "possedeRemiseReglementImmeuble",
+   "type": "radio",
+   "label": {
+    "fr": "Un exemplaire du règlement de l’immeuble a-t-il été remis au locataire avant la conclusion du bail?",
+    "en": "Was a copy of the by-laws of the immovable given to the lessee before entering into the lease?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "dateRemiseReglementImmeuble",
+   "type": "date",
+   "label": {
+    "fr": "Veuillez indiquer la date de remise du règlement de l’immeuble",
+    "en": "Please indicate the date the by-laws of the immovable were given"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "possedeRemiseReglementImmeubleCoproprieteDivise",
+   "type": "radio",
+   "label": {
+    "fr": "Un exemplaire du règlement de l’immeuble a-t-il été remis au locataire?",
+    "en": "Was a copy of the by-laws of the immovable given to the lessee?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "dateRemiseReglementCoproprieteDivise",
+   "type": "date",
+   "label": {
+    "fr": "Veuillez indiquer la date de remise du règlement de l’immeuble",
+    "en": "Please indicate the date the by-laws of the immovable were given"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "possedeReglementImmeubleJointBail",
+   "type": "radio",
+   "label": {
+    "fr": "Souhaitez-vous joindre un exemplaire du règlement de l'immeuble au bail?",
+    "en": "Do you wish to attach a copy of the by-laws of the immovable to the lease?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "reglementImmeubleJointBail",
+   "type": "customfile",
+   "label": {
+    "fr": "Exemplaire du règlement de l’immeuble à joindre au bail",
+    "en": "Copy of the by-laws of the immovable to attach to the lease"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "travauxReparationsAvantDelivrance",
+   "type": "textarea",
+   "label": {
+    "fr": "Travaux et réparations à faire par le locateur avant la délivrance du logement",
+    "en": "Work and repairs to be done by the lessor before the delivery of the dwelling"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "travauxReparationsEnCoursBail",
+   "type": "textarea",
+   "label": {
+    "fr": "Travaux et réparations à faire par le locateur en cours de bail",
+    "en": "Work and repairs to be done by the lessor during the lease"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "possederServiceConciergerie",
+   "type": "radio",
+   "label": {
+    "fr": "Offrez-vous un service de conciergerie?",
+    "en": "Do you offer janitorial services?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "precisionsServicesConcierge",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser les services offerts",
+    "en": "Please specify the services offered"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "nomConcierge",
+   "type": "text",
+   "label": {
+    "fr": "Nom",
+    "en": "Name"
+   },
+   "groupe": "coordonneesConcierge",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "noTelephone",
+   "type": "tel",
+   "label": {
+    "fr": "Numéro de téléphone",
+    "en": "Telephone number"
+   },
+   "groupe": "coordonneesConcierge",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autreNoTelephoneCell",
+   "type": "tel",
+   "label": {
+    "fr": "Autre numéro de téléphone (cellulaire)",
+    "en": "Other telephone number (cell phone)"
+   },
+   "groupe": "coordonneesConcierge",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "adresseCourriel",
+   "type": "email",
+   "label": {
+    "fr": "Adresse de courriel",
+    "en": "Email address"
+   },
+   "groupe": "coordonneesConcierge",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "typeChauffageLogement",
+   "type": "checkbox",
+   "label": {
+    "fr": "Quel est le type de chauffage utilisé dans le logement?",
+    "en": "What type of heating is used in the dwelling?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "electricite": {
+     "fr": "Électricité",
+     "en": "Electricity"
+    },
+    "gaz": {
+     "fr": "Gaz",
+     "en": "Gas"
+    },
+    "mazout": {
+     "fr": "Mazout",
+     "en": "Fuel oil"
+    }
+   }
+  },
+  {
+   "nom": "responsabiliteChauffage",
+   "type": "radio",
+   "label": {
+    "fr": "Veuillez indiquer qui en assume les coûts",
+    "en": "Please indicate who assumes the costs"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": "locateurLocataire",
+   "valeursPossibles": {
+    "locateur": {
+     "fr": "Locateur",
+     "en": "Lessor"
+    },
+    "locataire": {
+     "fr": "Locataire",
+     "en": "Lessee"
+    }
+   }
+  },
+  {
+   "nom": "responsabiliteGaz",
+   "type": "radio",
+   "label": {
+    "fr": "Gaz",
+    "en": "Gas"
+   },
+   "groupe": "responsabiliteServicesTaxesCoutsConsommation",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": "locateurLocataireNA",
+   "valeursPossibles": {
+    "locateur": {
+     "fr": "Locateur",
+     "en": "Lessor"
+    },
+    "locataire": {
+     "fr": "Locataire",
+     "en": "Lessee"
+    },
+    "na": {
+     "fr": "Ne s'applique pas",
+     "en": "Does not apply"
+    }
+   }
+  },
+  {
+   "nom": "responsabiliteElectricite",
+   "type": "radio",
+   "label": {
+    "fr": "Électricité",
+    "en": "Electricity"
+   },
+   "groupe": "responsabiliteServicesTaxesCoutsConsommation",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": "locateurLocataireNA",
+   "valeursPossibles": {
+    "locateur": {
+     "fr": "Locateur",
+     "en": "Lessor"
+    },
+    "locataire": {
+     "fr": "Locataire",
+     "en": "Lessee"
+    },
+    "na": {
+     "fr": "Ne s'applique pas",
+     "en": "Does not apply"
+    }
+   }
+  },
+  {
+   "nom": "responsabiliteChauffeEau",
+   "type": "radio",
+   "label": {
+    "fr": "Chauffe-eau (location)",
+    "en": "Water heater (rental fees)"
+   },
+   "groupe": "responsabiliteServicesTaxesCoutsConsommation",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": "locateurLocataireNA",
+   "valeursPossibles": {
+    "locateur": {
+     "fr": "Locateur",
+     "en": "Lessor"
+    },
+    "locataire": {
+     "fr": "Locataire",
+     "en": "Lessee"
+    },
+    "na": {
+     "fr": "Ne s'applique pas",
+     "en": "Does not apply"
+    }
+   }
+  },
+  {
+   "nom": "responsabiliteEauChaude",
+   "type": "radio",
+   "label": {
+    "fr": "Eau chaude (frais d'utilisation)",
+    "en": "Hot water (user fees)"
+   },
+   "groupe": "responsabiliteServicesTaxesCoutsConsommation",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": "locateurLocataireNA",
+   "valeursPossibles": {
+    "locateur": {
+     "fr": "Locateur",
+     "en": "Lessor"
+    },
+    "locataire": {
+     "fr": "Locataire",
+     "en": "Lessee"
+    },
+    "na": {
+     "fr": "Ne s'applique pas",
+     "en": "Does not apply"
+    }
+   }
+  },
+  {
+   "nom": "responsabiliteTaxeConsommationEau",
+   "type": "radio",
+   "label": {
+    "fr": "Taxe de consommation d’eau du logement",
+    "en": "Water consumption tax for dwelling"
+   },
+   "groupe": "responsabiliteServicesTaxesCoutsConsommation",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": "locateurLocataireNA",
+   "valeursPossibles": {
+    "locateur": {
+     "fr": "Locateur",
+     "en": "Lessor"
+    },
+    "locataire": {
+     "fr": "Locataire",
+     "en": "Lessee"
+    },
+    "na": {
+     "fr": "Ne s'applique pas",
+     "en": "Does not apply"
+    }
+   }
+  },
+  {
+   "nom": "responsabiliteDeneigementStationnement",
+   "type": "radio",
+   "label": {
+    "fr": "Déneigement et déglaçage (stationnement)",
+    "en": "Snow and ice removal (parking area(s))"
+   },
+   "groupe": "responsabiliteServicesTaxesCoutsConsommation",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": "locateurLocataireNA",
+   "valeursPossibles": {
+    "locateur": {
+     "fr": "Locateur",
+     "en": "Lessor"
+    },
+    "locataire": {
+     "fr": "Locataire",
+     "en": "Lessee"
+    },
+    "na": {
+     "fr": "Ne s'applique pas",
+     "en": "Does not apply"
+    }
+   }
+  },
+  {
+   "nom": "responsabiliteDeneigementBalcon",
+   "type": "radio",
+   "label": {
+    "fr": "Déneigement et déglaçage (balcon)",
+    "en": "Snow and ice removal (balcony(ies))"
+   },
+   "groupe": "responsabiliteServicesTaxesCoutsConsommation",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": "locateurLocataireNA",
+   "valeursPossibles": {
+    "locateur": {
+     "fr": "Locateur",
+     "en": "Lessor"
+    },
+    "locataire": {
+     "fr": "Locataire",
+     "en": "Lessee"
+    },
+    "na": {
+     "fr": "Ne s'applique pas",
+     "en": "Does not apply"
+    }
+   }
+  },
+  {
+   "nom": "responsabiliteDeneigementEntree",
+   "type": "radio",
+   "label": {
+    "fr": "Déneigement et déglaçage (entrée, trottoir, allée)",
+    "en": "Snow and ice removal (entrance, walkway, driveway)"
+   },
+   "groupe": "responsabiliteServicesTaxesCoutsConsommation",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": "locateurLocataireNA",
+   "valeursPossibles": {
+    "locateur": {
+     "fr": "Locateur",
+     "en": "Lessor"
+    },
+    "locataire": {
+     "fr": "Locataire",
+     "en": "Lessee"
+    },
+    "na": {
+     "fr": "Ne s'applique pas",
+     "en": "Does not apply"
+    }
+   }
+  },
+  {
+   "nom": "responsabiliteDeneigementEscalier",
+   "type": "radio",
+   "label": {
+    "fr": "Déneigement et déglaçage (escalier)",
+    "en": "Snow and ice removal (stairs)"
+   },
+   "groupe": "responsabiliteServicesTaxesCoutsConsommation",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": "locateurLocataireNA",
+   "valeursPossibles": {
+    "locateur": {
+     "fr": "Locateur",
+     "en": "Lessor"
+    },
+    "locataire": {
+     "fr": "Locataire",
+     "en": "Lessee"
+    },
+    "na": {
+     "fr": "Ne s'applique pas",
+     "en": "Does not apply"
+    }
+   }
+  },
+  {
+   "nom": "logementSansFumee",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce que le logement est sans fumée?",
+    "en": "Is the dwelling non-smoking?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "precisionLogementSansFumee",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez apporter des précisions à ce sujet, si nécessaire.",
+    "en": "Please provide details on this subject, if necessary."
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locatairePossedeDroitAccesTerrain",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce que le locataire a un droit d’accès au terrain?",
+    "en": "Does the lessee have a right of access to the grounds?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "precisionLocatairePossedeDroitAccesTerrain",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez apporter des précisions à ce sujet, si nécessaire.",
+    "en": "Please provide details on this subject, if necessary."
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locatairePossedeDroitAnimaux",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce que le locataire a le droit de garder un ou des animaux?",
+    "en": "Does the lessee have the right to keep one or more animals?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "precisionLocatairePossedeDroitAnimaux",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez apporter des précisions à ce sujet, si nécessaire.",
+    "en": "Please provide details on this subject, if necessary."
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "possedeAutresServicesConditionsRestriction",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce qu’il y a d’autres services, conditions et restrictions qui doivent être inclus au bail?",
+    "en": "Are there any other services, conditions and restrictions that must be included in the lease?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "precisionAutresServicesConditionsRestriction",
+   "type": "textarea",
+   "label": {
+    "fr": "Veuillez préciser les autres services, conditions et restrictions",
+    "en": "Please specify the other services, conditions and restrictions"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "possedeDocumentsJoindreBail",
+   "type": "radio",
+   "label": {
+    "fr": "Souhaitez-vous joindre des documents au bail?",
+    "en": "Do you wish to attach documents to the lease?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "DescriptionDocumentsJointsBail",
+   "type": "textarea",
+   "label": {
+    "fr": "Veuillez préciser les documents que vous désirez joindre au bail",
+    "en": "Please specify the documents you wish to attach to the lease"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "DocumentsJointsBail",
+   "type": "customfile",
+   "label": {
+    "fr": "Documents à joindre au bail",
+    "en": "Documents to attach to the lease"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "possedeServicesAdditionnelsBail",
+   "type": "radio",
+   "label": {
+    "fr": "Offrez-vous des services additionnels à ceux indiqués dans le présent formulaire, dont des services qui se rattachent à la personne même du locataire?",
+    "en": "Do you offer services in addition to those indicated in this form, including services of a personal nature provided to the lessee?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "situationApplicableRestrictionsFixationLoyer",
+   "type": "radio",
+   "label": {
+    "fr": "Choisir la situation qui s'applique",
+    "en": "Select the situation that applies"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "estLogementImmeubleMoins5ans": {
+     "fr": "Le logement est situé dans un immeuble construit depuis cinq ans ou moins",
+     "en": "The dwelling is located in an immovable erected five years ago or less"
+    },
+    "estLogementImmeubleChangementAffectation5ans": {
+     "fr": "Le logement est situé dans un immeuble dont l’utilisation à des fins résidentielles résulte d’un changement d’affectation depuis cinq ans ou moins",
+     "en": "The dwelling is located in an immovable whose use for residential purposes results from a change of destination five years ago or less"
+    },
+    "aucun": {
+     "fr": "Aucune de ces situations",
+     "en": "None of these situations"
+    }
+   }
+  },
+  {
+   "nom": "dateImmeublePretHabitation",
+   "type": "date",
+   "label": {
+    "fr": "Date à laquelle l'immeuble était prêt pour l'habitation",
+    "en": "Date on which the immovable was ready for habitation"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "dateImmeublePretHabitationAffectation",
+   "type": "date",
+   "label": {
+    "fr": "Date à laquelle l'immeuble était prêt pour l'habitation",
+    "en": "Date on which the immovable was ready for habitation"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "loyerMaximalImeublePretPourUsage",
+   "type": "nombre",
+   "label": {
+    "fr": "Indiquer le loyer maximal que le locateur pourra imposer au locataire dans les cinq années qui suivent la date à laquelle l’immeuble est prêt pour l’usage auquel il est destiné",
+    "en": "Indicate the maximum rent that the lessor may impose on the lessee in the five years following the date on which the immovable is ready for its intended use"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "situationApplicableAvisNouveauLocataire",
+   "type": "radio",
+   "label": {
+    "fr": "Choisir la situation qui s'applique",
+    "en": "Select the situation that applies"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "loyer": {
+     "fr": "(1) Je vous avise qu’un loyer a été payé pour votre logement au cours des douze mois précédant le début de votre bail, ou qu’un loyer a été fixé par le Tribunal administratif du logement au cours de cette période",
+     "en": "(1) I hereby notify you that a rent was paid for your dwelling in the twelve months prior to the beginning of your lease, or the rent fixed by the Tribunal administratif du logement during that period"
+    },
+    "aucunLoyer": {
+     "fr": "(2) Je vous avise qu’aucun loyer n’a été payé pour votre logement au cours des douze mois précédant le début de votre bail",
+     "en": "(2) I hereby notify you that no rent has been paid for your dwelling during the twelve months prior to the beginning of your lease"
+    },
+    "residencePriveeAines": {
+     "fr": "(3) Le logement était situé dans une résidence privée pour aînés (ou dans un autre lieu d’hébergement comprenant des services rattachés à la personne même du locataire) et a fait l’objet d’un changement d’affectation tout en demeurant offert à des fins d’habitation",
+     "en": "(3) The dwelling was situated in a private seniors' residence (or in another lodging facility providing services of a personal nature to the lessee) and was the subject of a change of destination while remaining offered for dwelling purposes"
+    }
+   }
+  },
+  {
+   "nom": "montantLoyerPlusBasPaye12Mois",
+   "type": "nombre",
+   "label": {
+    "fr": "Montant du loyer le plus bas payé pour le logement au cours des douze mois précédent le début du bail, ou le loyer fixé par le Tribunal administratif du logement au cours de cette période",
+    "en": "Amount of the lowest rent paid for the dwelling during the twelve months preceding the start of the lease, or the rent set by the Tribunal administratif du logement during this period"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "frequenceLoyerPlusBasPaye12Mois",
+   "type": "radio",
+   "label": {
+    "fr": "Fréquence du paiement",
+    "en": "Frequency of payment"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "mois": {
+     "fr": "Par mois",
+     "en": "Per month"
+    },
+    "semaine": {
+     "fr": "Par semaine",
+     "en": "Per week"
+    },
+    "autre": {
+     "fr": "Autre",
+     "en": "Other"
+    }
+   }
+  },
+  {
+   "nom": "precisionAutreFrequencePlusBasLoyer",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser la fréquence",
+    "en": "Please specify the frequency"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "dateDernierPaiementLoyer",
+   "type": "date",
+   "label": {
+    "fr": "Le dernier loyer a été payé le",
+    "en": "The last rent was paid on"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "montantDernierLoyerPaye",
+   "type": "nombre",
+   "label": {
+    "fr": "Montant du dernier loyer payé pour le logement",
+    "en": "Amount of the last rent paid for the dwelling"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "frequenceDernierLoyer",
+   "type": "radio",
+   "label": {
+    "fr": "Fréquence du paiement",
+    "en": "Frequency of payment"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "mois": {
+     "fr": "Par mois",
+     "en": "Per month"
+    },
+    "semaine": {
+     "fr": "Par semaine",
+     "en": "Per week"
+    },
+    "autre": {
+     "fr": "Autre",
+     "en": "Other"
+    }
+   }
+  },
+  {
+   "nom": "precisionAutreFrequenceDernierLoyer",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser la fréquence",
+    "en": "Please specify the frequency"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "montantLoyerBailPrecedent",
+   "type": "nombre",
+   "label": {
+    "fr": "Le montant du loyer exigé en vertu du bail précédent a été de",
+    "en": "The amount of rent charged under the previous lease was"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "frequenceLoyerBailPrecedent",
+   "type": "radio",
+   "label": {
+    "fr": "Fréquence du paiement",
+    "en": "Frequency of payment"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "mois": {
+     "fr": "Par mois",
+     "en": "Per month"
+    },
+    "semaine": {
+     "fr": "Par semaine",
+     "en": "Per week"
+    },
+    "autre": {
+     "fr": "Autre",
+     "en": "Other"
+    }
+   }
+  },
+  {
+   "nom": "precisionAutreFrequenceLoyerBailPrecedent",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser la fréquence",
+    "en": "Please specify the frequency"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "estMemeBienServicesConditions",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce que le bien loué, les services offerts par le locateur et les conditions du bail sont les mêmes?",
+    "en": "Are the leased dwelling, the services offered by the lessor and the conditions of the lease the same?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "modificationsApporteesBienServicesConditions",
+   "type": "textarea",
+   "label": {
+    "fr": "Veuillez indiquer les modifications apportées (retrait ou ajout d'un service) en précisant le coût pour chaque service retiré ou ajouté, le cas échéant",
+    "en": "Please indicate the modifications made (withdrawal or addition of a service) specifying the cost of each added or withdrawn service if applicable"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "confirmationTransmissionAvisNouveauLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je comprends que cet avis est obligatoire et sera transmis au(x) locataire(s) lors de la conclusion du bail",
+    "en": "I understand that this notice is mandatory and will be transmitted to the lessee(s) upon entering into the lease"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "estLocatairesEngagementSolidaire",
+   "type": "radio",
+   "label": {
+    "fr": "Les locataires s’engagent-ils solidairement?",
+    "en": "Do the lessees undertake to be solidarily liable?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "possedeAutresSignataires",
+   "type": "radio",
+   "label": {
+    "fr": "Une autre personne, telle une caution, signe-t-elle le bail?",
+    "en": "Is another person, such as a surety, signing the lease?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "nom",
+   "type": "text",
+   "label": {
+    "fr": "Nom",
+    "en": "Name"
+   },
+   "groupe": "autresSignataires",
+   "repetable": true,
+   "maxOccurrences": 2,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "qualite",
+   "type": "text",
+   "label": {
+    "fr": "En quelle qualité cette personne doit signer le bail?",
+    "en": "In what capacity must this person sign the lease?"
+   },
+   "groupe": "autresSignataires",
+   "repetable": true,
+   "maxOccurrences": 2,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "NoCivique",
+   "type": "text",
+   "label": null,
+   "groupe": "autresSignataires.adresse",
+   "repetable": true,
+   "maxOccurrences": 2,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Appartement",
+   "type": "text",
+   "label": null,
+   "groupe": "autresSignataires.adresse",
+   "repetable": true,
+   "maxOccurrences": 2,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "CodePostal",
+   "type": "codepostal",
+   "label": null,
+   "groupe": "autresSignataires.adresse",
+   "repetable": true,
+   "maxOccurrences": 2,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Province",
+   "type": "text",
+   "label": null,
+   "groupe": "autresSignataires.adresse",
+   "repetable": true,
+   "maxOccurrences": 2,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Municipalite",
+   "type": "text",
+   "label": null,
+   "groupe": "autresSignataires.adresse",
+   "repetable": true,
+   "maxOccurrences": 2,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Rue",
+   "type": "text",
+   "label": null,
+   "groupe": "autresSignataires.adresse",
+   "repetable": true,
+   "maxOccurrences": 2,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "AdresseComplete",
+   "type": "text",
+   "label": null,
+   "groupe": "autresSignataires.adresse",
+   "repetable": true,
+   "maxOccurrences": 2,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "courriel",
+   "type": "email",
+   "label": {
+    "fr": "Adresse de courriel",
+    "en": "Email address"
+   },
+   "groupe": "autresSignataires",
+   "repetable": true,
+   "maxOccurrences": 2,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "typeResidence",
+   "type": "radio",
+   "label": {
+    "fr": "Veuillez indiquer le type de résidence",
+    "en": "Please indicate the type of residence"
+   },
+   "groupe": "annexe6TypeResidence",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "residenceAines": {
+     "fr": "Résidence privée pour aînés",
+     "en": "Private seniors’ residence"
+    },
+    "autreLieuHebergement": {
+     "fr": "Autre lieu d'hébergement",
+     "en": "Other lodging facility"
+    }
+   }
+  },
+  {
+   "nom": "servicesDestinesA",
+   "type": "checkbox",
+   "label": {
+    "fr": "Résidence privée pour aînés offrant des services destinés à",
+    "en": "Private seniors’ residence offering services for"
+   },
+   "groupe": "annexe6TypeResidence",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "personnesAutonomes": {
+     "fr": "des personnes autonomes",
+     "en": "independent persons"
+    },
+    "personnesSemiIndependantes": {
+     "fr": "des personnes semi-autonomes",
+     "en": "semi-independent persons"
+    }
+   }
+  },
+  {
+   "nom": "precisionLieuHebergement",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser le lieu d'hébergement",
+    "en": "Please specify the lodging facility"
+   },
+   "groupe": "annexe6TypeResidence",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "logementOuChambre",
+   "type": "radio",
+   "label": {
+    "fr": "Type de logement",
+    "en": "Type of dwelling"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "logement": {
+     "fr": "Logement",
+     "en": "Dwelling"
+    },
+    "chambrePrivee": {
+     "fr": "Chambre privée",
+     "en": "Private room"
+    },
+    "chambreCommune": {
+     "fr": "Chambre commune",
+     "en": "Shared room"
+    }
+   }
+  },
+  {
+   "nom": "nbPiecesLogement",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser le nombre de pièces du logement",
+    "en": "Please specify the number of rooms in the dwelling"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "salleBain",
+   "type": "radio",
+   "label": {
+    "fr": "Salle de bain",
+    "en": "Bathroom"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "privee": {
+     "fr": "Privée",
+     "en": "Private"
+    },
+    "commune": {
+     "fr": "Commune",
+     "en": "Shared"
+    }
+   }
+  },
+  {
+   "nom": "baresAppuiMainsCourantes",
+   "type": "checkbox",
+   "label": {
+    "fr": "Barres d'appui et mains courantes",
+    "en": "Grab bars and handrails"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "salleBain": {
+     "fr": "Salle de bain",
+     "en": "Bathroom"
+    },
+    "corridor": {
+     "fr": "Corridors (aires communes)",
+     "en": "Corridors (common areas)"
+    }
+   }
+  },
+  {
+   "nom": "annexe6Chauffage",
+   "type": "checkbox",
+   "label": {
+    "fr": "Chauffage",
+    "en": "Heating"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "central": {
+     "fr": "Système central",
+     "en": "Central system"
+    },
+    "individuel": {
+     "fr": "Contrôle individuel",
+     "en": "Individual control"
+    }
+   }
+  },
+  {
+   "nom": "annexe6Climatisation",
+   "type": "checkbox",
+   "label": {
+    "fr": "Climatisation",
+    "en": "Air conditioning"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "central": {
+     "fr": "Système central",
+     "en": "Central system"
+    },
+    "individuel": {
+     "fr": "Contrôle individuel",
+     "en": "Individual control"
+    },
+    "autorise": {
+     "fr": "Système de climatisation personnel autorisé",
+     "en": "Authorized personal air-conditioning system"
+    }
+   }
+  },
+  {
+   "nom": "annexe6ClimatisationAutorise",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser le type de système autorisé",
+    "en": "Please specify the type of system allowed"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6Telecommunication",
+   "type": "checkbox",
+   "label": {
+    "fr": "Services de télécommunication",
+    "en": "Telecommunication services"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "telephone": {
+     "fr": "Téléphone",
+     "en": "Telephone"
+    },
+    "cablodistribution": {
+     "fr": "Câblodistribution",
+     "en": "Cable distribution"
+    },
+    "internetSansFil": {
+     "fr": "Réseau Internet sans fil",
+     "en": "Wireless Internet"
+    },
+    "internet": {
+     "fr": "Internet avec fil",
+     "en": "Wired Internet"
+    },
+    "autres": {
+     "fr": "Autres",
+     "en": "Other"
+    }
+   }
+  },
+  {
+   "nom": "annexe6AutresTelecom",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser les autres services de télécommunication",
+    "en": "Please specify other telecommunication services"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6SystemeAppelAide",
+   "type": "checkbox",
+   "label": {
+    "fr": "Système d'appel à l'aide",
+    "en": "Call-for-help-system"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "fixeLit": {
+     "fr": "Fixe - lit",
+     "en": "Fixed - bed"
+    },
+    "fixeSalleBain": {
+     "fr": "Fixe - Salle de bain",
+     "en": "Fixed - bathroom"
+    },
+    "fixeSalleEau": {
+     "fr": "Fixe - Salle d'eau",
+     "en": "Fixed - washroom"
+    },
+    "mobile": {
+     "fr": "Mobile",
+     "en": "Mobile"
+    },
+    "autres": {
+     "fr": "Autres",
+     "en": "Other"
+    }
+   }
+  },
+  {
+   "nom": "annexe6AutresSystemeAppelAide",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser les autres systèmes d'appel à l'aide",
+    "en": "Please specify other emergency call systems"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6FauteuilRoulant",
+   "type": "checkbox",
+   "label": {
+    "fr": "Fauteuil roulant ou à propulsion motorisée",
+    "en": "Manuel of powered wheelchair"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "logementAccessible": {
+     "fr": "Logement accessible et aménagé",
+     "en": "Accessible dwelling"
+    }
+   }
+  },
+  {
+   "nom": "annexe6MeublesAppareils",
+   "type": "checkbox",
+   "label": {
+    "fr": "Meubles et appareils (le locataire a le droit d’apporter)",
+    "en": "Furniture and appliances (the lessee has the right to bring)"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "appareilsElectromenagers": {
+     "fr": "Appareils électroménagers",
+     "en": "Household appliances"
+    },
+    "televiseur": {
+     "fr": "Téléviseur",
+     "en": "Television"
+    },
+    "meubles": {
+     "fr": "Meubles",
+     "en": "Furniture"
+    }
+   }
+  },
+  {
+   "nom": "annexe6PrecisionAppareilsElectromenagers",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser les appareils électroménagers",
+    "en": "Please specify appliances"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6PrecisionMeubles",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser les meubles",
+    "en": "Please specify furniture"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6Balcon",
+   "type": "checkbox",
+   "label": {
+    "fr": "Balcon",
+    "en": "Balcony"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "prive": {
+     "fr": "Privé",
+     "en": "Private"
+    },
+    "commun": {
+     "fr": "commun",
+     "en": "Shared"
+    }
+   }
+  },
+  {
+   "nom": "annexe6EspaceRangement",
+   "type": "text",
+   "label": {
+    "fr": "Espace de rangement fermé à clé",
+    "en": "Locked storage space"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6SalleLavage",
+   "type": "checkbox",
+   "label": {
+    "fr": "Salle de lavage",
+    "en": "Laundry room"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "salleLavageCommuneGratuite": {
+     "fr": "Salle de lavage commune gratuite",
+     "en": "Free shared laundry room"
+    },
+    "salleLavageCommunePayante": {
+     "fr": "Salle de lavage commune payable à chaque utilisation",
+     "en": "Common shared laundry room pay-per-use"
+    }
+   }
+  },
+  {
+   "nom": "annexe6Ascenceur",
+   "type": "checkbox",
+   "label": {
+    "fr": "Ascenceur disponible",
+    "en": "Elevator available"
+   },
+   "groupe": "annexe6DescriptionLieux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "accesActivitesLoisirs",
+   "type": "text",
+   "label": {
+    "fr": "Accès à des activités de loisirs",
+    "en": "Access to recreational activities"
+   },
+   "groupe": "annexe6ServicesLoisirs",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6Animateur",
+   "type": "checkbox",
+   "label": {
+    "fr": "Animateur",
+    "en": "Social director"
+   },
+   "groupe": "annexe6ServicesLoisirs",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6EspacesCommunsInterieurs",
+   "type": "checkbox",
+   "label": {
+    "fr": "Espaces communs à l'intérieur",
+    "en": "Indoor common areas"
+   },
+   "groupe": "annexe6ServicesLoisirs",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "bibliotheque": {
+     "fr": "Bibliothèque",
+     "en": "Library"
+    },
+    "cuisineCommune": {
+     "fr": "Cuisine commune",
+     "en": "Shared kitchen"
+    },
+    "espacePriveVisiteurs": {
+     "fr": "Espace privé pour recevoir des visiteurs",
+     "en": "Private area for receiving visitors"
+    },
+    "piscine": {
+     "fr": "Piscine",
+     "en": "Pool"
+    },
+    "salleEntrainementPhysique": {
+     "fr": "Salle d'entraînement physique",
+     "en": "Fitness room"
+    },
+    "salleBillard": {
+     "fr": "Salle de billard",
+     "en": "Billiard room"
+    },
+    "salleCinemaMaison": {
+     "fr": "Salle de cinéma maison",
+     "en": "Home theatre room"
+    },
+    "salleLoisirsMultifonctionnelle": {
+     "fr": "Salle de loisirs multifonctionnelle",
+     "en": "Multifunctional recreation room"
+    },
+    "salleQuilles": {
+     "fr": "Salle de quilles",
+     "en": "Bowling alley"
+    },
+    "salleReception": {
+     "fr": "Salle de réception",
+     "en": "Reception"
+    },
+    "salonInternet": {
+     "fr": "Salon Internet",
+     "en": "Internet"
+    },
+    "autres": {
+     "fr": "Autres",
+     "en": "Other"
+    }
+   }
+  },
+  {
+   "nom": "annexe6CoutSalleReception",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût de location de la salle de réception ($)",
+    "en": "Rental cost of reception hall ($)"
+   },
+   "groupe": "annexe6ServicesLoisirs",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6AutresEspacesCommunsInterieurs",
+   "type": "textarea",
+   "label": {
+    "fr": "Veuillez préciser les autres espaces communs à l'intérieur",
+    "en": "Please specify other indoor common areas"
+   },
+   "groupe": "annexe6ServicesLoisirs",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6EspacesCommunsExterieur",
+   "type": "checkbox",
+   "label": {
+    "fr": "Espaces communs à l'extérieur",
+    "en": "Outdoor common areas"
+   },
+   "groupe": "annexe6ServicesLoisirs",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "aireJeux": {
+     "fr": "Aire de jeux",
+     "en": "Recreation area"
+    },
+    "aireRepos": {
+     "fr": "Aire de repos",
+     "en": "Rest area"
+    },
+    "jardin": {
+     "fr": "Jardin",
+     "en": "Garden"
+    },
+    "piscine": {
+     "fr": "Piscine",
+     "en": "Pool"
+    },
+    "autres": {
+     "fr": "Autres",
+     "en": "Other"
+    }
+   }
+  },
+  {
+   "nom": "annexe6AutresEspacesCommunsExterieur",
+   "type": "textarea",
+   "label": {
+    "fr": "Veuillez préciser les autres espaces communs à l'extérieur",
+    "en": "Please specify other outdoor common areas",
+    "max": "150"
+   },
+   "groupe": "annexe6ServicesLoisirs",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6ActivitesReligieuses",
+   "type": "text",
+   "label": {
+    "fr": "Activités religieuses",
+    "en": "Religious activities"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6SalleAMangerVisiteurs",
+   "type": "checkbox",
+   "label": {
+    "fr": "Salle à manger accessible aux visiteurs",
+    "en": "Dining room open to visitors"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6ServicesMedicaux",
+   "type": "textarea",
+   "label": {
+    "fr": "Services médicaux",
+    "en": "Medical services"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6soinsInfirmiers",
+   "type": "checkbox",
+   "label": {
+    "fr": "Soins infirmiers (services offerts par le locateur)",
+    "en": "Nursing care (services offered by the lessor)"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "infirmiere": {
+     "fr": "Infirmière et infirmier",
+     "en": "Nurse"
+    },
+    "infirmiereAuxiliaire": {
+     "fr": "Infirmière auxiliaire et infirmier auxiliaire",
+     "en": "Nursing assistant"
+    }
+   }
+  },
+  {
+   "nom": "annexe6DetailsInfirmiere",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser les services offerts par l'infirmière/infirmier",
+    "en": "Please specify services offered by the nurse"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6HoraireInfirmiere",
+   "type": "text",
+   "label": {
+    "fr": "Horaire de service de l'infirmière/infirmier",
+    "en": "Nurse service schedule"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6DetailsInfirmiereAuxiliaire",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser les services offerts par l'infirmière auxiliaire/infirmier auxiliaire",
+    "en": "Please specify services offered by the nursing assistant"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6HoraireInfirmiereAuxiliaire",
+   "type": "text",
+   "label": {
+    "fr": "Horaire de service de l'infirmière auxiliaire/infirmier auxiliaire",
+    "en": "Nursing assistant service schedule"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6Prepose",
+   "type": "checkbox",
+   "label": {
+    "fr": "Préposé (services offerts par le locateur)",
+    "en": "Care attendant (services offered by the lessor)"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6DetailsPrepose",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser les services offerts par le préposé, s'il y a lieu.",
+    "en": "Please specify services offered by the care attendant, if applicable."
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6HorairePrepose",
+   "type": "text",
+   "label": {
+    "fr": "Horaire des services offerts par le préposé",
+    "en": "Care attendant service schedule"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6Securite",
+   "type": "checkbox",
+   "label": {
+    "fr": "Sécurité",
+    "en": "Security"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6SecuriteHoraire",
+   "type": "text",
+   "label": {
+    "fr": "Horaire du service de sécurité",
+    "en": "Security service schedule"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6SecuritePersonnel",
+   "type": "checkbox",
+   "label": {
+    "fr": "Membre du personnel de sécurité disponible",
+    "en": "Available security personnel member"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "infirmiere": {
+     "fr": "Infirmière et infirmier",
+     "en": "Nurse"
+    },
+    "infirmiereAuxiliaire": {
+     "fr": "Infirmière auxiliaire et infirmier auxiliaire",
+     "en": "Nursing assistant"
+    },
+    "prepose": {
+     "fr": "Préposé",
+     "en": "Care attendant"
+    },
+    "gardien": {
+     "fr": "Gardien",
+     "en": "Guard"
+    },
+    "receptionniste": {
+     "fr": "Réceptionniste",
+     "en": "Receptionist"
+    },
+    "autres": {
+     "fr": "Autres",
+     "en": "Other"
+    }
+   }
+  },
+  {
+   "nom": "annexe6SecuritePersonnelAutres",
+   "type": "textarea",
+   "label": {
+    "fr": "Veuillez préciser les autres membres du personnel de sécurité",
+    "en": "Please specify other security personnel members"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6Transport",
+   "type": "checkbox",
+   "label": {
+    "fr": "Transport",
+    "en": "Transportation"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "navette": {
+     "fr": "Service de navette",
+     "en": "Shuttle service"
+    },
+    "autres": {
+     "fr": "Autres",
+     "en": "Other"
+    }
+   }
+  },
+  {
+   "nom": "annexe6DetailsAutresTransport",
+   "type": "text",
+   "label": {
+    "fr": "Veuillez préciser les autres services de transport",
+    "en": "Please specify other transport services"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "annexe6TransportPayantAutres",
+   "type": "radio",
+   "label": {
+    "fr": "Ces autres services de transport sont-ils payables à chaque utilisation?",
+    "en": "Are these other transport services pay-per-use?"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "annexe6AutresServices",
+   "type": "textarea",
+   "label": {
+    "fr": "Veuillez préciser tout autre service, s’il y a lieu",
+    "en": "Please specify any other service, if applicable"
+   },
+   "groupe": "annexe6AutresServicesOfferts",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "nbRepasQuotidiens",
+   "type": "radio",
+   "label": {
+    "fr": "Nombre de repas quotidiens",
+    "en": "Number of meals per day"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "0": "0",
+    "1": "1",
+    "2": "2",
+    "3": "3"
+   }
+  },
+  {
+   "nom": "coutDejeuner",
+   "type": "nombre",
+   "label": {
+    "fr": "Déjeuner",
+    "en": "Breakfast"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutDiner",
+   "type": "nombre",
+   "label": {
+    "fr": "Dîner",
+    "en": "Lunch"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutSouper",
+   "type": "nombre",
+   "label": {
+    "fr": "Souper",
+    "en": "Supper"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutMenuJour",
+   "type": "nombre",
+   "label": {
+    "fr": "Menus du jour",
+    "en": "Daily specials"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutMenuChoix",
+   "type": "nombre",
+   "label": {
+    "fr": "Menus au choix",
+    "en": "A la carte meals"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutMenuDiet",
+   "type": "nombre",
+   "label": {
+    "fr": "Menus diététiques",
+    "en": "Special diet meals"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "precisionMenuDiet",
+   "type": "text",
+   "label": {
+    "fr": "Précisions sur les menus diététiques",
+    "en": "Special diet meals details"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "dejeunerDe",
+   "type": "text",
+   "label": {
+    "fr": "Déjeuner de",
+    "en": "Breakfast from"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "dejeunerA",
+   "type": "text",
+   "label": {
+    "fr": "Déjeuner à",
+    "en": "Breakfast to"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "dinerDe",
+   "type": "text",
+   "label": {
+    "fr": "Dîner de",
+    "en": "Lunch from"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "dinerA",
+   "type": "text",
+   "label": {
+    "fr": "Dîner à",
+    "en": "Lunch to"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "souperDe",
+   "type": "text",
+   "label": {
+    "fr": "Souper de",
+    "en": "Supper from"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "souperA",
+   "type": "text",
+   "label": {
+    "fr": "Souper à",
+    "en": "Supper to"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "nbCollations",
+   "type": "radio",
+   "label": {
+    "fr": "Nombre de collations par jour",
+    "en": "Number of snacks per day"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "0": "0",
+    "1": "1",
+    "2": "2",
+    "3": "3"
+   }
+  },
+  {
+   "nom": "coutCollations",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût des collations",
+    "en": "Snacks cost"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "horaireCollations",
+   "type": "text",
+   "label": {
+    "fr": "Horaire des collations",
+    "en": "Snacks schedule"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "lieuRepas",
+   "type": "checkbox",
+   "label": {
+    "fr": "Les repas et collations sont servis",
+    "en": "Meals and snacks are served"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "SalleManger": {
+     "fr": "À la salle à manger",
+     "en": "In the dining-room"
+    },
+    "Cafeteria": {
+     "fr": "À la cafétéria",
+     "en": "In the cafeteria"
+    },
+    "Logement": {
+     "fr": "Au logement ou à la chambre",
+     "en": "In the dwelling or room"
+    }
+   }
+  },
+  {
+   "nom": "coutRepasServiceLogement",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût du service au logement ou à la chambre",
+    "en": "Service in dwelling cost"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutMensuelAlimentaire",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût mensuel total des services alimentaires",
+    "en": "Total monthly cost of food services"
+   },
+   "groupe": "servicesAlimentaires",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutAlimentation",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié à l'aide à l'alimentation",
+    "en": "Eating assistance cost"
+   },
+   "groupe": "assistancePersonnelle",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "precisionAlimentation",
+   "type": "text",
+   "label": {
+    "fr": "Précisions sur l'aide à l'alimentation",
+    "en": "Eating assistance details"
+   },
+   "groupe": "assistancePersonnelle",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutHygiene",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié à l'aide à l'hygiène quotidienne",
+    "en": "Daily hygiene cost"
+   },
+   "groupe": "assistancePersonnelle",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "precisionHygiene",
+   "type": "text",
+   "label": {
+    "fr": "Précisions sur l'aide à l'hygiène quotidienne",
+    "en": "Daily hygiene details"
+   },
+   "groupe": "assistancePersonnelle",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "frequenceBain",
+   "type": "radio",
+   "label": {
+    "fr": "Nombre de bains par semaine",
+    "en": "Number of baths per week"
+   },
+   "groupe": "assistancePersonnelle",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "0": "0",
+    "1": "1",
+    "2": "2",
+    "3": "3",
+    "4": "4",
+    "5": "5",
+    "6": "6",
+    "7": "7"
+   }
+  },
+  {
+   "nom": "coutBain",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié au(x) bain(s)",
+    "en": "Bathing cost"
+   },
+   "groupe": "assistancePersonnelle",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutHabillage",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié à l'aide à l'habillage",
+    "en": "Dressing help cost"
+   },
+   "groupe": "assistancePersonnelle",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "precisionHabillage",
+   "type": "text",
+   "label": {
+    "fr": "Précisions sur l'aide à l'habillage",
+    "en": "Dressing help details"
+   },
+   "groupe": "assistancePersonnelle",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutAutresServicesAssistancePerso",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié aux autres service d'assistance personnelle",
+    "en": "Other personal assistance services cost"
+   },
+   "groupe": "assistancePersonnelle",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "precisionAutreServicesAssistancePerso",
+   "type": "textarea",
+   "label": {
+    "fr": "Précisions sur les autres services d'assistance personnelle",
+    "en": "Specify other personal assistance services"
+   },
+   "groupe": "assistancePersonnelle",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutDistributionMedicaments",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié à la distribution des médicaments",
+    "en": "Distribution of medication cost"
+   },
+   "groupe": "assistancePersonnelle",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutAdministrationMedicaments",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié à l'administration des médicaments",
+    "en": "Administration of medication cost"
+   },
+   "groupe": "assistancePersonnelle",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "precisionAdministration",
+   "type": "text",
+   "label": {
+    "fr": "Précisions sur l'administration des médicaments",
+    "en": "Specify administration of medication",
+    "outerClasses": "xxl"
+   },
+   "groupe": "assistancePersonnelle",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutSoinsInvasifs",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié aux soins invasifs d'assistance aux activités de la vie quotidienne",
+    "en": "Invasive care services involved in assistance with activities of daily living cost"
+   },
+   "groupe": "assistancePersonnelle",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "precisionSoinsInvasifs",
+   "type": "textarea",
+   "label": {
+    "fr": "Précisions sur les soins invasifs d'assistance aux activités de la vie quotidienne",
+    "en": "Invasive care services involved in assistance with activities of daily living details"
+   },
+   "groupe": "assistancePersonnelle",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutMensuelAssistancePersonnelle",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût mensuel total des services d’assistance personnelle",
+    "en": "Total monthly cost of personal assistance services"
+   },
+   "groupe": "assistancePersonnelle",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutInfirmier",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié à l'infirmière et à l'infirmier",
+    "en": "Nurse cost"
+   },
+   "groupe": "soinsInfirmiers",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "precisionInfirmier",
+   "type": "text",
+   "label": {
+    "fr": "Précisions sur les services de l'infirmière et de l'infirmier",
+    "en": "Nurse details"
+   },
+   "groupe": "soinsInfirmiers",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "heuresInfirmier",
+   "type": "number",
+   "label": {
+    "fr": "Nombre d'heures",
+    "en": "Number of hours"
+   },
+   "groupe": "soinsInfirmiers",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutInfirmierAuxiliaire",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié à l'infirmière auxiliaire et l'infirmier auxiliaire",
+    "en": "Nursing assistant cost"
+   },
+   "groupe": "soinsInfirmiers",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "precisionAuxiliaire",
+   "type": "text",
+   "label": {
+    "fr": "Précisions sur les services de l'infirmière auxiliaire et l'infirmier auxiliaire",
+    "en": "Nursing assistant details"
+   },
+   "groupe": "soinsInfirmiers",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "heuresAuxiliaire",
+   "type": "number",
+   "label": {
+    "fr": "Nombre d'heures",
+    "en": "Number of hours"
+   },
+   "groupe": "soinsInfirmiers",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutPrepose",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié au préposé",
+    "en": "Care attendant cost"
+   },
+   "groupe": "soinsInfirmiers",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "precisionPrepose",
+   "type": "text",
+   "label": {
+    "fr": "Précisions sur les services du préposé",
+    "en": "Care attendant details"
+   },
+   "groupe": "soinsInfirmiers",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "heuresPrepose",
+   "type": "number",
+   "label": {
+    "fr": "Nombre d'heures",
+    "en": "Number of hours"
+   },
+   "groupe": "soinsInfirmiers",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutMensuelSoins",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût mensuel total des soins infirmiers",
+    "en": "Total monthly cost of nursing care"
+   },
+   "groupe": "soinsInfirmiers",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "frequenceBuanderieLingeMaison",
+   "type": "radio",
+   "label": {
+    "fr": "Fréquence des services de buanderie - linge de maison",
+    "en": "Laundry - household linen frequency"
+   },
+   "groupe": "aideDomestique",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "Semaine": {
+     "fr": "semaine",
+     "en": "week"
+    },
+    "Mois": {
+     "fr": "mois",
+     "en": "month"
+    },
+    "Aucun": {
+     "fr": "aucun",
+     "en": "none"
+    }
+   }
+  },
+  {
+   "nom": "lingeMaisonNbFoisSemaine",
+   "type": "number",
+   "label": {
+    "fr": "Nombre de fois par semaine",
+    "en": "Number of times a week"
+   },
+   "groupe": "aideDomestique",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "lingeMaisonNbFoisMois",
+   "type": "number",
+   "label": {
+    "fr": "Nombre de fois par mois",
+    "en": "Number of times a month"
+   },
+   "groupe": "aideDomestique",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutLingeMaison",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié au linge de maison",
+    "en": "Household linen cost"
+   },
+   "groupe": "aideDomestique",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "frequenceBuanderieVetements",
+   "type": "radio",
+   "label": {
+    "fr": "Fréquence des services de buanderie - vêtements",
+    "en": "Laundry - cloathing frequency"
+   },
+   "groupe": "aideDomestique",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "Semaine": {
+     "fr": "semaine",
+     "en": "week"
+    },
+    "Mois": {
+     "fr": "mois",
+     "en": "month"
+    },
+    "Aucun": {
+     "fr": "aucun",
+     "en": "none"
+    }
+   }
+  },
+  {
+   "nom": "vetementsNbFoisSemaine",
+   "type": "number",
+   "label": {
+    "fr": "Nombre de fois par semaine",
+    "en": "Number of times a week"
+   },
+   "groupe": "aideDomestique",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "vetementsNbFoisMois",
+   "type": "number",
+   "label": {
+    "fr": "Nombre de fois par mois",
+    "en": "Number of times a month"
+   },
+   "groupe": "aideDomestique",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutVetements",
+   "type": "nombre",
+   "label": {
+    "fr": "Coûts liés aux vêtements",
+    "en": "Clothing cost"
+   },
+   "groupe": "aideDomestique",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "frequenceMenage",
+   "type": "radio",
+   "label": {
+    "fr": "Fréquence du ménage du logement ou de la chambre",
+    "en": "Cleaning of dwelling or room frequency"
+   },
+   "groupe": "aideDomestique",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "Semaine": {
+     "fr": "semaine",
+     "en": "week"
+    },
+    "Mois": {
+     "fr": "mois",
+     "en": "month"
+    },
+    "Aucun": {
+     "fr": "aucun",
+     "en": "none"
+    }
+   }
+  },
+  {
+   "nom": "menageNbFoisSemaine",
+   "type": "number",
+   "label": {
+    "fr": "Nombre de fois par semaine",
+    "en": "Number of times a week"
+   },
+   "groupe": "aideDomestique",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "menageNbFoisMois",
+   "type": "number",
+   "label": {
+    "fr": "Nombre de fois par mois",
+    "en": "Number of times a month"
+   },
+   "groupe": "aideDomestique",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutMenageLogement",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié au ménage du logement ou de la chambre",
+    "en": "Cleaning of dwelling or room cost"
+   },
+   "groupe": "aideDomestique",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "precisionMenage",
+   "type": "text",
+   "label": {
+    "fr": "Précisions sur l’entretien ménagé du logement ou de la chambre",
+    "en": "Cleaning of dwelling or room details"
+   },
+   "groupe": "aideDomestique",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutMensuelDomestique",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût mensuel total des services d'aide domestique",
+    "en": "Total monthly cost of domestic help services"
+   },
+   "groupe": "aideDomestique",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutDeplacement",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié à l'aide au déplacement",
+    "en": "Help with getting around cost"
+   },
+   "groupe": "autresServices",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "precisionDeplacement",
+   "type": "text",
+   "label": {
+    "fr": "Précisions sur l'aide au déplacement",
+    "en": "Help with getting around details"
+   },
+   "groupe": "autresServices",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutAccompagnementMedical",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié à l’accompagnement aux visites médicales",
+    "en": "Medical appointments cost"
+   },
+   "groupe": "autresServices",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutCourses",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié à l’accompagnement aux courses",
+    "en": "Errands cost"
+   },
+   "groupe": "autresServices",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutDispositifAlerte",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié au service d'alerte de sécurité",
+    "en": "Security device cost"
+   },
+   "groupe": "autresServices",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "precisionAlerte",
+   "type": "text",
+   "label": {
+    "fr": "Précisions sur le service d'alerte de sécurité",
+    "en": "Security device details"
+   },
+   "groupe": "autresServices",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutImpot",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié à l'assistance pour remplir les formulaires de crédit d'impôt pour maintien à domicile",
+    "en": "Assistance for completing forms related to the tax credit for home-support services for seniors"
+   },
+   "groupe": "autresServices",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autresServicesOffertsDetails",
+   "type": "textarea",
+   "label": {
+    "fr": "Précisez les autres services, s'il y a lieu",
+    "en": "Please specify other services, if applicable"
+   },
+   "groupe": "autresServices",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutAutreServices",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût lié aux autres services",
+    "en": "Other services cost"
+   },
+   "groupe": "autresServices",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutMensuelAutresServices",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût mensuel total des autres services offerts",
+    "en": "Total monthly cost of other services offered"
+   },
+   "groupe": "autresServices",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "coutTotalServices",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût mensuel total des services",
+    "en": "Total monthly cost of services"
+   },
+   "groupe": "totaux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "montantLoyerBase",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût mensuel du loyer de base",
+    "en": "Monthly basic rent"
+   },
+   "groupe": "totaux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "montantLoyerTotal",
+   "type": "nombre",
+   "label": {
+    "fr": "Coût mensuel du loyer total",
+    "en": "Monthly total rent"
+   },
+   "groupe": "totaux",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "nomAdresseTelephone",
+   "type": "text",
+   "label": {
+    "fr": "Nom, adresse et numéro de téléphone",
+    "en": "Name, address and telephone number"
+   },
+   "groupe": "personneContactCasUrgence",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire1engagementAvertisseursFumeeLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je m’engage à respecter la réglementation relative à la présence et au bon fonctionnement des avertisseurs de fumée dans le logement et dans l’immeuble",
+    "en": "I commit to complying with the regulations regarding the presence and proper functioning of smoke detectors in the dwelling and the building"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire1locataireAccepteRemiseChequePostdates",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je consens à remettre des chèques postdatés au locateur pour la durée du bail",
+    "en": "I consent to providing postdated cheques to the lessor for the duration of the lease"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire1locataireConfirmationReglementImmeuble",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme qu'un exemplaire du règlement de l'immeuble m'a été remis et/ou que j'ai pu en prendre connaissance sur cette plateforme",
+    "en": "I confirm that a copy of the building bylaws has been provided to me and/or that I have been able to review it on this platform"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire1confirmationReceptionAvisNouveauLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme avoir reçu cet avis obligatoire",
+    "en": "I confirm having received this mandatory notice"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire1confirmationEngagementSolidaireLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme que cette information est exacte",
+    "en": "I confirm that this information is correct"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire1logementResidenceFamiliale",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce que le logement faisant l’objet de ce bail servira de résidence familiale ?",
+    "en": "Will the dwelling subject to this lease be used as a family residence?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "locataire1nomConjoint",
+   "type": "text",
+   "label": {
+    "fr": "Je déclare être marié, uni civilement ou en union parentale avec",
+    "en": "I declare that I am married, in a civil union, or in a parental union with"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire1confirmationAvisResidenceFamiliale",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je vous avise que le logement faisant l’objet de ce bail servira de résidence familiale",
+    "en": "I notify you that the dwelling subject to this lease will be used as a family residence"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire2engagementAvertisseursFumeeLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je m’engage à respecter la réglementation relative à la présence et au bon fonctionnement des avertisseurs de fumée dans le logement et dans l’immeuble",
+    "en": "I commit to complying with the regulations regarding the presence and proper functioning of smoke detectors in the dwelling and the building"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire2locataireAccepteRemiseChequePostdates",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je consens à remettre des chèques postdatés au locateur pour la durée du bail",
+    "en": "I consent to providing postdated cheques to the lessor for the duration of the lease"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire2locataireConfirmationReglementImmeuble",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme qu'un exemplaire du règlement de l'immeuble m'a été remis et/ou que j'ai pu en prendre connaissance sur cette plateforme",
+    "en": "I confirm that a copy of the building bylaws has been provided to me and/or that I have been able to review it on this platform"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire2confirmationReceptionAvisNouveauLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme avoir reçu cet avis obligatoire",
+    "en": "I confirm having received this mandatory notice"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire2confirmationEngagementSolidaireLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme que cette information est exacte",
+    "en": "I confirm that this information is correct"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire2logementResidenceFamiliale",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce que le logement faisant l’objet de ce bail servira de résidence familiale ?",
+    "en": "Will the dwelling subject to this lease be used as a family residence?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "locataire2nomConjoint",
+   "type": "text",
+   "label": {
+    "fr": "Je déclare être marié, uni civilement ou en union parentale avec",
+    "en": "I declare that I am married, in a civil union, or in a parental union with"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire2confirmationAvisResidenceFamiliale",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je vous avise que le logement faisant l’objet de ce bail servira de résidence familiale",
+    "en": "I notify you that the dwelling subject to this lease will be used as a family residence"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire3engagementAvertisseursFumeeLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je m’engage à respecter la réglementation relative à la présence et au bon fonctionnement des avertisseurs de fumée dans le logement et dans l’immeuble",
+    "en": "I commit to complying with the regulations regarding the presence and proper functioning of smoke detectors in the dwelling and the building"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire3locataireAccepteRemiseChequePostdates",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je consens à remettre des chèques postdatés au locateur pour la durée du bail",
+    "en": "I consent to providing postdated cheques to the lessor for the duration of the lease"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire3locataireConfirmationReglementImmeuble",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme qu'un exemplaire du règlement de l'immeuble m'a été remis et/ou que j'ai pu en prendre connaissance sur cette plateforme",
+    "en": "I confirm that a copy of the building bylaws has been provided to me and/or that I have been able to review it on this platform"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire3confirmationReceptionAvisNouveauLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme avoir reçu cet avis obligatoire",
+    "en": "I confirm having received this mandatory notice"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire3confirmationEngagementSolidaireLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme que cette information est exacte",
+    "en": "I confirm that this information is correct"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire3logementResidenceFamiliale",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce que le logement faisant l’objet de ce bail servira de résidence familiale ?",
+    "en": "Will the dwelling subject to this lease be used as a family residence?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "locataire3nomConjoint",
+   "type": "text",
+   "label": {
+    "fr": "Je déclare être marié, uni civilement ou en union parentale avec",
+    "en": "I declare that I am married, in a civil union, or in a parental union with"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire3confirmationAvisResidenceFamiliale",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je vous avise que le logement faisant l’objet de ce bail servira de résidence familiale",
+    "en": "I notify you that the dwelling subject to this lease will be used as a family residence"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire4engagementAvertisseursFumeeLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je m’engage à respecter la réglementation relative à la présence et au bon fonctionnement des avertisseurs de fumée dans le logement et dans l’immeuble",
+    "en": "I commit to complying with the regulations regarding the presence and proper functioning of smoke detectors in the dwelling and the building"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire4locataireAccepteRemiseChequePostdates",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je consens à remettre des chèques postdatés au locateur pour la durée du bail",
+    "en": "I consent to providing postdated cheques to the lessor for the duration of the lease"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire4locataireConfirmationReglementImmeuble",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme qu'un exemplaire du règlement de l'immeuble m'a été remis et/ou que j'ai pu en prendre connaissance sur cette plateforme",
+    "en": "I confirm that a copy of the building bylaws has been provided to me and/or that I have been able to review it on this platform"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire4confirmationReceptionAvisNouveauLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme avoir reçu cet avis obligatoire",
+    "en": "I confirm having received this mandatory notice"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire4confirmationEngagementSolidaireLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme que cette information est exacte",
+    "en": "I confirm that this information is correct"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire4logementResidenceFamiliale",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce que le logement faisant l’objet de ce bail servira de résidence familiale ?",
+    "en": "Will the dwelling subject to this lease be used as a family residence?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "locataire4nomConjoint",
+   "type": "text",
+   "label": {
+    "fr": "Je déclare être marié, uni civilement ou en union parentale avec",
+    "en": "I declare that I am married, in a civil union, or in a parental union with"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locataire4confirmationAvisResidenceFamiliale",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je vous avise que le logement faisant l’objet de ce bail servira de résidence familiale",
+    "en": "I notify you that the dwelling subject to this lease will be used as a family residence"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autreSignataire1engagementAvertisseursFumeeLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je m’engage à respecter la réglementation relative à la présence et au bon fonctionnement des avertisseurs de fumée dans le logement et dans l’immeuble",
+    "en": "I commit to complying with the regulations regarding the presence and proper functioning of smoke detectors in the dwelling and the building"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autreSignataire1locataireAccepteRemiseChequePostdates",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je consens à remettre des chèques postdatés au locateur pour la durée du bail",
+    "en": "I consent to providing postdated cheques to the lessor for the duration of the lease"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autreSignataire1locataireConfirmationReglementImmeuble",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme qu'un exemplaire du règlement de l'immeuble m'a été remis et/ou que j'ai pu en prendre connaissance sur cette plateforme",
+    "en": "I confirm that a copy of the building bylaws has been provided to me and/or that I have been able to review it on this platform"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autreSignataire1confirmationReceptionAvisNouveauLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme avoir reçu cet avis obligatoire",
+    "en": "I confirm having received this mandatory notice"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autreSignataire1confirmationEngagementSolidaireLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme que cette information est exacte",
+    "en": "I confirm that this information is correct"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autreSignataire1logementResidenceFamiliale",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce que le logement faisant l’objet de ce bail servira de résidence familiale ?",
+    "en": "Will the dwelling subject to this lease be used as a family residence?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "autreSignataire1nomConjoint",
+   "type": "text",
+   "label": {
+    "fr": "Je déclare être marié, uni civilement ou en union parentale avec",
+    "en": "I declare that I am married, in a civil union, or in a parental union with"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autreSignataire1confirmationAvisResidenceFamiliale",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je vous avise que le logement faisant l’objet de ce bail servira de résidence familiale",
+    "en": "I notify you that the dwelling subject to this lease will be used as a family residence"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autreSignataire2engagementAvertisseursFumeeLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je m’engage à respecter la réglementation relative à la présence et au bon fonctionnement des avertisseurs de fumée dans le logement et dans l’immeuble",
+    "en": "I commit to complying with the regulations regarding the presence and proper functioning of smoke detectors in the dwelling and the building"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autreSignataire2locataireAccepteRemiseChequePostdates",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je consens à remettre des chèques postdatés au locateur pour la durée du bail",
+    "en": "I consent to providing postdated cheques to the lessor for the duration of the lease"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autreSignataire2locataireConfirmationReglementImmeuble",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme qu'un exemplaire du règlement de l'immeuble m'a été remis et/ou que j'ai pu en prendre connaissance sur cette plateforme",
+    "en": "I confirm that a copy of the building bylaws has been provided to me and/or that I have been able to review it on this platform"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autreSignataire2confirmationReceptionAvisNouveauLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme avoir reçu cet avis obligatoire",
+    "en": "I confirm having received this mandatory notice"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autreSignataire2confirmationEngagementSolidaireLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme que cette information est exacte",
+    "en": "I confirm that this information is correct"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autreSignataire2logementResidenceFamiliale",
+   "type": "radio",
+   "label": {
+    "fr": "Est-ce que le logement faisant l’objet de ce bail servira de résidence familiale ?",
+    "en": "Will the dwelling subject to this lease be used as a family residence?"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": {
+    "true": true,
+    "false": false
+   }
+  },
+  {
+   "nom": "autreSignataire2nomConjoint",
+   "type": "text",
+   "label": {
+    "fr": "Je déclare être marié, uni civilement ou en union parentale avec",
+    "en": "I declare that I am married, in a civil union, or in a parental union with"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "autreSignataire2confirmationAvisResidenceFamiliale",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je vous avise que le logement faisant l’objet de ce bail servira de résidence familiale",
+    "en": "I notify you that the dwelling subject to this lease will be used as a family residence"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locateur1engagementAvertisseursFumeeLocateurs",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je m’engage, conformément à mes responsabilités, à respecter la réglementation relative à la présence et au bon fonctionnement des avertisseurs de fumée dans le logement et dans l’immeuble",
+    "en": "I commit, in accordance with my responsibilities, to comply with the regulations regarding the presence and proper functioning of smoke detectors in the dwelling and the building"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locateur1confirmationLocateurAvisNouveauLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme que cette information est exacte",
+    "en": "I confirm that this information is correct"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locateur2engagementAvertisseursFumeeLocateurs",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je m’engage, conformément à mes responsabilités, à respecter la réglementation relative à la présence et au bon fonctionnement des avertisseurs de fumée dans le logement et dans l’immeuble",
+    "en": "I commit, in accordance with my responsibilities, to comply with the regulations regarding the presence and proper functioning of smoke detectors in the dwelling and the building"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locateur2confirmationLocateurAvisNouveauLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme que cette information est exacte",
+    "en": "I confirm that this information is correct"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locateur3engagementAvertisseursFumeeLocateurs",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je m’engage, conformément à mes responsabilités, à respecter la réglementation relative à la présence et au bon fonctionnement des avertisseurs de fumée dans le logement et dans l’immeuble",
+    "en": "I commit, in accordance with my responsibilities, to comply with the regulations regarding the presence and proper functioning of smoke detectors in the dwelling and the building"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "locateur3confirmationLocateurAvisNouveauLocataire",
+   "type": "checkbox",
+   "label": {
+    "fr": "Je confirme que cette information est exacte",
+    "en": "I confirm that this information is correct"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "motPasseWF",
+   "type": "text",
+   "label": {
+    "fr": "Mot de passe",
+    "en": "Password"
+   },
+   "groupe": null,
+   "repetable": null,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "NomComplet",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Initiales",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Courriel",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Date",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Ip",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "UserAgent",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "SignatureNumerique",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "EstSigne",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "NomComplet",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Initiales",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Courriel",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Date",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Ip",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "UserAgent",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "SignatureNumerique",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "EstSigne",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "NomComplet",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire3",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Initiales",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire3",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Courriel",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire3",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Date",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire3",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Ip",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire3",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "UserAgent",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire3",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "SignatureNumerique",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire3",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "EstSigne",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire3",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "NomComplet",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire4",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Initiales",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire4",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Courriel",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire4",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Date",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire4",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Ip",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire4",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "UserAgent",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire4",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "SignatureNumerique",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire4",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "EstSigne",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocataire4",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "NomComplet",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureAutreSignataire1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Initiales",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureAutreSignataire1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Courriel",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureAutreSignataire1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Date",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureAutreSignataire1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Ip",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureAutreSignataire1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "UserAgent",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureAutreSignataire1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "SignatureNumerique",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureAutreSignataire1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "EstSigne",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureAutreSignataire1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "NomComplet",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureAutreSignataire2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Initiales",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureAutreSignataire2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Courriel",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureAutreSignataire2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Date",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureAutreSignataire2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Ip",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureAutreSignataire2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "UserAgent",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureAutreSignataire2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "SignatureNumerique",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureAutreSignataire2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "EstSigne",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureAutreSignataire2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "NomComplet",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Initiales",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Courriel",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Date",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Ip",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "UserAgent",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "SignatureNumerique",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "EstSigne",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur1",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "NomComplet",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Initiales",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Courriel",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Date",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Ip",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "UserAgent",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "SignatureNumerique",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "EstSigne",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur2",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "NomComplet",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur3",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Initiales",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur3",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Courriel",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur3",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Date",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur3",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Ip",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur3",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "UserAgent",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur3",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "SignatureNumerique",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur3",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "EstSigne",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateur3",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "NomComplet",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateurPrincipal",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Initiales",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateurPrincipal",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Courriel",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateurPrincipal",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Date",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateurPrincipal",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "Ip",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateurPrincipal",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "UserAgent",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateurPrincipal",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "SignatureNumerique",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateurPrincipal",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  },
+  {
+   "nom": "EstSigne",
+   "type": "text",
+   "label": null,
+   "groupe": "signatureLocateurPrincipal",
+   "repetable": false,
+   "maxOccurrences": null,
+   "nomDomaine": null,
+   "valeursPossibles": null
+  }
+ ]
+}

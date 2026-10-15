@@ -73,6 +73,16 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "prospection_courtiers",
     "prospection_courtier_annonces",
     "prospection_courtier_contacts",
+    #: Bail de logement OFFICIEL généré par l'API du TAL (2026-10-15) :
+    #: versions du schéma 53000BAIL, connexion (clé CHIFFRÉE, jamais
+    #: exposée) et transmissions (ShortGuid, confirmation, PDF archivé,
+    #: coût 2,99 $, frais refacturé). Lecture IA :
+    #: kratos_list_entities(tal_transmissions) + détail tal_transmission ;
+    #: routes /immobilier/tal-bail. La génération reste un geste humain
+    #: confirmé (jamais par cron ni par le connecteur).
+    "tal_schemas",
+    "tal_connexion",
+    "tal_transmissions",
     "client_documents",
     "clients",
     "contact_hides",
