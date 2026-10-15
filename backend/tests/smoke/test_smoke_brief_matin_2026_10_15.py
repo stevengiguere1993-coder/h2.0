@@ -2,7 +2,7 @@
 
 La routine claude.ai ne peut pas compter sur le connecteur MCP ; Kratos
 envoie donc lui-même le digest chaque matin. On vérifie, sans réseau :
-- destinataires = propriétaires d'une clé API active (ou liste configurée) ;
+- destinataires = UNIQUEMENT la liste configurée (vide = personne) ;
 - le courriel porte le sujet daté et le digest de l'utilisateur ;
 - l'heure d'envoi est respectée (avant : rien ; après : un envoi) et le
   verrou quotidien (claim) est honoré ;
@@ -16,7 +16,7 @@ from datetime import datetime
 import pytest
 
 from app.services import brief_matin
-from tests.smoke.conftest import TestSessionLocal
+from tests.smoke.conftest import ADMIN_EMAIL, TestSessionLocal
 
 
 class FakeMailer:
@@ -83,8 +83,9 @@ def test_est_du():
 
 
 def test_destinataires_et_envoi(run, db_setup, seeded_users, fake_mailer, monkeypatch):
-    """L'admin du smoke a une clé API active (fixture api_key_headers) :
-    il reçoit le brief ; la liste configurée prend le dessus si fournie."""
+    """Règle Phil 2026-10-15 : sans liste configurée, PERSONNE ne reçoit le
+    brief — même les détenteurs d'une clé API (l'admin du smoke en a
+    une). Avec la liste, seuls les inscrits sont servis."""
     from app.models.api_key import ApiKey
     from app.models.user import User
     from sqlalchemy import select
@@ -98,25 +99,54 @@ def test_destinataires_et_envoi(run, db_setup, seeded_users, fake_mailer, monkey
         async with TestSessionLocal() as s:
             cles = (await s.execute(select(ApiKey).where(ApiKey.is_active.is_(True)))).scalars().all()
             proprietaires = {c.user_id for c in cles}
-            users = await brief_matin.destinataires(s, {})
-            rapport = await brief_matin.envoyer_brief(
+            sans_liste = await brief_matin.destinataires(s, {})
+            rapport_vide = await brief_matin.envoyer_brief(
                 s, quand=datetime(2026, 10, 15, 4, 31, tzinfo=brief_matin.FUSEAU), config={}
             )
-            await s.rollback()
-            # Liste configurée : un seul destinataire explicite.
             admin = (await s.execute(select(User).where(User.id.in_(proprietaires)))).scalars().first()
-            users2 = await brief_matin.destinataires(s, {"destinataires": [admin.email.upper()]})
-            return proprietaires, [u.id for u in users], rapport, [u.email for u in users2], admin.email
+            cfg = {"destinataires": [f"  {admin.email.upper()} ", admin.email, "inconnu@nulle-part.test"]}
+            users2 = await brief_matin.destinataires(s, cfg)
+            rapport = await brief_matin.envoyer_brief(
+                s, quand=datetime(2026, 10, 15, 4, 31, tzinfo=brief_matin.FUSEAU), config=cfg
+            )
+            # Valeurs lues AVANT le rollback (il expire les instances).
+            emails2, admin_email = [u.email for u in users2], admin.email
+            await s.rollback()
+            return proprietaires, sans_liste, rapport_vide, emails2, rapport, admin_email
 
-    proprietaires, ids, rapport, emails2, admin_email = run(_etat())
+    proprietaires, sans_liste, rapport_vide, emails2, rapport, admin_email = run(_etat())
     assert proprietaires, "le smoke doit avoir au moins une clé API active"
-    assert set(ids) == proprietaires
-    assert rapport["envoyes"] == len(ids) and not rapport["erreurs"]
+    assert sans_liste == []                      # clé API ≠ destinataire
+    assert rapport_vide["envoyes"] == 0 and rapport_vide["destinataires"] == []
+    assert "aucun destinataire configuré" in rapport_vide["erreurs"][0]
+    # (le seul courriel parti est celui du destinataire inscrit, vérifié plus bas)
+    assert emails2 == [admin_email]              # nettoyé, dédoublonné, inconnu ignoré
+    assert rapport["envoyes"] == 1 and rapport["destinataires"] == [admin_email] and not rapport["erreurs"]
+    assert len(fake_mailer.sent) == 1 and fake_mailer.sent[0]["to"] == [admin_email]
     assert fake_mailer.sent[0]["subject"] == "Kratos — brief du jeudi 15 octobre 2026"
     assert "Test pour" in fake_mailer.sent[0]["html"]
     assert brief_matin.JSON_DEBUT in fake_mailer.sent[0]["html"]
     assert "Analyses de leads en cours" in fake_mailer.sent[0]["html"]
-    assert emails2 == [admin_email]
+
+
+def test_reglage_destinataires_par_api(client, auth_headers, employee_headers):
+    """Le réglage est explicite, réservé admin/owner, vérifie que chaque
+    courriel est un compte Kratos actif, et survit à un changement d'heure."""
+    url = "/api/v1/automations/brief-matin/destinataires"
+    assert client.put(url, headers=employee_headers, json={"emails": []}).status_code == 403
+    assert client.get(url, headers=employee_headers).status_code == 403
+    r = client.put(url, headers=auth_headers, json={"emails": ["inconnu@nulle-part.test"]})
+    assert r.status_code == 422 and "inconnu@nulle-part.test" in r.json()["detail"]
+    r = client.put(url, headers=auth_headers, json={"emails": [" SMOKE-ADMIN@example.com ", "smoke-admin@example.com"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["destinataires"] == ["smoke-admin@example.com"]
+    assert client.get(url, headers=auth_headers).json()["destinataires"] == ["smoke-admin@example.com"]
+    # Changer l'heure ne vide pas la liste (fusion de la config).
+    r = client.patch("/api/v1/automations/brief_matin/config", headers=auth_headers, json={"config": {"heure": 5, "minute": 15}})
+    assert r.status_code == 200, r.text
+    assert client.get(url, headers=auth_headers).json()["destinataires"] == ["smoke-admin@example.com"]
+    assert client.put(url, headers=auth_headers, json={"emails": []}).json()["destinataires"] == []
+    assert client.patch("/api/v1/automations/brief_matin/config", headers=auth_headers, json={"config": {"heure": 4, "minute": 30}}).status_code == 200
 
 
 def test_envoyer_si_du_respecte_heure_et_verrou(run, db_setup, seeded_users, fake_mailer, monkeypatch):
@@ -133,6 +163,16 @@ def test_envoyer_si_du_respecte_heure_et_verrou(run, db_setup, seeded_users, fak
 
     monkeypatch.setattr("app.services.cron_guard.claim_cron_run", _claim)
 
+    async def _config():
+        from app.services.automation_state import set_automation_config
+
+        async with TestSessionLocal() as s:
+            await set_automation_config(
+                s, brief_matin.JOB, {"heure": 4, "minute": 30, "destinataires": [ADMIN_EMAIL]}
+            )
+            await s.commit()
+
+    run(_config())
     avant = datetime(2026, 10, 15, 4, 0, tzinfo=brief_matin.FUSEAU)
     apres = datetime(2026, 10, 15, 4, 45, tzinfo=brief_matin.FUSEAU)
     assert run(brief_matin.envoyer_si_du(avant)) is None
@@ -149,6 +189,9 @@ def test_route_et_catalogue(client, auth_headers, employee_headers, fake_mailer,
         return "État de Kratos.\nRoute manuelle."
 
     monkeypatch.setattr("app.services.user_ai.digest_pour_utilisateur", _digest)
+    assert client.put(
+        "/api/v1/automations/brief-matin/destinataires", headers=auth_headers, json={"emails": [ADMIN_EMAIL]}
+    ).status_code == 200
     r = client.post("/api/v1/automations/brief-matin/envoyer", headers=auth_headers)
     assert r.status_code == 200, r.text
     assert r.json()["envoyes"] >= 1
