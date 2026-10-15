@@ -11,11 +11,13 @@ admin/owner — invisible pour les autres volets.
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from sqlalchemy import func, select
 
 from app.api.deps import DBSession, RequireAdminOrOwner
 from app.automations.catalog import CATALOG_BY_KEY
 from app.services.automation_state import (
+    get_automation_config,
     list_automation_states,
     set_automation_config,
     set_automation_enabled,
@@ -98,6 +100,63 @@ async def toggle_automation(
     return {"key": key, "enabled": data.enabled}
 
 
+class DestinatairesIn(BaseModel):
+    emails: list[str] = Field(default_factory=list, max_length=50)
+
+
+@router.get("/brief-matin/destinataires")
+async def lire_destinataires_brief(user: RequireAdminOrOwner) -> dict:
+    """Qui reçoit le brief du matin. Liste EXPLICITE : vide = personne
+    (Phil 2026-10-15 : jamais de courriel à quelqu'un sans qu'un humain
+    l'ait inscrit)."""
+    from app.services.brief_matin import JOB, liste_destinataires
+
+    return {"destinataires": liste_destinataires(await get_automation_config(JOB))}
+
+
+@router.put("/brief-matin/destinataires")
+async def ecrire_destinataires_brief(
+    data: DestinatairesIn, db: DBSession, user: RequireAdminOrOwner
+) -> dict:
+    """Remplace la liste des destinataires du brief. Chaque courriel doit
+    être celui d'un compte Kratos actif (le brief respecte SES
+    permissions). Les autres réglages (heure, minute) sont conservés."""
+    from app.models.user import User
+    from app.services.audit import log_action
+    from app.services.brief_matin import JOB
+
+    emails: list[str] = []
+    for e in data.emails:
+        s = (e or "").strip().lower()
+        if s and s not in emails:
+            emails.append(s)
+    if emails:
+        connus = {
+            (u.email or "").strip().lower()
+            for u in (
+                await db.execute(
+                    select(User).where(func.lower(User.email).in_(emails), User.is_active.is_(True))
+                )
+            ).scalars().all()
+        }
+        inconnus = [e for e in emails if e not in connus]
+        if inconnus:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Courriel(s) sans compte Kratos actif : " + ", ".join(inconnus),
+            )
+    actuel = dict(await get_automation_config(JOB) or {})
+    actuel["destinataires"] = emails
+    await set_automation_config(db, JOB, actuel, user_id=user.id)
+    await log_action(
+        db, user=user, action="automations.brief_matin.destinataires",
+        entity_type="automation_setting", entity_id=None,
+        details={"destinataires": emails},
+    )
+    await db.flush()
+    return {"destinataires": emails}
+
+
 @router.patch("/{key}/config")
 async def update_automation_config(
     key: str,
@@ -127,5 +186,9 @@ async def update_automation_config(
                     f"« {p.label} » doit être un nombre positif.",
                 )
             clean[pk] = v
-    await set_automation_config(db, key, clean, user_id=user.id)
+    # Fusion : les réglages hors catalogue (ex. destinataires du brief)
+    # ne sont jamais écrasés par un changement d'heure.
+    actuel = dict(await get_automation_config(key) or {})
+    actuel.update(clean)
+    await set_automation_config(db, key, actuel, user_id=user.id)
     return {"key": key, "config": clean}

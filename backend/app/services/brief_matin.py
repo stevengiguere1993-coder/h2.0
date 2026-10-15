@@ -14,9 +14,13 @@ courriel. La routine n'a plus qu'à lire ce courriel dans Outlook (un
 connecteur de première partie, toujours attaché) ; le connecteur Kratos
 devient un plus, pas une dépendance.
 
-Destinataires : par défaut, les utilisateurs qui possèdent une clé API
-active (ce sont eux qui branchent des Claude) ; remplaçables par la liste
-``destinataires`` (courriels) de la configuration de l'automatisation.
+Destinataires : UNIQUEMENT la liste ``destinataires`` (courriels) de la
+configuration de l'automatisation (Paramètres → Automatisations, ou
+``PUT /api/v1/automations/brief-matin/destinataires``). Liste vide =
+personne. Plus aucun repli implicite : le 2026-10-15, le repli « tous
+les détenteurs d'une clé API » a envoyé le brief aux partenaires de
+Phil sans que personne l'ait décidé — on n'écrit à quelqu'un que si
+un humain l'a inscrit.
 Idempotent par jour (``claim_cron_run``). Jamais de contenu hors des
 permissions de l'utilisateur : le digest est celui de ``kratos_mon_brief``.
 """
@@ -29,7 +33,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
@@ -56,31 +60,29 @@ def sujet_du_jour(d: datetime) -> str:
     return f"Kratos — brief du {date_lisible(d)}"
 
 
+def liste_destinataires(config: Optional[dict[str, Any]]) -> list[str]:
+    """Courriels configurés, nettoyés et dédoublonnés (ordre conservé)."""
+    out: list[str] = []
+    for e in ((config or {}).get("destinataires") or []):
+        s = str(e).strip().lower()
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
 async def destinataires(db: AsyncSession, config: Optional[dict[str, Any]] = None) -> list:
-    """Utilisateurs à servir : liste ``destinataires`` (courriels) de la
-    configuration si présente, sinon les propriétaires d'une clé API
-    active (non expirée)."""
-    from app.models.api_key import ApiKey
+    """Utilisateurs à servir : UNIQUEMENT la liste ``destinataires``
+    (courriels) de la configuration — vide = personne. Aucun repli
+    implicite (règle Phil 2026-10-15 : on n'écrit à quelqu'un que si un
+    humain l'a inscrit)."""
     from app.models.user import User
 
-    cfg = config or {}
-    emails = [str(e).strip().lower() for e in (cfg.get("destinataires") or []) if str(e).strip()]
-    if emails:
-        rows = (
-            await db.execute(select(User).where(User.email.in_(emails)))
-        ).scalars().all()
-    else:
-        now = datetime.now(timezone.utc)
-        rows = (
-            await db.execute(
-                select(User)
-                .join(ApiKey, ApiKey.user_id == User.id)
-                .where(
-                    ApiKey.is_active.is_(True),
-                    (ApiKey.expires_at.is_(None)) | (ApiKey.expires_at > now),
-                )
-            )
-        ).scalars().unique().all()
+    emails = liste_destinataires(config)
+    if not emails:
+        return []
+    rows = (
+        await db.execute(select(User).where(func.lower(User.email).in_(emails)))
+    ).scalars().all()
     vus: set[str] = set()
     out = []
     for u in rows:
@@ -269,7 +271,10 @@ async def envoyer_brief(
     users = await destinataires(db, cfg)
     rapport: dict[str, Any] = {"envoyes": 0, "destinataires": [u.email for u in users], "erreurs": []}
     if not users:
-        rapport["erreurs"].append("aucun destinataire (aucune clé API active, aucune liste configurée)")
+        rapport["erreurs"].append(
+            "aucun destinataire configuré — Paramètres → Automatisations → "
+            "Brief du matin → destinataires (vide = personne)"
+        )
         return rapport
     mailer = get_mailer()
     if not mailer.ready:
@@ -360,6 +365,7 @@ __all__ = [
     "sujet_du_jour",
     "date_lisible",
     "destinataires",
+    "liste_destinataires",
     "construire_html",
     "collecter_donnees",
     "periode_debut",
