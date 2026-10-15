@@ -371,6 +371,57 @@ def test_flux_simulation_complet(client, auth_headers, tal_seed, run):
     assert e["schema"]["nb_champs"] == 409 and e["compteur"]["mois"]
 
 
+# ─── Signature interne (eSign) + suivi dans le kanban ─────────────────
+
+
+def test_signature_esign_et_suivi_kanban(client, auth_headers, tal_seed, run):
+    """Le PDF officiel part en signature avec l'outil eSign de Kratos :
+    locataire + caution + représentant, en parallèle ; le kanban Locations
+    montre la même donnée (bail TAL généré, signature lancée, qui/quand)."""
+    tid = IDS["t1"]
+    # Pas de signature sur un brouillon.
+    brouillon = client.post(f"{BASE}/transmissions", headers=auth_headers, json={"bail_id": tal_seed["bail2_id"]}).json()
+    r = client.post(f"{BASE}/transmissions/{brouillon['id']}/signature", headers=auth_headers, json={})
+    assert r.status_code == 409
+    assert client.post(f"{BASE}/transmissions/{brouillon['id']}/annuler", headers=auth_headers).status_code == 200
+    assert client.get(f"{BASE}/transmissions/{tid}/signature", headers=auth_headers).status_code == 404
+
+    r = client.post(f"{BASE}/transmissions/{tid}/signature", headers=auth_headers, json={"message": "Merci de signer."})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["cree"] is True and body["url"] == f"/entreprises/signature/{body['esign_document_id']}"
+    sig = body["signature"]
+    assert sig["statut"] == "brouillon" and sig["nb_signataires"] == 3 and sig["nb_signes"] == 0
+    roles = {s["role"]: s for s in sig["signataires"]}
+    assert roles["locataire"]["nom"] == "Alice Test" and roles["locataire"]["email"] == "alice@test.ca"
+    assert roles["caution"]["nom"] == "Bob Caution"
+    assert roles["locateur"]["email"] == "smoke-admin@example.com"
+    assert body["sans_courriel"] == []
+    # Idempotent : même document.
+    r2 = client.post(f"{BASE}/transmissions/{tid}/signature", headers=auth_headers, json={})
+    assert r2.status_code == 201 and r2.json()["cree"] is False and r2.json()["esign_document_id"] == body["esign_document_id"]
+    assert client.get(f"{BASE}/transmissions/{tid}/signature", headers=auth_headers).json()["nb_signataires"] == 3
+    # Le document eSign existe bien côté module Signature (PDF = celui du TAL).
+    d = client.get(f"/api/v1/esign/documents/{body['esign_document_id']}", headers=auth_headers)
+    assert d.status_code == 200, d.text
+    assert d.json()["title"].startswith("Bail de logement") and d.json()["status"] == "brouillon"
+    assert len(d.json()["signers"]) == 3
+    det = client.get(f"{BASE}/transmissions/{tid}", headers=auth_headers).json()
+    assert det["esign_document_id"] == body["esign_document_id"]
+
+    # Kanban Locations : la carte porte le suivi (même donnée que la fiche).
+    r = client.get("/api/v1/immobilier/locations/overview", headers=auth_headers, params={"immeuble_id": tal_seed["imm_id"]})
+    assert r.status_code == 200, r.text
+    row = next(x for x in r.json()["rows"] if x["id"] == tal_seed["dossier_id"])
+    assert row["statut"] == "bail_envoye" and row["nouveau_bail_document_id"] is None
+    assert row["tal_transmission_id"] == tid and row["tal_statut"] == "transmise" and row["tal_mode"] == "simulation"
+    assert row["tal_document_id"] and row["tal_genere_le"]
+    assert row["esign_document_id"] == body["esign_document_id"] and row["esign_statut"] == "brouillon"
+    assert row["nb_signataires"] == 3 and row["nb_signes"] == 0
+    assert {s["nom"] for s in row["signataires"]} == {"Alice Test", "Bob Caution", roles["locateur"]["nom"]}
+    assert all(s["signe_le"] is None for s in row["signataires"])
+
+
 # ─── Échec FRW122 puis relance, en mode réel (client factice) ──────────
 
 

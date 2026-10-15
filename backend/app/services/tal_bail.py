@@ -1214,7 +1214,177 @@ async def compteur(db: AsyncSession, mois: Optional[str] = None, *, config: Opti
     }
 
 
+# ─── Signature interne (eSign Kratos) ─────────────────────────────────
+
+
+def _prenom_nom(nom_complet: str) -> tuple[str, str]:
+    parts = (nom_complet or "").strip().split()
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return parts[0][:100], ""
+    return " ".join(parts[:-1])[:100], parts[-1][:100]
+
+
+def signataires_depuis_formulaire(form: dict[str, Any], *, representant_nom: str = "", representant_courriel: str = "") -> tuple[list[dict[str, Any]], list[str]]:
+    """Qui signe le bail : chaque locataire, chaque caution (autres
+    signataires) et le représentant du locateur (Horizon) — signature en
+    PARALLÈLE (décision Phil 2026-10-15). Retourne aussi les personnes
+    sans courriel (impossibles à inviter)."""
+    out: list[dict[str, Any]] = []
+    manquants: list[str] = []
+
+    def ajouter(nom: str, courriel: str, role: str, telephone: str = "") -> None:
+        nom = (nom or "").strip()
+        courriel = (courriel or "").strip()
+        if not nom:
+            return
+        if not courriel:
+            manquants.append(f"{nom} ({role})")
+            return
+        prenom, famille = _prenom_nom(nom)
+        out.append({"prenom": prenom, "nom": famille, "nom_complet": nom, "courriel": courriel, "telephone": (telephone or "").strip() or None, "role": role})
+
+    for occ in form.get("locataires") or []:
+        if isinstance(occ, dict):
+            ajouter(occ.get("nom", ""), occ.get("courrielLocataire", ""), "locataire", occ.get("autreNoTelephoneCell") or occ.get("noTelephone") or "")
+    if str(form.get("possedeAutresSignataires")) == "true":
+        for occ in form.get("autresSignataires") or []:
+            if isinstance(occ, dict):
+                ajouter(occ.get("nom", ""), occ.get("courriel", ""), (occ.get("qualite") or "caution").lower() or "caution")
+    loc0 = (form.get("locateurs") or [{}])[0] if isinstance(form.get("locateurs"), list) else {}
+    rep_nom = (loc0.get("representant") if isinstance(loc0, dict) else "") or representant_nom
+    rep_courriel = (loc0.get("courrielRepresentant") if isinstance(loc0, dict) else "") or representant_courriel
+    if rep_nom:
+        ajouter(rep_nom, rep_courriel, "locateur")
+    return out, manquants
+
+
+async def lancer_signature(db: AsyncSession, t: TalTransmission, *, user, message: Optional[str] = None) -> tuple[Any, bool, list[str]]:
+    """Crée le document eSign (brouillon) sur le PDF officiel du TAL avec
+    les signataires pré-remplis ; les zones se posent dans l'éditeur eSign
+    puis l'envoi part de là. Idempotent : un document déjà créé est
+    renvoyé tel quel. Retourne (document, créé ?, personnes sans courriel)."""
+    import asyncio
+    import hashlib
+
+    from app.models.esign import EsignDocument, EsignDocumentStatus, EsignEvent, EsignSigner
+    from app.services.audit import log_action
+    from app.services.esign_pdf import pdf_page_count
+
+    if t.statut != "transmise" or not t.document_id:
+        raise TransmissionFermee("Génère d'abord le bail officiel (PDF du TAL) avant de lancer la signature.")
+    if t.esign_document_id:
+        existant = await db.get(EsignDocument, t.esign_document_id)
+        if existant is not None:
+            return existant, False, []
+    pdf = (await db.execute(select(ImmDocument.pdf_blob).where(ImmDocument.id == t.document_id))).scalar_one_or_none()
+    if not pdf:
+        raise TalBailError("PDF du bail officiel introuvable au dossier.", http_status=404)
+    form = _charger_json(t.payload_json, {}) or {}
+    rep_nom = (getattr(user, "display_name", None) or "").strip()
+    rep_courriel = (getattr(user, "email", None) or "").strip()
+    signataires, manquants = signataires_depuis_formulaire(form, representant_nom=rep_nom, representant_courriel=rep_courriel)
+    if not signataires:
+        raise TalBailError("Aucun signataire avec courriel : ajoute le courriel du locataire (fiche) ou dans le formulaire.", http_status=422, details={"sans_courriel": manquants})
+    try:
+        pages = await asyncio.to_thread(pdf_page_count, pdf)
+    except Exception:  # noqa: BLE001
+        pages = 1
+    entreprise_id: Optional[int] = None
+    if t.immeuble_id:
+        entreprise_id = (
+            await db.execute(
+                select(ImmeubleOwnership.entreprise_id)
+                .where(ImmeubleOwnership.immeuble_id == t.immeuble_id)
+                .order_by(ImmeubleOwnership.ownership_pct.desc()).limit(1)
+            )
+        ).scalar_one_or_none()
+        if entreprise_id is None:
+            im = await db.get(Immeuble, t.immeuble_id)
+            entreprise_id = getattr(im, "owner_entreprise_id", None) if im is not None else None
+    titre = (f"Bail de logement — {t.adresse}" if t.adresse else "Bail de logement (TAL)")[:255]
+    doc = EsignDocument(
+        entreprise_id=entreprise_id, created_by_user_id=getattr(user, "id", None), title=titre,
+        message=(message or "Voici votre bail de logement (formulaire officiel du Tribunal administratif du logement) à signer électroniquement.")[:2000],
+        status=EsignDocumentStatus.BROUILLON.value, use_signing_order=False,
+        filename=f"bail-tal-{t.id}.pdf", content_type="application/pdf", pdf_blob=pdf, page_count=max(1, int(pages or 1)),
+        sha256=hashlib.sha256(pdf).hexdigest(),
+    )
+    db.add(doc)
+    await db.flush()
+    for i, s in enumerate(signataires):
+        db.add(EsignSigner(
+            document_id=doc.id, order_index=i, first_name=s["prenom"] or s["nom_complet"][:100], last_name=s["nom"],
+            email=s["courriel"][:320], phone=(s["telephone"] or None), require_sms_auth=False,
+            contact_ref=(f"tal:{s['role']}")[:64],
+        ))
+    db.add(EsignEvent(document_id=doc.id, type="cree", detail=(f"Bail officiel TAL (transmission #{t.id}) — par {rep_courriel}")[:500]))
+    t.esign_document_id = doc.id
+    t.updated_at = datetime.now(timezone.utc)
+    await log_action(db, user=user, action="tal_bail.signature_lancee", entity_type="tal_transmission", entity_id=t.id,
+                     details={"esign_document_id": doc.id, "bail_id": t.bail_id, "signataires": [s["role"] for s in signataires], "sans_courriel": manquants})
+    await db.flush()
+    return doc, True, manquants
+
+
+async def etat_signature(db: AsyncSession, esign_document_id: Optional[int]) -> Optional[dict[str, Any]]:
+    """Suivi « qui a signé, quand » du document eSign lié (kanban + fiche)."""
+    if not esign_document_id:
+        return None
+    from app.models.esign import EsignDocument, EsignSigner
+
+    doc = await db.get(EsignDocument, esign_document_id)
+    if doc is None:
+        return None
+    signers = (
+        await db.execute(select(EsignSigner).where(EsignSigner.document_id == doc.id).order_by(EsignSigner.order_index, EsignSigner.id))
+    ).scalars().all()
+
+    def _iso_dt(v: Any) -> Optional[str]:
+        return v.isoformat() if isinstance(v, datetime) else None
+
+    rows = [{
+        "id": s.id, "nom": f"{s.first_name} {s.last_name}".strip(), "email": s.email,
+        "role": (s.contact_ref or "").replace("tal:", "") or None,
+        "envoye_le": _iso_dt(s.sent_at), "ouvert_le": _iso_dt(s.last_opened_at or s.opened_at),
+        "signe_le": _iso_dt(s.signed_at), "refuse_le": _iso_dt(s.declined_at),
+    } for s in signers]
+    return {
+        "esign_document_id": doc.id, "statut": doc.status, "titre": doc.title,
+        "envoye_le": _iso_dt(doc.sent_at), "complete_le": _iso_dt(doc.completed_at), "expire_le": _iso_dt(doc.expires_at),
+        "nb_signataires": len(rows), "nb_signes": sum(1 for r in rows if r["signe_le"]),
+        "nb_refus": sum(1 for r in rows if r["refuse_le"]),
+        "signataires": rows, "url": f"/entreprises/signature/{doc.id}",
+    }
+
+
+async def etat_bail_tal(db: AsyncSession, bail_id: Optional[int]) -> Optional[dict[str, Any]]:
+    """Dernière transmission (non annulée) d'un bail + suivi de signature —
+    la même donnée pour le kanban Locations et la fiche."""
+    if not bail_id:
+        return None
+    t = (
+        await db.execute(
+            select(TalTransmission)
+            .where(TalTransmission.bail_id == bail_id, TalTransmission.statut != "annulee")
+            .order_by(TalTransmission.id.desc()).limit(1)
+        )
+    ).scalars().first()
+    if t is None:
+        return None
+    return {
+        "transmission_id": t.id, "statut": t.statut, "mode": t.mode,
+        "genere_le": t.genere_le.isoformat() if t.genere_le else None,
+        "document_id": t.document_id, "esign_document_id": t.esign_document_id,
+        "cout": float(t.cout) if t.cout is not None else None,
+        "created_by_email": t.created_by_email, "erreur": t.erreur,
+        "signature": await etat_signature(db, t.esign_document_id),
+    }
+
+
 __all__ = [
+    "signataires_depuis_formulaire", "lancer_signature", "etat_signature", "etat_bail_tal",
     "CONFIG_KEY", "COUT_TAL", "DOC_TYPE", "DEFAUTS", "GRATUITS_TOTAL",
     "TalBailError", "FormulaireInvalide", "TransmissionFermee",
     "fusionner_config", "charger_config", "chemins_requis",

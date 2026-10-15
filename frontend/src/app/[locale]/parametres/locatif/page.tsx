@@ -22,6 +22,7 @@ import { useAppLayout } from "../layout";
 import { authedFetch, hasMinRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { BoutonFilBancaire } from "@/components/immobilier/validation-bancaire";
+import { TalBailSection } from "@/components/immobilier/tal-bail-parametres";
 
 const MOIS_FR = [
   "janvier", "février", "mars", "avril", "mai", "juin", "juillet",
@@ -39,6 +40,7 @@ export default function LocatifDemarragePage() {
   const { onOpenSidebar } = useAppLayout();
   const { user: me } = useCurrentUser();
   const canEdit = hasMinRole(me, "manager");
+  const isAdmin = hasMinRole(me, "admin");
 
   const [valeur, setValeur] = useState<string | null>(null);
   const [enregistre, setEnregistre] = useState<string | null>(null);
@@ -411,6 +413,9 @@ export default function LocatifDemarragePage() {
 
         {/* ── Validation bancaire (QuickBooks) ── */}
         <ValidationBancaireSection canEdit={canEdit} />
+
+        {/* ── Bail officiel (TAL) : connexion, frais, défauts, schéma ── */}
+        <TalBailSection canEdit={canEdit} isAdmin={isAdmin} />
       </div>
     </>
   );
