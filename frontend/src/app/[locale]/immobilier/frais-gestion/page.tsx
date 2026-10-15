@@ -89,6 +89,7 @@ type Overview = {
 };
 
 type QboOptions = {
+  error?: string | null;
   connected: boolean;
   customers: { id: string; name: string }[];
 };
@@ -1358,7 +1359,16 @@ export default function FacturationImmoPage() {
                             />
                           </td>
                           <td className="px-3 py-2.5">
-                            {qboOpts?.connected ? (
+                            {qboOpts?.connected && qboOpts.error ? (
+                              <span
+                                className="block max-w-[280px] text-xs text-rose-300"
+                                title={qboOpts.error}
+                              >
+                                QuickBooks ne répond plus (connexion expirée).
+                                Paramètres → Comptabilité → « QuickBooks — autres
+                                pôles » → Reconnecter, puis recharge cette page.
+                              </span>
+                            ) : qboOpts?.connected ? (
                               <select
                                 value={row.qbo_customer_id || ""}
                                 disabled={!row.frais_gestion_actif}
