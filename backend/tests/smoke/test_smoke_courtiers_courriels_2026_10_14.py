@@ -119,6 +119,47 @@ def test_courriel_coupe_ou_obfusque(run, sans_reseau):
     assert res["courriel"] == "rosibel@groupemackay.com" and res["confiance"] == "verifie"
 
 
+def test_resultats_pertinents_et_ordre_des_moteurs(run, monkeypatch):
+    """Vrai cas prod : Bing, flairant un robot, renvoyait des horaires NFL
+    pour « Daniel Sauvé » → lot jugé vide, moteur suivant."""
+    jet = courriels.tokens_nom("Daniel Sauvé")
+    bidon = [
+        {"url": "https://www.espn.com/nfl/schedule/mnf", "titre": "Monday Night Football", "extrait": "NFL"},
+        {"url": "https://ca.shein.com/pdsearch/47.55555", "titre": "Shein", "extrait": ""},
+    ]
+    bon = [{"url": "https://www.remax-quebec.com/fr/courtiers-immobiliers/daniel.sauve/index.rmx",
+            "titre": "Daniel Sauvé — Courtier immobilier RE/MAX", "extrait": "514 555 1234"}]
+    assert courriels.resultats_pertinents(bidon, jet) == []
+    assert courriels.resultats_pertinents(bidon + bon, jet) == bon
+
+    appels: list = []
+
+    async def _get(url, **kw):
+        appels.append(url)
+        if "bing.com" in url:
+            return 200, ('<ol><li class="b_algo"><h2><a href="https://www.espn.com/nfl/schedule/mnf">'
+                         "Monday Night Football</a></h2><p>NFL</p></li></ol>")
+        return 200, "<html></html>"
+
+    async def _vps(requete, max_results=8):
+        appels.append("vps")
+        return [{"url": bon[0]["url"], "titre": bon[0]["titre"], "extrait": ""}]
+
+    from app.integrations import scraping_proxy
+
+    monkeypatch.setattr(courriels, "_http_get", _get)
+    monkeypatch.setattr(scraping_proxy, "vps_available", lambda: True)
+    monkeypatch.setattr(scraping_proxy, "scrape_web_search", _vps)
+    journal: list = []
+    # Ordre : direct (bing bidon) puis vps → le VPS gagne ; sans clé, google est sauté.
+    res = run(courriels.rechercher_web("Daniel Sauvé courtier", moteurs=("google", "bing", "vps"),
+                                       jetons=jet, journal=journal))
+    assert res == [{"url": bon[0]["url"], "titre": bon[0]["titre"], "extrait": ""}]
+    assert any("moteur bing : 1 résultat(s), 0 pertinent(s)" in l for l in journal)
+    assert any(l.startswith("moteur vps : 1 résultat(s), 1 pertinent(s)") for l in journal)
+    assert courriels.MOTEURS_WEB_DEFAUT[0] == "google" and courriels.MOTEURS_WEB_DEFAUT[1] == "vps"
+
+
 def test_parseurs_moteurs():
     ddg = """<div class="results">
       <div class="result"><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.immoalliances.ca%2Fequipe%2Fdenis-gallico&amp;rut=abc">Denis Gallico – Immo Alliances</a>
@@ -155,6 +196,7 @@ def test_recherche_un_courtier_verifie(run, sans_reseau):
 
     async def _web(requete, **kw):
         assert "Denis Gallico" in requete
+        assert kw.get("jetons") == ["denis", "gallico"]
         return [
             {"url": "https://www.centris.ca/fr/courtier~denis-gallico/1", "titre": "Centris", "extrait": ""},
             {"url": page_url, "titre": "Denis Gallico – Immo Alliances", "extrait": "Courtier immobilier"},
