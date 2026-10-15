@@ -131,6 +131,11 @@ def test_parseurs_moteurs():
     assert res[1]["url"].startswith("https://www.centris.ca")
     bing = """<ol id="b_results"><li class="b_algo"><h2><a href="https://www.remax-quebec.com/fr/courtiers-immobiliers/francois.courval/index.rmx">François Courval</a></h2>
       <div class="b_caption"><p>François Courval, courtier immobilier résidentiel RE/MAX. fcourval@remax-quebec.com</p></div></li></ol>"""
+    # Redirection Bing : l'URL réelle est encodée en base64 dans « u=a1… ».
+    redir = ("https://www.bing.com/ck/a?!&&p=abc&u=a1"
+             + "aHR0cHM6Ly9jb250YWN0b3V0LmNvbS9BbXktQXNzYWFkLTI1NzQ0NzAw" + "&ntb=1")
+    assert courriels.decoder_redirection_bing(redir) == "https://contactout.com/Amy-Assaad-25744700"
+    assert courriels.decoder_redirection_bing("https://www.remax-quebec.com/x") == "https://www.remax-quebec.com/x"
     res = courriels.parser_bing(bing)
     assert res == [{
         "url": "https://www.remax-quebec.com/fr/courtiers-immobiliers/francois.courval/index.rmx",
@@ -170,7 +175,14 @@ def test_recherche_un_courtier_verifie(run, sans_reseau):
 
     sans_reseau.setattr(courriels, "rechercher_web", _web)
     sans_reseau.setattr(courriels, "lire_page", _page)
-    res = run(courriels.chercher_courriel(_courtier("Denis Gallico", "Immo Alliances", "Montréal"), config={}))
+    journal: list = []
+    res = run(courriels.chercher_courriel(
+        _courtier("Denis Gallico", "Immo Alliances", "Montréal"), config={}, journal=journal
+    ))
+    assert any(l.startswith("gemini : rien") for l in journal)
+    assert any("web «" in l and "3 résultat(s)" in l for l in journal)
+    assert any(l.startswith("page https://www.immoalliances.ca") for l in journal)
+    assert any("candidat d.gallico@immoalliances.ca" in l for l in journal)
     assert res["courriel"] == "d.gallico@immoalliances.ca"
     assert res["confiance"] == "verifie"
     assert res["source"] == page_url
@@ -223,7 +235,7 @@ def test_enrichissement_en_lot(run, db_setup, sans_reseau):
 
     IDS["ursule"], IDS["ovide"] = run(_seed())
 
-    async def _chercher(c, *, config=None):
+    async def _chercher(c, *, config=None, journal=None):
         if "Ursule" in c.nom:
             return {"courriel": "ursule.testmail@viacapitale.com", "confiance": "probable",
                     "source": "https://viacapitale.com/ursule", "telephone": "514 555 2222",
@@ -267,7 +279,7 @@ def test_routes_courriels(client, auth_headers, monkeypatch, sans_reseau):
     monkeypatch.setattr(ep, "_session_factory_jobs", lambda: TestSessionLocal)
     ovide = IDS["ovide"]
 
-    async def _chercher(c, *, config=None):
+    async def _chercher(c, *, config=None, journal=None):
         return {"courriel": "ovide.sanscourriel@royallepage.ca", "confiance": "verifie",
                 "source": "https://www.royallepage.ca/fr/agent/ovide", "telephone": None, "site_web": None,
                 "note": "prénom et nom — 1 page(s) lue(s)", "methode": "web", "ecartes": []}
@@ -295,6 +307,12 @@ def test_routes_courriels(client, auth_headers, monkeypatch, sans_reseau):
         time.sleep(0.05)
     assert etat and etat["status"] == "termine", etat
     assert etat["resultat"]["courriels"]["examines"] == 1
+
+    # Diagnostic : rejoue sans écrire, renvoie le journal.
+    r = client.post(f"{BASE}/{ovide}/chercher-courriel/diagnostic", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["courtier"]["id"] == ovide and isinstance(r.json()["journal"], list)
+    assert r.json()["resultat"]["courriel"] == "ovide.sanscourriel@royallepage.ca"
 
     # Saisie manuelle : la référence, « vérifié ».
     r = client.patch(f"{BASE}/{ovide}", headers=auth_headers, json={"courriel": "Ovide@Perso.ca"})
