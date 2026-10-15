@@ -99,6 +99,8 @@ type Dossier = {
   tal_mode?: string | null;
   tal_genere_le?: string | null;
   tal_document_id?: number | null;
+  tal_signe_le?: string | null;
+  tal_document_signe_id?: number | null;
   esign_document_id?: number | null;
   esign_statut?: string | null;
   esign_envoye_le?: string | null;
@@ -1376,6 +1378,11 @@ function BailTalBloc({
         </span>
         {transmise && d.tal_genere_le ? (
           <span className="text-sky-200/70">le {fmtDateTime(d.tal_genere_le)}</span>
+        ) : null}
+        {d.tal_signe_le ? (
+          <span className="badge badge-emerald" title="Le PDF signé est LE bail au dossier (bail actif).">
+            Bail signé au dossier le {fmtDateTime(d.tal_signe_le)}
+          </span>
         ) : null}
         {transmise && d.tal_document_id ? (
           <button

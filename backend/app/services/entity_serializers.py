@@ -1036,6 +1036,8 @@ def serialize_tal_transmission(obj: Any, level: str = "summary") -> dict:
         "no_confirmation": _str(_get(obj, "no_confirmation")),
         "document_id": _get(obj, "document_id"),
         "esign_document_id": _get(obj, "esign_document_id"),
+        "signe_le": _iso(_get(obj, "signe_le")),
+        "document_signe_id": _get(obj, "document_signe_id"),
         "cout": _num(_get(obj, "cout")),
         "frais_montant": _num(_get(obj, "frais_montant")),
         "genere_le": _iso(_get(obj, "genere_le")),
