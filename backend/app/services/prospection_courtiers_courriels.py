@@ -82,6 +82,16 @@ _DOMAINES_DONNEES_CONTACT = (
     "contactout.", "rocketreach.", "signalhire.", "zoominfo.", "apollo.io", "lusha.",
     "hunter.io", "kaspr.", "snov.io", "leadiq.", "clearbit.", "adapt.io",
 )
+#: Sites de recherche de personnes (surtout américains) : courriels de
+#: n'importe qui portant le même nom → jamais ouverts, extraits ignorés.
+_DOMAINES_RECHERCHE_PERSONNES = (
+    "veripages.", "spokeo.", "whitepages.", "radaris.", "fastpeoplesearch.",
+    "truepeoplesearch.", "peoplefinders.", "beenverified.", "intelius.", "nuwber.",
+    "clustrmaps.", "cyberbackgroundchecks.", "mylife.", "publicdatausa.", "411.com",
+    "411.ca", "canada411.", "peekyou.", "pipl.", "thatsthem.", "usphonebook.",
+    "zabasearch.", "searchpeoplefree.", "locatefamily.", "findglocal.", "cybo.",
+    "yellowpages.", "pagesjaunes.", "infobel.", "hotfrog.", "cylex.", "opendi.",
+)
 #: Webmails : n'importe qui peut y créer « cote123@ » — on n'accepte que
 #: prénom + nom ou initiale + nom.
 _DOMAINES_WEBMAIL = (
@@ -207,7 +217,16 @@ def _domaine_exclu(url: str) -> bool:
         h = (urlparse(url).hostname or "").lower()
     except Exception:  # noqa: BLE001
         return True
-    return not h or any(d in h for d in _DOMAINES_EXCLUS)
+    return not h or any(d in h for d in _DOMAINES_EXCLUS) or any(
+        d in h for d in _DOMAINES_RECHERCHE_PERSONNES
+    )
+
+
+def _source_douteuse(source: str) -> bool:
+    """Extrait ou page d'un site de recherche de personnes : on n'en tire
+    aucun candidat."""
+    bas = (source or "").lower()
+    return any(d in bas for d in _DOMAINES_RECHERCHE_PERSONNES)
 
 
 _OBFUSCATIONS = (
@@ -673,6 +692,9 @@ async def chercher_courriel(
     def _noter(courriel: Optional[str], source: str, texte_page: str = "") -> None:
         c = courriel_propre(courriel)
         if not c:
+            return
+        if _source_douteuse(source):
+            _j(f"ignoré {c} ← {source[:90]} (site de recherche de personnes)")
             return
         score, raison = score_courriel(c, nom, agence)
         _j(f"candidat {c} ← {source[:90]} : {score} ({raison})")
