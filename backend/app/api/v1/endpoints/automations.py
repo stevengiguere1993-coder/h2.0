@@ -24,6 +24,25 @@ from app.services.automation_state import (
 router = APIRouter(prefix="/automations", tags=["automations"])
 
 
+@router.post(
+    "/brief-matin/envoyer",
+    summary="Envoyer le brief du matin maintenant (test ou rattrapage)",
+)
+async def envoyer_brief_matin_maintenant(
+    db: DBSession, user: RequireAdminOrOwner
+) -> dict:
+    """Envoie le digest Kratos du jour par courriel aux destinataires de
+    l'automatisation « Brief du matin » — sans attendre l'heure réglée et
+    sans consommer la réservation quotidienne."""
+    from datetime import datetime
+
+    from app.services.brief_matin import FUSEAU, envoyer_brief
+
+    rapport = await envoyer_brief(db, quand=datetime.now(FUSEAU))
+    await db.flush()
+    return rapport
+
+
 class AutomationToggle(BaseModel):
     enabled: bool
 
