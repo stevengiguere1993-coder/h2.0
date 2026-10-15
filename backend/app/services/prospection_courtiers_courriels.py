@@ -23,6 +23,7 @@ point d'entrée unique (``_http_get``) remplaçable dans les tests.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import random
@@ -75,6 +76,12 @@ _DOMAINES_COURRIEL_BIDON = (
     "yoursite", "votresite", "sentry-next", "mailchimp", "googlemail",
 )
 _PARTICULES = {"de", "du", "des", "la", "le", "les", "van", "von", "st", "ste", "d"}
+#: Annuaires de données de contacts (souvent devinés) : on garde le
+#: candidat mais jamais au rang « vérifié ».
+_DOMAINES_DONNEES_CONTACT = (
+    "contactout.", "rocketreach.", "signalhire.", "zoominfo.", "apollo.io", "lusha.",
+    "hunter.io", "kaspr.", "snov.io", "leadiq.", "clearbit.", "adapt.io",
+)
 #: Webmails : n'importe qui peut y créer « cote123@ » — on n'accepte que
 #: prénom + nom ou initiale + nom.
 _DOMAINES_WEBMAIL = (
@@ -301,6 +308,21 @@ def parser_duckduckgo(html: str) -> list[dict]:
     return out
 
 
+def decoder_redirection_bing(href: str) -> str:
+    """bing.com/ck/a?…&u=a1<base64 de l'URL> → l'URL réelle."""
+    if "bing.com/ck/a" not in (href or ""):
+        return href
+    try:
+        u = (parse_qs(urlparse(href).query).get("u") or [""])[0]
+        if u.startswith("a1"):
+            u = u[2:]
+        u += "=" * (-len(u) % 4)
+        reel = base64.urlsafe_b64decode(u.encode("ascii")).decode("utf-8", "ignore")
+        return reel if reel.startswith("http") else href
+    except Exception:  # noqa: BLE001
+        return href
+
+
 def parser_bing(html: str) -> list[dict]:
     """Résultats de bing.com/search → [{url, titre, extrait}]."""
     out: list[dict] = []
@@ -309,7 +331,7 @@ def parser_bing(html: str) -> list[dict]:
         a = li.select_one("h2 a[href]")
         if not a:
             continue
-        href = a.get("href") or ""
+        href = decoder_redirection_bing(a.get("href") or "")
         if not href.startswith("http"):
             continue
         p = li.select_one(".b_caption p") or li.select_one("p")
@@ -416,6 +438,7 @@ async def _via_gemini(nom: str, agence: Optional[str], secteur: Optional[str]) -
     tout autre candidat (correspondance au nom, relecture de la page)."""
     api_key = (getattr(settings, "gemini_api_key", None) or "").strip()
     if not api_key:
+        _DERNIER_GEMINI["raison"] = "clé GEMINI_API_KEY absente"
         return None
     from app.services.lead_extraction import (
         _GEMINI_BASE,
@@ -430,7 +453,10 @@ async def _via_gemini(nom: str, agence: Optional[str], secteur: Optional[str]) -
         cascade = []
     modeles = [m for m in cascade if not _gemini_en_pause(m)][:2]
     if not modeles:
+        _DERNIER_GEMINI["raison"] = "aucun modèle Gemini disponible (tous en pause)"
         return None
+    _DERNIER_GEMINI["raison"] = None
+    _DERNIER_GEMINI["essais"] = []
     prompt = (
         "Tu aides une entreprise immobilière du Québec à joindre un courtier immobilier. "
         f"Trouve l'adresse courriel PROFESSIONNELLE du courtier immobilier « {nom} »"
@@ -455,9 +481,16 @@ async def _via_gemini(nom: str, agence: Optional[str], secteur: Optional[str]) -
                 resp = await client.post(url, params={"key": api_key}, json=payload)
             if resp.status_code == 429:
                 _mettre_en_pause(modele, 600.0)
+                _DERNIER_GEMINI["essais"].append(f"{modele}: HTTP 429 (quota)")
                 continue
             if resp.status_code >= 400:
-                log.info("Gemini[%s] recherche courriel HTTP %s", modele, resp.status_code)
+                log.warning(
+                    "Gemini[%s] recherche courriel HTTP %s : %s",
+                    modele, resp.status_code, (resp.text or "")[:300],
+                )
+                _DERNIER_GEMINI["essais"].append(
+                    f"{modele}: HTTP {resp.status_code} {(resp.text or '')[:160]}"
+                )
                 if resp.status_code in (500, 502, 503, 504):
                     _mettre_en_pause(modele, 600.0)
                 continue
@@ -483,13 +516,22 @@ async def _via_gemini(nom: str, agence: Optional[str], secteur: Optional[str]) -
                 "sources": sources,
                 "modele": modele,
             }
+            _DERNIER_GEMINI["essais"].append(
+                f"{modele}: réponse {len(texte or '')} car., {len(sources)} source(s), "
+                f"courriel={out['courriel']}"
+            )
             if out["courriel"] or out["site_web"] or sources:
                 return out
             return None
         except Exception as exc:  # noqa: BLE001
             log.info("Gemini[%s] recherche courriel : %s", modele, exc)
+            _DERNIER_GEMINI["essais"].append(f"{modele}: {type(exc).__name__}")
             continue
     return None
+
+
+#: Dernier appel Gemini (diagnostic) : {raison, essais[]}.
+_DERNIER_GEMINI: dict[str, Any] = {"raison": None, "essais": []}
 
 
 # ─── Recherche d'un courtier ─────────────────────────────────────────
@@ -526,11 +568,17 @@ def _prioriser_pages(resultats: list[dict], nom: str, agence: Optional[str]) -> 
 
 
 async def chercher_courriel(
-    courtier: ProspectionCourtier, *, config: Optional[dict] = None
+    courtier: ProspectionCourtier, *, config: Optional[dict] = None,
+    journal: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Cherche le courriel d'UN courtier. Renvoie
     {courriel, confiance, source, telephone, site_web, note, methode,
-     ecartes: [...]} — courriel None si rien ne correspond au nom."""
+     ecartes: [...]} — courriel None si rien ne correspond au nom.
+    ``journal`` (liste) reçoit une ligne par étape (diagnostic)."""
+    def _j(msg: str) -> None:
+        if journal is not None:
+            journal.append(msg)
+
     nom = (courtier.nom or "").strip()
     agence = (courtier.agence or "").strip() or None
     secteur = (courtier.secteur or "").strip() or None
@@ -548,6 +596,7 @@ async def chercher_courriel(
         if not c:
             return
         score, raison = score_courriel(c, nom, agence)
+        _j(f"candidat {c} ← {source[:90]} : {score} ({raison})")
         jet = tokens_nom(nom)
         nom_famille = jet[-1] if len(jet) > 1 else (jet[0] if jet else "")
         bas = _sans_accents(texte_page).lower() if texte_page else ""
@@ -565,6 +614,8 @@ async def chercher_courriel(
         verifie = False
         if bas:
             verifie = c in bas and bool(nom_famille) and nom_famille in bas
+        if verifie and any(d in (source or "").lower() for d in _DOMAINES_DONNEES_CONTACT):
+            verifie = False  # annuaire de contacts : jamais « vérifié »
         prev = candidats.get(c)
         if prev is None or (score, verifie) > (prev["score"], prev["verifie"]):
             candidats[c] = {"score": score, "raison": raison, "source": source, "verifie": verifie}
@@ -576,7 +627,9 @@ async def chercher_courriel(
             return
         pages_lues.append(url)
         texte, mailtos = await lire_page(url)
-        for c in extraire_courriels(texte, mailtos):
+        trouves = extraire_courriels(texte, mailtos)
+        _j(f"page {url[:100]} : {len(texte)} car., {len(mailtos)} mailto, courriels {trouves[:5]}")
+        for c in trouves:
             _noter(c, url, texte)
 
     async def _travail() -> None:
@@ -584,6 +637,13 @@ async def chercher_courriel(
         # 1. Gemini + recherche Google : propose un courriel et des sources.
         if "gemini" in moteurs:
             g = await _via_gemini(nom, agence, secteur)
+            _j(
+                "gemini : " + (
+                    f"{g.get('modele')} → courriel={g.get('courriel')} site={g.get('site_web')} "
+                    f"source={g.get('source_url')} sources={len(g.get('sources') or [])}"
+                    if g else f"rien ({_DERNIER_GEMINI.get('raison') or '; '.join(_DERNIER_GEMINI.get('essais') or []) or 'réponse vide'})"
+                )
+            )
             if g:
                 methode.append(f"gemini:{g.get('modele')}")
                 telephone = telephone or g.get("telephone")
@@ -601,6 +661,9 @@ async def chercher_courriel(
         web_moteurs = tuple(m for m in moteurs if m in ("duckduckgo", "bing")) or ("duckduckgo", "bing")
         for requete in _requetes(nom, agence, secteur):
             resultats = await rechercher_web(requete, moteurs=web_moteurs)
+            _j(f"web « {requete} » : {len(resultats)} résultat(s) — " + "; ".join(
+                (r.get("url") or "")[:80] for r in resultats[:6]
+            ))
             if resultats:
                 methode.append("web")
             for r in resultats:
@@ -750,6 +813,7 @@ __all__ = [
     "score_courriel",
     "extraire_courriels",
     "deobfusquer",
+    "decoder_redirection_bing",
     "texte_colle_par_bloc",
     "parser_duckduckgo",
     "parser_bing",
