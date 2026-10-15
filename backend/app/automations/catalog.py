@@ -95,10 +95,10 @@ CATALOG: tuple[Automation, ...] = (
         "brief_matin", "Brief du matin par courriel", "rapport", "cron",
         "Jours ouvrables · 04h30 (Montréal), depuis l'application",
         "Envoie par courriel l'état du jour de Kratos (le digest « mon brief ») "
-        "aux utilisateurs qui ont une clé API active — ou à la liste "
-        "« destinataires » configurée. Les routines Claude le lisent dans "
-        "Outlook sans dépendre du connecteur Kratos. Boucle autonome : "
-        "aucun cron externe.",
+        "UNIQUEMENT aux destinataires inscrits (liste vide = personne ; "
+        "PUT /api/v1/automations/brief-matin/destinataires). Les routines "
+        "Claude le lisent dans Outlook sans dépendre du connecteur Kratos. "
+        "Boucle autonome : aucun cron externe.",
         params=(
             Param("heure", "Heure d'envoi (Montréal)", "int", 4,
                   "Heure locale à partir de laquelle le brief part (une fois par jour)."),
