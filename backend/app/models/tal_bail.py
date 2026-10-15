@@ -147,6 +147,11 @@ class TalTransmission(Base, TimestampUpdateMixin):
     document_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     #: Document eSign Kratos lancé sur ce PDF (signature interne, PR C).
     esign_document_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    #: Signature eSign TERMINÉE : date, et le PDF SIGNÉ posé comme bail au
+    #: dossier (imm_documents « bail »). Colonnes additives →
+    #: ensure_critical_columns (la table existe en prod depuis #1860).
+    signe_le: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    document_signe_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
 
     #: Coût TAL (2,99 $ en mode réel, 0 en simulation) et frais refacturé
     #: au propriétaire (tarif Paramètres, 8,99 $ par défaut).

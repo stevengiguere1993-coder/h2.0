@@ -153,6 +153,10 @@ async def ensure_critical_columns() -> None:
         ("prospection_courtiers", "courriel_confiance", "VARCHAR(16)"),
         ("prospection_courtiers", "courriel_cherche_le", "TIMESTAMP WITH TIME ZONE"),
         ("prospection_courtiers", "courriel_recherche_note", "VARCHAR(500)"),
+        # Bail officiel TAL : signature eSign terminée → bail signé au
+        # dossier (2026-10-15). Table créée par #1860, colonnes ajoutées après.
+        ("tal_transmissions", "signe_le", "TIMESTAMP WITH TIME ZONE"),
+        ("tal_transmissions", "document_signe_id", "INTEGER"),
         # Refus d'un document signable (consentement notamment).
         ("imm_documents", "refuse_le", "TIMESTAMP WITH TIME ZONE"),
         ("imm_documents", "refuse_par", "VARCHAR(255)"),

@@ -980,6 +980,18 @@ async def _finalize_document(
             "eSign : PDF final généré pour le doc %s (%d octets)",
             doc_id, len(final_pdf),
         )
+        # Bail officiel TAL (2026-10-15) : le PDF signé devient le bail au
+        # dossier (bail actif, carte « Reloué »). Best-effort, jamais bloquant.
+        try:
+            from app.services.tal_bail import apres_signature_complete
+
+            await apres_signature_complete(db, doc_id, pdf=final_pdf)
+        except Exception:  # noqa: BLE001
+            log.exception("eSign : rattachement du bail TAL signé échoué (doc %s)", doc_id)
+            try:
+                await db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
         if not send_emails:
             return True
 
