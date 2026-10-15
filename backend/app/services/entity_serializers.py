@@ -1011,6 +1011,48 @@ def serialize_prospection_courtier(obj: Any, level: str = "summary") -> dict:
     return _drop_none(data)
 
 
+def serialize_tal_transmission(obj: Any, level: str = "summary") -> dict:
+    """Bail officiel demandé au TAL (pôle Immobilier, 2026-10-15) :
+    statut du formulaire 53000BAIL, référence TAL (ShortGuid,
+    confirmation), PDF archivé, coût et frais refacturé. Jamais le
+    formulaire complet (données personnelles) ni la clé."""
+    statut = _str(_get(obj, "statut"))
+    data: dict[str, Any] = {
+        "entity_type": "tal_transmission",
+        "type": "tal_transmission",
+        "id": _get(obj, "id"),
+        "label": f"Bail TAL {_str(_get(obj, 'adresse')) or ''} ({statut or ''})".strip(),
+        "pole": "immobilier",
+        "statut": statut,
+        "status": statut,
+        "mode": _str(_get(obj, "mode")),
+        "adresse": _str(_get(obj, "adresse")),
+        "bail_id": _get(obj, "bail_id"),
+        "dossier_id": _get(obj, "dossier_id"),
+        "logement_id": _get(obj, "logement_id"),
+        "immeuble_id": _get(obj, "immeuble_id"),
+        "locataire_id": _get(obj, "locataire_id"),
+        "short_guid": _str(_get(obj, "short_guid")),
+        "no_confirmation": _str(_get(obj, "no_confirmation")),
+        "document_id": _get(obj, "document_id"),
+        "esign_document_id": _get(obj, "esign_document_id"),
+        "cout": _num(_get(obj, "cout")),
+        "frais_montant": _num(_get(obj, "frais_montant")),
+        "genere_le": _iso(_get(obj, "genere_le")),
+        "updated_at": _iso(_get(obj, "updated_at")),
+    }
+    if level in ("detail", "full"):
+        data.update({
+            "schema_version": _str(_get(obj, "schema_version")),
+            "identifiant_utilisateur": _str(_get(obj, "identifiant_utilisateur")),
+            "erreur": _str(_get(obj, "erreur")),
+            "tentatives": _get(obj, "tentatives"),
+            "created_by_email": _str(_get(obj, "created_by_email")),
+            "created_at": _iso(_get(obj, "created_at")),
+        })
+    return _drop_none(data)
+
+
 SERIALIZERS: dict[str, Callable[..., dict]] = {
     "devlog_soumission": serialize_devlog_soumission,
     "devlog_project_task": serialize_devlog_project_task,
@@ -1028,6 +1070,7 @@ SERIALIZERS: dict[str, Callable[..., dict]] = {
     "imm_tal_dossier": serialize_imm_tal_dossier,
     "imm_locataire_contact": serialize_imm_locataire_contact,
     "lot_paiement": serialize_lot_paiement,
+    "tal_transmission": serialize_tal_transmission,
     "prospection_courtier": serialize_prospection_courtier,
 }
 
