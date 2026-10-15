@@ -199,11 +199,28 @@ def _domaine_exclu(url: str) -> bool:
     return not h or any(d in h for d in _DOMAINES_EXCLUS)
 
 
+_OBFUSCATIONS = (
+    (re.compile(r"\s*[\[\({]\s*(?:at|arobas|arobase)\s*[\]\)}]\s*", re.IGNORECASE), "@"),
+    (re.compile(r"\s+(?:at|arobas|arobase)\s+", re.IGNORECASE), "@"),
+    (re.compile(r"\s*[\[\({]\s*(?:dot|point)\s*[\]\)}]\s*", re.IGNORECASE), "."),
+    (re.compile(r"&#64;|&commat;|%40", re.IGNORECASE), "@"),
+)
+
+
+def deobfusquer(texte: str) -> str:
+    """« prenom [at] agence [dot] ca » → « prenom@agence.ca »."""
+    s = texte or ""
+    for rx, rempl in _OBFUSCATIONS:
+        s = rx.sub(rempl, s)
+    return s
+
+
 def extraire_courriels(texte: str, mailtos: Optional[list[str]] = None) -> list[str]:
     """Courriels d'un texte / d'une liste de liens mailto, dédoublonnés,
     nettoyés, ordre d'apparition."""
     vus: list[str] = []
-    for brut in list(mailtos or []) + _MAIL_RE.findall(texte or ""):
+    texte = deobfusquer(texte or "")
+    for brut in list(mailtos or []) + _MAIL_RE.findall(texte):
         c = courriel_propre(brut.replace("mailto:", "").split("?")[0])
         if c and c not in vus:
             vus.append(c)
@@ -229,6 +246,36 @@ def _soup(html: str):
     from bs4 import BeautifulSoup  # type: ignore
 
     return BeautifulSoup(html or "", "html.parser")
+
+
+_BLOCS_TEXTE = ["p", "li", "td", "th", "div", "h1", "h2", "h3", "h4", "h5", "h6",
+                "a", "address", "section", "article", "body"]
+_DEBUT_COURRIEL_RE = re.compile(r"^[\w.+-]*@[\w.-]+")
+_FIN_MOT_RE = re.compile(r"[\w.+-]$")
+
+
+def texte_colle_par_bloc(soup) -> str:
+    """Texte de la page où deux morceaux d'un MÊME bloc sont recollés
+    quand le second commence par « …@ » (« rosibe</span>l@agence.com »
+    → « rosibel@agence.com »). Ne sert qu'à l'extraction des courriels."""
+    out: list[str] = []
+    dernier_bloc = None
+    for s in soup.find_all(string=True):
+        txt = str(s).strip()
+        if not txt:
+            continue
+        parent = s.find_parent(_BLOCS_TEXTE)
+        bloc = id(parent) if parent is not None else None
+        if (
+            out and bloc is not None and bloc == dernier_bloc
+            and _FIN_MOT_RE.search(out[-1])
+            and (_DEBUT_COURRIEL_RE.match(txt) or out[-1].endswith("@"))
+        ):
+            out[-1] = out[-1] + txt
+        else:
+            out.append(txt)
+        dernier_bloc = bloc
+    return " ".join(out)
 
 
 def parser_duckduckgo(html: str) -> list[dict]:
@@ -331,6 +378,15 @@ async def lire_page(url: str) -> tuple[str, list[str]]:
                 s.decompose()
             mailtos = [a.get("href", "") for a in soup.select('a[href^="mailto:"]')]
             texte = soup.get_text(" ", strip=True)
+            # Un courriel coupé en deux balises (« rosibe</span>l@… ») est
+            # perdu avec un séparateur : on ajoute le texte recollé par
+            # bloc, qui ne sert qu'à l'extraction des courriels.
+            try:
+                colle = texte_colle_par_bloc(soup)
+            except Exception:  # noqa: BLE001
+                colle = ""
+            if colle:
+                texte = texte + " \n" + colle
     except Exception as exc:  # noqa: BLE001
         log.info("lecture directe %s en échec : %s", url, exc)
     if len(texte) < 200 and not mailtos:
@@ -492,15 +548,22 @@ async def chercher_courriel(
         if not c:
             return
         score, raison = score_courriel(c, nom, agence)
+        jet = tokens_nom(nom)
+        nom_famille = jet[-1] if len(jet) > 1 else (jet[0] if jet else "")
+        bas = _sans_accents(texte_page).lower() if texte_page else ""
+        if score < 55 and bas and nom_famille and nom_famille in bas:
+            # « rosibel@agence.com » sur la page qui porte « Rosibel
+            # Martinez » : le prénom seul suffit quand le nom est là.
+            local_a = re.sub(r"[^a-z]", "", _sans_accents(c.split("@")[0]).lower())
+            prenom = jet[0] if jet else ""
+            if len(prenom) >= 4 and local_a == prenom and "webmail" not in raison:
+                score, raison = 60, "prénom seul, nom sur la page"
         if score < 55:
             if c not in ecartes:
                 ecartes.append(c)
             return
         verifie = False
-        if texte_page:
-            bas = _sans_accents(texte_page).lower()
-            jet = tokens_nom(nom)
-            nom_famille = jet[-1] if len(jet) > 1 else (jet[0] if jet else "")
+        if bas:
             verifie = c in bas and bool(nom_famille) and nom_famille in bas
         prev = candidats.get(c)
         if prev is None or (score, verifie) > (prev["score"], prev["verifie"]):
@@ -570,7 +633,11 @@ async def chercher_courriel(
             "source": v["source"],
             "telephone": telephone,
             "site_web": site_web,
-            "note": f"{v['raison']} — {len(pages_lues)} page(s) lue(s)" + (f" ; écartés : {', '.join(ecartes[:4])}" if ecartes else ""),
+            "note": (
+                f"{v['raison']} — {len(pages_lues)} page(s) lue(s)"
+                + (f" ; écartés : {', '.join(ecartes[:4])}" if ecartes else "")
+                + (f" ; via {','.join(methode)}" if methode else "")
+            ),
             "methode": ",".join(methode) or "aucune",
             "ecartes": ecartes,
         }
@@ -583,6 +650,7 @@ async def chercher_courriel(
         "note": (
             f"aucun courriel au nom du courtier — {len(pages_lues)} page(s) lue(s)"
             + (f" ; écartés : {', '.join(ecartes[:4])}" if ecartes else "")
+            + (f" ; via {','.join(methode)}" if methode else "")
         ),
         "methode": ",".join(methode) or "aucune",
         "ecartes": ecartes,
@@ -681,6 +749,8 @@ __all__ = [
     "courriel_propre",
     "score_courriel",
     "extraire_courriels",
+    "deobfusquer",
+    "texte_colle_par_bloc",
     "parser_duckduckgo",
     "parser_bing",
     "rechercher_web",
