@@ -39,9 +39,9 @@ services:
     volumes:
       - ./prewarm.sh:/prewarm.sh:ro
     environment:
-      PREWARM_FROM_UTC: "9"
-      PREWARM_TO_UTC: "14"
-      PREWARM_INTERVAL: "300"
+      PREWARM_FROM_UTC: "8"
+      PREWARM_TO_UTC: "15"
+      PREWARM_INTERVAL: "240"
     deploy:
       resources:
         limits:

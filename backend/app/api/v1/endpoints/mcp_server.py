@@ -1610,6 +1610,64 @@ def _unauthorized() -> JSONResponse:
     )
 
 
+#: Journal des appels MCP (diagnostic « connecteur non activé dans la
+#: routine », 2026-10-15) : tampon des 300 derniers messages dans
+#: automation_settings « mcp_journal », lisible par GET
+#: /api/v1/automations/mcp-journal (admin).
+MCP_JOURNAL_KEY = "mcp_journal"
+_MCP_JOURNAL_MAX = 300
+
+
+async def journaliser_appel_mcp(
+    db,
+    *,
+    api_key: str,
+    user: Optional[User],
+    messages: list[dict[str, Any]],
+    duree_ms: int,
+    ok: bool,
+    user_agent: Optional[str] = None,
+) -> None:
+    """Best-effort : n'empêche jamais la réponse."""
+    try:
+        import time as _time
+
+        from app.services.automation_state import (
+            get_automation_config,
+            set_automation_config,
+        )
+
+        entrees = []
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            params = m.get("params") or {}
+            client = None
+            if m.get("method") == "initialize":
+                ci = params.get("clientInfo") or {}
+                client = f"{ci.get('name') or '?'} {ci.get('version') or ''}".strip()
+            entrees.append({
+                "t": datetime.now(_tz.utc).isoformat(timespec="seconds"),
+                "methode": m.get("method"),
+                "outil": (params.get("name") if m.get("method") == "tools/call" else None),
+                "cle": (api_key or "")[:12],
+                "utilisateur": getattr(user, "email", None),
+                "client": client,
+                "agent": (user_agent or "")[:80] or None,
+                "duree_ms": duree_ms,
+                "ok": ok,
+            })
+        if not entrees:
+            return
+        cfg = await get_automation_config(MCP_JOURNAL_KEY)
+        journal = [e for e in (cfg.get("entrees") or []) if isinstance(e, dict)]
+        journal.extend(entrees)
+        await set_automation_config(db, MCP_JOURNAL_KEY, {"entrees": journal[-_MCP_JOURNAL_MAX:]})
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).info("journal MCP : écriture impossible (%s)", exc)
+
+
 @router.post("/{api_key}")
 async def mcp_streamable_http(
     request: Request,
@@ -1628,9 +1686,18 @@ async def mcp_streamable_http(
             content=_rpc_error(None, -32700, "JSON invalide (parse error)."),
         )
 
+    import time as _time
+
+    t0 = _time.monotonic()
+    agent = request.headers.get("user-agent")
     async with AsyncSessionLocal() as db:
         user, scopes = await _context_from_key(db, api_key)
         if user is None:
+            await journaliser_appel_mcp(
+                db, api_key=api_key, user=None,
+                messages=body if isinstance(body, list) else [body],
+                duree_ms=int((_time.monotonic() - t0) * 1000), ok=False, user_agent=agent,
+            )
             return _unauthorized()
 
         if isinstance(body, list):
@@ -1641,6 +1708,11 @@ async def mcp_streamable_http(
                 resp = await _handle_rpc(db, user, scopes, msg)
                 if resp is not None:
                     responses.append(resp)
+            await journaliser_appel_mcp(
+                db, api_key=api_key, user=user, messages=body,
+                duree_ms=int((_time.monotonic() - t0) * 1000),
+                ok=all("error" not in r for r in responses), user_agent=agent,
+            )
             if not responses:
                 return JSONResponse(status_code=202, content=None)
             return JSONResponse(content=responses)
@@ -1652,6 +1724,11 @@ async def mcp_streamable_http(
             )
 
         resp = await _handle_rpc(db, user, scopes, body)
+        await journaliser_appel_mcp(
+            db, api_key=api_key, user=user, messages=[body],
+            duree_ms=int((_time.monotonic() - t0) * 1000),
+            ok=(resp is None or "error" not in resp), user_agent=agent,
+        )
         if resp is None:
             return JSONResponse(status_code=202, content=None)
         return JSONResponse(content=resp)

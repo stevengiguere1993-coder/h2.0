@@ -24,9 +24,16 @@
 #
 # Journal : `docker logs horizon-prewarm` sur le VPS.
 
-FROM_UTC="${PREWARM_FROM_UTC:-9}"
-TO_UTC="${PREWARM_TO_UTC:-14}"
-INTERVAL="${PREWARM_INTERVAL:-300}"
+# 2026-10-15 : cause racine confirmée (48,7 s de réveil mesurés sur le
+# frontend de staging) et la fenêtre commençait À L'HEURE de la routine
+# (09:00 UTC) → elle commence maintenant 1 h avant (08:00 UTC = 04 h
+# Montréal à l'heure avancée, 03 h à l'heure normale) et dure jusqu'à
+# 14:59 UTC, toutes les 4 min. On pingue aussi le chemin MCP exact que le
+# connecteur appelle (401 attendu : la clé n'est pas ici) pour réveiller
+# toute la chaîne. Un réveil à froid (> 5 s) est signalé dans le journal.
+FROM_UTC="${PREWARM_FROM_UTC:-8}"
+TO_UTC="${PREWARM_TO_UTC:-15}"
+INTERVAL="${PREWARM_INTERVAL:-240}"
 
 echo "$(date -u +%FT%TZ) prewarm démarré — fenêtre ${FROM_UTC}h–${TO_UTC}h UTC, toutes les ${INTERVAL}s"
 while true; do
@@ -35,7 +42,14 @@ while true; do
   if [ "$h" -ge "$FROM_UTC" ] && [ "$h" -lt "$TO_UTC" ]; then
     a=$(curl -sS -o /dev/null -w '%{http_code} %{time_total}s' --max-time 90 https://immohorizon.com/api/v1/ping 2>&1 || true)
     b=$(curl -sS -o /dev/null -w '%{http_code} %{time_total}s' --max-time 90 https://h2-0.onrender.com/health 2>&1 || true)
-    echo "$(date -u +%FT%TZ) site+api=$a  api=$b"
+    c=$(curl -sS -o /dev/null -w '%{http_code} %{time_total}s' --max-time 90 https://h2-0.onrender.com/api/v1/mcp/prewarm 2>&1 || true)
+    d=$(curl -sS -o /dev/null -w '%{http_code} %{time_total}s' --max-time 90 https://immohorizon.com/api/v1/mcp/prewarm 2>&1 || true)
+    marque=""
+    for x in "$a" "$b" "$c" "$d"; do
+      t=${x#* }; t=${t%s}; t=${t%%.*}
+      case "$t" in ''|*[!0-9]*) ;; *) [ "$t" -ge 5 ] && marque="  ⚠ RÉVEIL À FROID" ;; esac
+    done
+    echo "$(date -u +%FT%TZ) site+api=$a  api=$b  mcp-api=$c  mcp-site=$d$marque"
   fi
   sleep "$INTERVAL"
 done
