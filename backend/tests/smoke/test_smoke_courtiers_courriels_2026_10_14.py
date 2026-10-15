@@ -243,6 +243,28 @@ def test_recherche_un_courtier_verifie(run, sans_reseau):
     assert "web" in res["methode"]
 
 
+def test_sites_de_recherche_de_personnes_ignores(run, sans_reseau):
+    """Vrai cas : ssantangelo@att.net sur veripages.com (États-Unis) marqué
+    « vérifié » pour Salvator Santangelo — ces sites sont ignorés."""
+    async def _web(requete, **kw):
+        return [{"url": "https://veripages.com/name/Salvatore/Santangelo/", "titre": "Salvatore Santangelo",
+                 "extrait": "ssantangelo@att.net"}]
+
+    lues: list = []
+
+    async def _page(url):
+        lues.append(url)
+        return "Salvatore Santangelo ssantangelo@att.net", []
+
+    sans_reseau.setattr(courriels, "rechercher_web", _web)
+    sans_reseau.setattr(courriels, "lire_page", _page)
+    journal: list = []
+    res = run(courriels.chercher_courriel(_courtier("Salvator Santangelo"), config={}, journal=journal))
+    assert res["courriel"] is None
+    assert lues == []  # la page n'est même pas ouverte
+    assert any("site de recherche de personnes" in l for l in journal)
+
+
 def test_recherche_un_courtier_sans_resultat_nominatif(run, sans_reseau):
     async def _web(requete, **kw):
         return [{"url": "https://www.sutton.com/bureau", "titre": "Sutton", "extrait": "info@sutton.com"}]
@@ -372,6 +394,10 @@ def test_routes_courriels(client, auth_headers, monkeypatch, sans_reseau):
     assert r.json()["courriel"] == "ovide@perso.ca"
     assert r.json()["courriel_confiance"] == "verifie"
     assert r.json()["courriel_source"] == "saisi à la main"
+    r = client.patch(f"{BASE}/{ovide}", headers=auth_headers, json={"courriel": ""})
+    assert r.json()["courriel"] is None and r.json()["courriel_source"] is None
+    assert r.json()["courriel_confiance"] is None
+    client.patch(f"{BASE}/{ovide}", headers=auth_headers, json={"courriel": "ovide@perso.ca"})
 
     # Réglages exposés.
     p = client.get(f"{BASE}/parametres", headers=auth_headers).json()["config"]

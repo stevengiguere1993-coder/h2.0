@@ -930,6 +930,10 @@ async def modifier_courtier(
             c.courriel_source = "saisi à la main"
             c.courriel_confiance = "verifie"
             c.courriel_recherche_note = None
+        elif not data["courriel"] and c.courriel:
+            # Effacé à la main : la source et la confiance partent avec.
+            c.courriel_source = None
+            c.courriel_confiance = None
     for k, v in data.items():
         if isinstance(v, str):
             v = v.strip() or None
