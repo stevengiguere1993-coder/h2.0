@@ -216,6 +216,44 @@ async def centris_search(req: CentrisSearchRequest):
 class WebSearchRequest(BaseModel):
     query: str
     max_results: int = 8
+    #: Jetons (nom du courtier) : si aucun résultat d'un moteur n'en
+    #: contient un (titre / extrait / URL), le moteur suivant est essayé
+    #: — Bing sert des pages bidon (sport, boutiques) aux robots.
+    must_contain: List[str] = []
+
+
+def _decoder_redirection(href: str) -> str:
+    """Lien de moteur → URL réelle (DuckDuckGo uddg=, Bing ck/a u=a1…)."""
+    from urllib.parse import parse_qs, urlparse
+    import base64
+
+    h = href or ""
+    try:
+        if "duckduckgo.com/l/" in h and "uddg=" in h:
+            reel = (parse_qs(urlparse(h).query).get("uddg") or [""])[0]
+            return reel if reel.startswith("http") else h
+        if "bing.com/ck/a" in h:
+            u = (parse_qs(urlparse(h).query).get("u") or [""])[0]
+            if u.startswith("a1"):
+                u = u[2:]
+            u += "=" * (-len(u) % 4)
+            reel = base64.urlsafe_b64decode(u.encode("ascii")).decode("utf-8", "ignore")
+            return reel if reel.startswith("http") else h
+    except Exception:  # noqa: BLE001
+        return h
+    return h
+
+
+def _pertinents(items: list, jetons: List[str]) -> list:
+    jet = [j.lower() for j in jetons if len(j) >= 3]
+    if not jet:
+        return items
+    out = []
+    for i in items:
+        bas = " ".join(str(i.get(k) or "") for k in ("titre", "extrait", "url")).lower()
+        if any(j in bas for j in jet):
+            out.append(i)
+    return out
 
 
 class WebSearchResult(BaseModel):
@@ -246,8 +284,9 @@ async def web_search(req: WebSearchRequest):
     moteur = None
     try:
         for moteur_essai, url in (
-            ("bing", "https://www.bing.com/search?q=" + quote_plus(req.query) + "&setlang=fr&cc=CA"),
             ("duckduckgo", "https://html.duckduckgo.com/html/?q=" + quote_plus(req.query) + "&kl=ca-fr"),
+            ("bing", "https://www.bing.com/search?q=" + quote_plus(req.query) + "&setlang=fr&cc=CA"),
+            ("duckduckgo-lite", "https://lite.duckduckgo.com/lite/?q=" + quote_plus(req.query) + "&kl=ca-fr"),
         ):
             try:
                 await page.goto(url, wait_until="domcontentloaded")
@@ -260,7 +299,7 @@ async def web_search(req: WebSearchRequest):
                             return a ? {url: a.href, titre: a.innerText, extrait: p ? p.innerText : ''} : null;
                         }).filter(Boolean)"""
                     )
-                else:
+                elif moteur_essai == "duckduckgo":
                     items = await page.evaluate(
                         """() => Array.from(document.querySelectorAll('.result')).map(r => {
                             const a = r.querySelector('a.result__a');
@@ -268,7 +307,18 @@ async def web_search(req: WebSearchRequest):
                             return a ? {url: a.href, titre: a.innerText, extrait: s ? s.innerText : ''} : null;
                         }).filter(Boolean)"""
                     )
+                else:
+                    items = await page.evaluate(
+                        """() => Array.from(document.querySelectorAll('a.result-link')).map(a => {
+                            const tr = a.closest('tr');
+                            const next = tr ? tr.nextElementSibling : null;
+                            return {url: a.href, titre: a.innerText, extrait: next ? next.innerText : ''};
+                        })"""
+                    )
                 items = [i for i in (items or []) if str(i.get("url", "")).startswith("http")]
+                for i in items:
+                    i["url"] = _decoder_redirection(i["url"])
+                items = _pertinents(items, req.must_contain)
                 if items:
                     results = items[: max(1, min(20, req.max_results))]
                     moteur = moteur_essai

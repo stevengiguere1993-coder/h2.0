@@ -81,6 +81,9 @@ def test_notation_et_nettoyage():
     assert s < 55 and "nom court" in r
     s, _ = courriels.score_courriel("gallico@quelconque.ca", "Denis Gallico", None)
     assert s == 60  # nom long (≥ 5 lettres) : accepté
+    # Vrai cas : daniel@groupe-immosauve.com pour Daniel Sauvé.
+    s, r = courriels.score_courriel("daniel@groupe-immosauve.com", "Daniel Sauvé", None)
+    assert s >= 60 and "nom dans le domaine" in r
     assert courriels.extraire_courriels(
         "Joignez D.Gallico@immoalliances.ca ou info@immoalliances.ca — logo@2x.png",
         ["mailto:d.gallico@immoalliances.ca?subject=Info"],
@@ -141,9 +144,12 @@ def test_resultats_pertinents_et_ordre_des_moteurs(run, monkeypatch):
                          "Monday Night Football</a></h2><p>NFL</p></li></ol>")
         return 200, "<html></html>"
 
-    async def _vps(requete, max_results=8):
+    async def _vps(requete, max_results=8, must_contain=None):
         appels.append("vps")
-        return [{"url": bon[0]["url"], "titre": bon[0]["titre"], "extrait": ""}]
+        assert must_contain == ["daniel", "sauve"]
+        # Le VPS peut renvoyer un lien de redirection : décodé côté backend.
+        return [{"url": "https://duckduckgo.com/l/?uddg=" + bon[0]["url"].replace(":", "%3A").replace("/", "%2F"),
+                 "titre": bon[0]["titre"], "extrait": ""}]
 
     from app.integrations import scraping_proxy
 
@@ -177,6 +183,10 @@ def test_parseurs_moteurs():
              + "aHR0cHM6Ly9jb250YWN0b3V0LmNvbS9BbXktQXNzYWFkLTI1NzQ0NzAw" + "&ntb=1")
     assert courriels.decoder_redirection_bing(redir) == "https://contactout.com/Amy-Assaad-25744700"
     assert courriels.decoder_redirection_bing("https://www.remax-quebec.com/x") == "https://www.remax-quebec.com/x"
+    assert courriels.decoder_redirection(
+        "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fdanielsauve.ca%2F&rut=9cd114"
+    ) == "https://danielsauve.ca/"
+    assert courriels.decoder_redirection(redir) == "https://contactout.com/Amy-Assaad-25744700"
     res = courriels.parser_bing(bing)
     assert res == [{
         "url": "https://www.remax-quebec.com/fr/courtiers-immobiliers/francois.courval/index.rmx",

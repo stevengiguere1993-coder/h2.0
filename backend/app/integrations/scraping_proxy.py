@@ -131,17 +131,21 @@ async def scrape_centris_search_complet(
         return data
 
 
-async def scrape_web_search(requete: str, max_results: int = 8) -> Optional[List[dict]]:
+async def scrape_web_search(
+    requete: str, max_results: int = 8, must_contain: Optional[List[str]] = None
+) -> Optional[List[dict]]:
     """Résultats web [{url, titre, extrait}] rendus par le navigateur du
     VPS (quand DuckDuckGo / Bing bloquent le serveur) — recherche du
-    courriel des courtiers 2026-10-14."""
+    courriel des courtiers 2026-10-14. ``must_contain`` : jetons dont au
+    moins un doit apparaître dans les résultats d'un moteur, sinon le VPS
+    passe au moteur suivant (Bing sert des pages bidon aux robots)."""
     if not vps_available():
         return None
-    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=10.0)) as client:
         r = await client.post(
             f"{VPS_URL}/scrape/web-search",
             headers=_headers(),
-            json={"query": requete, "max_results": max_results},
+            json={"query": requete, "max_results": max_results, "must_contain": must_contain or []},
         )
         r.raise_for_status()
         return r.json().get("results", [])
