@@ -422,6 +422,47 @@ def test_signature_esign_et_suivi_kanban(client, auth_headers, tal_seed, run):
     assert all(s["signe_le"] is None for s in row["signataires"])
 
 
+def test_signature_complete_pose_le_bail_au_dossier(client, auth_headers, tal_seed, run):
+    """Fin de signature eSign : le PDF signé devient LE bail au dossier
+    (imm_documents « bail »), le bail proposé devient actif, la carte passe
+    à « Reloué », la transmission garde la date. Idempotent."""
+    tid = IDS["t1"]
+    esign_id = client.get(f"{BASE}/transmissions/{tid}", headers=auth_headers).json()["esign_document_id"]
+    assert esign_id
+
+    async def _completer():
+        from app.models.esign import EsignDocument, EsignDocumentStatus, EsignSigner
+
+        async with TestSessionLocal() as s:
+            doc = await s.get(EsignDocument, esign_id)
+            now = datetime.now(timezone.utc)
+            doc.status = EsignDocumentStatus.COMPLETE.value
+            doc.completed_at = now
+            for sg in (await s.execute(select(EsignSigner).where(EsignSigner.document_id == esign_id))).scalars().all():
+                sg.signed_at = now
+            await s.commit()
+            r1 = await svc.apres_signature_complete(s, esign_id, pdf=b"%PDF-1.4 signe par tous")
+            r2 = await svc.apres_signature_complete(s, esign_id, pdf=b"%PDF-1.4 signe par tous")
+            bail = await s.get(Bail, tal_seed["bail_id"])
+            dossier = await s.get(LocationDossier, tal_seed["dossier_id"])
+            doc_bail = await s.get(ImmDocument, r1["document_signe_id"])
+            blob = (await s.execute(select(ImmDocument.pdf_blob).where(ImmDocument.id == doc_bail.id))).scalar_one()
+            return r1, r2, bail.document_id, bail.status, dossier.statut, doc_bail.type, doc_bail.signed_by_name, bytes(blob)
+
+    r1, r2, bail_doc, bail_statut, dossier_statut, doc_type, signe_par, blob = run(_completer())
+    assert r1["activation"] == "actif" and r1["document_signe_id"]
+    assert r2["deja"] is True and r2["document_signe_id"] == r1["document_signe_id"]
+    assert bail_doc == r1["document_signe_id"] and bail_statut == "actif"
+    assert dossier_statut == LocationDossierStatut.RELOUE.value
+    assert doc_type == "bail" and "Alice Test" in (signe_par or "") and blob.startswith(b"%PDF-")
+    det = client.get(f"{BASE}/transmissions/{tid}", headers=auth_headers).json()
+    assert det["signe_le"] and det["document_signe_id"] == r1["document_signe_id"]
+    r = client.get("/api/v1/immobilier/locations/overview", headers=auth_headers, params={"immeuble_id": tal_seed["imm_id"]})
+    row = next(x for x in r.json()["rows"] if x["id"] == tal_seed["dossier_id"])
+    assert row["statut"] == "reloue" and row["nouveau_bail_document_id"] == r1["document_signe_id"]
+    assert row["tal_signe_le"] and row["tal_document_signe_id"] == r1["document_signe_id"]
+
+
 # ─── Échec FRW122 puis relance, en mode réel (client factice) ──────────
 
 

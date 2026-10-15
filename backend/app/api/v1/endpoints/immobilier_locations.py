@@ -126,6 +126,8 @@ class DossierRow(BaseModel):
     tal_mode: Optional[str] = None              # simulation|reel
     tal_genere_le: Optional[str] = None
     tal_document_id: Optional[int] = None       # PDF du TAL (imm_documents, bail_tal)
+    tal_signe_le: Optional[str] = None          # signature eSign terminée → bail signé au dossier
+    tal_document_signe_id: Optional[int] = None
     esign_document_id: Optional[int] = None
     esign_statut: Optional[str] = None          # brouillon|envoye|complete|refuse|annule|expire
     esign_envoye_le: Optional[str] = None
@@ -268,6 +270,8 @@ async def _to_row(db, d: LocationDossier) -> DossierRow:
         tal_mode=tal.get("mode"),
         tal_genere_le=tal.get("genere_le"),
         tal_document_id=tal.get("document_id"),
+        tal_signe_le=tal.get("signe_le"),
+        tal_document_signe_id=tal.get("document_signe_id"),
         esign_document_id=tal.get("esign_document_id"),
         esign_statut=sig.get("statut"),
         esign_envoye_le=sig.get("envoye_le"),

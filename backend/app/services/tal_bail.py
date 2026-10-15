@@ -892,6 +892,8 @@ def resume_transmission(t: TalTransmission, *, avec_form: bool = False) -> dict[
         "documents": _charger_json(t.documents_json, []),
         "document_id": t.document_id,
         "esign_document_id": t.esign_document_id,
+        "signe_le": t.signe_le.isoformat() if t.signe_le else None,
+        "document_signe_id": t.document_signe_id,
         "cout": float(t.cout) if t.cout is not None else None,
         "frais_manuel_id": t.frais_manuel_id,
         "frais_montant": float(t.frais_montant) if t.frais_montant is not None else None,
@@ -1328,6 +1330,91 @@ async def lancer_signature(db: AsyncSession, t: TalTransmission, *, user, messag
     return doc, True, manquants
 
 
+async def apres_signature_complete(
+    db: AsyncSession, esign_document_id: int, *, pdf: Optional[bytes] = None
+) -> Optional[dict[str, Any]]:
+    """Fin de signature eSign d'un bail officiel TAL : le PDF SIGNÉ devient
+    LE bail au dossier (imm_documents « bail »), le bail proposé s'active
+    par la règle unique (dossier de relocation → « Reloué », logement
+    recalé). Idempotent, best-effort : appelé après le commit de la
+    signature, jamais bloquant. Retourne None si ce document eSign n'est
+    pas un bail TAL."""
+    from app.models.esign import EsignDocument, EsignSigner
+    from app.services.audit import log_action
+    from app.services.locatif_depart import ActivationImpossible, activer_bail_propose
+
+    t = (
+        await db.execute(
+            select(TalTransmission)
+            .where(TalTransmission.esign_document_id == esign_document_id, TalTransmission.statut == "transmise")
+            .order_by(TalTransmission.id.desc()).limit(1)
+        )
+    ).scalars().first()
+    if t is None:
+        return None
+    if t.document_signe_id:
+        return {"transmission_id": t.id, "bail_id": t.bail_id, "document_signe_id": t.document_signe_id, "deja": True}
+    doc = (
+        await db.execute(
+            select(EsignDocument).where(EsignDocument.id == esign_document_id).options(undefer(EsignDocument.signed_pdf_blob))
+        )
+    ).scalars().first()
+    if doc is None:
+        return None
+    octets = pdf or doc.signed_pdf_blob
+    if not octets:
+        log.warning("bail TAL #%s : signature complète mais PDF final absent", t.id)
+        return None
+    if t.bail_id is None:
+        log.warning("bail TAL #%s : signé mais le bail Kratos a disparu (désistement ?)", t.id)
+        return None
+    bail = await db.get(Bail, t.bail_id)
+    if bail is None:
+        return None
+    signers = (
+        await db.execute(
+            select(EsignSigner).where(EsignSigner.document_id == doc.id).order_by(EsignSigner.order_index, EsignSigner.id)
+        )
+    ).scalars().all()
+    noms = ", ".join(f"{s.first_name} {s.last_name}".strip() for s in signers)
+    now = doc.completed_at or datetime.now(timezone.utc)
+    imm_doc = ImmDocument(
+        bail_id=t.bail_id, locataire_id=t.locataire_id, immeuble_id=t.immeuble_id, logement_id=t.logement_id,
+        type="bail",
+        titre=(f"Bail signé — {t.adresse}" if t.adresse else "Bail signé (TAL)")[:255],
+        source="genere", filename=f"bail-signe-{t.id}.pdf",
+        params_json=_json({
+            "transmission_id": t.id, "esign_document_id": doc.id, "short_guid": t.short_guid,
+            "mode": t.mode, "document_tal_id": t.document_id,
+        }),
+        pdf_blob=octets, created_by_email=t.created_by_email,
+        signed_at=now, signed_by_name=(noms[:255] or None),
+    )
+    db.add(imm_doc)
+    await db.flush()
+    ancien = bail.document_id
+    if ancien and ancien != imm_doc.id:
+        imm_doc.remplace_document_id = ancien
+    bail.document_id = imm_doc.id
+    bail.updated_at = now
+    activation = "actif"
+    try:
+        await activer_bail_propose(db, bail)
+    except ActivationImpossible as exc:
+        activation = f"impossible : {exc}"
+        log.warning("bail TAL #%s signé mais non activé : %s", t.id, exc)
+    t.signe_le = now
+    t.document_signe_id = imm_doc.id
+    t.updated_at = now
+    await log_action(
+        db, user=None, action="tal_bail.bail_signe", entity_type="tal_transmission", entity_id=t.id,
+        details={"bail_id": t.bail_id, "esign_document_id": doc.id, "document_signe_id": imm_doc.id,
+                 "signataires": noms, "activation": activation},
+    )
+    await db.commit()
+    return {"transmission_id": t.id, "bail_id": t.bail_id, "document_signe_id": imm_doc.id, "activation": activation}
+
+
 async def etat_signature(db: AsyncSession, esign_document_id: Optional[int]) -> Optional[dict[str, Any]]:
     """Suivi « qui a signé, quand » du document eSign lié (kanban + fiche)."""
     if not esign_document_id:
@@ -1377,6 +1464,8 @@ async def etat_bail_tal(db: AsyncSession, bail_id: Optional[int]) -> Optional[di
         "transmission_id": t.id, "statut": t.statut, "mode": t.mode,
         "genere_le": t.genere_le.isoformat() if t.genere_le else None,
         "document_id": t.document_id, "esign_document_id": t.esign_document_id,
+        "signe_le": t.signe_le.isoformat() if t.signe_le else None,
+        "document_signe_id": t.document_signe_id,
         "cout": float(t.cout) if t.cout is not None else None,
         "created_by_email": t.created_by_email, "erreur": t.erreur,
         "signature": await etat_signature(db, t.esign_document_id),
@@ -1385,6 +1474,7 @@ async def etat_bail_tal(db: AsyncSession, bail_id: Optional[int]) -> Optional[di
 
 __all__ = [
     "signataires_depuis_formulaire", "lancer_signature", "etat_signature", "etat_bail_tal",
+    "apres_signature_complete",
     "CONFIG_KEY", "COUT_TAL", "DOC_TYPE", "DEFAUTS", "GRATUITS_TOTAL",
     "TalBailError", "FormulaireInvalide", "TransmissionFermee",
     "fusionner_config", "charger_config", "chemins_requis",
