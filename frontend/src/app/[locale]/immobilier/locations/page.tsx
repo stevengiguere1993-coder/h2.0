@@ -17,7 +17,7 @@ export default function LocationsPage() {
       <ImmobilierTopbar
         breadcrumbs={[
           { label: "Immobilier", href: "/immobilier" },
-          { label: "Locations" }
+          { label: "Locations & nouveaux baux" }
         ]}
       />
       <div className="p-4 pb-28 lg:p-6 lg:pb-28">
@@ -26,7 +26,7 @@ export default function LocationsPage() {
             <KeyRound className="h-5 w-5" />
           </span>
           <div>
-            <h1 className="text-2xl font-bold text-white">Locations</h1>
+            <h1 className="text-2xl font-bold text-white">Locations &amp; nouveaux baux</h1>
             <p className="mt-1 max-w-2xl text-sm text-white/60">
               Chaque logement qui se libère devient un dossier : départ
               confirmé, annonces publiées, visites de candidats, jusqu&apos;au

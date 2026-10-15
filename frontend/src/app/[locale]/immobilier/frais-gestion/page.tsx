@@ -1167,7 +1167,7 @@ export default function FacturationImmoPage() {
                   </span>
                   <span className="text-white/45">
                     facturés quand un nouveau locataire entre (peu importe la
-                    porte : fiche, page Baux, kanban) ; chaque immeuble peut
+                    porte : fiche, page Baux en vigueur, kanban) ; chaque immeuble peut
                     avoir son propre tarif ci-dessous.
                   </span>
                   <label className="flex items-center gap-1.5 text-white/70">
