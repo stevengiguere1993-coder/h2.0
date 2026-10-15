@@ -5,6 +5,7 @@ FastAPI application for Horizon Services Immobiliers.
 """
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -37,6 +38,32 @@ from app.db.session import (
 logger = logging.getLogger(__name__)
 
 
+#: Heure de démarrage du processus (preuve des réveils à froid Render,
+#: incident « connecteur non activé dans la routine » 2026-10-15).
+_DEMARRE_A = datetime.now(timezone.utc)
+
+
+async def _enregistrer_demarrage() -> None:
+    """Garde les 30 derniers démarrages du processus (automation_settings
+    « app_boots ») : /health les montre → on voit si l'API s'est réveillée
+    à froid à l'heure d'une routine."""
+    try:
+        from app.db.session import AsyncSessionLocal
+        from app.services.automation_state import (
+            get_automation_config,
+            set_automation_config,
+        )
+
+        cfg = await get_automation_config("app_boots")
+        boots = [b for b in (cfg.get("boots") or []) if isinstance(b, str)]
+        boots.append(_DEMARRE_A.isoformat(timespec="seconds"))
+        async with AsyncSessionLocal() as db:
+            await set_automation_config(db, "app_boots", {"boots": boots[-30:]})
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.info("enregistrement du démarrage impossible : %s", exc)
+
+
 async def _run_startup_tasks() -> None:
     """Travail de démarrage : créations de tables idempotentes
     (create_all), colonnes critiques, backfills et seeders.
@@ -52,6 +79,7 @@ async def _run_startup_tasks() -> None:
         await init_db()
     except Exception as exc:
         logger.warning("init_db failed during startup: %s", exc)
+    await _enregistrer_demarrage()
 
     # Garantit les colonnes critiques HORS de la grosse transaction
     # init_db : si une étape d'init_db échoue, toute sa transaction est
@@ -678,6 +706,17 @@ async def health_check(response: Response) -> dict:
     ok, colonnes, tables = await schema_ok()
     if not ok:
         response.status_code = 503
+    maintenant = datetime.now(timezone.utc)
+    derniers: list[str] = []
+    try:
+        from app.services.automation_state import get_automation_config
+
+        derniers = [
+            b for b in ((await get_automation_config("app_boots")).get("boots") or [])
+            if isinstance(b, str)
+        ][-10:]
+    except Exception:  # noqa: BLE001
+        derniers = []
     return {
         "status": "healthy" if ok else "degraded",
         "environment": settings.env,
@@ -686,6 +725,11 @@ async def health_check(response: Response) -> dict:
             "colonnes_manquantes": colonnes,
             "tables_absentes": tables,
         },
+        # Réveils à froid Render : heure de démarrage de CE processus et
+        # les derniers démarrages connus (routine du matin, 2026-10-15).
+        "demarre_a": _DEMARRE_A.isoformat(timespec="seconds"),
+        "uptime_s": int((maintenant - _DEMARRE_A).total_seconds()),
+        "derniers_demarrages": derniers,
     }
 
 
