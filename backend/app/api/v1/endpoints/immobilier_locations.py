@@ -80,6 +80,17 @@ def _now() -> datetime:
 # ─── Schemas ────────────────────────────────────────────────────────────
 
 
+class SignataireRow(BaseModel):
+    id: int
+    nom: str
+    email: Optional[str] = None
+    role: Optional[str] = None
+    envoye_le: Optional[str] = None
+    ouvert_le: Optional[str] = None
+    signe_le: Optional[str] = None
+    refuse_le: Optional[str] = None
+
+
 class DossierRow(BaseModel):
     id: int
     logement_id: int
@@ -107,6 +118,21 @@ class DossierRow(BaseModel):
     nouveau_bail_loyer: Optional[float] = None
     #: PDF du bail signé au dossier (None = en attente de signature).
     nouveau_bail_document_id: Optional[int] = None
+    #: Bail OFFICIEL demandé au TAL pour le bail proposé (2026-10-15) et
+    #: suivi de la signature eSign : qui a signé, quand — la même donnée
+    #: sur la carte du kanban et dans la fiche (règle « sections miroir »).
+    tal_transmission_id: Optional[int] = None
+    tal_statut: Optional[str] = None            # brouillon|forme_creee|transmise|echec
+    tal_mode: Optional[str] = None              # simulation|reel
+    tal_genere_le: Optional[str] = None
+    tal_document_id: Optional[int] = None       # PDF du TAL (imm_documents, bail_tal)
+    esign_document_id: Optional[int] = None
+    esign_statut: Optional[str] = None          # brouillon|envoye|complete|refuse|annule|expire
+    esign_envoye_le: Optional[str] = None
+    esign_complete_le: Optional[str] = None
+    nb_signataires: int = 0
+    nb_signes: int = 0
+    signataires: List[SignataireRow] = Field(default_factory=list)
     gestion_externe: bool = False
     created_at: Optional[datetime] = None
 
@@ -197,6 +223,18 @@ async def _to_row(db, d: LocationDossier) -> DossierRow:
                 else None
             )
             nouveau_locataire_nom = nlo.full_name if nlo else None
+    # Bail officiel TAL + signature eSign du bail proposé (2026-10-15).
+    tal: dict = {}
+    sig: dict = {}
+    if d.nouveau_bail_id:
+        from app.services.tal_bail import etat_bail_tal
+
+        try:
+            tal = (await etat_bail_tal(db, d.nouveau_bail_id)) or {}
+        except Exception:  # noqa: BLE001 — le kanban prime
+            log.exception("état TAL illisible (bail %s)", d.nouveau_bail_id)
+            tal = {}
+        sig = tal.get("signature") or {}
     return DossierRow(
         id=d.id,
         logement_id=d.logement_id,
@@ -225,6 +263,18 @@ async def _to_row(db, d: LocationDossier) -> DossierRow:
         nouveau_bail_date_debut=nouveau_bail_date_debut,
         nouveau_bail_loyer=nouveau_bail_loyer,
         nouveau_bail_document_id=nouveau_bail_document_id,
+        tal_transmission_id=tal.get("transmission_id"),
+        tal_statut=tal.get("statut"),
+        tal_mode=tal.get("mode"),
+        tal_genere_le=tal.get("genere_le"),
+        tal_document_id=tal.get("document_id"),
+        esign_document_id=tal.get("esign_document_id"),
+        esign_statut=sig.get("statut"),
+        esign_envoye_le=sig.get("envoye_le"),
+        esign_complete_le=sig.get("complete_le"),
+        nb_signataires=int(sig.get("nb_signataires") or 0),
+        nb_signes=int(sig.get("nb_signes") or 0),
+        signataires=[SignataireRow(**s) for s in (sig.get("signataires") or [])],
         gestion_externe=bool(im.gestion_externe) if im else False,
         created_at=d.created_at,
     )

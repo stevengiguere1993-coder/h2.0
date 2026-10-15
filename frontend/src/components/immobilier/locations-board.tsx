@@ -20,6 +20,7 @@ import {
   ChevronDown,
   ChevronRight,
   FileSignature,
+  FileText,
   KeyRound,
   Loader2,
   Megaphone,
@@ -50,6 +51,22 @@ import {
   JourEcheanceField
 } from "@/components/immobilier/fin-bail";
 import { TalFormDropdown } from "@/components/immobilier/tal-avis";
+import {
+  TalBailModal,
+  libelleModeTal,
+  ouvrirPdfDocument
+} from "@/components/immobilier/tal-bail-modal";
+
+type Signataire = {
+  id: number;
+  nom: string;
+  email: string | null;
+  role: string | null;
+  envoye_le: string | null;
+  ouvert_le: string | null;
+  signe_le: string | null;
+  refuse_le: string | null;
+};
 
 type Dossier = {
   id: number;
@@ -75,6 +92,20 @@ type Dossier = {
   nouveau_bail_loyer: number | null;
   //: PDF du bail signé au dossier (null = en attente de signature).
   nouveau_bail_document_id: number | null;
+  //: Bail OFFICIEL demandé au TAL pour le bail proposé + signature eSign
+  //: (2026-10-15) — même donnée que la fiche (règle « sections miroir »).
+  tal_transmission_id?: number | null;
+  tal_statut?: string | null;
+  tal_mode?: string | null;
+  tal_genere_le?: string | null;
+  tal_document_id?: number | null;
+  esign_document_id?: number | null;
+  esign_statut?: string | null;
+  esign_envoye_le?: string | null;
+  esign_complete_le?: string | null;
+  nb_signataires?: number;
+  nb_signes?: number;
+  signataires?: Signataire[];
   gestion_externe?: boolean;
 };
 
@@ -107,10 +138,16 @@ const COLUMNS: Array<{
     hint: "L'annonce est en ligne (Marketplace, Kijiji…) — hors Kratos."
   },
   {
-    id: "bail_envoye",
-    label: "Bail en signature",
+    id: "bail_a_preparer",
+    label: "Bail à préparer",
     dot: "bg-fuchsia-400",
-    hint: "Un locataire est lié ; son bail proposé attend la signature."
+    hint: "Un locataire est lié ; le bail officiel (TAL) reste à générer."
+  },
+  {
+    id: "en_signature",
+    label: "En signature",
+    dot: "bg-violet-400",
+    hint: "Bail officiel généré — signature électronique en cours (qui, quand)."
   },
   {
     id: "reloue",
@@ -126,6 +163,38 @@ const STATUT_LABEL: Record<string, string> = Object.fromEntries(
   COLUMNS.map((c) => [c.id, c.label])
 );
 STATUT_LABEL.annule = "Annulé";
+STATUT_LABEL.bail_envoye = "Bail en signature";
+
+/** Colonne AFFICHÉE d'un dossier : le statut « bail_envoye » (locataire
+ *  lié) se dédouble selon l'avancement du bail officiel TAL — « Bail à
+ *  préparer » tant qu'il n'est pas généré, « En signature » ensuite. */
+function colonneDe(d: Dossier): string {
+  if (d.statut !== "bail_envoye") return d.statut;
+  return d.tal_statut === "transmise" ? "en_signature" : "bail_a_preparer";
+}
+
+/** Colonne → statut enregistré côté serveur. */
+function statutDeColonne(col: string): string {
+  return col === "bail_a_preparer" || col === "en_signature"
+    ? "bail_envoye"
+    : col;
+}
+
+/** Lignes « qui a signé, quand » pour l'infobulle de la carte. */
+function signaturesLignes(d: Dossier): string[] {
+  return (d.signataires || []).map((s) => {
+    const etat = s.signe_le
+      ? `signé le ${fmtDateTime(s.signe_le)}`
+      : s.refuse_le
+        ? `refusé le ${fmtDateTime(s.refuse_le)}`
+        : s.ouvert_le
+          ? `ouvert le ${fmtDateTime(s.ouvert_le)}`
+          : s.envoye_le
+            ? `envoyé le ${fmtDateTime(s.envoye_le)}`
+            : "à envoyer";
+    return `${s.nom}${s.role ? ` (${s.role})` : ""} : ${etat}`;
+  });
+}
 
 function money(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -194,6 +263,10 @@ export function LocationsBoard({
   //: lieu de bloquer, retour Phil 2026-08-20).
   const [lierPour, setLierPour] = useState<number | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  //: « Nouveau bail » (TAL) : dossier dont on produit le bail officiel,
+  //: et sélecteur d'unité du bouton d'en-tête.
+  const [talFor, setTalFor] = useState<Dossier | null>(null);
+  const [showNouveauBail, setShowNouveauBail] = useState(false);
   const [importBailFor, setImportBailFor] = useState<Dossier | null>(null);
   const [showHistorique, setShowHistorique] = useState(false);
   const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
@@ -282,7 +355,8 @@ export function LocationsBoard({
       COLUMNS.map((c) => [c.id, [] as Dossier[]])
     );
     for (const r of rows) {
-      if (map[r.statut]) map[r.statut].push(r);
+      const col = colonneDe(r);
+      if (map[col]) map[col].push(r);
     }
     return map;
   }, [rows]);
@@ -360,6 +434,14 @@ export function LocationsBoard({
         >
           <Plus className="h-3.5 w-3.5" /> Nouvelle relocation
         </button>
+        <button
+          type="button"
+          onClick={() => setShowNouveauBail(true)}
+          className="btn-accent btn-sm"
+          title="Produire le bail officiel (formulaire du TAL) d'une unité : une unité déjà en relocation, ou n'importe quelle autre unité — un dossier de relocation est alors créé."
+        >
+          <FileSignature className="h-3.5 w-3.5" /> Nouveau bail
+        </button>
       </div>
 
       {err ? (
@@ -393,7 +475,8 @@ export function LocationsBoard({
                   const id = Number(e.dataTransfer.getData("text/plain"));
                   if (!Number.isFinite(id) || id <= 0) return;
                   const d = rows.find((r) => r.id === id);
-                  if (!d || d.statut === col.id) return;
+                  if (!d || colonneDe(d) === col.id) return;
+                  const cible = statutDeColonne(col.id);
                   // Reloué = bail signé importé OBLIGATOIRE.
                   if (col.id === "reloue" && d.nouveau_bail_id) {
                     setImportBailFor(d);
@@ -406,14 +489,21 @@ export function LocationsBoard({
                   // « Lier un locataire », la carte avance ensuite
                   // d'elle-même.
                   if (
-                    (col.id === "bail_envoye" || col.id === "reloue") &&
+                    (cible === "bail_envoye" || col.id === "reloue") &&
                     d.nouveau_bail_id == null
                   ) {
                     setLierPour(d.id);
                     setOpenId(d.id);
                     return;
                   }
-                  void patchDossier(id, { statut: col.id });
+                  // « En signature » veut dire « le bail officiel existe » :
+                  // y glisser une carte ouvre « Nouveau bail » (TAL).
+                  if (col.id === "en_signature" && d.tal_statut !== "transmise") {
+                    setTalFor(d);
+                    return;
+                  }
+                  if (cible === d.statut) return;
+                  void patchDossier(id, { statut: cible });
                 }}
                 className={`flex w-72 min-w-[270px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 transition ${
                   dragOverCol === col.id
@@ -505,6 +595,41 @@ export function LocationsBoard({
           onImporterBail={(bailId) =>
             setImportBailFor({ ...selected, nouveau_bail_id: bailId })
           }
+          onNouveauBail={() => setTalFor(selected)}
+        />
+      ) : null}
+
+      {talFor && talFor.nouveau_bail_id ? (
+        <TalBailModal
+          bailId={talFor.nouveau_bail_id}
+          dossierId={talFor.id}
+          titre={`Logement ${talFor.logement_numero} · ${talFor.immeuble_name}${
+            talFor.nouveau_locataire_nom ? ` · ${talFor.nouveau_locataire_nom}` : ""
+          }`}
+          onClose={() => setTalFor(null)}
+          onDone={() => void load()}
+        />
+      ) : null}
+
+      {showNouveauBail ? (
+        <NouveauBailPickerModal
+          rows={data?.rows || []}
+          immeubleId={immeubleId}
+          onClose={() => setShowNouveauBail(false)}
+          onDossier={(d) => {
+            setShowNouveauBail(false);
+            if (d.nouveau_bail_id) setTalFor(d);
+            else {
+              setLierPour(d.id);
+              setOpenId(d.id);
+            }
+          }}
+          onCreated={async (row) => {
+            setShowNouveauBail(false);
+            await load();
+            setLierPour(row.id);
+            setOpenId(row.id);
+          }}
         />
       ) : null}
 
@@ -608,7 +733,11 @@ function DossierCard({
       : "",
     `Loyer demandé : ${money(d.loyer_demande)}${
       d.loyer_ancien != null ? ` (ancien : ${money(d.loyer_ancien)})` : ""
-    }`
+    }`,
+    d.tal_statut === "transmise"
+      ? `Bail officiel TAL (${libelleModeTal(d.tal_mode)}) généré le ${fmtDateTime(d.tal_genere_le)}`
+      : "",
+    ...signaturesLignes(d)
   ]
     .filter(Boolean)
     .join("\n");
@@ -671,6 +800,57 @@ function DossierCard({
           </span>
         </div>
       ) : null}
+      {d.tal_statut && d.statut !== "reloue" ? (
+        <div className="mt-1 flex flex-wrap items-center gap-1">
+          <span
+            className={`badge ${
+              d.tal_statut === "transmise"
+                ? "badge-sky"
+                : d.tal_statut === "brouillon"
+                  ? "badge-neutral"
+                  : "badge-rose"
+            }`}
+            title={
+              d.tal_statut === "transmise"
+                ? `Bail officiel TAL généré (${libelleModeTal(d.tal_mode)})`
+                : d.tal_statut === "brouillon"
+                  ? "Bail officiel TAL en préparation"
+                  : "Génération du bail TAL en échec — à relancer"
+            }
+          >
+            <FileText className="mr-0.5 inline h-2.5 w-2.5 shrink-0" />
+            {d.tal_statut === "transmise"
+              ? `Bail TAL · ${libelleModeTal(d.tal_mode)}`
+              : d.tal_statut === "brouillon"
+                ? "Bail TAL en préparation"
+                : "Bail TAL — échec"}
+          </span>
+          {d.esign_statut ? (
+            <span
+              className={`badge ${
+                d.esign_statut === "complete"
+                  ? "badge-emerald"
+                  : d.esign_statut === "envoye"
+                    ? "badge-violet"
+                    : d.esign_statut === "brouillon"
+                      ? "badge-neutral"
+                      : "badge-rose"
+              }`}
+              title={signaturesLignes(d).join("\n") || "Signature"}
+            >
+              {d.esign_statut === "complete"
+                ? "Signé par tous"
+                : d.esign_statut === "envoye"
+                  ? `Signatures ${d.nb_signes ?? 0}/${d.nb_signataires ?? 0}`
+                  : d.esign_statut === "brouillon"
+                    ? "Signature à envoyer"
+                    : `Signature ${d.esign_statut}`}
+            </span>
+          ) : d.tal_statut === "transmise" ? (
+            <span className="badge badge-neutral">Signature à lancer</span>
+          ) : null}
+        </div>
+      ) : null}
     </button>
   );
 }
@@ -685,6 +865,7 @@ function DossierModal({
   onError,
   onDeleted,
   onImporterBail,
+  onNouveauBail,
   lierDemande,
   onLierConsomme
 }: {
@@ -696,6 +877,8 @@ function DossierModal({
   onDeleted: () => void;
   /** Ouvre l'import du bail signé (→ « Reloué ») pour ce bail. */
   onImporterBail: (bailId: number) => void;
+  /** Ouvre « Nouveau bail » (bail officiel TAL) pour le bail proposé. */
+  onNouveauBail: () => void;
   /** La carte a été glissée vers une colonne qui exige un locataire :
    *  on ouvre directement « Lier un locataire ». */
   lierDemande?: boolean;
@@ -795,8 +978,9 @@ function DossierModal({
         {/* Stepper de statut — cliquer une étape déplace le dossier. */}
         <div className="mt-4 flex items-center gap-0 overflow-x-auto rounded-xl border border-brand-800 bg-brand-900/60 p-1.5">
           {COLUMNS.map((col, i) => {
-            const activeIdx = COLUMNS.findIndex((c) => c.id === d.statut);
-            const isActive = d.statut === col.id;
+            const colonneActive = colonneDe(d);
+            const activeIdx = COLUMNS.findIndex((c) => c.id === colonneActive);
+            const isActive = colonneActive === col.id;
             const isPast = activeIdx >= 0 && i < activeIdx;
             return (
               <div key={col.id} className="flex flex-1 items-center">
@@ -811,13 +995,14 @@ function DossierModal({
                   type="button"
                   onClick={() => {
                     if (isActive) return;
+                    const cible = statutDeColonne(col.id);
                     // Même logique que le glisser-déposer : sans
                     // locataire lié, « Bail en signature » et
                     // « Reloué » ouvrent « Lier un locataire » ; avec
                     // un locataire, « Reloué » passe par l'import du
                     // bail signé.
                     if (
-                      (col.id === "bail_envoye" || col.id === "reloue") &&
+                      (cible === "bail_envoye" || col.id === "reloue") &&
                       d.nouveau_bail_id == null
                     ) {
                       setShowLier(true);
@@ -827,7 +1012,12 @@ function DossierModal({
                       onImporterBail(d.nouveau_bail_id);
                       return;
                     }
-                    void onPatch({ statut: col.id });
+                    if (col.id === "en_signature" && d.tal_statut !== "transmise") {
+                      onNouveauBail();
+                      return;
+                    }
+                    if (cible === d.statut) return;
+                    void onPatch({ statut: cible });
                   }}
                   title={`${col.hint}\nPasser à « ${col.label} »`}
                   className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1.5 text-[11px] font-semibold transition ${
@@ -994,6 +1184,7 @@ function DossierModal({
                 <DesistementButton d={d} onDone={onMutated} />
               </span>
             </div>
+            <BailTalBloc d={d} onNouveauBail={onNouveauBail} onError={onError} />
           </div>
         ) : d.statut === "reloue" && d.nouveau_bail_id ? (
           <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
@@ -1031,9 +1222,10 @@ function DossierModal({
 
         {actif ? (
           <p className="mt-3 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2 text-[11px] text-white/50">
-            📄 Le bail signé (PDF du gestionnaire — ou bientôt notre
-            système de signature) se joint depuis cette fiche ou en
-            glissant la carte à{" "}
+            📄 Le bail officiel se produit ici (« Nouveau bail », formulaire
+            du TAL), part en signature électronique, et le bail signé
+            revient au dossier. Un PDF signé ailleurs se joint depuis cette
+            fiche ou en glissant la carte à{" "}
             <b className="text-white/75">« Reloué »</b>. C&apos;est ce qui
             garantit qu&apos;aucun locataire n&apos;entre sans bail au
             dossier.
@@ -1136,6 +1328,313 @@ function DossierModal({
           }}
         />
       ) : null}
+    </div>
+  );
+}
+
+// ─── Bail officiel (TAL) + signature — bloc de la fiche ─────────────────
+
+function BailTalBloc({
+  d,
+  onNouveauBail,
+  onError
+}: {
+  d: Dossier;
+  onNouveauBail: () => void;
+  onError: (msg: string) => void;
+}) {
+  if (!d.tal_statut) {
+    return (
+      <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-sky-400/30 bg-sky-500/10 px-2.5 py-2 text-[11px] text-sky-100">
+        <FileText className="h-3.5 w-3.5" />
+        Bail officiel (TAL) : pas encore généré.
+        <button
+          type="button"
+          onClick={onNouveauBail}
+          className="btn-accent btn-xs ml-auto"
+          title="Pré-rempli depuis Kratos ; validation, confirmation, génération par l'API du TAL, puis signature électronique."
+        >
+          <FileSignature className="h-3 w-3" /> Nouveau bail
+        </button>
+      </div>
+    );
+  }
+  const transmise = d.tal_statut === "transmise";
+  return (
+    <div className="mt-2 rounded-md border border-sky-400/30 bg-sky-500/10 px-2.5 py-2 text-[11px] text-sky-100">
+      <div className="flex flex-wrap items-center gap-2">
+        <FileText className="h-3.5 w-3.5" />
+        Bail officiel (TAL) :
+        <span
+          className={`badge ${transmise ? "badge-sky" : d.tal_statut === "brouillon" ? "badge-neutral" : "badge-rose"}`}
+        >
+          {transmise
+            ? `généré · ${libelleModeTal(d.tal_mode)}`
+            : d.tal_statut === "brouillon"
+              ? "en préparation"
+              : "échec — à relancer"}
+        </span>
+        {transmise && d.tal_genere_le ? (
+          <span className="text-sky-200/70">le {fmtDateTime(d.tal_genere_le)}</span>
+        ) : null}
+        {transmise && d.tal_document_id ? (
+          <button
+            type="button"
+            onClick={() => {
+              void ouvrirPdfDocument(d.tal_document_id as number).catch((e) =>
+                onError((e as Error).message)
+              );
+            }}
+            className="btn-outline-accent btn-xs"
+          >
+            <FileText className="h-3 w-3" /> PDF
+          </button>
+        ) : null}
+        <button type="button" onClick={onNouveauBail} className="btn-outline-accent btn-xs ml-auto">
+          <FileSignature className="h-3 w-3" /> {transmise ? "Ouvrir" : "Reprendre"}
+        </button>
+      </div>
+      {d.esign_statut ? (
+        <div className="mt-1.5 border-t border-sky-400/20 pt-1.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={`badge ${
+                d.esign_statut === "complete"
+                  ? "badge-emerald"
+                  : d.esign_statut === "envoye"
+                    ? "badge-violet"
+                    : d.esign_statut === "brouillon"
+                      ? "badge-neutral"
+                      : "badge-rose"
+              }`}
+            >
+              {d.esign_statut === "complete"
+                ? "Signé par tous"
+                : d.esign_statut === "envoye"
+                  ? `En signature · ${d.nb_signes ?? 0}/${d.nb_signataires ?? 0}`
+                  : d.esign_statut === "brouillon"
+                    ? "Signature à envoyer (zones à poser)"
+                    : `Signature ${d.esign_statut}`}
+            </span>
+            {d.esign_envoye_le ? (
+              <span className="text-sky-200/70">envoyée le {fmtDateTime(d.esign_envoye_le)}</span>
+            ) : null}
+            {d.esign_document_id ? (
+              <Link
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={`/entreprises/signature/${d.esign_document_id}` as any}
+                className="ml-auto underline-offset-2 hover:underline"
+              >
+                Ouvrir dans Signature →
+              </Link>
+            ) : null}
+          </div>
+          {d.signataires?.length ? (
+            <ul className="mt-1 space-y-0.5">
+              {d.signataires.map((s) => (
+                <li key={s.id} className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-medium text-white/85">{s.nom}</span>
+                  {s.role ? <span className="text-sky-200/60">({s.role})</span> : null}
+                  <span className="ml-auto">
+                    {s.signe_le ? (
+                      <span className="text-emerald-300">✓ signé le {fmtDateTime(s.signe_le)}</span>
+                    ) : s.refuse_le ? (
+                      <span className="text-rose-300">refusé le {fmtDateTime(s.refuse_le)}</span>
+                    ) : s.ouvert_le ? (
+                      <>ouvert le {fmtDateTime(s.ouvert_le)}</>
+                    ) : s.envoye_le ? (
+                      <>envoyé le {fmtDateTime(s.envoye_le)}</>
+                    ) : (
+                      <span className="text-sky-200/60">à envoyer</span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : transmise ? (
+        <p className="mt-1 text-sky-200/70">
+          Signature pas encore lancée — ouvre le bail et clique « Lancer la signature ».
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+// ─── « Nouveau bail » : choisir l'unité ─────────────────────────────────
+
+function NouveauBailPickerModal({
+  rows,
+  immeubleId,
+  onClose,
+  onDossier,
+  onCreated
+}: {
+  rows: Dossier[];
+  immeubleId?: number;
+  onClose: () => void;
+  /** Une unité déjà en relocation : on continue sur son dossier. */
+  onDossier: (d: Dossier) => void;
+  /** Une autre unité : le dossier vient d'être créé. */
+  onCreated: (row: Dossier) => Promise<void>;
+}) {
+  const [immeubles, setImmeubles] = useState<ImmeubleLite[]>([]);
+  const [immId, setImmId] = useState<number | null>(immeubleId ?? null);
+  const [logements, setLogements] = useState<LogementLite[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (immeubleId != null) return;
+    void (async () => {
+      const r = await authedFetch("/api/v1/immobilier/immeubles");
+      if (r.ok) setImmeubles((await r.json()) as ImmeubleLite[]);
+    })();
+  }, [immeubleId]);
+
+  useEffect(() => {
+    setLogements([]);
+    if (immId == null) return;
+    void (async () => {
+      const r = await authedFetch(`/api/v1/immobilier/immeubles/${immId}/logements`);
+      if (r.ok) setLogements((await r.json()) as LogementLite[]);
+    })();
+  }, [immId]);
+
+  const actifs = rows.filter(
+    (r) => STATUTS_ACTIFS.includes(r.statut) && (immId == null || r.immeuble_id === immId)
+  );
+  const dossierParLogement = new Map(actifs.map((r) => [r.logement_id, r]));
+
+  async function creer(logementId: number) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authedFetch("/api/v1/immobilier/locations", {
+        method: "POST",
+        body: JSON.stringify({ logement_id: logementId })
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${r.status}`);
+      }
+      await onCreated((await r.json()) as Dossier);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+      <div className="my-8 w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
+          <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-accent-500">
+            <FileSignature className="h-4 w-4" /> Nouveau bail — quelle unité ?
+          </h2>
+          <button type="button" onClick={onClose} className="btn-ghost btn-xs">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="grid gap-3 p-5">
+          {immeubleId == null ? (
+            <label className="text-[11px] font-semibold text-white/60">
+              Immeuble
+              <select
+                value={immId == null ? "" : String(immId)}
+                onChange={(e) => setImmId(e.target.value ? Number(e.target.value) : null)}
+                className={`${INPUT_CLS} mt-0.5 block w-full`}
+              >
+                <option value="">Tous (unités en relocation) — ou choisir…</option>
+                {immeubles.map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
+              Unités à relouer ({actifs.length})
+            </p>
+            {actifs.length === 0 ? (
+              <p className="mt-1 text-xs text-white/40">Aucune relocation en cours.</p>
+            ) : (
+              <ul className="mt-1 divide-y divide-brand-800 rounded-lg border border-brand-800">
+                {actifs.map((r) => (
+                  <li key={r.id}>
+                    <button
+                      type="button"
+                      onClick={() => onDossier(r)}
+                      className="flex w-full flex-wrap items-center gap-2 px-3 py-2 text-left text-xs hover:bg-brand-900"
+                    >
+                      <span className="font-semibold text-white">Logement {r.logement_numero}</span>
+                      <span className="text-white/50">{r.immeuble_name}</span>
+                      <span className={`badge ${r.nouveau_bail_id ? "badge-violet" : "badge-amber"}`}>
+                        {r.nouveau_bail_id
+                          ? r.tal_statut === "transmise"
+                            ? `Bail TAL généré · ${r.nouveau_locataire_nom || ""}`
+                            : `Locataire lié · ${r.nouveau_locataire_nom || ""}`
+                          : STATUT_LABEL[r.statut] ?? r.statut}
+                      </span>
+                      <span className="ml-auto text-accent-500">
+                        {r.nouveau_bail_id ? "Nouveau bail →" : "Lier un locataire →"}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {immId != null ? (
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
+                Autres unités de l&apos;immeuble
+              </p>
+              <p className="mt-0.5 text-[11px] text-white/40">
+                Choisir une unité sans relocation crée son dossier (le logement garde son statut),
+                puis on lie le locataire et on génère le bail.
+              </p>
+              <ul className="mt-1 max-h-64 divide-y divide-brand-800 overflow-y-auto rounded-lg border border-brand-800">
+                {logements
+                  .filter((l) => !dossierParLogement.has(l.id))
+                  .map((l) => (
+                    <li key={l.id}>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void creer(l.id)}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-brand-900 disabled:opacity-50"
+                      >
+                        <span className="font-semibold text-white">Logement {l.numero}</span>
+                        {l.loyer_demande != null ? (
+                          <span className="text-white/50">{money(l.loyer_demande)}</span>
+                        ) : null}
+                        <span className="ml-auto text-accent-500">Créer la relocation →</span>
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {err ? (
+            <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+              {err}
+            </p>
+          ) : null}
+          {busy ? (
+            <p className="flex items-center gap-2 text-xs text-white/50">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Création du dossier…
+            </p>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }

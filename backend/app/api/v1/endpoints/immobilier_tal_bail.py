@@ -440,6 +440,34 @@ async def annuler_transmission(transmission_id: int, db: DBSession, user: Requir
     return svc.resume_transmission(t)
 
 
+# ─── Signature interne (eSign) ────────────────────────────────────────
+
+
+class SignatureIn(BaseModel):
+    message: Optional[str] = Field(default=None, max_length=2000)
+
+
+@router.post("/transmissions/{transmission_id}/signature", summary="Lancer la signature eSign sur le PDF officiel", status_code=201)
+async def lancer_signature(transmission_id: int, payload: Optional[SignatureIn], db: DBSession, user: RequireManager) -> Dict[str, Any]:
+    t = await _transmission_or_404(db, transmission_id)
+    try:
+        doc, cree, manquants = await svc.lancer_signature(db, t, user=user, message=(payload.message if payload else None))
+    except svc.TalBailError as exc:
+        raise _erreur(exc) from exc
+    await db.commit()
+    etat = await svc.etat_signature(db, doc.id)
+    return {"esign_document_id": doc.id, "cree": cree, "url": f"/entreprises/signature/{doc.id}", "sans_courriel": manquants, "signature": etat}
+
+
+@router.get("/transmissions/{transmission_id}/signature", summary="Suivi de la signature (qui, quand)")
+async def lire_signature(transmission_id: int, db: DBSession, user: RequireManager) -> Dict[str, Any]:
+    t = await _transmission_or_404(db, transmission_id)
+    etat = await svc.etat_signature(db, t.esign_document_id)
+    if etat is None:
+        raise HTTPException(status_code=404, detail="Aucune signature lancée pour cette transmission.")
+    return etat
+
+
 # ─── Compteur ─────────────────────────────────────────────────────────
 
 
