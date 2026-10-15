@@ -37,16 +37,39 @@ def fake_mailer(monkeypatch) -> FakeMailer:
 
 
 def test_sujet_et_html():
+    import json
+
     d = datetime(2026, 10, 15, 4, 30, tzinfo=brief_matin.FUSEAU)
     assert brief_matin.sujet_du_jour(d) == "Kratos — brief du jeudi 15 octobre 2026"
-    html = brief_matin.construire_html(
-        "État de Kratos au 2026-10-15.\nGestion locative : 22 en retard <test>\nEntreprises : 46 tâches ouvertes.",
-        "Philippe", d,
-    )
+    donnees = {
+        "periode": {"debut": "2026-10-14T05:00:00-04:00", "fin": "2026-10-15T04:30:00-04:00"},
+        "digest": "État de Kratos au 2026-10-15.\nGestion locative : 22 en retard <test>\nEntreprises : 46 tâches ouvertes.",
+        "sommaire": {"synthese": {"par_pole": {"prospection": 3}, "par_personne": {"phil@x.ca": 3}},
+                     "evenements": [{"quand": "2026-10-14T13:00:00+00:00", "qui": "phil@x.ca", "action": "lead.update",
+                                     "entite": "lead_analysis", "id": 73, "details": {"champ": "prix"}}]},
+        "analyses": [{"id": 73, "label": "1660 Saint-Clément", "city": "Montréal", "status_label": "Décision en attente"}],
+        "deals": [],
+        "avertissements": [],
+    }
+    html = brief_matin.construire_html(donnees, "Philippe", d)
     assert "Bonjour Philippe" in html
     assert "<strong>État de Kratos au 2026-10-15.</strong>" in html
     assert "<li>Gestion locative : 22 en retard &lt;test&gt;</li>" in html
-    assert "<li>Entreprises : 46 tâches ouvertes.</li>" in html
+    assert "lead.update lead_analysis#73" in html
+    assert "#73 1660 Saint-Clément" in html
+    # Bloc JSON extractible entre les balises, HTML déséchappé.
+    debut = html.index(brief_matin.JSON_DEBUT) + len(brief_matin.JSON_DEBUT)
+    fin = html.index(brief_matin.JSON_FIN)
+    brut = html[debut:fin].strip().replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    data = json.loads(brut)
+    assert data["analyses"][0]["id"] == 73 and data["periode"]["debut"].startswith("2026-10-14T05:00")
+
+
+def test_periode_debut():
+    lundi = datetime(2026, 10, 19, 4, 30, tzinfo=brief_matin.FUSEAU)
+    jeudi = datetime(2026, 10, 15, 4, 30, tzinfo=brief_matin.FUSEAU)
+    assert brief_matin.periode_debut(lundi) == datetime(2026, 10, 16, 5, 0, tzinfo=brief_matin.FUSEAU)
+    assert brief_matin.periode_debut(jeudi) == datetime(2026, 10, 14, 5, 0, tzinfo=brief_matin.FUSEAU)
 
 
 def test_est_du():
@@ -91,6 +114,8 @@ def test_destinataires_et_envoi(run, db_setup, seeded_users, fake_mailer, monkey
     assert rapport["envoyes"] == len(ids) and not rapport["erreurs"]
     assert fake_mailer.sent[0]["subject"] == "Kratos — brief du jeudi 15 octobre 2026"
     assert "Test pour" in fake_mailer.sent[0]["html"]
+    assert brief_matin.JSON_DEBUT in fake_mailer.sent[0]["html"]
+    assert "Analyses de leads en cours" in fake_mailer.sent[0]["html"]
     assert emails2 == [admin_email]
 
 
