@@ -543,6 +543,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.services.paiements_auto import boucle as paiements_auto_loop
 
     paiements_auto_task = asyncio.create_task(paiements_auto_loop())
+    # Brief du matin par courriel (Phil 2026-10-15) : les crons Render ne
+    # tournent pas et le connecteur MCP n'est pas fiable dans les routines
+    # claude.ai → Kratos envoie lui-même le digest, une fois par jour.
+    from app.services.brief_matin import boucle as brief_matin_loop
+
+    brief_matin_task = asyncio.create_task(brief_matin_loop())
     try:
         yield
     finally:
@@ -552,6 +558,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             qbo_nets_task.cancel()
         if not paiements_auto_task.done():
             paiements_auto_task.cancel()
+        if not brief_matin_task.done():
+            brief_matin_task.cancel()
         await close_db()
 
 
