@@ -232,6 +232,8 @@ export default function ProspectionCourtiersPage() {
   const [apercuBusy, setApercuBusy] = useState(false);
   const [sending, setSending] = useState(false);
   const [chercheCourriel, setChercheCourriel] = useState(false);
+  const [diagnostic, setDiagnostic] = useState<string[] | null>(null);
+  const [diagnosticBusy, setDiagnosticBusy] = useState(false);
   const [journal, setJournal] = useState({
     canal: "telephone",
     direction: "sortant",
@@ -409,6 +411,32 @@ export default function ProspectionCourtiersPage() {
     }
   }
 
+  async function diagnostiquerCourriel(id: number) {
+    if (diagnosticBusy) return;
+    setDiagnosticBusy(true);
+    setDiagnostic(null);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/prospection/courtiers/${id}/chercher-courriel/diagnostic`,
+        { method: "POST" }
+      );
+      if (!res.ok) throw new Error(await lireErreur(res));
+      const d = (await res.json()) as {
+        journal: string[];
+        resultat: { courriel: string | null; confiance: string | null; note: string | null };
+      };
+      setDiagnostic([
+        ...d.journal,
+        `→ ${d.resultat.courriel ? `${d.resultat.courriel} (${d.resultat.confiance})` : "rien d'écrit"} — ${d.resultat.note || ""}`
+      ]);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setDiagnosticBusy(false);
+    }
+  }
+
   // ── Fiche ──
   const ouvrirFiche = useCallback(async (id: number) => {
     setDetailId(id);
@@ -443,6 +471,7 @@ export default function ProspectionCourtiersPage() {
     setDetailId(null);
     setDetail(null);
     setApercu(null);
+    setDiagnostic(null);
   }
 
   async function sauvegarderFiche() {
@@ -1346,7 +1375,28 @@ export default function ProspectionCourtiersPage() {
                           )}
                           {detail.courriel ? "Rechercher à nouveau" : "Chercher le courriel"}
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => diagnostiquerCourriel(detail.id)}
+                          disabled={diagnosticBusy}
+                          className="btn-ghost btn-xs"
+                          title="Rejoue la recherche et montre chaque étape (rien n'est modifié)"
+                        >
+                          {diagnosticBusy ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : null}
+                          Pourquoi ?
+                        </button>
                       </div>
+                      {diagnostic ? (
+                        <ul className="mt-2 max-h-56 space-y-0.5 overflow-y-auto rounded-lg border border-brand-800 bg-brand-950/60 p-2 font-mono text-[10px] text-white/60">
+                          {diagnostic.map((l, i) => (
+                            <li key={i} className="break-all">
+                              {l}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
                       {detail.courriel_recherche_note ? (
                         <p className="mt-1 text-[11px] text-white/40">
                           {detail.courriel_recherche_note}

@@ -979,6 +979,24 @@ async def chercher_courriel_fiche(
     return await lire_courtier(courtier_id, db, user)
 
 
+@router.post(
+    "/{courtier_id}/chercher-courriel/diagnostic",
+    summary="Rejouer la recherche de courriel et montrer chaque étape (rien n'est écrit)",
+)
+async def diagnostic_courriel(
+    courtier_id: int, db: DBSession, user: RequireManager
+) -> dict:
+    c = await _get_or_404(db, courtier_id)
+    config = await svc.charger_config()
+    journal: List[str] = []
+    res = await courriels.chercher_courriel(c, config=config, journal=journal)
+    return {
+        "courtier": {"id": c.id, "nom": c.nom, "agence": c.agence, "secteur": c.secteur},
+        "resultat": {k: v for k, v in res.items()},
+        "journal": journal,
+    }
+
+
 @router.delete("/{courtier_id}", status_code=204, summary="Supprimer un courtier")
 async def supprimer_courtier(
     courtier_id: int, db: DBSession, user: RequireManager
