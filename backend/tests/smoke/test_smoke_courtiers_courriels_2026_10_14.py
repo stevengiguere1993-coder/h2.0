@@ -27,6 +27,8 @@ from tests.smoke.conftest import TestSessionLocal
 
 BASE = "/api/v1/prospection/courtiers"
 IDS: dict = {}
+#: Vraie lecture de page (capturée AVANT que les fixtures la remplacent).
+LIRE_PAGE_REELLE = courriels.lire_page
 
 
 async def _rien(*a, **kw):
@@ -83,6 +85,38 @@ def test_notation_et_nettoyage():
         "Joignez D.Gallico@immoalliances.ca ou info@immoalliances.ca — logo@2x.png",
         ["mailto:d.gallico@immoalliances.ca?subject=Info"],
     ) == ["d.gallico@immoalliances.ca", "info@immoalliances.ca"]
+
+
+def test_courriel_coupe_ou_obfusque(run, sans_reseau):
+    """Vrai cas prod : « rosibe</span>l@groupemackay.com » donnait
+    « l@groupemackay.com » ; et « rosibel [at] groupemackay [dot] com »."""
+    assert courriels.deobfusquer("rosibel [at] groupemackay [dot] com") == "rosibel@groupemackay.com"
+    assert courriels.deobfusquer("rosibel (arobas) groupemackay.com") == "rosibel@groupemackay.com"
+    assert courriels.extraire_courriels("Écrivez à rosibel [at] groupemackay [dot] com") == [
+        "rosibel@groupemackay.com"
+    ]
+
+    html = ('<html><body><h1>Rosibel Martinez</h1><p>Courtier immobilier, Groupe Mackay</p>'
+            '<p><span>rosibe</span><span>l@groupemackay.com</span></p></body></html>')
+
+    async def _get(url, **kw):
+        return 200, html
+
+    sans_reseau.setattr(courriels, "_http_get", _get)
+    # Vraie lire_page (réseau remplacé) : le texte collé rend le courriel entier.
+    texte, mailtos = run(LIRE_PAGE_REELLE("https://groupemackay.com/equipe/rosibel"))
+    trouves = courriels.extraire_courriels(texte, mailtos)
+    assert "rosibel@groupemackay.com" in trouves
+    assert "mackayrosibel@groupemackay.com" not in trouves  # pas recollé entre deux <p>
+
+    # Recherche complète : prénom seul, mais le nom est sur la page → vérifié.
+    async def _web(requete, **kw):
+        return [{"url": "https://groupemackay.com/equipe/rosibel", "titre": "Rosibel Martinez", "extrait": ""}]
+
+    sans_reseau.setattr(courriels, "rechercher_web", _web)
+    sans_reseau.setattr(courriels, "lire_page", LIRE_PAGE_REELLE)
+    res = run(courriels.chercher_courriel(_courtier("Rosibel Martinez"), config={}))
+    assert res["courriel"] == "rosibel@groupemackay.com" and res["confiance"] == "verifie"
 
 
 def test_parseurs_moteurs():
