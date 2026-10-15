@@ -132,7 +132,7 @@ export default function BauxPage() {
       <ImmobilierTopbar
         breadcrumbs={[
           { label: "Immobilier", href: "/immobilier" },
-          { label: "Baux" }
+          { label: "Baux en vigueur" }
         ]}
       />
       <div className="space-y-4 p-4 sm:p-6">
@@ -144,7 +144,7 @@ export default function BauxPage() {
             <ClipboardList className="h-5 w-5" />
           </span>
           <div>
-            <h1 className="text-2xl font-bold text-white">Baux</h1>
+            <h1 className="text-2xl font-bold text-white">Baux en vigueur</h1>
             <p className="mt-1 max-w-2xl text-sm text-white/60">
               Une ligne par logement : créer le bail, importer le PDF
               signé (il devient actif) et mettre fin au bail. La collecte
