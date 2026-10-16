@@ -8,6 +8,8 @@ Runs once a day. For every Facture in status "sent" / "overdue":
   friendly -> firm -> final.
 - next_reminder_at can be set manually on the invoice to override when
   the next reminder fires (push it back or bring it forward).
+- reminders_paused (interrupteur sur la fiche) suspend les rappels de
+  cette facture sans toucher à l'historique ; on le remet pour reprendre.
 
 The reminder body mentions the invoice reference, total and days
 overdue. Staff is cc'd on every send so they see the pressure trail.
@@ -171,6 +173,7 @@ async def run() -> dict:
     flipped_overdue = 0
     sent = 0
     skipped_no_mail = 0
+    paused = 0
 
     async with AsyncSessionLocal() as db:
         rows = (
@@ -195,6 +198,13 @@ async def run() -> dict:
             if fa.status == FactureStatus.SENT.value:
                 fa.status = FactureStatus.OVERDUE.value
                 flipped_overdue += 1
+
+            # Rappels suspendus sur la fiche (interrupteur) : la facture
+            # reste « en retard » mais aucun courriel ne part. Rien n'est
+            # incrémenté, l'historique des rappels déjà envoyés reste.
+            if fa.reminders_paused:
+                paused += 1
+                continue
 
             # Cadence : un rappel tous les 4 jours tant que la facture
             # est impayée. `next_reminder_at` (réglable à la main sur la
@@ -289,6 +299,7 @@ async def run() -> dict:
         "flipped_to_overdue": flipped_overdue,
         "reminders_sent": sent,
         "skipped_no_client_email": skipped_no_mail,
+        "skipped_paused": paused,
     }
 
 
