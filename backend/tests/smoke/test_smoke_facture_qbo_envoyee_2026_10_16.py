@@ -22,12 +22,14 @@ QuickBooks est simulé en mémoire : aucun appel réseau.
 
 from __future__ import annotations
 
+import json
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 import app.services.facture_qbo as fq
 from app.integrations.quickbooks import QuickBooksError
+from app.models.audit_log import AuditLog
 from app.models.client import Client
 from app.models.facture import Facture
 from tests.smoke.conftest import TestSessionLocal
@@ -147,6 +149,31 @@ def test_filet_marque_envoyees_les_invoices_non_envoyees(qb, run):
 
     assert sorted(res["marquees"]) == sorted([str(base + 134), str(base + 132)])
     assert res["echecs"] == {}
+    # Le passage est inscrit au journal (lisible dans Kratos).
+    async def _journal():
+        async with TestSessionLocal() as s:
+            rows = (
+                await s.execute(
+                    select(AuditLog)
+                    .where(AuditLog.action == "facture.qbo_marquage_envoi")
+                    .order_by(AuditLog.id.desc())
+                )
+            ).scalars().all()
+            return [
+                r
+                for r in rows
+                if str(base + 134) in json.loads(r.details_json or "{}").get("marquees", [])
+            ]
+
+    entrees = run(_journal())
+    assert entrees and json.loads(entrees[0].details_json)["echecs"] == {}
+
+    async def _nettoyer():
+        async with TestSessionLocal() as s:
+            await s.execute(delete(AuditLog).where(AuditLog.id.in_([e.id for e in entrees])))
+            await s.commit()
+
+    run(_nettoyer())
     for iid in (iid_a, iid_b):
         inv = qb.invoices[iid]
         assert inv["EmailStatus"] == "EmailSent"
