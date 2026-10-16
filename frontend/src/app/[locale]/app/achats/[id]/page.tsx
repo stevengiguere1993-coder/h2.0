@@ -110,6 +110,11 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: "Annulé"
 };
 
+function isoToDateInput(iso: string | null): string {
+  if (!iso) return "";
+  return iso.slice(0, 10);
+}
+
 export default function AchatDetailPage() {
   const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
@@ -190,6 +195,7 @@ export default function AchatDetailPage() {
   const [statusStr, setStatusStr] = useState("received");
   const [invoiceDate, setInvoiceDate] = useState("");
   const [supplierInvoiceNumber, setSupplierInvoiceNumber] = useState("");
+  const [receivedAt, setReceivedAt] = useState("");
   const [receiptUrl, setReceiptUrl] = useState("");
   const [notes, setNotes] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
@@ -305,6 +311,7 @@ export default function AchatDetailPage() {
           data.invoice_date ? data.invoice_date.slice(0, 10) : ""
         );
         setSupplierInvoiceNumber(data.supplier_invoice_number || "");
+        setReceivedAt(isoToDateInput(data.received_at));
         setReceiptUrl(data.receipt_url || "");
         setNotes(data.notes || "");
         setPaymentMethod(data.payment_method || "");
@@ -335,13 +342,14 @@ export default function AchatDetailPage() {
       invoiceDate !==
         (a.invoice_date ? a.invoice_date.slice(0, 10) : "") ||
       supplierInvoiceNumber !== (a.supplier_invoice_number || "") ||
+      receivedAt !== isoToDateInput(a.received_at) ||
       receiptUrl !== (a.receipt_url || "") ||
       notes !== (a.notes || "") ||
       paymentMethod !== (a.payment_method || "")
     );
   }, [
     a, projectId, fournisseurId, description, amount, amountTps, amountTvq,
-    statusStr, invoiceDate, supplierInvoiceNumber,
+    statusStr, invoiceDate, supplierInvoiceNumber, receivedAt,
     receiptUrl, notes, paymentMethod
   ]);
 
@@ -364,11 +372,7 @@ export default function AchatDetailPage() {
         status: statusStr,
         invoice_date: invoiceDate || null,
         supplier_invoice_number: supplierInvoiceNumber.trim() || null,
-        // « Reçu le » = date de facture (midi UTC : pas de décalage de
-        // jour en heure de l'Est) ; sans date de facture, on garde l'actuel.
-        received_at: invoiceDate
-          ? `${invoiceDate}T12:00:00Z`
-          : a.received_at,
+        received_at: receivedAt ? new Date(receivedAt).toISOString() : null,
         receipt_url: receiptUrl.trim() || null,
         notes: notes.trim() || null,
         fournisseur_id: fournisseurId ? Number(fournisseurId) : null,
@@ -891,9 +895,6 @@ export default function AchatDetailPage() {
                     ) : null}
                   </div>
 
-                  {/* Une seule date : « Reçu le » (received_at, base de
-                      l'échéance et du payé le) suit la date de facture à la
-                      sauvegarde — retour Steven 2026-10-16. */}
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div>
                       <label htmlFor="aidate" className="label">
@@ -904,6 +905,16 @@ export default function AchatDetailPage() {
                         type="date"
                         value={invoiceDate}
                         onChange={(e) => setInvoiceDate(e.target.value)}
+                        className="input"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="arec" className="label">Reçu le</label>
+                      <input
+                        id="arec"
+                        type="date"
+                        value={receivedAt}
+                        onChange={(e) => setReceivedAt(e.target.value)}
                         className="input"
                       />
                     </div>

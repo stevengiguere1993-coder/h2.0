@@ -12,7 +12,7 @@ Regles metier :
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import select
@@ -54,16 +54,7 @@ async def apply_payment_defaults(db: AsyncSession, achat: Achat) -> None:
     pm = (achat.payment_method or "").strip() or None
     now = datetime.now(timezone.utc)
     if achat.received_at is None:
-        # « Reçu le » suit la date de facture quand elle est connue (même
-        # date à notre niveau — retour Steven 2026-10-16) : l'échéance part
-        # de la facture, comme dans QuickBooks. Midi UTC pour ne pas
-        # changer de jour en heure de l'Est.
-        if achat.invoice_date is not None:
-            achat.received_at = datetime.combine(
-                achat.invoice_date, time(12, 0), tzinfo=timezone.utc
-            )
-        else:
-            achat.received_at = now
+        achat.received_at = now
 
     if pm and pm != PaymentMethod.BILL_TO_PAY.value:
         # Paye au moment de l'achat (cheque, CC).
