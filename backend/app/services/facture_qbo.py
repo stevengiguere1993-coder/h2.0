@@ -451,6 +451,12 @@ def _build_invoice_payload(
         "CustomerRef": {"value": str(customer_id)},
         "DocNumber": facture.reference[:21],
         "Line": lines,
+        # Seules les factures émises partent dans QB, et c'est Kratos qui
+        # les envoie au client (PDF, courriel, rappels). Sans cet état, QB
+        # les voit « Non envoyé » et son flux « Get unsent invoice
+        # reminder » ouvre une tâche « Review Invoice » par facture
+        # (Steven 2026-10-16 : 19 tâches dans « Nécessite votre attention »).
+        "EmailStatus": QB_ETAT_ENVOYEE,
     }
     if class_id:
         # Repli : aussi au niveau transaction si la compagnie est en mode
@@ -500,6 +506,20 @@ def _build_invoice_payload(
         payload["PrivateNote"] = MEMO_KRATOS.format(id=facture.id)
 
     return payload
+
+
+#: État d'envoi QB d'une facture envoyée au client (par Kratos).
+QB_ETAT_ENVOYEE = "EmailSent"
+
+
+def _refus_etat_envoi(p: Dict[str, Any], message: str) -> bool:
+    """QB refuse-t-il le corps à cause de l'état d'envoi (courriel du
+    client manquant, champ refusé) ? On renvoie alors la facture sans cet
+    état : la synchro des lignes et des paiements passe avant."""
+    if "EmailStatus" not in p:
+        return False
+    m = message.lower()
+    return any(k in m for k in ("email", "courriel", "e-mail"))
 
 
 #: Champs d'une Invoice lue dans QuickBooks qu'on ne lui renvoie pas dans
@@ -1113,6 +1133,8 @@ async def sync_facture_to_qbo(
             except QuickBooksError:
                 raise exc_origine
 
+        courriel_client = (getattr(client, "email", None) or "").strip()
+
         def _corps_creation() -> Dict[str, Any]:
             """Création à neuf : la vue Kratos, signée et datée du jour
             d'émission."""
@@ -1123,6 +1145,8 @@ async def sync_facture_to_qbo(
             }
             p.setdefault("PrivateNote", MEMO_KRATOS.format(id=fa.id))
             p.setdefault("TxnDate", _date_emission(fa))
+            if courriel_client:
+                p.setdefault("BillEmail", {"Address": courriel_client})
             return p
 
         def _corps_maj(
@@ -1136,7 +1160,10 @@ async def sync_facture_to_qbo(
             if client_qb:
                 vue["CustomerRef"] = {"value": client_qb}
             vue.setdefault("PrivateNote", MEMO_KRATOS.format(id=fa.id))
-            return corps_mise_a_jour_complete(cur, vue)
+            corps = corps_mise_a_jour_complete(cur, vue)
+            if courriel_client and not (corps.get("BillEmail") or {}).get("Address"):
+                corps["BillEmail"] = {"Address": courriel_client}
+            return corps
 
         async def _push_invoice(
             p: Dict[str, Any], _lie_essaye: bool = False, _relu: bool = False
@@ -1146,6 +1173,14 @@ async def sync_facture_to_qbo(
             except QuickBooksError as exc:
                 m = str(exc).lower()
                 codes = _codes_erreur_qbo(str(exc))
+                if _refus_etat_envoi(p, str(exc)):
+                    log.warning(
+                        "Facture %s : QB refuse l'état « envoyée » (%s), "
+                        "facture renvoyée sans cet état",
+                        fa.id, str(exc)[:200],
+                    )
+                    p2 = {k: v for k, v in p.items() if k != "EmailStatus"}
+                    return await _push_invoice(p2, _lie_essaye=_lie_essaye, _relu=_relu)
                 if p.get("Id") and not _lie_essaye and any(k in m for k in _LINK_KEYS):
                     cur = await qbo.get_invoice(str(p["Id"]))
                     cur = cur.get("Invoice") or cur
@@ -1776,3 +1811,94 @@ async def corriger_factures_en_retard_dans_qb(
         "deja_signalees": deja_signalees,
         "deja_tentees": deja_tentees,
     }
+
+
+#: Factures marquées « envoyée » dans QB par passage du filet horaire.
+MAX_MARQUAGES_ENVOI_PAR_PASSAGE = 50
+#: Invoices dont QB a refusé l'état « envoyée » (pas retentées sans fin).
+_marquages_envoi_refuses: set[str] = set()
+
+
+async def marquer_factures_envoyees_dans_qb(
+    *, limite: int = MAX_MARQUAGES_ENVOI_PAR_PASSAGE
+) -> Dict[str, Any]:
+    """Filet horaire : les Invoices QB des factures émises dans Kratos qui
+    sont encore « Non envoyé » dans QB passent à « envoyée ». C'est Kratos
+    qui envoie les factures (PDF, courriel, rappels) ; tant que QB les
+    croit non envoyées, son flux « Get unsent invoice reminder » ouvre une
+    tâche « Review Invoice » par facture (Steven 2026-10-16).
+
+    Mise à jour « sparse » de l'en-tête seulement (état d'envoi, et le
+    courriel du client s'il manque) : lignes, montants, taxes, paiements
+    et dates de l'Invoice ne sont pas renvoyés, donc pas touchés."""
+    from app.db.session import AsyncSessionLocal
+
+    qbo = get_qbo()
+    await qbo._load_refresh_from_db()
+    if not qbo.ready:
+        return {"skipped": "qbo_non_configure"}
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(Facture.qbo_invoice_id, Client.email)
+                .outerjoin(Client, Client.id == Facture.client_id)
+                .where(
+                    Facture.status.in_(("sent", "paid", "overdue")),
+                    Facture.qbo_invoice_id.is_not(None),
+                )
+            )
+        ).all()
+    courriels = {str(qid): (email or "").strip() for qid, email in rows if qid}
+    ids = sorted(courriels)
+    marquees: list[str] = []
+    echecs: Dict[str, str] = {}
+    for i in range(0, len(ids), 40):
+        if len(marquees) + len(echecs) >= limite:
+            break
+        lot = ", ".join("'" + x.replace("'", "''") + "'" for x in ids[i : i + 40])
+        invoices = await qbo.query(
+            f"SELECT * FROM Invoice WHERE Id IN ({lot}) MAXRESULTS 1000"
+        )
+        for inv in invoices:
+            qid = str(inv.get("Id") or "")
+            if qid not in courriels or qid in _marquages_envoi_refuses:
+                continue
+            if str(inv.get("EmailStatus") or "") == QB_ETAT_ENVOYEE:
+                continue
+            if len(marquees) + len(echecs) >= limite:
+                break
+            corps: Dict[str, Any] = {
+                "Id": qid,
+                "SyncToken": str(inv.get("SyncToken") or "0"),
+                "sparse": True,
+                "EmailStatus": QB_ETAT_ENVOYEE,
+            }
+            if courriels[qid] and not (inv.get("BillEmail") or {}).get("Address"):
+                corps["BillEmail"] = {"Address": courriels[qid]}
+            doc = str(inv.get("DocNumber") or qid)
+            try:
+                rep = await qbo.create_invoice(corps)
+                rep = rep.get("Invoice") or rep
+                if str(rep.get("EmailStatus") or "") != QB_ETAT_ENVOYEE:
+                    # QB a accepté sans appliquer : pas de réécriture à
+                    # chaque heure (chaque écriture relance son flux).
+                    _marquages_envoi_refuses.add(qid)
+                    echecs[doc] = "état d'envoi ignoré par QuickBooks"
+                    log.warning(
+                        "Invoice QB %s : état « envoyée » ignoré par QB (%s)",
+                        doc, rep.get("EmailStatus"),
+                    )
+                    continue
+                marquees.append(doc)
+            except QuickBooksError as exc:
+                _marquages_envoi_refuses.add(qid)
+                echecs[doc] = str(exc)[:200]
+                log.warning(
+                    "Invoice QB %s : état « envoyée » refusé : %s", doc, exc
+                )
+    if marquees:
+        log.warning(
+            "%d facture(s) marquée(s) envoyée(s) dans QB : %s",
+            len(marquees), ", ".join(marquees),
+        )
+    return {"marquees": marquees, "echecs": echecs}
