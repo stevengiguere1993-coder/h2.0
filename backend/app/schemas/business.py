@@ -649,6 +649,10 @@ class AchatRead(_Base):
     markup_percent: Optional[float] = None
     invoiced_at: Optional[datetime] = None
     facture_item_id: Optional[int] = None
+    #: « Ne pas refacturer » autorisé explicitement (page À refacturer).
+    refacturation_dispense_at: Optional[datetime] = None
+    refacturation_dispense_par_user_id: Optional[int] = None
+    refacturation_dispense_raison: Optional[str] = None
     sous_traitant_id: Optional[int] = None
     kind: str = "material"
     hours: Optional[float] = None
