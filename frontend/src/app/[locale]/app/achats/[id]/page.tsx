@@ -26,7 +26,7 @@ import { authedFetch } from "@/lib/auth";
 import { splitFromTotal, TPS_RATE, TVQ_RATE } from "@/lib/tax";
 import {
   projectLabel,
-  fournisseursPourAchat,
+  trierParNom,
   trierProjetsParAdresse
 } from "@/lib/project";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -91,12 +91,7 @@ type Project = {
   // refacturer » quand on rattache l'achat à ce projet.
   billing_kind?: string | null;
 };
-type Fournisseur = {
-  id: number;
-  name: string;
-  active?: boolean;
-  in_directory?: boolean;
-};
+type Fournisseur = { id: number; name: string };
 
 // Bon de travail proposé dans le sélecteur « Projet / Bon de travail »
 // (retour 2026-09-18 : la fiche d'un achat ne listait que les projets —
@@ -137,7 +132,6 @@ export default function AchatDetailPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [bons, setBons] = useState<BonMini[]>([]);
   const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
-  const [nomsClients, setNomsClients] = useState<string[]>([]);
   const [employes, setEmployes] = useState<Employe[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -212,14 +206,13 @@ export default function AchatDetailPage() {
         // /projects sans `kind` exclut les mini-projets des bons → on les
         // charge à part pour que la valeur d'un achat déjà rattaché à un
         // bon reste affichable (retour 2026-09-18).
-        const [aRes, pRes, bpRes, frRes, eRes, bRes, cRes] = await Promise.all([
+        const [aRes, pRes, bpRes, frRes, eRes, bRes] = await Promise.all([
           authedFetch(`/api/v1/achats/${id}`),
           authedFetch("/api/v1/projects?limit=500"),
           authedFetch("/api/v1/projects?kind=bon_travail&limit=500"),
           authedFetch("/api/v1/fournisseurs?limit=500"),
           authedFetch("/api/v1/employes?limit=500&volet=construction"),
-          authedFetch("/api/v1/bons-travail?limit=500"),
-          authedFetch("/api/v1/clients?limit=500")
+          authedFetch("/api/v1/bons-travail?limit=500")
         ]);
         const bonsAll = bRes.ok
           ? ((await bRes.json()) as BonMini[]).filter(
@@ -317,10 +310,6 @@ export default function AchatDetailPage() {
         setPaymentMethod(data.payment_method || "");
         if (frRes.ok) setFournisseurs((await frRes.json()) as Fournisseur[]);
         if (eRes.ok) setEmployes((await eRes.json()) as Employe[]);
-        if (cRes.ok)
-          setNomsClients(
-            ((await cRes.json()) as { name: string }[]).map((c) => c.name)
-          );
       } catch {
         if (!cancelled) setError("Achat introuvable.");
       } finally {
@@ -685,11 +674,7 @@ export default function AchatDetailPage() {
                       emptyLabel="— Aucun —"
                       placeholder="Choisis ou tape le nom du fournisseur…"
                       options={[
-                        ...fournisseursPourAchat(
-                          fournisseurs,
-                          nomsClients,
-                          fournisseurId
-                        ).map((fr) => ({
+                        ...trierParNom(fournisseurs).map((fr) => ({
                           value: String(fr.id),
                           label: fr.name
                         })),

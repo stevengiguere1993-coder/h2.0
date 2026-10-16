@@ -78,36 +78,3 @@ export function trierProjetsParAdresse<
     );
   });
 }
-
-/**
- * Fournisseurs proposés dans l'ajout / la modification d'un achat, triés.
- * Retire les fiches désactivées et celles créées par un import QuickBooks
- * (hors annuaire) qui portent le nom d'un client : ce sont des dépenses
- * payées à un client, pas des fournisseurs. Une fiche créée à la main
- * reste, même si le contact est aussi client. `garderId` garde la fiche
- * déjà liée à l'achat pour qu'elle reste affichée.
- */
-export function fournisseursPourAchat<
-  T extends {
-    id: number;
-    name?: string | null;
-    active?: boolean;
-    in_directory?: boolean;
-  }
->(
-  fournisseurs: readonly T[],
-  nomsClients: readonly (string | null | undefined)[],
-  garderId?: string
-): T[] {
-  const norm = (s: string | null | undefined) =>
-    sansAccents((s || "").trim());
-  const clients = new Set(nomsClients.map(norm).filter(Boolean));
-  return trierParNom(
-    fournisseurs.filter(
-      (f) =>
-        (garderId && String(f.id) === garderId) ||
-        (f.active !== false &&
-          !(f.in_directory === false && clients.has(norm(f.name))))
-    )
-  );
-}

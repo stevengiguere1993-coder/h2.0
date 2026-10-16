@@ -121,21 +121,6 @@ async def _import_qbo_receipts(db: AsyncSession, qbo: Any) -> int:
     return imported
 
 
-def _nom_fournisseur_de(ref: Optional[dict]) -> Optional[str]:
-    """Nom du bénéficiaire d'une dépense QB s'il s'agit d'un FOURNISSEUR.
-
-    L'EntityRef d'une Purchase peut viser un Vendor, mais aussi un
-    Customer (remboursement à un client) ou un Employee : ceux-là ne
-    sont pas des fournisseurs et ne doivent pas créer de fiche
-    Fournisseur (retour Steven 2026-10-16 : des clients apparaissaient
-    dans la liste des fournisseurs de l'ajout d'achat)."""
-    ref = ref or {}
-    kind = str(ref.get("type") or "").strip().lower()
-    if kind and kind != "vendor":
-        return None
-    return ref.get("name")
-
-
 async def _fournisseur_id_for(
     db: AsyncSession,
     fourn_by_name: dict[str, int],
@@ -1197,7 +1182,6 @@ async def pull_project_costs_from_qbo(
             continue
         total = _num(p.get("TotalAmt"))
         vendor = (p.get("EntityRef") or {}).get("name")
-        vendor_fourn = _nom_fournisseur_de(p.get("EntityRef"))
         doc = str(p.get("DocNumber") or "")
         # Anti-doublon : un Achat poussé DEPUIS Kratos vers QB stocke
         # l'Id de la Purchase dans `qbo_bill_id` (cf. achat_qbo.py), PAS
@@ -1289,15 +1273,11 @@ async def pull_project_costs_from_qbo(
                     existing.payment_method = new_method
                 updated.append("mode de paiement")
             # Backfill : fournisseur manquant sur l'achat lié.
-            if (
-                not dry_run
-                and existing.fournisseur_id is None
-                and vendor_fourn
-            ):
+            if not dry_run and existing.fournisseur_id is None and vendor:
                 existing.fournisseur_id = await _fournisseur_id_for(
                     db,
                     fourn_by_name,
-                    vendor_fourn,
+                    vendor,
                     (p.get("EntityRef") or {}).get("value"),
                 )
                 updated.append("fournisseur")
@@ -1389,7 +1369,7 @@ async def pull_project_costs_from_qbo(
             _fid = await _fournisseur_id_for(
                 db,
                 fourn_by_name,
-                vendor_fourn,
+                vendor,
                 (p.get("EntityRef") or {}).get("value"),
             )
             _base_desc = _txn_description(p)
