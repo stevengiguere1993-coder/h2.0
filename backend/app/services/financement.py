@@ -62,7 +62,18 @@ STATUT_LOGEMENT_LABELS: dict[str, str] = {
     "vacant": "Vacant",
     "reserve": "Réservé",
     "hors_location": "Hors location",
+    "parallele_seulement": "Occupé (bail parallèle)",
+    "occupe_chambres": "Occupé (chambres)",
 }
+
+
+def occupation_label(ligne: dict[str, Any]) -> str:
+    """Libellé d'occupation d'une ligne du rent roll (chambres comptées)."""
+    occ = ligne.get("occupation") or ""
+    if occ == "occupe_chambres":
+        n = len(ligne.get("baux") or [])
+        return f"Occupé · {n} chambre{'s' if n > 1 else ''}"
+    return STATUT_LOGEMENT_LABELS.get(occ, occ)
 
 
 def _now() -> datetime:
@@ -202,13 +213,22 @@ async def rent_roll(
         liste = par_log.get(lg.id, [])
         standards = [b for b in liste if not est_bail_parallele(b)]
         pars = [b for b in liste if est_bail_parallele(b)]
+        actifs = [b for b in standards if b.status == BailStatus.ACTIF.value and _couvre(b, jour)]
+        # Unité louée EN CHAMBRES (ou plusieurs baux actifs qui cohabitent) :
+        # UNE ligne pour l'unité, loyer = somme des chambres, les baux de
+        # chambre comme pièces (Phil 2026-10-16 : le rent roll reste à N unités).
+        chambres: list[Bail] = []
         courant = None
-        for b in standards:
-            if b.status == BailStatus.ACTIF.value and _couvre(b, jour):
+        if actifs and (bool(getattr(lg, "location_en_chambres", False)) or len(actifs) > 1):
+            chambres = sorted(actifs, key=lambda b: ((b.date_debut or date.min), b.id))
+        else:
+            for b in actifs:
                 if courant is None or (b.date_debut or date.min) > (courant.date_debut or date.min):
                     courant = b
         prochain = None
         for b in standards:
+            if chambres:
+                break  # les chambres tournent : pas de « prochain » par unité
             if b.id == (courant.id if courant else None):
                 continue
             if b.status == BailStatus.PROPOSE.value or (
@@ -218,9 +238,12 @@ async def rent_roll(
                     prochain = b
         par_vigueur = [b for b in pars if b.status == BailStatus.PARALLELE.value]
 
-        if lg.status == LogementStatus.HORS_LOC.value and courant is None:
+        if lg.status == LogementStatus.HORS_LOC.value and courant is None and not chambres:
             occupation = "hors_location"
             nb_hors += 1
+        elif chambres:
+            occupation = "occupe_chambres"
+            nb_occ += 1
         elif courant is not None:
             occupation = "occupe"
             nb_occ += 1
@@ -234,10 +257,16 @@ async def rent_roll(
             occupation = "vacant"
             nb_vac += 1
 
-        loyer = _f(courant.loyer_mensuel) if courant else None
+        if chambres:
+            loyer = round(sum(float(b.loyer_mensuel or 0) for b in chambres), 2)
+        else:
+            loyer = _f(courant.loyer_mensuel) if courant else None
         if loyer:
             tot_std += loyer
         lo = locs.get(courant.locataire_id) if courant else None
+        noms_chambres = [
+            (locs.get(b.locataire_id).full_name if locs.get(b.locataire_id) else f"bail #{b.id}") for b in chambres
+        ]
         ligne: dict[str, Any] = {
             "logement_id": lg.id,
             "numero": lg.numero,
@@ -250,15 +279,41 @@ async def rent_roll(
             "en_chambres": bool(getattr(lg, "location_en_chambres", False)),
             "bail_id": courant.id if courant else None,
             "locataire_id": courant.locataire_id if courant else None,
-            "locataire": (lo.full_name if lo else None),
+            "locataire": (
+                f"{len(chambres)} chambre{'s' if len(chambres) > 1 else ''} : {', '.join(noms_chambres)}" if chambres
+                else (lo.full_name if lo else None)
+            ),
             "loyer": loyer,
-            "inclusions": inclusions_de(courant) if courant else [],
-            "date_debut": courant.date_debut.isoformat() if courant and courant.date_debut else None,
-            "date_fin": courant.date_fin.isoformat() if courant and courant.date_fin else None,
-            "au_mois": bool(courant.au_mois) if courant else None,
-            "jour_echeance": courant.jour_echeance if courant else None,
-            "depot": _f(courant.depot_garantie) if courant else None,
-            "document_signe": bool(courant.document_id) if courant else None,
+            "inclusions": (
+                sorted({i for b in chambres for i in inclusions_de(b)}) if chambres
+                else (inclusions_de(courant) if courant else [])
+            ),
+            "date_debut": (
+                min(b.date_debut for b in chambres if b.date_debut).isoformat() if chambres and any(b.date_debut for b in chambres)
+                else (courant.date_debut.isoformat() if courant and courant.date_debut else None)
+            ),
+            "date_fin": (
+                (None if any(b.au_mois for b in chambres) else max(b.date_fin for b in chambres if b.date_fin).isoformat())
+                if chambres and any(b.date_fin for b in chambres)
+                else (courant.date_fin.isoformat() if courant and courant.date_fin else None)
+            ),
+            "au_mois": (any(bool(b.au_mois) for b in chambres) if chambres else (bool(courant.au_mois) if courant else None)),
+            "jour_echeance": None if chambres else (courant.jour_echeance if courant else None),
+            "depot": (
+                round(sum(float(b.depot_garantie or 0) for b in chambres), 2) if chambres
+                else (_f(courant.depot_garantie) if courant else None)
+            ),
+            "document_signe": (all(bool(b.document_id) for b in chambres) if chambres else (bool(courant.document_id) if courant else None)),
+            "baux": [
+                {
+                    "bail_id": b.id, "locataire_id": b.locataire_id,
+                    "locataire": (locs.get(b.locataire_id).full_name if locs.get(b.locataire_id) else None),
+                    "loyer": _f(b.loyer_mensuel), "date_debut": b.date_debut.isoformat() if b.date_debut else None,
+                    "date_fin": b.date_fin.isoformat() if b.date_fin else None, "au_mois": bool(b.au_mois),
+                    "document_signe": bool(b.document_id),
+                }
+                for b in chambres
+            ],
             "loyer_demande": _f(lg.loyer_demande),
             "nb_paralleles": len(par_vigueur),
             "categorie": "standard",
@@ -386,12 +441,12 @@ def rent_roll_tableau(rr: RentRoll) -> tuple[list[str], list[list[Any]]]:
         inc = set(l.get("inclusions") or [])
         row = [
             "Standard", l["numero"], l.get("nb_pieces"),
-            STATUT_LOGEMENT_LABELS.get(l["occupation"], "Occupé (bail parallèle)" if l["occupation"] == "parallele_seulement" else l["occupation"]),
+            occupation_label(l),
             l.get("locataire"), None, None, l.get("loyer"),
-            oui_non("chauffage" in inc) if l.get("bail_id") else None,
-            oui_non("eau chaude" in inc) if l.get("bail_id") else None,
-            oui_non("électricité" in inc) if l.get("bail_id") else None,
-            oui_non("internet" in inc) if l.get("bail_id") else None,
+            oui_non("chauffage" in inc) if (l.get("bail_id") or l.get("baux")) else None,
+            oui_non("eau chaude" in inc) if (l.get("bail_id") or l.get("baux")) else None,
+            oui_non("électricité" in inc) if (l.get("bail_id") or l.get("baux")) else None,
+            oui_non("internet" in inc) if (l.get("bail_id") or l.get("baux")) else None,
             l.get("date_debut"), l.get("date_fin"), oui_non(l.get("au_mois")), l.get("jour_echeance"),
             l.get("depot"), oui_non(l.get("document_signe")),
             (l.get("prochain") or {}).get("locataire"), (l.get("prochain") or {}).get("date_debut"),
@@ -487,7 +542,7 @@ def rent_roll_pdf(rr: RentRoll, *, titre: Optional[str] = None, preteur: Optiona
         entetes += ["Projection*", "Source"]
     data = [[P(f"<b>{e}</b>") for e in entetes]]
     for l in rr.lignes:
-        occ = STATUT_LOGEMENT_LABELS.get(l["occupation"], "Occupé (bail parallèle)" if l["occupation"] == "parallele_seulement" else l["occupation"])
+        occ = occupation_label(l)
         if l.get("prochain"):
             occ += f"<br/><font size='6'>prochain : {l['prochain'].get('locataire') or '—'} ({l['prochain'].get('date_debut') or '?'})</font>"
         row = [
@@ -496,7 +551,7 @@ def rent_roll_pdf(rr: RentRoll, *, titre: Optional[str] = None, preteur: Optiona
             P(", ".join(l.get("inclusions") or []) or ("—" if l.get("bail_id") else "")),
             P(l.get("date_debut") or ""), P(("au mois" if l.get("au_mois") else l.get("date_fin")) or ""),
             P(f"le {l['jour_echeance']}" if l.get("jour_echeance") else ""), P(_money(l["depot"]) if l.get("depot") else ""),
-            P(("oui" if l.get("document_signe") else "non") if l.get("bail_id") else ""),
+            P(("oui" if l.get("document_signe") else "non") if (l.get("bail_id") or l.get("baux")) else ""),
         ]
         if avec_proj:
             p = l.get("projection") or {}

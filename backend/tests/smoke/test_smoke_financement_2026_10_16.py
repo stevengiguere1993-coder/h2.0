@@ -200,6 +200,56 @@ def test_rent_roll_json_et_exports(client, auth_headers, fin_seed):
     assert client.get(f"{FIN}/immeubles/999999/rent-roll", headers=auth_headers).status_code == 404
 
 
+# ─── Unité louée en chambres : une ligne, total des chambres ──────────
+
+
+def test_rent_roll_unite_en_chambres(client, auth_headers, run):
+    """Phil 2026-10-16 (1660 Saint-Clément) : une unité louée en chambres
+    reste UNE ligne du rent roll, avec le total des loyers des chambres et les
+    vrais baux de chambre comme pièces — pas de bail inventé pour l'unité."""
+
+    async def _seed():
+        async with TestSessionLocal() as s:
+            imm = Immeuble(name="Immeuble Smoke Chambres", address="1660 rue Chambres", city="Montréal", is_active=True)
+            s.add(imm)
+            await s.flush()
+            u1 = Logement(immeuble_id=imm.id, numero="1", nb_pieces_decimal=5.5, status=LogementStatus.OCCUPE.value, location_en_chambres=True)
+            u2 = Logement(immeuble_id=imm.id, numero="2", nb_pieces_decimal=4.5, status=LogementStatus.OCCUPE.value)
+            a, b, c = Locataire(full_name="Anne Chambre"), Locataire(full_name="Bruno Chambre"), Locataire(full_name="Claire Entier")
+            s.add_all([u1, u2, a, b, c])
+            await s.flush()
+            s.add_all([
+                Bail(logement_id=u1.id, locataire_id=a.id, date_debut=date(2026, 1, 1), date_fin=date(2026, 12, 31), loyer_mensuel=500.0,
+                     status=BailStatus.ACTIF.value, au_mois=True, chauffage_inclus=True),
+                Bail(logement_id=u1.id, locataire_id=b.id, date_debut=date(2026, 3, 1), date_fin=date(2027, 2, 28), loyer_mensuel=550.0,
+                     status=BailStatus.ACTIF.value, au_mois=True, internet_inclus=True),
+                Bail(logement_id=u2.id, locataire_id=c.id, date_debut=date(2026, 7, 1), date_fin=date(2027, 6, 30), loyer_mensuel=1200.0,
+                     status=BailStatus.ACTIF.value),
+            ])
+            await s.flush()
+            await s.commit()
+            return imm.id
+
+    imm = run(_seed())
+    r = client.get(f"{FIN}/immeubles/{imm}/rent-roll", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    rr = r.json()
+    assert len(rr["lignes"]) == 2                         # 2 unités, pas 3 baux
+    l1 = next(l for l in rr["lignes"] if l["numero"] == "1")
+    assert l1["occupation"] == "occupe_chambres" and l1["loyer"] == 1050 and l1["bail_id"] is None
+    assert l1["locataire"] == "2 chambres : Anne Chambre, Bruno Chambre"
+    assert [b["loyer"] for b in l1["baux"]] == [500, 550] and l1["document_signe"] is False
+    assert l1["inclusions"] == ["chauffage", "internet"] and l1["au_mois"] is True and l1["date_fin"] is None
+    assert "prochain" not in l1
+    t = rr["totaux"]
+    assert t["nb_unites"] == 2 and t["nb_occupees"] == 2 and t["mensuel_standard"] == 2250
+    r = client.get(f"{FIN}/immeubles/{imm}/rent-roll", headers=auth_headers, params={"fmt": "csv"})
+    csv = r.content.decode("utf-8-sig")
+    assert "Occupé · 2 chambres" in csv and "2 chambres : Anne Chambre, Bruno Chambre" in csv
+    r = client.get(f"{FIN}/immeubles/{imm}/rent-roll", headers=auth_headers, params={"fmt": "pdf"})
+    assert r.status_code == 200 and r.content[:5] == b"%PDF-"
+
+
 # ─── Dossier de financement ───────────────────────────────────────────
 
 

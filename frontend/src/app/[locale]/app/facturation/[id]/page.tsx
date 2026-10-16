@@ -48,6 +48,7 @@ type Facture = {
   last_reminder_at: string | null;
   reminder_count: number;
   next_reminder_at: string | null;
+  reminders_paused: boolean;
   qbo_invoice_id: string | null;
   qbo_doc_number: string | null;
   qbo_sync_error: string | null;
@@ -534,6 +535,43 @@ export default function FactureDetailPage() {
       setNextReminderAt(isoToDateInput(u.next_reminder_at));
     } catch {
       setError("Sauvegarde du rappel échouée.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggleReminders() {
+    if (!f) return;
+    const pause = !f.reminders_paused;
+    const body: Record<string, unknown> = { reminders_paused: pause };
+    // À la reprise d'une facture déjà en retard, on ne veut pas qu'un
+    // rappel parte dès le prochain passage du cron parce que la date
+    // calculée est dépassée depuis la pause : on repart sur la cadence
+    // (4 jours) à partir d'aujourd'hui, sauf date future déjà fixée.
+    if (!pause && f.status === "overdue") {
+      const fixed = f.next_reminder_at ? new Date(f.next_reminder_at) : null;
+      if (!fixed || fixed.getTime() <= Date.now()) {
+        body.next_reminder_at = new Date(
+          Date.now() + 4 * 24 * 3600 * 1000
+        ).toISOString();
+      }
+    }
+    setSaving(true);
+    try {
+      const res = await authedFetch(`/api/v1/factures/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) throw new Error();
+      const u = (await res.json()) as Facture;
+      setF(u);
+      setNextReminderAt(isoToDateInput(u.next_reminder_at));
+    } catch {
+      setError(
+        pause
+          ? "Impossible de suspendre les rappels."
+          : "Impossible de réactiver les rappels."
+      );
     } finally {
       setSaving(false);
     }
@@ -1347,9 +1385,46 @@ export default function FactureDetailPage() {
             </div>
 
             <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900 p-5">
-              <h2 className="text-sm font-semibold text-white">
-                Suivi de l&apos;envoi et des rappels
-              </h2>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold text-white">
+                  Suivi de l&apos;envoi et des rappels
+                </h2>
+                {f.status !== "paid" && f.status !== "void" ? (
+                  <label className="flex items-center gap-2 text-xs text-white/70">
+                    Rappels automatiques
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!f.reminders_paused}
+                      aria-label={
+                        f.reminders_paused
+                          ? "Réactiver les rappels automatiques"
+                          : "Suspendre les rappels automatiques"
+                      }
+                      disabled={saving}
+                      onClick={toggleReminders}
+                      className={
+                        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors disabled:opacity-60 " +
+                        (!f.reminders_paused
+                          ? "border-accent-500 bg-accent-500"
+                          : "border-slate-400/60 bg-slate-300")
+                      }
+                    >
+                      <span
+                        className={
+                          "inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform " +
+                          (!f.reminders_paused
+                            ? "translate-x-4"
+                            : "translate-x-0.5")
+                        }
+                      />
+                    </button>
+                    <span className="font-medium text-white">
+                      {f.reminders_paused ? "Suspendus" : "Actifs"}
+                    </span>
+                  </label>
+                ) : null}
+              </div>
               <div className="mt-3 grid gap-3 sm:grid-cols-3">
                 <div>
                   <p className="text-xs text-white/50">Envoyée au client</p>
@@ -1397,6 +1472,10 @@ export default function FactureDetailPage() {
                         ? "Facture annulée"
                         : "Pas encore envoyée"}
                     </p>
+                  ) : f.reminders_paused ? (
+                    <p className="mt-0.5 text-sm text-white">
+                      Aucun · rappels suspendus
+                    </p>
                   ) : (
                     <div className="mt-1 flex flex-wrap items-center gap-2">
                       <input
@@ -1424,7 +1503,9 @@ export default function FactureDetailPage() {
                 l&apos;échéance, jusqu&apos;à l&apos;enregistrement du
                 paiement. Laisse la date vide pour la cadence
                 automatique, ou fixe une date précise pour forcer le
-                prochain rappel.
+                prochain rappel. L&apos;interrupteur suspend les rappels
+                de cette facture (ex. client qui paie par versements) ;
+                remets-le pour les reprendre.
               </p>
             </section>
 

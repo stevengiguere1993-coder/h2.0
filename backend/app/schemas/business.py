@@ -471,6 +471,7 @@ class FactureUpdate(BaseModel):
     due_at: Optional[datetime] = None
     paid_at: Optional[datetime] = None
     next_reminder_at: Optional[datetime] = None
+    reminders_paused: Optional[bool] = None
     qbo_invoice_id: Optional[str] = None
     qbo_doc_number: Optional[str] = None
     qbo_sync_token: Optional[str] = None
@@ -496,6 +497,7 @@ class FactureRead(_Base):
     last_reminder_at: Optional[datetime] = None
     reminder_count: int = 0
     next_reminder_at: Optional[datetime] = None
+    reminders_paused: bool = False
     qbo_invoice_id: Optional[str]
     qbo_doc_number: Optional[str]
     # Dernière erreur de synchro QBO — affichée automatiquement sur la
