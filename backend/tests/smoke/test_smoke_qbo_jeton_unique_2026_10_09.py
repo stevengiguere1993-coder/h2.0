@@ -377,7 +377,7 @@ def test_cron_quotidien_garde_chaque_connexion_vivante(intuit, run):
         assert run(_ligne_construction()).refresh_token == "rt-1"
         ligne = run(_ligne_inc())
         assert ligne.reconnect_required_at is not None
-        assert "Paramètres → Drive" in ligne.last_refresh_error
+        assert "Gestion documentaire Drive" in ligne.last_refresh_error
 
         # Le lendemain : Construction renouvelée de nouveau, la connexion
         # refusée sautée (seule une reconnexion la rétablit).
