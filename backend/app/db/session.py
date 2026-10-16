@@ -157,6 +157,15 @@ async def ensure_critical_columns() -> None:
         # dossier (2026-10-15). Table créée par #1860, colonnes ajoutées après.
         ("tal_transmissions", "signe_le", "TIMESTAMP WITH TIME ZONE"),
         ("tal_transmissions", "document_signe_id", "INTEGER"),
+        # Baux PARALLÈLES (Financement, 2026-10-16) : catégorie + locateur du
+        # bail parallèle. DEFAULT backfille les baux existants en « standard ».
+        ("imm_baux", "categorie", "VARCHAR(16) NOT NULL DEFAULT 'standard'"),
+        ("imm_baux", "parallele_type", "VARCHAR(24)"),
+        ("imm_baux", "parallele_locateur", "VARCHAR(255)"),
+        ("imm_baux", "parallele_locateur_courriel", "VARCHAR(320)"),
+        ("imm_baux", "parallele_locateur_telephone", "VARCHAR(32)"),
+        ("imm_baux", "parallele_note", "TEXT"),
+        ("imm_locataires", "categorie", "VARCHAR(16) NOT NULL DEFAULT 'standard'"),
         # Refus d'un document signable (consentement notamment).
         ("imm_documents", "refuse_le", "TIMESTAMP WITH TIME ZONE"),
         ("imm_documents", "refuse_par", "VARCHAR(255)"),

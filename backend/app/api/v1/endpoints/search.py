@@ -255,7 +255,9 @@ async def global_search(
                     Locataire.full_name.ilike(needle),
                     Locataire.email.ilike(needle),
                     Locataire.phone.ilike(needle),
-                )
+                ),
+                # Occupants des baux parallèles : dans Financement seulement.
+                or_(Locataire.categorie.is_(None), Locataire.categorie != "parallele"),
             )
             .order_by(Locataire.full_name.asc())
             .limit(limit)

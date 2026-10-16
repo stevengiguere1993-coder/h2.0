@@ -1055,6 +1055,44 @@ def serialize_tal_transmission(obj: Any, level: str = "summary") -> dict:
     return _drop_none(data)
 
 
+def serialize_imm_financement(obj: Any, level: str = "summary") -> dict:
+    """Dossier de financement d'un immeuble (Gestion locative → Financement,
+    2026-10-16) : prêteur, montant, statut, dates. Pas la projection ni les
+    pièces (détail métier dans l'API)."""
+    statut = _str(_get(obj, "statut"))
+    data: dict[str, Any] = {
+        "entity_type": "imm_financement",
+        "type": "imm_financement",
+        "id": _get(obj, "id"),
+        "label": f"{_str(_get(obj, 'titre')) or 'Financement'} ({statut or ''})".strip(),
+        "pole": "immobilier",
+        "titre": _str(_get(obj, "titre")),
+        "type_dossier": _str(_get(obj, "type")),
+        "statut": statut,
+        "status": statut,
+        "immeuble_id": _get(obj, "immeuble_id"),
+        "hypotheque_id": _get(obj, "hypotheque_id"),
+        "preteur": _str(_get(obj, "preteur")),
+        "courtier": _str(_get(obj, "courtier")),
+        "montant_demande": _num(_get(obj, "montant_demande")),
+        "taux_pct": _num(_get(obj, "taux_pct")),
+        "terme_mois": _get(obj, "terme_mois"),
+        "date_depot": _iso(_get(obj, "date_depot")),
+        "date_reponse": _iso(_get(obj, "date_reponse")),
+        "date_echeance": _iso(_get(obj, "date_echeance")),
+        "updated_at": _iso(_get(obj, "updated_at")),
+    }
+    if level in ("detail", "full"):
+        data.update({
+            "amortissement_mois": _get(obj, "amortissement_mois"),
+            "inclure_paralleles": _get(obj, "inclure_paralleles"),
+            "notes": _str(_get(obj, "notes")),
+            "created_by_email": _str(_get(obj, "created_by_email")),
+            "created_at": _iso(_get(obj, "created_at")),
+        })
+    return _drop_none(data)
+
+
 SERIALIZERS: dict[str, Callable[..., dict]] = {
     "devlog_soumission": serialize_devlog_soumission,
     "devlog_project_task": serialize_devlog_project_task,
@@ -1073,6 +1111,7 @@ SERIALIZERS: dict[str, Callable[..., dict]] = {
     "imm_locataire_contact": serialize_imm_locataire_contact,
     "lot_paiement": serialize_lot_paiement,
     "tal_transmission": serialize_tal_transmission,
+    "imm_financement": serialize_imm_financement,
     "prospection_courtier": serialize_prospection_courtier,
 }
 

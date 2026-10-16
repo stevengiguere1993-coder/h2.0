@@ -32,6 +32,8 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
+from app.models.immobilier import bail_non_parallele
+
 from app.services.locatif_chambres import cle_tri_numero
 from app.api.deps import CurrentUser, DBSession
 from app.integrations.email_graph import get_mailer
@@ -165,6 +167,7 @@ async def list_destinataires(
             Bail.status.in_(
                 [BailStatus.ACTIF.value, BailStatus.PROPOSE.value]
             ),
+            bail_non_parallele(),
             Immeuble.is_active.is_(True),
         )
         .order_by(Immeuble.name.asc(), Logement.numero.asc())
@@ -391,7 +394,8 @@ async def _resoudre_destinataires(
         .where(
             Bail.status.in_(
                 [BailStatus.ACTIF.value, BailStatus.PROPOSE.value]
-            )
+            ),
+            bail_non_parallele(),
         )
         .order_by(Immeuble.name.asc(), Logement.numero.asc())
     )
