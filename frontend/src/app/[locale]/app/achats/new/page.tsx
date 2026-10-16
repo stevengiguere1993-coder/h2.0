@@ -17,7 +17,7 @@ import { authedFetch } from "@/lib/auth";
 import { splitFromTotal, TPS_RATE, TVQ_RATE } from "@/lib/tax";
 import {
   projectLabel,
-  trierParNom,
+  fournisseursPourAchat,
   trierProjetsParAdresse
 } from "@/lib/project";
 
@@ -27,7 +27,12 @@ type Project = {
   address?: string | null;
   billing_kind?: string;
 };
-type Fournisseur = { id: number; name: string };
+type Fournisseur = {
+  id: number;
+  name: string;
+  active?: boolean;
+  in_directory?: boolean;
+};
 type BonMini = {
   id: number;
   reference: string;
@@ -499,7 +504,11 @@ export default function NewAchatPage() {
                 emptyLabel="— Aucun —"
                 placeholder="Choisis ou tape le nom du fournisseur…"
                 options={[
-                  ...trierParNom(fournisseurs).map((fr) => ({
+                  ...fournisseursPourAchat(
+                    fournisseurs,
+                    clients.map((c) => c.name),
+                    fournisseurId
+                  ).map((fr) => ({
                     value: String(fr.id),
                     label: fr.name
                   })),
