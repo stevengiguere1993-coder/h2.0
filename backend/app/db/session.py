@@ -347,6 +347,11 @@ async def ensure_critical_columns() -> None:
         # Auteur de l'achat (2026-10-04) — l'app mobile ne montre à
         # l'employé que son dernier achat.
         ("achats", "created_by_user_id", "INTEGER"),
+        # « Ne pas refacturer » autorisé (page À refacturer, 2026-10-16) :
+        # qui, quand, pourquoi.
+        ("achats", "refacturation_dispense_at", "TIMESTAMP WITH TIME ZONE"),
+        ("achats", "refacturation_dispense_par_user_id", "INTEGER"),
+        ("achats", "refacturation_dispense_raison", "TEXT"),
         # Gestion externe d'un immeuble (compagnie tierce) : sans ces
         # colonnes, tout SELECT sur imm_immeubles plante → 500 sur tout
         # le volet immobilier. Table préexistante → create_all ne les

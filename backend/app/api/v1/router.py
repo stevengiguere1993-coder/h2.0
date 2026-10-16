@@ -144,6 +144,7 @@ from app.api.v1.endpoints import (
     purchase_agreements,
     punch_ops,
     achat_qbo,
+    achats_a_refacturer,
     achat_payment,
     email_templates,
     mtl_properties,
@@ -367,6 +368,9 @@ api_router.include_router(drive_page_modules.router)
 api_router.include_router(drive_auto_uploads.router)
 api_router.include_router(client_qbo.router)
 api_router.include_router(achat_qbo.router, dependencies=DEP_CONSTRUCTION_IMMO)
+# Page « À refacturer » (2026-10-16) — achats reçus après la facture
+# finale ou restés sur un BT fermé ; admins/owners.
+api_router.include_router(achats_a_refacturer.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(achat_payment.router, dependencies=DEP_CONSTRUCTION_IMMO)
 api_router.include_router(purchase_order_actions.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(cron_runner.router)

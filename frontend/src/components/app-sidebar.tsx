@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import {
+  AlertTriangle,
   BarChart3,
   Briefcase,
   Calendar,
@@ -22,6 +23,7 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
+import { EVT_A_REFACTURER } from "@/lib/a-refacturer";
 import { authedFetch, type UserRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { useNavAccessEtat } from "@/hooks/use-nav-access";
@@ -48,7 +50,10 @@ const CONSTRUCTION_NAV: NavItem[] = [
   { href: "/app/punch", label: "Punch / Temps", icon: Clock, minRole: "manager" },
   { href: "/app/facturation", label: "Facturation", icon: DollarSign, minRole: "manager" },
   { href: "/app/po", label: "Bons de commande (PO)", icon: ClipboardCheck, minRole: "manager" },
-  { href: "/app/achats", label: "Achats / dépenses", icon: ShoppingCart, minRole: "manager" }
+  { href: "/app/achats", label: "Achats / dépenses", icon: ShoppingCart, minRole: "manager" },
+  // Filet anti-perte (Steven 2026-10-16) : achats reçus après la facture
+  // finale ou restés sur un BT fermé sans être refacturés.
+  { href: "/app/a-refacturer", label: "À refacturer", icon: AlertTriangle, minRole: "admin" }
 ];
 
 const ADMINISTRATION_NAV: NavItem[] = [
@@ -89,6 +94,7 @@ export function AppSidebar({
 }) {
   const pathname = usePathname();
   const [pendingLeaves, setPendingLeaves] = useState(0);
+  const [aRefacturer, setARefacturer] = useState(0);
   const { user } = useCurrentUser();
   const role = (user?.role as UserRole | undefined) || "employee";
   // Filtre d'accès par page (refonte permissions) — appliqué à côté du
@@ -137,6 +143,34 @@ export function AppSidebar({
     };
   }, []);
 
+  // Pastille « À refacturer » : sondée seulement si le lien est visible
+  // (admins / owners), toutes les 5 min et après chaque action de la page.
+  const voitARefacturer = visibleConstruction.some(
+    (i) => i.href === "/app/a-refacturer"
+  );
+  useEffect(() => {
+    if (!voitARefacturer) return;
+    let cancelled = false;
+    async function poll() {
+      try {
+        const res = await authedFetch("/api/v1/achats-a-refacturer/compte");
+        if (!res.ok) return;
+        const body = (await res.json()) as { compte?: number };
+        if (!cancelled) setARefacturer(Number(body.compte) || 0);
+      } catch {
+        /* ignore */
+      }
+    }
+    void poll();
+    const t = setInterval(poll, 300_000);
+    window.addEventListener(EVT_A_REFACTURER, poll);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+      window.removeEventListener(EVT_A_REFACTURER, poll);
+    };
+  }, [voitARefacturer]);
+
   function isActive(href: string) {
     if (href === "/app")
       return pathname === "/app" || pathname === "/fr/app" || pathname === "/en/app";
@@ -181,6 +215,10 @@ export function AppSidebar({
             <ul className="space-y-0.5">
               {visibleConstruction.map((item) => {
                 const active = isActive(item.href);
+                const badge =
+                  item.href === "/app/a-refacturer" && aRefacturer > 0
+                    ? aRefacturer
+                    : null;
                 return (
                   <li key={item.href}>
                     {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
@@ -198,7 +236,12 @@ export function AppSidebar({
                           active ? "text-accent-500" : ""
                         }`}
                       />
-                      <span>{item.label}</span>
+                      <span className="flex-1">{item.label}</span>
+                      {badge ? (
+                        <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] font-bold text-white">
+                          {badge}
+                        </span>
+                      ) : null}
                     </Link>
                   </li>
                 );
