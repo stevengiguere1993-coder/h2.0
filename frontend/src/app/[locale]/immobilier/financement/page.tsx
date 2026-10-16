@@ -71,6 +71,8 @@ type RentRollLigne = {
   document_signe: boolean | null;
   loyer_demande: number | null;
   nb_paralleles: number;
+  //: Unité louée en chambres : un bail par chambre, la ligne porte le total.
+  baux?: { bail_id: number; locataire_id: number | null; locataire: string | null; loyer: number | null; date_debut: string | null; date_fin: string | null; au_mois: boolean; document_signe: boolean }[];
   prochain?: { bail_id: number; locataire: string | null; date_debut: string | null; loyer: number | null; statut: string };
   projection?: { loyer: number | null; source: string | null; note: string | null };
 };
@@ -251,7 +253,8 @@ const OCCUPATION_LABEL: Record<string, string> = {
   vacant: "Vacant",
   reserve: "Réservé",
   hors_location: "Hors location",
-  parallele_seulement: "Occupé (bail parallèle)"
+  parallele_seulement: "Occupé (bail parallèle)",
+  occupe_chambres: "Occupé · chambres"
 };
 const PARALLELE_TYPES: [string, string][] = [
   ["sous_location", "Sous-location"],
@@ -1208,9 +1211,31 @@ function RentRollTab({ immeuble, dossier, onPatchDossier }: { immeuble: Immeuble
                           ""
                         )}
                       </td>
-                      <td className="px-3 py-2">{l.bail_id ? <span className={`badge ${l.document_signe ? "badge-emerald" : "badge-amber"}`}>{l.document_signe ? "oui" : "non"}</span> : null}</td>
+                      <td className="px-3 py-2">{l.bail_id || l.baux?.length ? <span className={`badge ${l.document_signe ? "badge-emerald" : "badge-amber"}`}>{l.document_signe ? "oui" : l.baux?.length ? "incomplet" : "non"}</span> : null}</td>
                       <td className="px-3 py-2">
-                        {l.bail_id ? (
+                        {l.baux?.length ? (
+                          <div className="space-y-1">
+                            {l.baux.map((b) => (
+                              <div key={b.bail_id} className="flex flex-wrap items-center justify-end gap-1">
+                                <span className="mr-auto text-[11px] text-white/60">
+                                  {b.locataire || "—"} · {money(b.loyer)}
+                                  {b.document_signe ? "" : " · non signé"}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setCorriger({ bailId: b.bail_id, categorie: "standard", loyer: b.loyer, debut: b.date_debut, fin: b.date_fin, libelle: `Logement ${l.numero} · chambre · ${b.locataire || ""}` })}
+                                  className="btn-ghost btn-xs"
+                                >
+                                  <Pencil className="h-3 w-3" />
+                                </button>
+                                <TalFormDropdown bailId={b.bail_id} />
+                                <button type="button" onClick={() => setTalFor({ bailId: b.bail_id, titre: `Logement ${l.numero} · chambre · ${immeuble.name} · ${b.locataire || ""}` })} className="btn-outline-accent btn-xs">
+                                  <FileSignature className="h-3 w-3" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : l.bail_id ? (
                           <div className="flex flex-wrap justify-end gap-1">
                             <button
                               type="button"
