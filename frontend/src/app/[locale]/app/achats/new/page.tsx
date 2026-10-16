@@ -15,7 +15,11 @@ import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 import { splitFromTotal, TPS_RATE, TVQ_RATE } from "@/lib/tax";
-import { projectLabel } from "@/lib/project";
+import {
+  projectLabel,
+  trierParNom,
+  trierProjetsParAdresse
+} from "@/lib/project";
 
 type Project = {
   id: number;
@@ -435,7 +439,7 @@ export default function NewAchatPage() {
                   id="project"
                   value={projectId}
                   onChange={setProjectId}
-                  options={projects.map((p) => ({
+                  options={trierProjetsParAdresse(projects).map((p) => ({
                     value: String(p.id),
                     label: projectLabel(p)
                   }))}
@@ -495,7 +499,7 @@ export default function NewAchatPage() {
                 emptyLabel="— Aucun —"
                 placeholder="Choisis ou tape le nom du fournisseur…"
                 options={[
-                  ...fournisseurs.map((fr) => ({
+                  ...trierParNom(fournisseurs).map((fr) => ({
                     value: String(fr.id),
                     label: fr.name
                   })),
