@@ -20,16 +20,13 @@ async function getConfig() {
   };
 }
 
-// 1.3.1 — l'adresse du serveur et la clé viennent d'une page Kratos
-// (SET_CONFIG) : le message dit quelle page ouvrir, plus « clique l'icône »
-// (Steven 2026-10-16 : extension installée, panneau QuickBooks rouge).
-const ERREUR_NON_RELIEE =
-  "Extension pas encore reliée à Kratos : ouvre Kratos → Entreprises → Comptabilité → Projets QB (ou Prospection → Immeubles MTL) dans ce navigateur, la page la configure toute seule";
-
 async function postJson(path, payload) {
   const { backendUrl, apiKey } = await getConfig();
-  if (!backendUrl || !apiKey) {
-    return { ok: false, code: "NON_RELIEE", error: ERREUR_NON_RELIEE };
+  if (!backendUrl) {
+    return { ok: false, error: "Backend URL non configurée (clique l'icône extension)" };
+  }
+  if (!apiKey) {
+    return { ok: false, error: "API key non configurée" };
   }
   const url = `${backendUrl.replace(/\/+$/, "")}${path}`;
   log("POST", url);
@@ -47,9 +44,6 @@ async function postJson(path, payload) {
       log("Backend error", resp.status, text);
       return {
         ok: false,
-        // 401 = la clé enregistrée n'est plus celle du serveur : rouvrir
-        // une page Kratos la retransmet.
-        code: resp.status === 401 ? "CLE_REFUSEE" : "HTTP",
         error: `HTTP ${resp.status}: ${text.substring(0, 200)}`,
       };
     }

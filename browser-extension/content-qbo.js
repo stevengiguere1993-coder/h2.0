@@ -101,11 +101,6 @@
     });
   }
 
-  // Page Kratos qui configure l'extension (adresse de production : tant que
-  // l'extension n'est pas reliée, elle ne connaît pas encore le serveur).
-  const PAGE_KRATOS_PROJETS =
-    "https://immohorizon.com/entreprises/comptabilite/projets-quickbooks";
-
   function surPageProjets() {
     return /\/app\/projects(\/|$|\?)/.test(location.pathname + location.search);
   }
@@ -119,7 +114,6 @@
   const etat = {
     liste: null, // {items, company_name, realm_id, environment, lien_projets}
     erreur: null,
-    erreurCode: null, // NON_RELIEE / CLE_REFUSEE / HTTP (background.js)
     enCours: false,
     message: null, // dernière ligne d'état (texte, ton)
     auto: false,
@@ -132,11 +126,9 @@
     if (!r || !r.ok) {
       etat.liste = null;
       etat.erreur = (r && r.error) || "Kratos injoignable";
-      etat.erreurCode = (r && r.code) || null;
       return;
     }
     etat.erreur = null;
-    etat.erreurCode = null;
     etat.liste = r.data || { items: [] };
     etat.compagnieOk = verifierCompagnie();
   }
@@ -218,39 +210,13 @@
     p.appendChild(corps);
 
     if (etat.erreur) {
-      if (etat.erreurCode === "NON_RELIEE" || etat.erreurCode === "CLE_REFUSEE") {
-        // 1.3.1 — la configuration vient d'une page Kratos : on dit laquelle
-        // ouvrir, avec le lien, au lieu de « clique l'icône extension ».
-        corps.appendChild(
-          el(
-            "p",
-            "margin:0 0 6px;color:#9a3412;font-weight:600;",
-            etat.erreurCode === "NON_RELIEE"
-              ? "L'extension n'est pas encore reliée à Kratos."
-              : "Kratos refuse la clé de l'extension (elle a changé ?)."
-          )
-        );
-        corps.appendChild(
-          el(
-            "p",
-            "margin:0 0 6px;font-size:12px;color:#4a4a4a;",
-            "1. Ouvre Kratos → Entreprises → Comptabilité → Projets QB dans ce navigateur, connecté : la page configure l'extension toute seule. 2. Reviens ici et clique Actualiser."
-          )
-        );
-        const lien = el(
-          "a",
-          "display:inline-block;margin:0 0 8px;font-size:12px;font-weight:600;color:#1d4ed8;text-decoration:underline;",
-          "Ouvrir la page Kratos ↗"
-        );
-        lien.href = PAGE_KRATOS_PROJETS;
-        lien.target = "_blank";
-        lien.rel = "noopener";
-        corps.appendChild(lien);
-      } else {
-        corps.appendChild(
-          el("p", "margin:0 0 8px;color:#9a3412;", "Kratos : " + etat.erreur)
-        );
-      }
+      corps.appendChild(
+        el(
+          "p",
+          "margin:0 0 8px;color:#9a3412;",
+          "Kratos : " + etat.erreur + ". Ouvre Kratos → Comptabilité → Projets QB pour configurer l'extension."
+        )
+      );
     }
 
     if (etat.liste && etat.liste.company_name) {

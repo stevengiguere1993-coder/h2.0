@@ -63,7 +63,7 @@ type Bilan = { verifies: number; converties: number[]; restantes: number[] };
 //: Même zip que Prospection → Rôles fonciers ; version = manifest.json
 //: (tests/test_extension_zip.py). La conversion des sous-clients demande
 //: la 1.3.0 (content-qbo.js).
-const EXTENSION_VERSION = "1.3.1";
+const EXTENSION_VERSION = "1.3.0";
 const EXTENSION_MIN = "1.3.0";
 const EXTENSION_ZIP = "/telechargements/extension-horizon-h2.zip";
 
@@ -361,8 +361,8 @@ export default function ProjetsQuickBooksPage() {
             <span className="text-xs text-amber-300">non détectée dans ce navigateur</span>
           ) : extStatut === "non_configuree" ? (
             <span className="text-xs text-amber-300">
-              installée, mais Kratos n&apos;a pas pu lui transmettre sa configuration : recharge
-              cette page ; si ça persiste, la clé EXTENSION_API_KEY manque sur le serveur (Render)
+              installée, mais la clé n&apos;a pas pu lui être transmise (EXTENSION_API_KEY côté
+              serveur ?)
             </span>
           ) : (
             <span className="text-xs text-[var(--qg-text-muted)]">détection…</span>

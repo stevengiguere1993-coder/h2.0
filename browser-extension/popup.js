@@ -1,7 +1,4 @@
-// Popup de l'icône : état de la liaison avec Kratos + formulaire de
-// dépannage (backend URL + API key). Depuis 1.2.1 la configuration vient
-// d'une page Kratos (SET_CONFIG) ; depuis 1.3.1 le popup le dit clairement
-// (Steven 2026-10-16).
+// Popup pour configurer backend URL + API key
 
 const $ = (id) => document.getElementById(id);
 
@@ -9,15 +6,6 @@ async function load() {
   const data = await chrome.storage.local.get(["backendUrl", "apiKey"]);
   $("backendUrl").value = data.backendUrl || "";
   $("apiKey").value = data.apiKey || "";
-  const etat = $("etat");
-  if (data.backendUrl && data.apiKey) {
-    etat.textContent = "Reliée à Kratos : " + data.backendUrl;
-    etat.className = "status ok";
-  } else {
-    etat.textContent =
-      "Pas encore reliée à Kratos : ouvre une page Kratos dans ce navigateur (voir ci-dessus), puis reviens ici.";
-    etat.className = "status error";
-  }
 }
 
 function showStatus(msg, ok) {
