@@ -1021,6 +1021,8 @@ def _bail_couvre(bail: Bail, m: date) -> bool:
     qu'il est actif ; terminé/résilié = borné à sa fin)."""
     if bail.status == BailStatus.PROPOSE.value:
         return False
+    if (getattr(bail, "categorie", None) or "standard") == "parallele":
+        return False  # hors du quotidien (Financement)
     if bail.date_debut and bail.date_debut.replace(day=1) > m:
         return False
     if bail.date_fin and m > bail.date_fin.replace(day=1):

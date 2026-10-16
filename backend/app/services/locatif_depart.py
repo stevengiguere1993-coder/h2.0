@@ -40,6 +40,8 @@ from typing import Iterable, Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.immobilier import est_bail_parallele
+
 from app.models.immobilier import (
     Bail,
     BailRenouvellement,
@@ -282,8 +284,10 @@ async def recaler_statut_logement(
             select(Bail).where(Bail.logement_id == logement_id)
         )
     ).scalars().all()
+    # Un bail PARALLÈLE en vigueur (sous-location…) occupe aussi l'unité :
+    # quelqu'un y vit — jamais « vacant » (ni dossier de relocation).
     occupe = any(
-        b.status == BailStatus.ACTIF.value
+        b.status in (BailStatus.ACTIF.value, BailStatus.PARALLELE.value)
         and b.date_debut is not None
         and b.date_debut <= today
         and (b.au_mois or (b.date_fin is not None and b.date_fin >= today))
@@ -295,7 +299,8 @@ async def recaler_statut_logement(
     # ça, l'unité repassait « vacant » au premier recalage alors qu'un
     # bail est en signature (audit 2026-09-15).
     reserve = any(
-        b.date_debut is not None
+        not est_bail_parallele(b)
+        and b.date_debut is not None
         and (
             (
                 b.status in (BailStatus.ACTIF.value, BailStatus.PROPOSE.value)
@@ -1165,6 +1170,15 @@ async def activer_bail_propose(
     Retourne le dossier de relocation refermé (s'il y en avait un).
     """
     if bail.status != BailStatus.PROPOSE.value:
+        return None
+    if est_bail_parallele(bail):
+        # Bail PARALLÈLE : en vigueur = statut « parallele » ; aucun
+        # dossier de relocation, aucun chevauchement à vérifier (il
+        # coexiste avec le bail standard de l'unité).
+        bail.status = BailStatus.PARALLELE.value
+        bail.updated_at = _now()
+        await db.flush()
+        await recaler_statut_logement(db, bail.logement_id)
         return None
     await terminer_baux_echus_avant(
         db, bail.logement_id, bail.date_debut, exclure_bail_id=bail.id

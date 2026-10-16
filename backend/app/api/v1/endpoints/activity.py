@@ -50,6 +50,7 @@ from app.models.paiement_fournisseur import LotPaiement
 from app.models.entreprise_tache import EntrepriseTache
 from app.models.immobilier import ImmLocataireContact, ImmTalDossier
 from app.models.tal_bail import TalTransmission
+from app.models.financement import Financement
 from app.models.project import Project
 from app.models.materiau import Materiau
 from app.models.projet_materiau import ProjetMateriau
@@ -1625,6 +1626,11 @@ _DETAIL_ENTITIES: dict[str, tuple] = {
         TalTransmission, "immobilier", "tal_transmission",
         "immobilier:tal_dossiers:read",
     ),
+    # Financement d'un immeuble (2026-10-16).
+    "financement": (
+        Financement, "immobilier", "imm_financement",
+        "immobilier:tal_dossiers:read",
+    ),
 }
 
 
@@ -1969,6 +1975,14 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         list_cap="immobilier:tal_dossiers:list",
         order_attr="updated_at", stage_attr="statut", supports_active=False,
     ),
+    # Immobilier (2026-10-16) : dossiers de financement ; `stage` filtre le
+    # statut (preparation | envoye | en_analyse | approuve | refuse | clos).
+    "financements": _ListSpec(
+        model=Financement, pole="immobilier",
+        entity_type="imm_financement",
+        list_cap="immobilier:tal_dossiers:list",
+        order_attr="updated_at", stage_attr="statut", supports_active=False,
+    ),
 }
 
 #: Alias supplémentaires (noms « complets ») vers les mêmes specs, pour que
@@ -2000,6 +2014,9 @@ _LIST_ALIASES: dict[str, str] = {
     "prospection_courtiers": "courtiers",
     "registre_courtiers": "courtiers",
     "tal_transmission": "tal_transmissions",
+    "financement": "financements",
+    "imm_financement": "financements",
+    "dossiers_financement": "financements",
     "baux_tal": "tal_transmissions",
     "bail_tal": "tal_transmissions",
 }

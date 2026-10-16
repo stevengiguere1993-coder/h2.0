@@ -34,6 +34,8 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, or_, select
 
+from app.models.immobilier import bail_non_parallele
+
 from app.api.deps import CurrentUser, DBSession
 from app.models.immobilier import (
     Bail,
@@ -228,6 +230,7 @@ async def _baux_du_logement(db, logement_id: int) -> List[Bail]:
                 select(Bail).where(
                     Bail.logement_id == logement_id,
                     Bail.status != BailStatus.PROPOSE.value,
+                    bail_non_parallele(),
                 )
             )
         ).scalars().all()
@@ -290,6 +293,7 @@ async def _occupations_annee(db, annee: int) -> List[dict]:
                     ),
                 ),
                 Bail.status != BailStatus.PROPOSE.value,
+                bail_non_parallele(),
             ).order_by(Bail.date_debut.asc())
         )
     ).scalars().all()
