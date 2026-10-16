@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
+  ChevronDown,
+  ChevronUp,
   Hammer,
   Image as ImageIcon,
   Loader2,
@@ -124,6 +126,9 @@ export default function BonsTravailPage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BonResult | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  // Zone « Facturé » du suivi : fermée à chaque arrivée sur la page,
+  // ouverte au besoin d'un clic sur son en-tête.
+  const [factureOpen, setFactureOpen] = useState(false);
 
   const [bons, setBons] = useState<BonListItem[] | null>(null);
   // Filtre immeuble du suivi (kanban + mini dashboard).
@@ -716,24 +721,74 @@ export default function BonsTravailPage() {
             <div className="mt-4 flex gap-4 overflow-x-auto pb-4">
               {COLUMNS.map((col) => {
                 const cards = byColumn[col.id] || [];
+                // Zone « Facturé » repliable dès qu'elle contient un bon ;
+                // fermée, seuls l'en-tête et le compteur restent.
+                const foldable = col.id === "facture" && cards.length > 0;
+                const closed = foldable && !factureOpen;
+                const dot = (
+                  <span className={`h-2 w-2 rounded-full ${col.dot}`} />
+                );
+                const count = (
+                  <span className="badge badge-neutral">{cards.length}</span>
+                );
                 return (
                   <div
                     key={col.id}
-                    className="flex w-72 min-w-[288px] flex-shrink-0 flex-col rounded-xl border border-brand-800 bg-brand-900/60"
+                    className={`flex w-72 min-w-[288px] flex-shrink-0 flex-col rounded-xl border border-brand-800 bg-brand-900/60 ${
+                      closed ? "self-start" : ""
+                    }`}
                   >
-                    <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <span className={`h-2 w-2 rounded-full ${col.dot}`} />
-                        <h3 className="text-sm font-semibold text-white">
-                          {col.label}
-                        </h3>
+                    {foldable ? (
+                      <h3 className="border-b border-brand-800">
+                        <button
+                          type="button"
+                          onClick={() => setFactureOpen(!factureOpen)}
+                          aria-expanded={factureOpen}
+                          title={
+                            factureOpen
+                              ? "Fermer la zone Facturé"
+                              : "Ouvrir la zone Facturé"
+                          }
+                          className="flex w-full items-center justify-between rounded-t-xl px-4 py-3 transition hover:bg-accent-500/10"
+                        >
+                          <span className="flex items-center gap-2 text-sm font-semibold text-white">
+                            {dot}
+                            {col.label}
+                          </span>
+                          <span className="flex items-center gap-1.5">
+                            {count}
+                            {factureOpen ? (
+                              <ChevronUp className="h-4 w-4 text-white/60" />
+                            ) : (
+                              <ChevronDown className="h-4 w-4 text-white/60" />
+                            )}
+                          </span>
+                        </button>
+                      </h3>
+                    ) : (
+                      <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          {dot}
+                          <h3 className="text-sm font-semibold text-white">
+                            {col.label}
+                          </h3>
+                        </div>
+                        {count}
                       </div>
-                      <span className="badge badge-neutral">
-                        {cards.length}
-                      </span>
-                    </div>
+                    )}
                     <div className="flex-1 space-y-3 p-3">
-                      {cards.length === 0 ? (
+                      {closed ? (
+                        <button
+                          type="button"
+                          onClick={() => setFactureOpen(true)}
+                          className="flex w-full items-center justify-center gap-1.5 rounded-md bg-brand-950 px-3 py-1.5 text-xs font-semibold text-white/70 transition hover:text-white"
+                        >
+                          <ChevronDown className="h-3.5 w-3.5" />
+                          {cards.length > 1
+                            ? `Afficher les ${cards.length} bons`
+                            : "Afficher le bon"}
+                        </button>
+                      ) : cards.length === 0 ? (
                         <p className="py-6 text-center text-xs text-white/40">
                           —
                         </p>
@@ -771,6 +826,16 @@ export default function BonsTravailPage() {
                           </button>
                         ))
                       )}
+                      {foldable && factureOpen ? (
+                        <button
+                          type="button"
+                          onClick={() => setFactureOpen(false)}
+                          className="flex w-full items-center justify-center gap-1.5 rounded-md bg-brand-950 px-3 py-1.5 text-xs font-semibold text-white/70 transition hover:text-white"
+                        >
+                          <ChevronUp className="h-3.5 w-3.5" />
+                          Fermer la zone
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 );

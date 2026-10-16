@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ChevronDown,
+  ChevronUp,
   ClipboardCheck,
   HardHat,
   Loader2,
@@ -90,21 +92,41 @@ export default function BonsPage() {
   const [search, setSearch] = useState("");
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
   const dragIdRef = useRef<number | null>(null);
+  // Vrai pendant un glisser (souris ou doigt) : la zone « Facturé »
+  // fermée garde alors toute sa hauteur pour rester une grande cible.
+  const [dragging, setDragging] = useState(false);
+  // Zone « Facturé » : fermée à chaque arrivée sur la page, ouverte au
+  // besoin d'un clic sur son en-tête (même mécanique que la zone
+  // « Terminé » des tâches).
+  const [factureOpen, setFactureOpen] = useState(false);
+  const factureHeaderRef = useRef<HTMLHeadingElement | null>(null);
   const finePointer = useFinePointer();
+
+  // Le bouton « Fermer la zone » du bas ramène l'en-tête à l'écran, la
+  // zone rétrécissant d'un coup après une longue liste.
+  function closeFactureFromBottom() {
+    setFactureOpen(false);
+    window.requestAnimationFrame(() => {
+      factureHeaderRef.current?.scrollIntoView({ block: "center" });
+    });
+  }
   // Au doigt : appui long sur la carte (le glisser HTML5 ne sert qu'à la
   // souris), même dépôt que la souris.
   const boardRef = useKanbanTouchDrag({
     onStart: (id) => {
       dragIdRef.current = id;
+      setDragging(true);
     },
     onOver: setDragOverCol,
     onDrop: (id, colId) => {
       dragIdRef.current = null;
+      setDragging(false);
       setDragOverCol(null);
       if (colId) void moveTo(id, colId);
     },
     onCancel: () => {
       dragIdRef.current = null;
+      setDragging(false);
       setDragOverCol(null);
     }
   });
@@ -295,6 +317,19 @@ export default function BonsPage() {
                 {COLUMNS.map((col) => {
               const cards = byColumn[col.id] || [];
               const isOver = dragOverCol === col.id;
+              // Zone « Facturé » repliable dès qu'elle contient un bon ;
+              // fermée, elle ne montre que son en-tête et son compteur,
+              // sans s'étirer — sauf pendant un glisser, pour rester une
+              // grande cible de dépôt.
+              const foldable = col.id === "facture" && cards.length > 0;
+              const closed = foldable && !factureOpen;
+              const shrunk = closed && !dragging;
+              const dot = (
+                <span className={`h-2 w-2 rounded-full ${col.dot}`} />
+              );
+              const count = (
+                <span className="badge badge-neutral">{cards.length}</span>
+              );
               return (
                 <div
                   key={col.id}
@@ -304,7 +339,7 @@ export default function BonsPage() {
                     isOver
                       ? "border-accent-500 ring-1 ring-accent-500/40"
                       : "border-brand-800"
-                  }`}
+                  } ${shrunk ? "self-start" : ""}`}
                   onDragOver={(e) => {
                     e.preventDefault();
                     if (dragOverCol !== col.id) setDragOverCol(col.id);
@@ -315,24 +350,66 @@ export default function BonsPage() {
                   onDrop={(e) => {
                     e.preventDefault();
                     setDragOverCol(null);
+                    setDragging(false);
                     const id = dragIdRef.current;
                     dragIdRef.current = null;
                     if (id != null) moveTo(id, col.id);
                   }}
                 >
-                  <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <span className={`h-2 w-2 rounded-full ${col.dot}`} />
-                      <h2 className="text-sm font-semibold text-white">
-                        {col.label}
-                      </h2>
+                  {foldable ? (
+                    <h2
+                      ref={factureHeaderRef}
+                      className="border-b border-brand-800"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setFactureOpen(!factureOpen)}
+                        aria-expanded={factureOpen}
+                        title={
+                          factureOpen
+                            ? "Fermer la zone Facturé"
+                            : "Ouvrir la zone Facturé"
+                        }
+                        className="flex w-full items-center justify-between rounded-t-xl px-4 py-3 transition hover:bg-accent-500/10"
+                      >
+                        <span className="flex items-center gap-2 text-sm font-semibold text-white">
+                          {dot}
+                          {col.label}
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                          {count}
+                          {factureOpen ? (
+                            <ChevronUp className="h-4 w-4 text-white/60" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4 text-white/60" />
+                          )}
+                        </span>
+                      </button>
+                    </h2>
+                  ) : (
+                    <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        {dot}
+                        <h2 className="text-sm font-semibold text-white">
+                          {col.label}
+                        </h2>
+                      </div>
+                      {count}
                     </div>
-                    <span className="badge badge-neutral">
-                      {cards.length}
-                    </span>
-                  </div>
+                  )}
                   <div className="flex-1 space-y-3 p-3">
-                    {cards.length === 0 ? (
+                    {closed ? (
+                      <button
+                        type="button"
+                        onClick={() => setFactureOpen(true)}
+                        className="flex w-full items-center justify-center gap-1.5 rounded-md bg-brand-950 px-3 py-1.5 text-xs font-semibold text-white/70 transition hover:text-white"
+                      >
+                        <ChevronDown className="h-3.5 w-3.5" />
+                        {cards.length > 1
+                          ? `Afficher les ${cards.length} bons`
+                          : "Afficher le bon"}
+                      </button>
+                    ) : cards.length === 0 ? (
                       <p className="py-8 text-center text-xs text-white/40">
                         Aucun bon
                       </p>
@@ -354,9 +431,11 @@ export default function BonsPage() {
                             onDragStart={(e) => {
                               dragIdRef.current = b.id;
                               e.dataTransfer.effectAllowed = "move";
+                              setDragging(true);
                             }}
                             onDragEnd={() => {
                               dragIdRef.current = null;
+                              setDragging(false);
                               setDragOverCol(null);
                             }}
                             className={`group relative block cursor-grab rounded-lg border p-3 transition active:cursor-grabbing ${
@@ -439,6 +518,16 @@ export default function BonsPage() {
                         );
                       })
                     )}
+                    {foldable && factureOpen ? (
+                      <button
+                        type="button"
+                        onClick={closeFactureFromBottom}
+                        className="flex w-full items-center justify-center gap-1.5 rounded-md bg-brand-950 px-3 py-1.5 text-xs font-semibold text-white/70 transition hover:text-white"
+                      >
+                        <ChevronUp className="h-3.5 w-3.5" />
+                        Fermer la zone
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               );
