@@ -4,26 +4,24 @@
  * Gestion locative → FINANCEMENT (Phil 2026-10-16) : « je veux que mes
  * financements deviennent faciles ».
  *
- * Un immeuble à la fois, trois volets :
- * - Dossiers : une demande par prêteur (refinancement, achat,
- *   renouvellement) — statut, dates, checklist des pièces (fournies /
- *   envoyées, rattachées aux documents de l'immeuble), projection pro
- *   forma par unité (toujours marquée « estimation »), tableau de bord,
- *   journal, exports (rent roll PDF/Excel, paquet PDF).
- * - Rent roll : aperçu depuis les baux ENREGISTRÉS, choix des catégories
- *   (standards / parallèles), correction du bail à la source (journalisée),
- *   avis TAL et bail officiel pour chaque bail.
- * - Baux parallèles : sous-locations et baux principaux d'exploitant —
- *   vrais contrats hors du quotidien, visibles ICI seulement : création,
- *   PDF signé, bail officiel TAL + signature, avis, fin.
+ * Parcours (Phil) : 1. choisir l'immeuble ; 2. créer un dossier de
+ * financement ou en ouvrir un — rien d'autre ; 3. dans le dossier : aperçu
+ * (tableau de bord), rent roll (depuis les baux ENREGISTRÉS, catégories
+ * standards / parallèles, correction du bail à la source), pièces et
+ * exports (checklist, projection marquée estimation, PDF/Excel, paquet),
+ * baux parallèles (sous-locations gérées par un tiers : vrais contrats
+ * hors du quotidien, visibles ICI seulement, partagés par les dossiers de
+ * l'immeuble), suivi dans le temps.
  *
- * Garde-fou : aucun montant modifiable « pour l'export » — si un chiffre
- * est faux, on corrige le bail et l'export le reflète.
+ * Garde-fou : le rent roll est PRODUIT par les baux, jamais l'inverse ; il
+ * n'existe aucun montant modifiable « pour l'export » — si un chiffre est
+ * faux, on corrige le bail (journalisé) et l'export suit.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
+  ArrowLeft,
   Check,
   ChevronDown,
   ChevronRight,
@@ -44,11 +42,7 @@ import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar } from "../layout";
 import { TalFormDropdown } from "@/components/immobilier/tal-avis";
-import {
-  TalBailModal,
-  libelleModeTal,
-  ouvrirPdfDocument
-} from "@/components/immobilier/tal-bail-modal";
+import { TalBailModal, ouvrirPdfDocument } from "@/components/immobilier/tal-bail-modal";
 
 const FIN = "/api/v1/immobilier/financement";
 const INPUT =
@@ -312,14 +306,12 @@ async function telecharger(url: string, nomParDefaut: string): Promise<void> {
   window.setTimeout(() => URL.revokeObjectURL(href), 30_000);
 }
 
-// ─── Page ─────────────────────────────────────────────────────────────
-
-type Onglet = "dossiers" | "rentroll" | "paralleles";
+// ─── Page : immeuble → dossier ────────────────────────────────────────
 
 export default function FinancementPage() {
   const [immeubles, setImmeubles] = useState<ImmeubleLite[]>([]);
   const [immId, setImmId] = useState<number | null>(null);
-  const [onglet, setOnglet] = useState<Onglet>("dossiers");
+  const [openId, setOpenId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -332,16 +324,18 @@ export default function FinancementPage() {
       const list = ((await r.json()) as ImmeubleLite[]).filter((i) => !i.gestion_externe);
       list.sort((a, b) => a.name.localeCompare(b.name, "fr"));
       setImmeubles(list);
-      const url = new URLSearchParams(window.location.search).get("immeuble");
+      const params = new URLSearchParams(window.location.search);
       let stored: string | null = null;
       try {
         stored = window.localStorage.getItem("kratos-financement-immeuble");
       } catch {
         /* privé */
       }
-      const voulu = Number(url || stored);
+      const voulu = Number(params.get("immeuble") || stored);
       if (Number.isFinite(voulu) && list.some((i) => i.id === voulu)) setImmId(voulu);
       else if (list.length === 1) setImmId(list[0].id);
+      const dossier = Number(params.get("dossier"));
+      if (Number.isFinite(dossier) && dossier > 0) setOpenId(dossier);
     })();
   }, []);
 
@@ -367,16 +361,18 @@ export default function FinancementPage() {
           <div className="min-w-0 flex-1">
             <h1 className="text-2xl font-bold text-white">Financement</h1>
             <p className="mt-1 max-w-3xl text-sm text-white/60">
-              Monte le dossier d&apos;un immeuble pour un prêteur : rent roll depuis les baux enregistrés,
-              pièces, projection clairement identifiée, suivi dans le temps. Les baux parallèles
-              (sous-locations, baux d&apos;exploitant) vivent ici, hors du quotidien.
+              Un immeuble, un dossier par demande de prêt. Dans le dossier : rent roll depuis les baux
+              enregistrés, pièces, projection clairement identifiée, baux parallèles, suivi dans le temps.
             </p>
           </div>
           <label className="text-[11px] font-semibold text-white/60">
             Immeuble
             <select
               value={immId == null ? "" : String(immId)}
-              onChange={(e) => setImmId(e.target.value ? Number(e.target.value) : null)}
+              onChange={(e) => {
+                setImmId(e.target.value ? Number(e.target.value) : null);
+                setOpenId(null);
+              }}
               className={`${INPUT} mt-0.5 block min-w-[240px]`}
             >
               <option value="">Choisir un immeuble…</option>
@@ -389,53 +385,24 @@ export default function FinancementPage() {
           </label>
         </header>
 
-        {err ? (
-          <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{err}</p>
-        ) : null}
+        {err ? <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{err}</p> : null}
 
-        {immeuble ? (
-          <>
-            <nav className="mt-5 flex flex-wrap gap-1 rounded-xl border border-brand-800 bg-brand-900/60 p-1">
-              {(
-                [
-                  ["dossiers", "Dossiers de financement"],
-                  ["rentroll", "Rent roll"],
-                  ["paralleles", "Baux parallèles"]
-                ] as [Onglet, string][]
-              ).map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setOnglet(id)}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                    onglet === id
-                      ? "bg-accent-500/15 text-accent-500 ring-1 ring-inset ring-accent-500/40"
-                      : "text-white/60 hover:bg-brand-800 hover:text-white"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </nav>
-            <div className="mt-4">
-              {onglet === "dossiers" ? <DossiersTab immeuble={immeuble} onError={setErr} /> : null}
-              {onglet === "rentroll" ? <RentRollTab immeuble={immeuble} /> : null}
-              {onglet === "paralleles" ? <ParallelesTab immeuble={immeuble} /> : null}
-            </div>
-          </>
+        {!immeuble ? (
+          <p className="mt-8 text-sm text-white/50">Étape 1 : choisis un immeuble.</p>
+        ) : openId == null ? (
+          <DossiersListe immeuble={immeuble} onOpen={setOpenId} onError={setErr} />
         ) : (
-          <p className="mt-8 text-sm text-white/50">Choisis un immeuble pour commencer.</p>
+          <DossierVue dossierId={openId} immeuble={immeuble} onBack={() => setOpenId(null)} onError={setErr} />
         )}
       </div>
     </>
   );
 }
 
-// ─── Onglet Dossiers ──────────────────────────────────────────────────
+// ─── Étape 2 : créer ou ouvrir un dossier ─────────────────────────────
 
-function DossiersTab({ immeuble, onError }: { immeuble: ImmeubleLite; onError: (m: string | null) => void }) {
+function DossiersListe({ immeuble, onOpen, onError }: { immeuble: ImmeubleLite; onOpen: (id: number) => void; onError: (m: string | null) => void }) {
   const [items, setItems] = useState<Dossier[] | null>(null);
-  const [openId, setOpenId] = useState<number | null>(null);
   const [showCreate, setShowCreate] = useState(false);
 
   const load = useCallback(async () => {
@@ -448,7 +415,6 @@ function DossiersTab({ immeuble, onError }: { immeuble: ImmeubleLite; onError: (
   }, [immeuble.id, onError]);
 
   useEffect(() => {
-    setOpenId(null);
     void load();
   }, [load]);
 
@@ -456,66 +422,56 @@ function DossiersTab({ immeuble, onError }: { immeuble: ImmeubleLite; onError: (
   const fermes = (items || []).filter((d) => ["approuve", "refuse", "clos"].includes(d.statut));
 
   return (
-    <div className="space-y-4">
+    <div className="mt-5 space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <p className="text-xs text-white/50">
-          {items == null ? "Chargement…" : `${ouverts.length} dossier(s) en cours · ${fermes.length} fermé(s)`}
+          Étape 2 : ouvre un dossier ou crée-en un.
+          {items != null ? ` ${ouverts.length} en cours · ${fermes.length} fermé(s).` : ""}
         </p>
         <button type="button" onClick={() => setShowCreate(true)} className="btn-accent btn-sm ml-auto">
-          <Plus className="h-3.5 w-3.5" /> Nouveau dossier
+          <Plus className="h-3.5 w-3.5" /> Nouveau dossier de financement
         </button>
       </div>
-      {items && items.length === 0 ? (
-        <p className="rounded-xl border border-brand-800 bg-brand-900/60 px-4 py-8 text-center text-sm text-white/50">
-          Aucun dossier de financement pour cet immeuble. Ouvre le premier : la checklist standard se crée toute seule.
+      {items == null ? (
+        <p className="flex items-center gap-2 py-6 text-xs text-white/50">
+          <Loader2 className="h-4 w-4 animate-spin" /> Chargement…
         </p>
-      ) : null}
-      <div className="grid gap-3 lg:grid-cols-2">
-        {[...ouverts, ...fermes].map((d) => (
-          <button
-            key={d.id}
-            type="button"
-            onClick={() => setOpenId(d.id)}
-            className="rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-accent-500"
-          >
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-semibold text-white">{d.titre}</span>
-              <span className={`badge ${STATUT_BADGE[d.statut] || "badge-neutral"}`}>{STATUT_LABEL[d.statut] || d.statut}</span>
-              <span className="badge badge-neutral">{TYPE_LABEL[d.type] || d.type}</span>
-            </div>
-            <p className="mt-1 text-xs text-white/55">
-              {d.preteur || "Prêteur à préciser"}
-              {d.courtier ? ` · courtier ${d.courtier}` : ""}
-              {d.montant_demande != null ? ` · ${money(d.montant_demande)}` : ""}
-              {d.taux_pct != null ? ` · ${d.taux_pct} %` : ""}
-            </p>
-            <p className="mt-1 text-[11px] text-white/40">
-              Pièces : {d.nb_pieces_fournies ?? 0}/{d.nb_pieces_requises ?? 0}
-              {d.date_echeance ? ` · échéance ${fmtDate(d.date_echeance)}` : ""}
-              {d.date_depot ? ` · déposé le ${fmtDate(d.date_depot)}` : ""}
-            </p>
-          </button>
-        ))}
-      </div>
-      {openId != null ? (
-        <DossierPanel
-          dossierId={openId}
-          immeuble={immeuble}
-          onClose={() => {
-            setOpenId(null);
-            void load();
-          }}
-          onError={onError}
-        />
-      ) : null}
+      ) : items.length === 0 ? (
+        <p className="rounded-xl border border-brand-800 bg-brand-900/60 px-4 py-8 text-center text-sm text-white/50">
+          Aucun dossier de financement pour {immeuble.name}. Crée le premier : la checklist standard se prépare toute seule.
+        </p>
+      ) : (
+        <div className="grid gap-3 lg:grid-cols-2">
+          {[...ouverts, ...fermes].map((d) => (
+            <button key={d.id} type="button" onClick={() => onOpen(d.id)} className="rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-accent-500">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold text-white">{d.titre}</span>
+                <span className={`badge ${STATUT_BADGE[d.statut] || "badge-neutral"}`}>{STATUT_LABEL[d.statut] || d.statut}</span>
+                <span className="badge badge-neutral">{TYPE_LABEL[d.type] || d.type}</span>
+              </div>
+              <p className="mt-1 text-xs text-white/55">
+                {d.preteur || "Prêteur à préciser"}
+                {d.courtier ? ` · courtier ${d.courtier}` : ""}
+                {d.montant_demande != null ? ` · ${money(d.montant_demande)}` : ""}
+                {d.taux_pct != null ? ` · ${d.taux_pct} %` : ""}
+              </p>
+              <p className="mt-1 text-[11px] text-white/40">
+                Pièces : {d.nb_pieces_fournies ?? 0}/{d.nb_pieces_requises ?? 0}
+                {d.date_echeance ? ` · échéance ${fmtDate(d.date_echeance)}` : ""}
+                {d.date_depot ? ` · déposé le ${fmtDate(d.date_depot)}` : ""}
+                {d.updated_at ? ` · mis à jour ${fmtDateTime(d.updated_at)}` : ""}
+              </p>
+            </button>
+          ))}
+        </div>
+      )}
       {showCreate ? (
         <NouveauDossierModal
           immeuble={immeuble}
           onClose={() => setShowCreate(false)}
           onCreated={(id) => {
             setShowCreate(false);
-            void load();
-            setOpenId(id);
+            onOpen(id);
           }}
         />
       ) : null}
@@ -592,12 +548,10 @@ function NouveauDossierModal({ immeuble, onClose, onCreated }: { immeuble: Immeu
           Baux dans le rent roll du dossier
           <div className="mt-1 flex flex-col gap-1 text-xs font-normal text-white/80">
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={f.inclure_standards} onChange={(e) => setF({ ...f, inclure_standards: e.target.checked })} />
-              Baux standards
+              <input type="checkbox" checked={f.inclure_standards} onChange={(e) => setF({ ...f, inclure_standards: e.target.checked })} /> Baux standards
             </label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={f.inclure_paralleles} onChange={(e) => setF({ ...f, inclure_paralleles: e.target.checked })} />
-              Baux parallèles (sous-location…)
+              <input type="checkbox" checked={f.inclure_paralleles} onChange={(e) => setF({ ...f, inclure_paralleles: e.target.checked })} /> Baux parallèles (sous-location…)
             </label>
           </div>
         </div>
@@ -619,19 +573,16 @@ function NouveauDossierModal({ immeuble, onClose, onCreated }: { immeuble: Immeu
   );
 }
 
-// ─── Fiche d'un dossier ───────────────────────────────────────────────
+// ─── Étape 3 : le dossier ─────────────────────────────────────────────
 
-function DossierPanel({ dossierId, immeuble, onClose, onError }: { dossierId: number; immeuble: ImmeubleLite; onClose: () => void; onError: (m: string | null) => void }) {
+type Vue = "apercu" | "rentroll" | "pieces" | "paralleles" | "suivi";
+
+function DossierVue({ dossierId, immeuble, onBack, onError }: { dossierId: number; immeuble: ImmeubleLite; onBack: () => void; onError: (m: string | null) => void }) {
   const [d, setD] = useState<DossierDetail | null>(null);
   const [docs, setDocs] = useState<DocumentImm[]>([]);
+  const [vue, setVue] = useState<Vue>("apercu");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [showPaquet, setShowPaquet] = useState(false);
-  const [note, setNote] = useState("");
-  const [noteType, setNoteType] = useState("note");
-  const [proj, setProj] = useState<Record<string, { loyer: string; source: string; note: string }>>({});
-  const [vacance, setVacance] = useState("0");
-  const [projOuvert, setProjOuvert] = useState(false);
 
   const load = useCallback(async () => {
     const [r, rd] = await Promise.all([authedFetch(`${FIN}/dossiers/${dossierId}`), authedFetch(`${FIN}/immeubles/${immeuble.id}/documents`)]);
@@ -639,12 +590,186 @@ function DossierPanel({ dossierId, immeuble, onClose, onError }: { dossierId: nu
       onError(await lireErreur(r));
       return;
     }
-    const det = (await r.json()) as DossierDetail;
-    setD(det);
+    setD((await r.json()) as DossierDetail);
     if (rd.ok) setDocs(((await rd.json()) as { items: DocumentImm[] }).items);
+  }, [dossierId, immeuble.id, onError]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const patch = useCallback(
+    async (body: Record<string, unknown>) => {
+      setBusy(true);
+      setErr(null);
+      try {
+        const r = await authedFetch(`${FIN}/dossiers/${dossierId}`, { method: "PATCH", body: JSON.stringify(body) });
+        if (!r.ok) throw new Error(await lireErreur(r));
+        setD((await r.json()) as DossierDetail);
+      } catch (e) {
+        setErr((e as Error).message);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [dossierId]
+  );
+
+  async function supprimer() {
+    if (!d) return;
+    if (!window.confirm("Supprimer DÉFINITIVEMENT ce dossier de financement (pièces et journal compris) ?")) return;
+    const r = await authedFetch(`${FIN}/dossiers/${d.id}`, { method: "DELETE" });
+    if (!r.ok) {
+      setErr(await lireErreur(r));
+      return;
+    }
+    onBack();
+  }
+
+  if (!d) {
+    return (
+      <p className="mt-6 flex items-center gap-2 text-xs text-white/50">
+        <Loader2 className="h-4 w-4 animate-spin" /> Chargement du dossier…
+      </p>
+    );
+  }
+  const tb = d.tableau_de_bord;
+
+  return (
+    <div className="mt-5 space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" onClick={onBack} className="btn-secondary btn-sm">
+          <ArrowLeft className="h-3.5 w-3.5" /> Dossiers
+        </button>
+        <h2 className="text-lg font-bold text-white">{d.titre}</h2>
+        <span className={`badge ${STATUT_BADGE[d.statut] || "badge-neutral"}`}>{STATUT_LABEL[d.statut] || d.statut}</span>
+        <span className="badge badge-neutral">{TYPE_LABEL[d.type] || d.type}</span>
+        {busy ? <Loader2 className="h-4 w-4 animate-spin text-white/40" /> : null}
+      </div>
+
+      <nav className="flex flex-wrap gap-1 rounded-xl border border-brand-800 bg-brand-900/60 p-1">
+        {(
+          [
+            ["apercu", "Aperçu"],
+            ["rentroll", "Rent roll"],
+            ["pieces", "Pièces et exports"],
+            ["paralleles", "Baux parallèles"],
+            ["suivi", "Suivi"]
+          ] as [Vue, string][]
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setVue(id)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+              vue === id ? "bg-accent-500/15 text-accent-500 ring-1 ring-inset ring-accent-500/40" : "text-white/60 hover:bg-brand-800 hover:text-white"
+            }`}
+          >
+            {label}
+            {id === "pieces" && tb.pieces_manquantes.length ? <span className="badge badge-amber ml-1">{tb.pieces_manquantes.length}</span> : null}
+          </button>
+        ))}
+      </nav>
+
+      {err ? <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{err}</p> : null}
+
+      {vue === "apercu" ? (
+        <>
+          <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            <label className="text-[11px] font-semibold text-white/60">
+              Statut
+              <select value={d.statut} disabled={busy} onChange={(e) => void patch({ statut: e.target.value })} className={`${INPUT} mt-0.5 block w-full`}>
+                {d.statuts.map((s) => (
+                  <option key={s} value={s}>
+                    {STATUT_LABEL[s] || s}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-[11px] font-semibold text-white/60">
+              Type
+              <select value={d.type} disabled={busy} onChange={(e) => void patch({ type: e.target.value })} className={`${INPUT} mt-0.5 block w-full`}>
+                {d.types.map((t) => (
+                  <option key={t} value={t}>
+                    {TYPE_LABEL[t] || t}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <ChampBlur label="Prêteur" value={d.preteur || ""} onSave={(v) => void patch({ preteur: v || null })} />
+            <ChampBlur label="Courtier" value={d.courtier || ""} onSave={(v) => void patch({ courtier: v || null })} />
+            <ChampBlur label="Montant demandé ($)" value={d.montant_demande != null ? String(d.montant_demande) : ""} onSave={(v) => void patch({ montant_demande: v ? Number(v) : null })} inputMode="decimal" />
+            <ChampBlur label="Taux (%)" value={d.taux_pct != null ? String(d.taux_pct) : ""} onSave={(v) => void patch({ taux_pct: v ? Number(v) : null })} inputMode="decimal" />
+            <ChampBlur label="Terme (mois)" value={d.terme_mois != null ? String(d.terme_mois) : ""} onSave={(v) => void patch({ terme_mois: v ? Number(v) : null })} inputMode="numeric" />
+            <ChampBlur label="Amortissement (mois)" value={d.amortissement_mois != null ? String(d.amortissement_mois) : ""} onSave={(v) => void patch({ amortissement_mois: v ? Number(v) : null })} inputMode="numeric" />
+            <ChampBlur label="Déposé le" value={d.date_depot || ""} onSave={(v) => void patch({ date_depot: v || null })} type="date" />
+            <ChampBlur label="Réponse le" value={d.date_reponse || ""} onSave={(v) => void patch({ date_reponse: v || null })} type="date" />
+            <ChampBlur label="Échéance" value={d.date_echeance || ""} onSave={(v) => void patch({ date_echeance: v || null })} type="date" />
+            <ChampBlur label="Titre du dossier" value={d.titre} onSave={(v) => (v.trim() ? void patch({ titre: v.trim() }) : undefined)} />
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            <Tuile label="Revenus réels / mois" valeur={money(tb.reel_mensuel)} sous={`${money(tb.reel_annuel)} / an · baux standards`} />
+            <Tuile label="Baux parallèles / mois" valeur={money(tb.paralleles_mensuel)} sous={d.inclure_paralleles ? `${money(tb.paralleles_annuel)} / an` : "exclus du dossier"} />
+            <Tuile
+              label="Projection / mois"
+              valeur={tb.projection_mensuelle != null ? money(tb.projection_mensuelle) : "—"}
+              sous={tb.ecart_projection_pct != null ? `${tb.ecart_projection_pct > 0 ? "+" : ""}${tb.ecart_projection_pct} % vs réel · estimation` : "estimation"}
+              accent
+            />
+            <Tuile label="Occupation" valeur={tb.taux_occupation_pct != null ? `${tb.taux_occupation_pct} %` : "—"} sous={`${tb.nb_unites} unités · ${tb.nb_vacantes} vacante(s)`} />
+            <Tuile label="Pièces" valeur={`${tb.pieces_fournies}/${tb.pieces_requises}`} sous={tb.pieces_manquantes.length ? `${tb.pieces_manquantes.length} manquante(s)` : "complet"} alerte={tb.pieces_manquantes.length > 0} />
+            <Tuile
+              label="Échéance"
+              valeur={tb.jours_avant_echeance != null ? `${tb.jours_avant_echeance} j` : "—"}
+              sous={d.date_echeance ? fmtDate(d.date_echeance) : "aucune"}
+              alerte={tb.jours_avant_echeance != null && tb.jours_avant_echeance < 14}
+            />
+          </div>
+          <label className="block text-[11px] font-semibold text-white/60">
+            Notes du dossier
+            <NotesBlur value={d.notes || ""} onSave={(v) => void patch({ notes: v || null })} />
+          </label>
+        </>
+      ) : null}
+
+      {vue === "rentroll" ? <RentRollTab immeuble={immeuble} dossier={d} onPatchDossier={patch} /> : null}
+
+      {vue === "pieces" ? <PiecesEtExports d={d} docs={docs} onReload={load} onPatch={patch} busy={busy} /> : null}
+
+      {vue === "paralleles" ? (
+        <>
+          <p className="rounded-lg border border-brand-800 bg-brand-900/60 px-3 py-2 text-[11px] text-white/50">
+            Les baux parallèles appartiennent à l&apos;immeuble : ils sont partagés par tous ses dossiers et n&apos;apparaissent nulle part ailleurs dans Kratos.
+          </p>
+          <ParallelesTab immeuble={immeuble} onChanged={load} />
+        </>
+      ) : null}
+
+      {vue === "suivi" ? <Suivi d={d} onReload={load} onSupprimer={supprimer} /> : null}
+    </div>
+  );
+}
+
+function NotesBlur({ value, onSave }: { value: string; onSave: (v: string) => void }) {
+  const [v, setV] = useState(value);
+  useEffect(() => setV(value), [value]);
+  return <textarea rows={3} value={v} onChange={(e) => setV(e.target.value)} onBlur={() => (v !== value ? onSave(v) : undefined)} className={`${INPUT} mt-0.5 block w-full`} />;
+}
+
+// ─── Pièces, projection, exports ─────────────────────────────────────
+
+function PiecesEtExports({ d, docs, onReload, onPatch, busy }: { d: DossierDetail; docs: DocumentImm[]; onReload: () => Promise<void>; onPatch: (b: Record<string, unknown>) => Promise<void>; busy: boolean }) {
+  const [err, setErr] = useState<string | null>(null);
+  const [showPaquet, setShowPaquet] = useState(false);
+  const [proj, setProj] = useState<Record<string, { loyer: string; source: string; note: string }>>({});
+  const [vacance, setVacance] = useState("0");
+  const [projOuvert, setProjOuvert] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
     const p: Record<string, { loyer: string; source: string; note: string }> = {};
-    for (const l of det.rent_roll.lignes) {
-      const e = det.projection?.logements?.[String(l.logement_id)];
+    for (const l of d.rent_roll.lignes) {
+      const e = d.projection?.logements?.[String(l.logement_id)];
       p[String(l.logement_id)] = {
         loyer: e?.loyer != null ? String(e.loyer) : l.loyer != null ? String(l.loyer) : l.loyer_demande != null ? String(l.loyer_demande) : "",
         source: e?.source || (l.loyer != null ? "bail" : "demande"),
@@ -652,26 +777,8 @@ function DossierPanel({ dossierId, immeuble, onClose, onError }: { dossierId: nu
       };
     }
     setProj(p);
-    setVacance(String(det.projection?.hypotheses?.vacance_pct ?? 0));
-  }, [dossierId, immeuble.id, onError]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  async function patch(body: Record<string, unknown>) {
-    setBusy(true);
-    setErr(null);
-    try {
-      const r = await authedFetch(`${FIN}/dossiers/${dossierId}`, { method: "PATCH", body: JSON.stringify(body) });
-      if (!r.ok) throw new Error(await lireErreur(r));
-      setD((await r.json()) as DossierDetail);
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
+    setVacance(String(d.projection?.hypotheses?.vacance_pct ?? 0));
+  }, [d]);
 
   async function patchPiece(id: number, body: Record<string, unknown>) {
     setErr(null);
@@ -680,20 +787,18 @@ function DossierPanel({ dossierId, immeuble, onClose, onError }: { dossierId: nu
       setErr(await lireErreur(r));
       return;
     }
-    await load();
+    await onReload();
   }
-
   async function ajouterPiece() {
     const libelle = window.prompt("Libellé de la pièce à ajouter :");
     if (!libelle?.trim()) return;
-    const r = await authedFetch(`${FIN}/dossiers/${dossierId}/pieces`, { method: "POST", body: JSON.stringify({ type: "autre", libelle: libelle.trim() }) });
+    const r = await authedFetch(`${FIN}/dossiers/${d.id}/pieces`, { method: "POST", body: JSON.stringify({ type: "autre", libelle: libelle.trim() }) });
     if (!r.ok) {
       setErr(await lireErreur(r));
       return;
     }
-    await load();
+    await onReload();
   }
-
   async function supprimerPiece(id: number) {
     if (!window.confirm("Retirer cette pièce de la checklist ?")) return;
     const r = await authedFetch(`${FIN}/pieces/${id}`, { method: "DELETE" });
@@ -701,301 +806,225 @@ function DossierPanel({ dossierId, immeuble, onClose, onError }: { dossierId: nu
       setErr(await lireErreur(r));
       return;
     }
-    await load();
+    await onReload();
   }
-
-  async function ajouterJournal() {
-    if (!note.trim()) return;
-    const r = await authedFetch(`${FIN}/dossiers/${dossierId}/journal`, { method: "POST", body: JSON.stringify({ type: noteType, texte: note.trim() }) });
-    if (!r.ok) {
-      setErr(await lireErreur(r));
-      return;
-    }
-    setNote("");
-    await load();
-  }
-
   async function enregistrerProjection() {
-    setBusy(true);
+    setSaving(true);
     setErr(null);
     try {
       const logements: Record<string, { loyer: number | null; source: string; note: string }> = {};
       for (const [k, v] of Object.entries(proj)) {
         logements[k] = { loyer: v.loyer.trim() ? Number(v.loyer.replace(",", ".")) : null, source: v.source, note: v.note };
       }
-      const r = await authedFetch(`${FIN}/dossiers/${dossierId}/projection`, {
+      const r = await authedFetch(`${FIN}/dossiers/${d.id}/projection`, {
         method: "PUT",
         body: JSON.stringify({ logements, hypotheses: { vacance_pct: Number(vacance.replace(",", ".")) || 0 } })
       });
       if (!r.ok) throw new Error(await lireErreur(r));
-      setD((await r.json()) as DossierDetail);
+      await onReload();
     } catch (e) {
       setErr((e as Error).message);
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
   }
 
-  async function supprimer() {
-    if (!window.confirm("Supprimer DÉFINITIVEMENT ce dossier de financement (pièces et journal compris) ?")) return;
-    const r = await authedFetch(`${FIN}/dossiers/${dossierId}`, { method: "DELETE" });
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      {err ? <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200 lg:col-span-2">{err}</p> : null}
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-3.5">
+        <div className="flex items-center gap-2">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-accent-500">Pièces à fournir</h4>
+          <button type="button" onClick={() => void ajouterPiece()} className="btn-ghost btn-xs ml-auto">
+            <Plus className="h-3 w-3" /> Ajouter
+          </button>
+        </div>
+        <ul className="mt-2 divide-y divide-brand-800">
+          {d.pieces.map((p) => {
+            const doc = p.document_id ? docs.find((x) => x.id === p.document_id) : null;
+            return (
+              <li key={p.id} className="flex flex-wrap items-center gap-2 py-1.5 text-xs">
+                <input type="checkbox" checked={p.fournie} onChange={(e) => void patchPiece(p.id, { envoye: e.target.checked })} title="Marquer envoyée / fournie" />
+                <span className={`min-w-0 flex-1 ${p.fournie ? "text-white/50 line-through" : "text-white/85"}`}>
+                  {p.libelle}
+                  {!p.requis ? <span className="ml-1 text-white/35">(facultatif)</span> : null}
+                </span>
+                <span className="badge badge-neutral">{PIECE_LABEL[p.type] || p.type}</span>
+                {doc ? (
+                  <button type="button" onClick={() => void ouvrirPdfDocument(doc.id).catch((e) => setErr((e as Error).message))} className="text-accent-500 hover:underline" title={doc.titre}>
+                    <FileText className="inline h-3 w-3" /> {doc.titre.slice(0, 28)}
+                  </button>
+                ) : (
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) void patchPiece(p.id, { document_id: Number(e.target.value) });
+                    }}
+                    className={`${INPUT} max-w-[180px] py-1`}
+                    title="Rattacher un document de l'immeuble"
+                  >
+                    <option value="">Rattacher un document…</option>
+                    {docs.map((x) => (
+                      <option key={x.id} value={x.id}>
+                        {x.titre}
+                        {x.numero ? ` (app. ${x.numero})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {p.envoye_le ? <span className="text-white/40">envoyée {fmtDateTime(p.envoye_le)}</span> : null}
+                <button type="button" onClick={() => void supprimerPiece(p.id)} className="text-rose-300/50 hover:text-rose-300" title="Retirer">
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+        <p className="mt-2 text-[11px] text-white/40">Importer une pièce : fiche de l&apos;immeuble → Documents, puis « Rattacher un document… » ici.</p>
+      </section>
+
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-3.5">
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-accent-500">Exports</h4>
+        <p className="mt-1 text-[11px] text-white/50">
+          Rent roll du dossier :{" "}
+          <label className="inline-flex items-center gap-1">
+            <input type="checkbox" checked={d.inclure_standards} disabled={busy} onChange={(e) => void onPatch({ inclure_standards: e.target.checked })} /> baux standards
+          </label>{" "}
+          <label className="inline-flex items-center gap-1">
+            <input type="checkbox" checked={d.inclure_paralleles} disabled={busy} onChange={(e) => void onPatch({ inclure_paralleles: e.target.checked })} /> baux parallèles
+          </label>
+        </p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {(["pdf", "xlsx", "csv"] as const).map((fmt) => (
+            <button
+              key={fmt}
+              type="button"
+              onClick={() => void telecharger(`${FIN}/dossiers/${d.id}/rent-roll?fmt=${fmt}&projection=true`, `rent-roll.${fmt}`).catch((e) => setErr((e as Error).message))}
+              className="btn-outline-accent btn-xs"
+            >
+              <Download className="h-3 w-3" /> Rent roll {fmt.toUpperCase()} (avec projection)
+            </button>
+          ))}
+          <button type="button" onClick={() => void telecharger(`${FIN}/dossiers/${d.id}/rent-roll?fmt=pdf&projection=false`, "rent-roll.pdf").catch((e) => setErr((e as Error).message))} className="btn-outline-accent btn-xs">
+            <Download className="h-3 w-3" /> Rent roll PDF (réel seulement)
+          </button>
+          <button type="button" onClick={() => setShowPaquet(true)} className="btn-accent btn-xs">
+            <FileText className="h-3 w-3" /> Paquet PDF…
+          </button>
+        </div>
+        <p className="mt-2 text-[11px] text-white/40">Tous les montants viennent des baux enregistrés. La colonne « Projection » est une estimation, marquée comme telle dans le document.</p>
+
+        <button type="button" onClick={() => setProjOuvert((v) => !v)} className="mt-3 flex w-full items-center gap-2 text-left text-xs font-semibold text-white">
+          {projOuvert ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+          Projection pro forma par unité (estimation)
+        </button>
+        {projOuvert ? (
+          <div className="mt-2 space-y-2">
+            <table className="w-full text-xs">
+              <thead className="text-[11px] uppercase tracking-wider text-white/45">
+                <tr>
+                  <th className="py-1 text-left">Unité</th>
+                  <th className="py-1 text-right">Loyer au bail</th>
+                  <th className="py-1 text-right">Projeté</th>
+                  <th className="py-1 text-left">Source</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-brand-800">
+                {d.rent_roll.lignes.map((l) => {
+                  const p = proj[String(l.logement_id)] || { loyer: "", source: "manuel", note: "" };
+                  return (
+                    <tr key={l.logement_id}>
+                      <td className="py-1 text-white/85">{l.numero}</td>
+                      <td className="py-1 text-right font-mono text-white/70">{money(l.loyer)}</td>
+                      <td className="py-1 text-right">
+                        <input
+                          inputMode="decimal"
+                          value={p.loyer}
+                          onChange={(e) => setProj({ ...proj, [String(l.logement_id)]: { ...p, loyer: e.target.value, source: p.source === "bail" ? "manuel" : p.source } })}
+                          className={`${INPUT} w-24 text-right`}
+                        />
+                      </td>
+                      <td className="py-1">
+                        <select value={p.source} onChange={(e) => setProj({ ...proj, [String(l.logement_id)]: { ...p, source: e.target.value } })} className={`${INPUT} py-1`}>
+                          <option value="bail">bail actuel</option>
+                          <option value="demande">loyer demandé</option>
+                          <option value="marche">marché</option>
+                          <option value="manuel">manuel</option>
+                        </select>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-[11px] font-semibold text-white/60">
+                Vacance (%)
+                <input inputMode="decimal" value={vacance} onChange={(e) => setVacance(e.target.value)} className={`${INPUT} ml-2 w-16 text-right`} />
+              </label>
+              <button type="button" disabled={saving} onClick={() => void enregistrerProjection()} className="btn-accent btn-xs ml-auto disabled:opacity-60">
+                {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />} Enregistrer la projection
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </section>
+      {showPaquet ? <PaquetModal dossier={d} docs={docs} onClose={() => setShowPaquet(false)} /> : null}
+    </div>
+  );
+}
+
+function Suivi({ d, onReload, onSupprimer }: { d: DossierDetail; onReload: () => Promise<void>; onSupprimer: () => Promise<void> }) {
+  const [note, setNote] = useState("");
+  const [noteType, setNoteType] = useState("note");
+  const [err, setErr] = useState<string | null>(null);
+
+  async function ajouter() {
+    if (!note.trim()) return;
+    const r = await authedFetch(`${FIN}/dossiers/${d.id}/journal`, { method: "POST", body: JSON.stringify({ type: noteType, texte: note.trim() }) });
     if (!r.ok) {
       setErr(await lireErreur(r));
       return;
     }
-    onClose();
+    setNote("");
+    await onReload();
   }
-
-  if (!d) {
-    return (
-      <Modal titre="Dossier de financement" onClose={onClose} large>
-        <div className="flex items-center gap-2 py-8 text-xs text-white/50">
-          <Loader2 className="h-4 w-4 animate-spin" /> Chargement…
-        </div>
-      </Modal>
-    );
-  }
-  const tb = d.tableau_de_bord;
 
   return (
-    <Modal titre={d.titre} onClose={onClose} large>
-      {/* En-tête : statut, type, prêteur, montants, dates */}
-      <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-4">
-        <label className="text-[11px] font-semibold text-white/60">
-          Statut
-          <select value={d.statut} disabled={busy} onChange={(e) => void patch({ statut: e.target.value })} className={`${INPUT} mt-0.5 block w-full`}>
-            {d.statuts.map((s) => (
-              <option key={s} value={s}>
-                {STATUT_LABEL[s] || s}
-              </option>
-            ))}
-          </select>
-        </label>
-        <ChampBlur label="Prêteur" value={d.preteur || ""} onSave={(v) => void patch({ preteur: v || null })} />
-        <ChampBlur label="Courtier" value={d.courtier || ""} onSave={(v) => void patch({ courtier: v || null })} />
-        <ChampBlur label="Montant demandé ($)" value={d.montant_demande != null ? String(d.montant_demande) : ""} onSave={(v) => void patch({ montant_demande: v ? Number(v) : null })} inputMode="decimal" />
-        <ChampBlur label="Taux (%)" value={d.taux_pct != null ? String(d.taux_pct) : ""} onSave={(v) => void patch({ taux_pct: v ? Number(v) : null })} inputMode="decimal" />
-        <ChampBlur label="Terme (mois)" value={d.terme_mois != null ? String(d.terme_mois) : ""} onSave={(v) => void patch({ terme_mois: v ? Number(v) : null })} inputMode="numeric" />
-        <ChampBlur label="Déposé le" value={d.date_depot || ""} onSave={(v) => void patch({ date_depot: v || null })} type="date" />
-        <ChampBlur label="Échéance" value={d.date_echeance || ""} onSave={(v) => void patch({ date_echeance: v || null })} type="date" />
+    <section className="rounded-xl border border-brand-800 bg-brand-900 p-3.5">
+      <h4 className="text-xs font-semibold uppercase tracking-wider text-accent-500">Suivi dans le temps</h4>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <select value={noteType} onChange={(e) => setNoteType(e.target.value)} className={`${INPUT} w-auto`}>
+          <option value="note">Note</option>
+          <option value="envoi">Envoi</option>
+          <option value="appel">Appel</option>
+          <option value="courriel">Courriel</option>
+          <option value="reponse">Réponse du prêteur</option>
+        </select>
+        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Ce qui s'est passé…" className={`${INPUT} min-w-[240px] flex-1`} onKeyDown={(e) => (e.key === "Enter" ? void ajouter() : undefined)} />
+        <button type="button" onClick={() => void ajouter()} className="btn-secondary btn-xs">
+          <Plus className="h-3 w-3" /> Ajouter
+        </button>
       </div>
-
-      {/* Tableau de bord */}
-      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        <Tuile label="Revenus réels / mois" valeur={money(tb.reel_mensuel)} sous={`${money(tb.reel_annuel)} / an · baux standards`} />
-        <Tuile label="Baux parallèles / mois" valeur={money(tb.paralleles_mensuel)} sous={d.inclure_paralleles ? `${money(tb.paralleles_annuel)} / an` : "exclus du dossier"} />
-        <Tuile
-          label="Projection / mois"
-          valeur={tb.projection_mensuelle != null ? money(tb.projection_mensuelle) : "—"}
-          sous={tb.ecart_projection_pct != null ? `${tb.ecart_projection_pct > 0 ? "+" : ""}${tb.ecart_projection_pct} % vs réel · estimation` : "estimation"}
-          accent
-        />
-        <Tuile label="Occupation" valeur={tb.taux_occupation_pct != null ? `${tb.taux_occupation_pct} %` : "—"} sous={`${tb.nb_unites} unités · ${tb.nb_vacantes} vacante(s)`} />
-        <Tuile label="Pièces" valeur={`${tb.pieces_fournies}/${tb.pieces_requises}`} sous={tb.pieces_manquantes.length ? `${tb.pieces_manquantes.length} manquante(s)` : "complet"} alerte={tb.pieces_manquantes.length > 0} />
-        <Tuile
-          label="Échéance"
-          valeur={tb.jours_avant_echeance != null ? `${tb.jours_avant_echeance} j` : "—"}
-          sous={d.date_echeance ? fmtDate(d.date_echeance) : "aucune"}
-          alerte={tb.jours_avant_echeance != null && tb.jours_avant_echeance < 14}
-        />
-      </div>
-
-      {err ? <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{err}</p> : null}
-
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        {/* Checklist */}
-        <section className="rounded-xl border border-brand-800 bg-brand-900 p-3.5">
-          <div className="flex items-center gap-2">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-accent-500">Pièces à fournir</h4>
-            <button type="button" onClick={() => void ajouterPiece()} className="btn-ghost btn-xs ml-auto">
-              <Plus className="h-3 w-3" /> Ajouter
-            </button>
-          </div>
-          <ul className="mt-2 divide-y divide-brand-800">
-            {d.pieces.map((p) => {
-              const doc = p.document_id ? docs.find((x) => x.id === p.document_id) : null;
-              return (
-                <li key={p.id} className="flex flex-wrap items-center gap-2 py-1.5 text-xs">
-                  <input type="checkbox" checked={p.fournie} onChange={(e) => void patchPiece(p.id, { envoye: e.target.checked })} title="Marquer envoyée / fournie" />
-                  <span className={`min-w-0 flex-1 ${p.fournie ? "text-white/50 line-through" : "text-white/85"}`}>
-                    {p.libelle}
-                    {!p.requis ? <span className="ml-1 text-white/35">(facultatif)</span> : null}
-                  </span>
-                  <span className="badge badge-neutral">{PIECE_LABEL[p.type] || p.type}</span>
-                  {doc ? (
-                    <button type="button" onClick={() => void ouvrirPdfDocument(doc.id).catch((e) => setErr((e as Error).message))} className="text-accent-500 hover:underline" title={doc.titre}>
-                      <FileText className="inline h-3 w-3" /> {doc.titre.slice(0, 28)}
-                    </button>
-                  ) : (
-                    <select
-                      value=""
-                      onChange={(e) => {
-                        if (e.target.value) void patchPiece(p.id, { document_id: Number(e.target.value) });
-                      }}
-                      className={`${INPUT} max-w-[180px] py-1`}
-                      title="Rattacher un document de l'immeuble"
-                    >
-                      <option value="">Rattacher un document…</option>
-                      {docs.map((x) => (
-                        <option key={x.id} value={x.id}>
-                          {x.titre}
-                          {x.numero ? ` (app. ${x.numero})` : ""}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  {p.envoye_le ? <span className="text-white/40">envoyée {fmtDateTime(p.envoye_le)}</span> : null}
-                  <button type="button" onClick={() => void supprimerPiece(p.id)} className="text-rose-300/50 hover:text-rose-300" title="Retirer">
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-          <p className="mt-2 text-[11px] text-white/40">
-            Importer une pièce : fiche de l&apos;immeuble → Documents, puis « Rattacher un document… » ici.
-          </p>
-        </section>
-
-        {/* Exports */}
-        <section className="rounded-xl border border-brand-800 bg-brand-900 p-3.5">
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-accent-500">Exports</h4>
-          <p className="mt-1 text-[11px] text-white/50">
-            Rent roll du dossier :{" "}
-            {d.inclure_standards && d.inclure_paralleles ? "baux standards et parallèles" : d.inclure_standards ? "baux standards seulement" : "baux parallèles seulement"}
-            {" · "}
-            <label className="inline-flex items-center gap-1">
-              <input type="checkbox" checked={d.inclure_standards} onChange={(e) => void patch({ inclure_standards: e.target.checked })} /> standards
-            </label>{" "}
-            <label className="inline-flex items-center gap-1">
-              <input type="checkbox" checked={d.inclure_paralleles} onChange={(e) => void patch({ inclure_paralleles: e.target.checked })} /> parallèles
-            </label>
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {(["pdf", "xlsx", "csv"] as const).map((fmt) => (
-              <button
-                key={fmt}
-                type="button"
-                onClick={() => void telecharger(`${FIN}/dossiers/${d.id}/rent-roll?fmt=${fmt}&projection=true`, `rent-roll.${fmt}`).catch((e) => setErr((e as Error).message))}
-                className="btn-outline-accent btn-xs"
-              >
-                <Download className="h-3 w-3" /> Rent roll {fmt.toUpperCase()} (avec projection)
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => void telecharger(`${FIN}/dossiers/${d.id}/rent-roll?fmt=pdf&projection=false`, "rent-roll.pdf").catch((e) => setErr((e as Error).message))}
-              className="btn-outline-accent btn-xs"
-            >
-              <Download className="h-3 w-3" /> Rent roll PDF (réel seulement)
-            </button>
-            <button type="button" onClick={() => setShowPaquet(true)} className="btn-accent btn-xs">
-              <FileText className="h-3 w-3" /> Paquet PDF…
-            </button>
-          </div>
-          <p className="mt-2 text-[11px] text-white/40">
-            Tous les montants viennent des baux enregistrés. La colonne « Projection » est une estimation, marquée comme telle dans le document.
-          </p>
-
-          {/* Projection */}
-          <button type="button" onClick={() => setProjOuvert((v) => !v)} className="mt-3 flex w-full items-center gap-2 text-left text-xs font-semibold text-white">
-            {projOuvert ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-            Projection pro forma par unité (estimation)
-          </button>
-          {projOuvert ? (
-            <div className="mt-2 space-y-2">
-              <table className="w-full text-xs">
-                <thead className="text-[11px] uppercase tracking-wider text-white/45">
-                  <tr>
-                    <th className="py-1 text-left">Unité</th>
-                    <th className="py-1 text-right">Loyer au bail</th>
-                    <th className="py-1 text-right">Projeté</th>
-                    <th className="py-1 text-left">Source</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-brand-800">
-                  {d.rent_roll.lignes.map((l) => {
-                    const p = proj[String(l.logement_id)] || { loyer: "", source: "manuel", note: "" };
-                    return (
-                      <tr key={l.logement_id}>
-                        <td className="py-1 text-white/85">{l.numero}</td>
-                        <td className="py-1 text-right font-mono text-white/70">{money(l.loyer)}</td>
-                        <td className="py-1 text-right">
-                          <input
-                            inputMode="decimal"
-                            value={p.loyer}
-                            onChange={(e) => setProj({ ...proj, [String(l.logement_id)]: { ...p, loyer: e.target.value, source: p.source === "bail" ? "manuel" : p.source } })}
-                            className={`${INPUT} w-24 text-right`}
-                          />
-                        </td>
-                        <td className="py-1">
-                          <select value={p.source} onChange={(e) => setProj({ ...proj, [String(l.logement_id)]: { ...p, source: e.target.value } })} className={`${INPUT} py-1`}>
-                            <option value="bail">bail actuel</option>
-                            <option value="demande">loyer demandé</option>
-                            <option value="marche">marché</option>
-                            <option value="manuel">manuel</option>
-                          </select>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="text-[11px] font-semibold text-white/60">
-                  Vacance (%)
-                  <input inputMode="decimal" value={vacance} onChange={(e) => setVacance(e.target.value)} className={`${INPUT} ml-2 w-16 text-right`} />
-                </label>
-                <button type="button" disabled={busy} onClick={() => void enregistrerProjection()} className="btn-accent btn-xs ml-auto disabled:opacity-60">
-                  {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />} Enregistrer la projection
-                </button>
-              </div>
-            </div>
-          ) : null}
-        </section>
-      </div>
-
-      {/* Journal */}
-      <section className="mt-4 rounded-xl border border-brand-800 bg-brand-900 p-3.5">
-        <h4 className="text-xs font-semibold uppercase tracking-wider text-accent-500">Suivi dans le temps</h4>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <select value={noteType} onChange={(e) => setNoteType(e.target.value)} className={`${INPUT} w-auto`}>
-            <option value="note">Note</option>
-            <option value="envoi">Envoi</option>
-            <option value="appel">Appel</option>
-            <option value="courriel">Courriel</option>
-            <option value="reponse">Réponse du prêteur</option>
-          </select>
-          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Ce qui s'est passé…" className={`${INPUT} min-w-[240px] flex-1`} onKeyDown={(e) => (e.key === "Enter" ? void ajouterJournal() : undefined)} />
-          <button type="button" onClick={() => void ajouterJournal()} className="btn-secondary btn-xs">
-            <Plus className="h-3 w-3" /> Ajouter
-          </button>
-        </div>
-        <ul className="mt-2 divide-y divide-brand-800 text-xs">
-          {d.journal.map((j) => (
-            <li key={j.id} className="flex flex-wrap items-center gap-2 py-1.5">
-              <span className="badge badge-neutral">{j.type}</span>
-              <span className="min-w-0 flex-1 text-white/85">{j.texte}</span>
-              <span className="text-white/40">
-                {fmtDateTime(j.created_at)}
-                {j.auteur_email ? ` · ${j.auteur_email.split("@")[0]}` : ""}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-brand-800 pt-3">
-        <button type="button" onClick={() => void supprimer()} className="inline-flex items-center gap-1 text-xs text-rose-300/60 hover:text-rose-300">
+      {err ? <p className="mt-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{err}</p> : null}
+      <ul className="mt-2 divide-y divide-brand-800 text-xs">
+        {d.journal.map((j) => (
+          <li key={j.id} className="flex flex-wrap items-center gap-2 py-1.5">
+            <span className="badge badge-neutral">{j.type}</span>
+            <span className="min-w-0 flex-1 text-white/85">{j.texte}</span>
+            <span className="text-white/40">
+              {fmtDateTime(j.created_at)}
+              {j.auteur_email ? ` · ${j.auteur_email.split("@")[0]}` : ""}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <div className="mt-4 border-t border-brand-800 pt-3">
+        <button type="button" onClick={() => void onSupprimer()} className="inline-flex items-center gap-1 text-xs text-rose-300/60 hover:text-rose-300">
           <Trash2 className="h-3 w-3" /> Supprimer le dossier
         </button>
-        <button type="button" onClick={onClose} className="btn-secondary btn-sm ml-auto">
-          Fermer
-        </button>
       </div>
-
-      {showPaquet ? <PaquetModal dossier={d} docs={docs} onClose={() => setShowPaquet(false)} /> : null}
-    </Modal>
+    </section>
   );
 }
 
@@ -1015,10 +1044,7 @@ function PaquetModal({ dossier, docs, onClose }: { dossier: DossierDetail; docs:
     setBusy(true);
     setErr(null);
     try {
-      await telecharger(
-        `${FIN}/dossiers/${dossier.id}/paquet.pdf?documents=${choisis.join(",")}&rent_roll=${rentRoll}&projection=${projection}`,
-        "dossier-financement.pdf"
-      );
+      await telecharger(`${FIN}/dossiers/${dossier.id}/paquet.pdf?documents=${choisis.join(",")}&rent_roll=${rentRoll}&projection=${projection}`, "dossier-financement.pdf");
       onClose();
     } catch (e) {
       setErr((e as Error).message);
@@ -1064,52 +1090,46 @@ function PaquetModal({ dossier, docs, onClose }: { dossier: DossierDetail; docs:
   );
 }
 
-// ─── Onglet Rent roll ─────────────────────────────────────────────────
+// ─── Rent roll (dans le dossier) ──────────────────────────────────────
 
-function RentRollTab({ immeuble }: { immeuble: ImmeubleLite }) {
+function RentRollTab({ immeuble, dossier, onPatchDossier }: { immeuble: ImmeubleLite; dossier: DossierDetail; onPatchDossier: (b: Record<string, unknown>) => Promise<void> }) {
   const [rr, setRr] = useState<RentRoll | null>(null);
-  const [standards, setStandards] = useState(true);
-  const [paralleles, setParalleles] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [corriger, setCorriger] = useState<{ bailId: number; categorie: "standard" | "parallele"; loyer: number | null; debut: string | null; fin: string | null; libelle: string } | null>(null);
   const [talFor, setTalFor] = useState<{ bailId: number; titre: string } | null>(null);
+  const standards = dossier.inclure_standards;
+  const paralleles = dossier.inclure_paralleles;
 
   const load = useCallback(async () => {
-    const r = await authedFetch(`${FIN}/immeubles/${immeuble.id}/rent-roll?inclure_standards=${standards}&inclure_paralleles=${paralleles}`);
+    const r = await authedFetch(`${FIN}/dossiers/${dossier.id}/rent-roll?projection=true`);
     if (!r.ok) {
       setErr(await lireErreur(r));
       return;
     }
     setErr(null);
     setRr((await r.json()) as RentRoll);
-  }, [immeuble.id, standards, paralleles]);
+  }, [dossier.id]);
 
   useEffect(() => {
-    if (!standards && !paralleles) return;
     void load();
-  }, [load, standards, paralleles]);
+  }, [load, dossier.updated_at, dossier.inclure_standards, dossier.inclure_paralleles]);
 
   const t = (rr?.totaux || {}) as Record<string, number | null>;
+  const avecProj = !!rr?.projection;
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-brand-800 bg-brand-900/60 px-3 py-2 text-xs">
-        <span className="font-semibold text-white/70">Catégories :</span>
+        <span className="font-semibold text-white/70">Dans ce dossier :</span>
         <label className="flex items-center gap-1.5 text-white/85">
-          <input type="checkbox" checked={standards} onChange={(e) => setStandards(e.target.checked)} /> Baux standards
+          <input type="checkbox" checked={standards} onChange={(e) => void onPatchDossier({ inclure_standards: e.target.checked })} /> Baux standards
         </label>
         <label className="flex items-center gap-1.5 text-white/85">
-          <input type="checkbox" checked={paralleles} onChange={(e) => setParalleles(e.target.checked)} /> Baux parallèles
+          <input type="checkbox" checked={paralleles} onChange={(e) => void onPatchDossier({ inclure_paralleles: e.target.checked })} /> Baux parallèles
         </label>
         <span className="ml-auto flex flex-wrap gap-2">
           {(["pdf", "xlsx", "csv"] as const).map((fmt) => (
-            <button
-              key={fmt}
-              type="button"
-              disabled={!standards && !paralleles}
-              onClick={() => void telecharger(`${FIN}/immeubles/${immeuble.id}/rent-roll?fmt=${fmt}&inclure_standards=${standards}&inclure_paralleles=${paralleles}`, `rent-roll.${fmt}`).catch((e) => setErr((e as Error).message))}
-              className="btn-outline-accent btn-xs disabled:opacity-50"
-            >
+            <button key={fmt} type="button" onClick={() => void telecharger(`${FIN}/dossiers/${dossier.id}/rent-roll?fmt=${fmt}&projection=true`, `rent-roll.${fmt}`).catch((e) => setErr((e as Error).message))} className="btn-outline-accent btn-xs">
               <Download className="h-3 w-3" /> {fmt.toUpperCase()}
             </button>
           ))}
@@ -1134,6 +1154,7 @@ function RentRollTab({ immeuble }: { immeuble: ImmeubleLite }) {
                     <th className="px-3 py-2 text-left">Occupation</th>
                     <th className="px-3 py-2 text-left">Locataire</th>
                     <th className="px-3 py-2 text-right">Loyer / mois</th>
+                    {avecProj ? <th className="px-3 py-2 text-right text-amber-300">Projection*</th> : null}
                     <th className="px-3 py-2 text-left">Inclusions</th>
                     <th className="px-3 py-2 text-left">Bail</th>
                     <th className="px-3 py-2 text-left">Signé</th>
@@ -1150,7 +1171,11 @@ function RentRollTab({ immeuble }: { immeuble: ImmeubleLite }) {
                       </td>
                       <td className="px-3 py-2 text-white/70">
                         {OCCUPATION_LABEL[l.occupation] || l.occupation}
-                        {l.prochain ? <div className="text-[11px] text-white/40">prochain : {l.prochain.locataire || "—"} · {fmtDate(l.prochain.date_debut)} · {money(l.prochain.loyer)}</div> : null}
+                        {l.prochain ? (
+                          <div className="text-[11px] text-white/40">
+                            prochain : {l.prochain.locataire || "—"} · {fmtDate(l.prochain.date_debut)} · {money(l.prochain.loyer)}
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-3 py-2 text-white/85">
                         {l.locataire_id ? (
@@ -1166,6 +1191,12 @@ function RentRollTab({ immeuble }: { immeuble: ImmeubleLite }) {
                         )}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-white/85">{money(l.loyer)}</td>
+                      {avecProj ? (
+                        <td className="px-3 py-2 text-right font-mono text-amber-200">
+                          {money(l.projection?.loyer)}
+                          <span className="ml-1 text-[10px] text-amber-200/60">{l.projection?.source || ""}</span>
+                        </td>
+                      ) : null}
                       <td className="px-3 py-2 text-white/60">{l.inclusions.join(", ") || (l.bail_id ? "—" : "")}</td>
                       <td className="px-3 py-2 text-white/60">
                         {l.bail_id ? (
@@ -1205,8 +1236,10 @@ function RentRollTab({ immeuble }: { immeuble: ImmeubleLite }) {
                       Total baux standards · {t.nb_occupees ?? 0} occupées / {t.nb_unites ?? 0} unités
                     </td>
                     <td className="px-3 py-2 text-right font-mono">{money(t.mensuel_standard)}</td>
+                    {avecProj ? <td className="px-3 py-2 text-right font-mono text-amber-200">{money(t.projection_mensuelle)}</td> : null}
                     <td className="px-3 py-2 text-white/60" colSpan={4}>
                       {money(t.annuel_standard)} / an
+                      {avecProj && t.projection_annuelle != null ? ` · projection ${money(t.projection_annuelle)} / an (estimation)` : ""}
                     </td>
                   </tr>
                 </tfoot>
@@ -1267,7 +1300,7 @@ function RentRollTab({ immeuble }: { immeuble: ImmeubleLite }) {
                   {rr.paralleles.length === 0 ? (
                     <tr>
                       <td className="px-3 py-3 text-white/40" colSpan={8}>
-                        Aucun bail parallèle — onglet « Baux parallèles » pour en créer un.
+                        Aucun bail parallèle — onglet « Baux parallèles » pour en enregistrer un.
                       </td>
                     </tr>
                   ) : null}
@@ -1287,7 +1320,8 @@ function RentRollTab({ immeuble }: { immeuble: ImmeubleLite }) {
             </div>
           ) : null}
           <p className="text-[11px] text-white/40">
-            Situation au {fmtDate(rr.a_date)}. Tous les montants viennent des baux enregistrés ; pour corriger un chiffre, corrige le bail (bouton « Corriger »), c&apos;est journalisé et l&apos;export suit.
+            Situation au {fmtDate(rr.a_date)}. Le rent roll est produit par les baux enregistrés, jamais l&apos;inverse : pour changer un chiffre, corrige le bail (« Corriger »), c&apos;est journalisé et l&apos;export suit.
+            {avecProj ? " * La projection est une estimation, séparée des baux." : ""}
           </p>
         </>
       )}
@@ -1361,9 +1395,9 @@ function CorrigerBailModal({ cible, onClose, onDone }: { cible: { bailId: number
   );
 }
 
-// ─── Onglet Baux parallèles ───────────────────────────────────────────
+// ─── Baux parallèles (de l'immeuble) ──────────────────────────────────
 
-function ParallelesTab({ immeuble }: { immeuble: ImmeubleLite }) {
+function ParallelesTab({ immeuble, onChanged }: { immeuble: ImmeubleLite; onChanged?: () => Promise<void> }) {
   const [items, setItems] = useState<BailParallele[] | null>(null);
   const [inclureTermines, setInclureTermines] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1386,6 +1420,11 @@ function ParallelesTab({ immeuble }: { immeuble: ImmeubleLite }) {
     void load();
   }, [load]);
 
+  async function rafraichir() {
+    await load();
+    if (onChanged) await onChanged();
+  }
+
   async function terminer(b: BailParallele) {
     if (!window.confirm(`Mettre fin au bail parallèle de ${b.locataire_nom || "cet occupant"} (logement ${b.logement_numero}) ?`)) return;
     const r = await authedFetch(`${FIN}/baux-paralleles/${b.id}`, { method: "PATCH", body: JSON.stringify({ statut: "termine" }) });
@@ -1393,20 +1432,20 @@ function ParallelesTab({ immeuble }: { immeuble: ImmeubleLite }) {
       setErr(await lireErreur(r));
       return;
     }
-    await load();
+    await rafraichir();
   }
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-violet-500/30 bg-violet-500/5 px-3 py-2 text-xs text-violet-100">
         <span>
-          <b>Baux parallèles</b> : vrais contrats (sous-location, bail principal d&apos;un exploitant), vraies parties, vrais montants — hors du quotidien de la gestion locative. Ils n&apos;apparaissent qu&apos;ici et dans les exports de financement.
+          <b>Baux parallèles</b> : contrats réels gérés par un tiers (sous-location, bail principal d&apos;un exploitant) — occupant réel, locateur du bail, loyer tel qu&apos;au contrat. Enregistre le contrat, importe le PDF signé fourni par l&apos;exploitant ; le bail officiel TAL sert seulement à un nouveau contrat à faire signer.
         </span>
         <label className="ml-auto flex items-center gap-1.5 text-white/70">
           <input type="checkbox" checked={inclureTermines} onChange={(e) => setInclureTermines(e.target.checked)} /> voir les terminés
         </label>
         <button type="button" onClick={() => setShowCreate(true)} className="btn-accent btn-sm">
-          <Plus className="h-3.5 w-3.5" /> Nouveau bail parallèle
+          <Plus className="h-3.5 w-3.5" /> Enregistrer un bail parallèle
         </button>
       </div>
       {err ? <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{err}</p> : null}
@@ -1469,7 +1508,7 @@ function ParallelesTab({ immeuble }: { immeuble: ImmeubleLite }) {
                         <Upload className="h-3 w-3" /> PDF signé
                       </button>
                       <TalFormDropdown bailId={b.id} />
-                      <button type="button" onClick={() => setTalFor(b)} className="btn-outline-accent btn-xs" title="Bail officiel TAL + signature eSign">
+                      <button type="button" onClick={() => setTalFor(b)} className="btn-outline-accent btn-xs" title="Nouveau contrat réel à faire signer : bail officiel TAL + eSign">
                         <FileSignature className="h-3 w-3" /> Bail TAL
                       </button>
                       {b.status !== "termine" && b.status !== "resilie" ? (
@@ -1492,7 +1531,7 @@ function ParallelesTab({ immeuble }: { immeuble: ImmeubleLite }) {
           onClose={() => setShowCreate(false)}
           onSaved={() => {
             setShowCreate(false);
-            void load();
+            void rafraichir();
           }}
         />
       ) : null}
@@ -1503,7 +1542,7 @@ function ParallelesTab({ immeuble }: { immeuble: ImmeubleLite }) {
           onClose={() => setEdit(null)}
           onSaved={() => {
             setEdit(null);
-            void load();
+            void rafraichir();
           }}
         />
       ) : null}
@@ -1512,7 +1551,7 @@ function ParallelesTab({ immeuble }: { immeuble: ImmeubleLite }) {
           bailId={talFor.id}
           titre={`Logement ${talFor.logement_numero} · ${immeuble.name} · ${talFor.locataire_nom || ""} (bail parallèle)`}
           onClose={() => setTalFor(null)}
-          onDone={() => void load()}
+          onDone={() => void rafraichir()}
         />
       ) : null}
       {importFor ? (
@@ -1521,7 +1560,7 @@ function ParallelesTab({ immeuble }: { immeuble: ImmeubleLite }) {
           onClose={() => setImportFor(null)}
           onDone={() => {
             setImportFor(null);
-            void load();
+            void rafraichir();
           }}
         />
       ) : null}
@@ -1596,16 +1635,10 @@ function BailParalleleModal({ immeuble, existant, onClose, onSaved }: { immeuble
         r = await authedFetch(`${FIN}/baux-paralleles/${existant.id}`, { method: "PATCH", body: JSON.stringify({ ...commun, statut: f.statut }) });
       } else {
         if (!f.logement_id) throw new Error("Choisis le logement.");
-        const occupant =
-          modeOccupant === "existant"
-            ? { locataire_id: Number(f.locataire_id) }
-            : { locataire: { full_name: f.full_name.trim(), email: f.email.trim() || null, phone: f.phone.trim() || null } };
         if (modeOccupant === "existant" && !f.locataire_id) throw new Error("Choisis l'occupant existant.");
         if (modeOccupant === "nouveau" && f.full_name.trim().length < 2) throw new Error("Nom de l'occupant requis.");
-        r = await authedFetch(`${FIN}/baux-paralleles`, {
-          method: "POST",
-          body: JSON.stringify({ logement_id: Number(f.logement_id), ...occupant, ...commun, statut: f.statut })
-        });
+        const occupant = modeOccupant === "existant" ? { locataire_id: Number(f.locataire_id) } : { locataire: { full_name: f.full_name.trim(), email: f.email.trim() || null, phone: f.phone.trim() || null } };
+        r = await authedFetch(`${FIN}/baux-paralleles`, { method: "POST", body: JSON.stringify({ logement_id: Number(f.logement_id), ...occupant, ...commun, statut: f.statut }) });
       }
       if (!r.ok) throw new Error(await lireErreur(r));
       onSaved();
@@ -1617,8 +1650,11 @@ function BailParalleleModal({ immeuble, existant, onClose, onSaved }: { immeuble
   }
 
   return (
-    <Modal titre={existant ? `Modifier le bail parallèle — logement ${existant.logement_numero}` : `Nouveau bail parallèle — ${immeuble.name}`} onClose={onClose} large>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+    <Modal titre={existant ? `Modifier le bail parallèle — logement ${existant.logement_numero}` : `Enregistrer un bail parallèle — ${immeuble.name}`} onClose={onClose} large>
+      <p className="rounded-lg border border-brand-800 bg-brand-900/60 px-3 py-2 text-[11px] text-white/55">
+        Ce qui est inscrit ici est ce que le contrat dit : occupant réel, locateur du bail, loyer tel qu&apos;au contrat. Le rent roll le reprendra tel quel.
+      </p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {!existant ? (
           <label className="text-[11px] font-semibold text-white/60">
             Logement
@@ -1645,8 +1681,8 @@ function BailParalleleModal({ immeuble, existant, onClose, onSaved }: { immeuble
         <label className="text-[11px] font-semibold text-white/60">
           Statut
           <select value={f.statut} onChange={(e) => setF({ ...f, statut: e.target.value })} className={`${INPUT} mt-0.5 block w-full`}>
-            <option value="parallele">En vigueur (déjà signé)</option>
-            <option value="propose">À faire signer</option>
+            <option value="parallele">En vigueur (contrat déjà signé)</option>
+            <option value="propose">Nouveau contrat à faire signer</option>
             {existant ? <option value="termine">Terminé</option> : null}
             {existant ? <option value="resilie">Résilié</option> : null}
           </select>
@@ -1693,7 +1729,7 @@ function BailParalleleModal({ immeuble, existant, onClose, onSaved }: { immeuble
         <Champ label="Téléphone du locateur" value={f.parallele_locateur_telephone} onChange={(v) => setF({ ...f, parallele_locateur_telephone: v })} inputMode="tel" />
         <Champ label="Début" value={f.date_debut} onChange={(v) => setF({ ...f, date_debut: v })} type="date" />
         <Champ label="Fin" value={f.date_fin} onChange={(v) => setF({ ...f, date_fin: v })} type="date" />
-        <Champ label="Loyer mensuel ($)" value={f.loyer_mensuel} onChange={(v) => setF({ ...f, loyer_mensuel: v })} inputMode="decimal" />
+        <Champ label="Loyer mensuel au contrat ($)" value={f.loyer_mensuel} onChange={(v) => setF({ ...f, loyer_mensuel: v })} inputMode="decimal" />
         <Champ label="Dépôt ($)" value={f.depot_garantie} onChange={(v) => setF({ ...f, depot_garantie: v })} inputMode="decimal" />
         <Champ label="Payable le (jour)" value={f.jour_echeance} onChange={(v) => setF({ ...f, jour_echeance: v })} inputMode="numeric" />
         <div className="text-[11px] font-semibold text-white/60">
@@ -1725,7 +1761,7 @@ function BailParalleleModal({ immeuble, existant, onClose, onSaved }: { immeuble
           Annuler
         </button>
         <button type="button" disabled={busy} onClick={() => void submit()} className="btn-accent btn-sm disabled:opacity-60">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} {existant ? "Enregistrer" : "Créer le bail parallèle"}
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} {existant ? "Enregistrer" : "Enregistrer le bail parallèle"}
         </button>
       </div>
     </Modal>
@@ -1756,7 +1792,7 @@ function ImportPdfSigneModal({ bail, onClose, onDone }: { bail: BailParallele; o
 
   return (
     <Modal titre={`PDF du bail parallèle signé — logement ${bail.logement_numero}`} onClose={onClose} zIndex="z-[70]">
-      <p className="text-xs text-white/60">Le PDF devient le bail au dossier de ce bail parallèle ; s&apos;il était « à faire signer », il passe « en vigueur ».</p>
+      <p className="text-xs text-white/60">Le PDF fourni par le locateur du bail devient le bail au dossier de ce bail parallèle ; s&apos;il était « à faire signer », il passe « en vigueur ».</p>
       <input type="file" accept="application/pdf,image/*" onChange={(e) => setFile(e.target.files?.[0] || null)} className="mt-3 block w-full text-xs text-white/80" />
       {err ? <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{err}</p> : null}
       <div className="mt-4 flex justify-end gap-2 border-t border-brand-800 pt-3">
@@ -1804,14 +1840,7 @@ function ChampBlur({ label, value, onSave, type = "text", inputMode }: { label: 
   return (
     <label className="text-[11px] font-semibold text-white/60">
       {label}
-      <input
-        type={type}
-        inputMode={inputMode}
-        value={v}
-        onChange={(e) => setV(e.target.value)}
-        onBlur={() => (v !== value ? onSave(v) : undefined)}
-        className={`${INPUT} mt-0.5 block w-full`}
-      />
+      <input type={type} inputMode={inputMode} value={v} onChange={(e) => setV(e.target.value)} onBlur={() => (v !== value ? onSave(v) : undefined)} className={`${INPUT} mt-0.5 block w-full`} />
     </label>
   );
 }
@@ -1825,4 +1854,3 @@ function Tuile({ label, valeur, sous, accent = false, alerte = false }: { label:
     </div>
   );
 }
-
