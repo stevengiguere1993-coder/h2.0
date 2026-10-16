@@ -24,11 +24,7 @@ import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 import { splitFromTotal, TPS_RATE, TVQ_RATE } from "@/lib/tax";
-import {
-  projectLabel,
-  trierParNom,
-  trierProjetsParAdresse
-} from "@/lib/project";
+import { projectLabel } from "@/lib/project";
 import { useConfirm } from "@/components/confirm-dialog";
 
 const PAYMENT_OPTIONS = [
@@ -624,13 +620,13 @@ export default function AchatDetailPage() {
                       emptyLabel="— Aucun —"
                       placeholder="Choisis ou tape pour chercher…"
                       options={[
-                        ...trierProjetsParAdresse(
-                          projects.filter((p) => p.kind !== "bon_travail")
-                        ).map((p) => ({
-                          value: String(p.id),
-                          label: projectLabel(p),
-                          group: "Projets"
-                        })),
+                        ...projects
+                          .filter((p) => p.kind !== "bon_travail")
+                          .map((p) => ({
+                            value: String(p.id),
+                            label: projectLabel(p),
+                            group: "Projets"
+                          })),
                         // TOUS les bons (retour 2026-09-18) — même ceux
                         // sans mini-projet porteur : il est créé à la
                         // sélection. Un bon avec projet pointe droit
@@ -678,7 +674,7 @@ export default function AchatDetailPage() {
                       emptyLabel="— Aucun —"
                       placeholder="Choisis ou tape le nom du fournisseur…"
                       options={[
-                        ...trierParNom(fournisseurs).map((fr) => ({
+                        ...fournisseurs.map((fr) => ({
                           value: String(fr.id),
                           label: fr.name
                         })),
