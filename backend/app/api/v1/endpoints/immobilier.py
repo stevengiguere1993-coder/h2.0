@@ -34,6 +34,8 @@ from fastapi import (
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import and_, func, or_, select, update
+
+from app.models.immobilier import bail_non_parallele, est_bail_parallele
 from sqlalchemy.exc import IntegrityError
 
 from app.core.permissions import visible_immeuble_ids
@@ -1211,6 +1213,7 @@ async def _refuser_si_unite_deja_en_signature(
         Bail.logement_id == log_obj.id,
         Bail.status == BailStatus.PROPOSE.value,
         Bail.locataire_id != locataire_id,
+        bail_non_parallele(),
     )
     if date_debut is not None and date_fin is not None:
         q = q.where(
@@ -3327,7 +3330,12 @@ async def list_locataires(
     db: DBSession, user: CurrentUser, search: Optional[str] = None
 ) -> List[LocataireListItem]:
     _require_volet(user)
-    q = select(Locataire).order_by(Locataire.full_name.asc())
+    # Les occupants des baux PARALLÈLES vivent dans Financement, pas ici.
+    q = (
+        select(Locataire)
+        .where(or_(Locataire.categorie.is_(None), Locataire.categorie != "parallele"))
+        .order_by(Locataire.full_name.asc())
+    )
     rows = list((await db.execute(q)).scalars().all())
 
     # Recherche (2026-09-09) : nom, courriel, téléphone (chiffres) ET les
@@ -4487,6 +4495,9 @@ async def depots_overview(
             )
             saisi = max(0.0, min(saisi, montant))
         reste = round(montant - saisi, 2)
+        # Baux parallèles : hors du suivi des dépôts (Financement).
+        if est_bail_parallele(b):
+            continue
         if montant <= 0:
             # Bail sans dépôt : on n'affiche que les ACTIFS (et les
             # proposés — audit 2026-09-15 : on saisit souvent le dépôt
@@ -4596,7 +4607,7 @@ async def list_baux_for_immeuble(
         await db.execute(
             select(Bail)
             .join(Logement, Logement.id == Bail.logement_id)
-            .where(Logement.immeuble_id == immeuble_id)
+            .where(Logement.immeuble_id == immeuble_id, bail_non_parallele())
             .order_by(Bail.date_debut.desc())
         )
     ).scalars().all()
@@ -4665,11 +4676,22 @@ async def _creer_bail(
         raise HTTPException(
             status_code=422, detail="Statut de bail invalide."
         )
+    # Bail PARALLÈLE (Financement, 2026-10-16) : en vigueur = statut
+    # « parallele », jamais « actif » ; il coexiste avec le bail standard
+    # de l'unité → aucune garde d'unicité, aucun dossier de relocation.
+    parallele = est_bail_parallele(payload)
+    if parallele and payload.status == BailStatus.ACTIF.value:
+        payload = payload.model_copy(update={"status": BailStatus.PARALLELE.value})
+    if not parallele and payload.status == BailStatus.PARALLELE.value:
+        raise HTTPException(
+            status_code=422,
+            detail="Le statut « parallele » est réservé aux baux de catégorie parallèle.",
+        )
     # Audit 2026-09-15 : un 2e bail (proposé ou actif) pour un AUTRE
     # locataire alors qu'un bail est déjà EN SIGNATURE sur l'unité
     # restait invisible (kanban et page Baux ne montraient que le
     # premier) — refus explicite qui dit quoi faire.
-    if payload.status in (BailStatus.ACTIF.value, BailStatus.PROPOSE.value):
+    if not parallele and payload.status in (BailStatus.ACTIF.value, BailStatus.PROPOSE.value):
         await _refuser_si_unite_deja_en_signature(
             db, log_obj, payload.locataire_id, payload.date_debut, payload.date_fin
         )
@@ -4770,8 +4792,9 @@ async def _creer_bail(
 
     # Interconnexion kanban Locations (v16) : un bail « proposé » crée
     # ou rattache le dossier de relocation du logement — la page Baux
-    # et le kanban vivent sur la MÊME donnée.
-    if obj.status == BailStatus.PROPOSE.value:
+    # et le kanban vivent sur la MÊME donnée. Jamais pour un bail
+    # parallèle (il ne passe pas par la relocation).
+    if obj.status == BailStatus.PROPOSE.value and not est_bail_parallele(obj):
         await db.flush()
         from app.models.immobilier import LocationDossier
         from app.services.locatif_depart import DOSSIER_STATUTS_REGLES
@@ -4897,6 +4920,14 @@ async def update_bail(
         if data["status"] not in {s.value for s in BailStatus}:
             raise HTTPException(
                 status_code=422, detail="Statut de bail invalide."
+            )
+        # Bail parallèle : « actif » veut dire « parallele » (en vigueur).
+        if est_bail_parallele(obj) and data["status"] == BailStatus.ACTIF.value:
+            data["status"] = BailStatus.PARALLELE.value
+        if not est_bail_parallele(obj) and data["status"] == BailStatus.PARALLELE.value:
+            raise HTTPException(
+                status_code=422,
+                detail="Le statut « parallele » est réservé aux baux de catégorie parallèle.",
             )
         if (
             data["status"] == BailStatus.ACTIF.value
@@ -5866,6 +5897,7 @@ async def loyers_overview(
                         Bail.date_debut > today,
                         Bail.status == BailStatus.PROPOSE.value,
                     ),
+                    bail_non_parallele(),
                 )
                 .order_by(Bail.date_debut.asc())
             )

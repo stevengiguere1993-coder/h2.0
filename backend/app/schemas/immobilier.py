@@ -238,6 +238,8 @@ class LocataireBase(BaseModel):
     # Dernière confirmation de la preuve d'assurance (à refaire chaque année).
     assurance_confirmee_le: Optional[date] = None
     notes: Optional[str] = None
+    #: « standard » | « parallele » (occupant d'un bail parallèle, Financement).
+    categorie: str = Field(default="standard", max_length=16)
 
 
 class LocataireCreate(LocataireBase):
@@ -477,6 +479,14 @@ class BailBase(BaseModel):
             "Habituellement le 1er."
         ),
     )
+    #: Catégorie (Financement, 2026-10-16) : « standard » | « parallele »
+    #: (vrai contrat hors du quotidien : sous-location, bail principal).
+    categorie: str = Field(default="standard", max_length=16)
+    parallele_type: Optional[str] = Field(default=None, max_length=24)
+    parallele_locateur: Optional[str] = Field(default=None, max_length=255)
+    parallele_locateur_courriel: Optional[str] = Field(default=None, max_length=320)
+    parallele_locateur_telephone: Optional[str] = Field(default=None, max_length=32)
+    parallele_note: Optional[str] = None
 
     @field_validator("jour_echeance")
     @classmethod
@@ -516,6 +526,12 @@ class BailUpdate(BaseModel):
     #: Dossier TAL ouvert (non-paiement) — coché depuis Paiements ;
     #: envoyer explicitement null pour le décocher.
     tal_dossier_ouvert_le: Optional[date] = None
+    #: Bail parallèle (Financement) : infos du locateur du bail.
+    parallele_type: Optional[str] = Field(default=None, max_length=24)
+    parallele_locateur: Optional[str] = Field(default=None, max_length=255)
+    parallele_locateur_courriel: Optional[str] = Field(default=None, max_length=320)
+    parallele_locateur_telephone: Optional[str] = Field(default=None, max_length=32)
+    parallele_note: Optional[str] = None
 
     @field_validator("jour_echeance")
     @classmethod

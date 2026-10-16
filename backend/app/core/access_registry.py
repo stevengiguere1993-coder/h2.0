@@ -222,6 +222,10 @@ PAGES: list[PageEntry] = [
        "manager", "/immobilier/bons-travail"),
     _p("immobilier.frais_gestion", "Facturation", "immobilier",
        "manager", "/immobilier/frais-gestion"),
+    # Financement (2026-10-16) : dossiers de financement par immeuble, rent
+    # roll, paquet de pièces, baux parallèles — gestionnaires.
+    _p("immobilier.financement", "Financement", "immobilier",
+       "manager", "/immobilier/financement"),
     # ⚠️ Gestion des accès aux immeubles → admin (héritait de la racine
     # employé avant l'audit permissions v2).
     _p("immobilier.utilisateurs", "Utilisateurs (immobilier)", "immobilier",

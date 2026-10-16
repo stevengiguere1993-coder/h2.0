@@ -431,6 +431,9 @@ class ContexteBail:
     dernier_paiement_le: Optional[date] = None
     representant_nom: str = ""
     representant_courriel: str = ""
+    #: Bail PARALLÈLE : le locateur nommé sur ce bail (exploitant…) prend la
+    #: place de l'entreprise propriétaire.
+    locateur_parallele: Optional[dict[str, Any]] = None
 
     def resume(self) -> dict[str, Any]:
         return {
@@ -446,7 +449,10 @@ class ContexteBail:
             "locataire_nom": self.locataire.full_name if self.locataire else None,
             "colocataires": [c.full_name for c in self.colocataires],
             "garants": [c.full_name for c in self.garants],
-            "locateur": self.entreprise.name if self.entreprise else None,
+            "locateur": (
+                self.locateur_parallele.get("nom") if self.locateur_parallele else (self.entreprise.name if self.entreprise else None)
+            ),
+            "bail_categorie": getattr(self.bail, "categorie", None) or "standard",
             "bail_precedent_id": self.bail_precedent.id if self.bail_precedent else None,
             "bail_precedent_loyer": (
                 float(self.bail_precedent.loyer_mensuel) if self.bail_precedent and self.bail_precedent.loyer_mensuel is not None else None
@@ -540,7 +546,15 @@ async def charger_contexte(db: AsyncSession, bail_id: int, *, user=None, config:
             rep_nom = (getattr(user, "display_name", None) or "").strip()
         if not rep_courriel:
             rep_courriel = (getattr(user, "email", None) or "").strip()
+    locateur_parallele = None
+    if (getattr(bail, "categorie", None) or "standard") == "parallele" and getattr(bail, "parallele_locateur", None):
+        locateur_parallele = {
+            "nom": bail.parallele_locateur,
+            "courriel": getattr(bail, "parallele_locateur_courriel", None),
+            "telephone": getattr(bail, "parallele_locateur_telephone", None),
+        }
     return ContexteBail(
+        locateur_parallele=locateur_parallele,
         bail=bail, logement=logement, immeuble=immeuble, locataire=locataire,
         colocataires=[c for c in contacts if c.role == "colocataire"],
         garants=[c for c in contacts if c.role == "garant"],
@@ -595,7 +609,21 @@ def construire_formulaire(schema: SchemaTal, ctx: ContexteBail, config: dict[str
     # ── A. Locateur ────────────────────────────────────────────────
     loc = _occurrence(schema, "locateurs")
     ent = ctx.entreprise
-    if ent is not None:
+    if ctx.locateur_parallele:
+        # Bail parallèle : le locateur est celui nommé sur CE bail.
+        lp = ctx.locateur_parallele
+        loc["nom"] = lp.get("nom") or ""
+        origine["locateurs[0].nom"] = "donnees"
+        tel = _telephone(lp.get("telephone"))
+        if tel:
+            loc["noTelephone"] = tel
+        if lp.get("courriel"):
+            loc["courrielLocateur"] = str(lp["courriel"]).strip()
+            loc["courrielMandant"] = str(lp["courriel"]).strip()
+        a_verifier.append({"chemin": "locateurs[0].adresse", "note": "adresse du locateur du bail parallèle à saisir"})
+        origine["locateurs[0].adresse"] = "inconnu"
+        ent = None
+    elif ent is not None:
         loc["nom"] = ent.name or ""
         origine["locateurs[0].nom"] = "donnees"
         tel = _telephone(getattr(ent, "contact_telephone", None))

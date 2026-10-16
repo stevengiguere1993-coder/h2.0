@@ -65,6 +65,7 @@ from app.api.v1.endpoints import (
     immobilier_exports,
     immobilier_tal_garants,
     immobilier_tal_bail,
+    immobilier_financement,
     immobilier_extras,
     immobilier_import_excel,
     immobilier_locations,
@@ -550,6 +551,10 @@ api_router.include_router(
 # Bail de logement OFFICIEL généré par l'API du TAL (2026-10-15).
 api_router.include_router(
     immobilier_tal_bail.router, dependencies=DEP_IMMOBILIER
+)
+# Financement d'un immeuble : rent roll, pièces, baux parallèles (2026-10-16).
+api_router.include_router(
+    immobilier_financement.router, dependencies=DEP_IMMOBILIER
 )
 # Page Communications — envois courriel sans signature + audit.
 api_router.include_router(

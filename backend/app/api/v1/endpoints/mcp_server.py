@@ -658,6 +658,8 @@ _LIST_GENERIC_CHOICES = (
     "courtiers",
     # Immobilier (2026-10-15) : baux officiels demandés au TAL.
     "tal_transmissions",
+    # Immobilier (2026-10-16) : dossiers de financement.
+    "financements",
 )
 
 _LIMIT_PROP = {

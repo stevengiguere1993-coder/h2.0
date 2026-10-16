@@ -11,6 +11,8 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, select
+
+from app.models.immobilier import bail_non_parallele
 from sqlalchemy.orm import undefer
 
 from app.api.deps import CurrentUser, DBSession
@@ -1731,6 +1733,7 @@ async def transferer_unite(
                 Bail.status.in_(
                     [BailStatus.ACTIF.value, BailStatus.PROPOSE.value]
                 ),
+                bail_non_parallele(),
             )
         )
     ).scalars().all()

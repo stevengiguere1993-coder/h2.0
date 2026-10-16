@@ -28,6 +28,8 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
+from app.models.immobilier import bail_non_parallele, est_bail_parallele
+
 from app.api.deps import CurrentUser, DBSession
 from app.services.audit import log_action
 from app.core.permissions import visible_immeuble_ids
@@ -514,6 +516,7 @@ async def _bail_propose_orphelin(
             .where(
                 Bail.logement_id == dossier.logement_id,
                 Bail.status == BailStatus.PROPOSE.value,
+                bail_non_parallele(),
             )
             .order_by(Bail.id.desc())
         )
@@ -1374,6 +1377,9 @@ async def suivi_baux(
     actifs_par_log: dict = {}
     prochains_par_log: dict = {}
     for b in baux:
+        # Baux parallèles : jamais sur la page Baux (Financement).
+        if est_bail_parallele(b):
+            continue
         if b.status == "actif" and b.date_debut and b.date_debut <= today:
             cur = actifs_par_log.get(b.logement_id)
             # Le plus récent des actifs commencés.

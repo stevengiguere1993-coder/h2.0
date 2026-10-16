@@ -60,6 +60,17 @@ class BailStatus(str, Enum):
     TERMINE = "termine"
     RESILIE = "resilie"
     PROPOSE = "propose"  # bail signé pas encore commencé
+    #: Bail PARALLÈLE en vigueur (Financement, 2026-10-16) : vrai contrat
+    #: hors du quotidien (sous-location, bail principal d'un exploitant).
+    #: Jamais « actif » → exclu d'office de tout ce qui filtre sur actif.
+    PARALLELE = "parallele"
+
+
+BAIL_CATEGORIE_STANDARD = "standard"
+BAIL_CATEGORIE_PARALLELE = "parallele"
+BAIL_PARALLELE_TYPES: tuple[str, ...] = (
+    "sous_location", "bail_principal", "colocation", "autre",
+)
 
 
 class BailRenouvellementStatus(str, Enum):
@@ -387,6 +398,14 @@ class Locataire(Base, TimestampUpdateMixin):
     # > 12 mois = à reconfirmer. Colonne additive → ensure_critical_columns.
     assurance_confirmee_le: Mapped[Optional[date]] = mapped_column(
         Date, nullable=True
+    )
+    #: « standard » | « parallele » : occupant créé depuis Financement pour
+    #: un bail parallèle (sous-location…) — il ne figure PAS dans les
+    #: listes du quotidien (Locataires, recherche). Un locataire du
+    #: quotidien réutilisé sur un bail parallèle reste « standard ».
+    #: Colonne additive → ensure_critical_columns.
+    categorie: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="standard", server_default="standard"
     )
 
 
@@ -798,6 +817,28 @@ class Bail(Base, TimestampUpdateMixin):
     tal_dossier_ouvert_le: Mapped[Optional[date]] = mapped_column(
         Date, nullable=True
     )
+
+    #: CATÉGORIE du bail (Phil 2026-10-16) : « standard » (gestion du
+    #: quotidien) ou « parallele » — vrai contrat, vraies parties, vrai
+    #: montant, mais HORS du quotidien (sous-location, bail principal
+    #: d'un exploitant…) : exclu des paiements attendus, relances,
+    #: renouvellements, dépôts, assurance et kanban Locations ; il
+    #: coexiste avec le bail standard de la même unité ; en vigueur, son
+    #: statut est « parallele » (jamais « actif »). Visible dans
+    #: Financement (rent roll, section à part). Colonnes additives →
+    #: ensure_critical_columns.
+    categorie: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="standard", server_default="standard"
+    )
+    #: sous_location | bail_principal | colocation | autre
+    parallele_type: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
+    #: Le LOCATEUR nommé sur le bail parallèle (ex. l'exploitant) et ses
+    #: coordonnées — c'est lui qui apparaît comme locateur sur le bail
+    #: officiel TAL de ce bail.
+    parallele_locateur: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    parallele_locateur_courriel: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+    parallele_locateur_telephone: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    parallele_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Signature électronique du bail (lien tokenisé envoyé au locataire).
     # Colonnes ajoutées de façon additive via init_db (cf. db/session.py).
@@ -1738,3 +1779,18 @@ class ImmLocataireContact(Base, TimestampUpdateMixin):
     created_by_email: Mapped[Optional[str]] = mapped_column(
         String(256), nullable=True
     )
+
+# ─── Baux parallèles : filtres communs ──────────────────────────────────
+
+
+def bail_non_parallele():
+    """Filtre SQL « bail du quotidien » : catégorie standard (NULL compris,
+    pour les lignes d'avant la colonne)."""
+    from sqlalchemy import or_
+
+    return or_(Bail.categorie.is_(None), Bail.categorie != BAIL_CATEGORIE_PARALLELE)
+
+
+def est_bail_parallele(bail) -> bool:
+    return (getattr(bail, "categorie", None) or BAIL_CATEGORIE_STANDARD) == BAIL_CATEGORIE_PARALLELE
+
