@@ -141,3 +141,14 @@ puis POST. Le double de test `QBMiroir` ignore `Line` quand `sparse` est
 vrai pour que ce piège reste couvert. Même précaution à prendre pour
 Bill / Purchase / Estimate (`achat_qbo.py`, `soumission_qbo.py` envoient
 encore `sparse`).
+
+## QuickBooks — factures « envoyées » (2026-10-16)
+
+C'est Kratos qui envoie les factures (PDF, courriel, rappels). Toute
+Invoice que Kratos crée ou met à jour porte `EmailStatus: "EmailSent"`
+(et `BillEmail` du client s'il manque) ; le filet horaire
+`marquer_factures_envoyees_dans_qb` rattrape les anciennes par une mise à
+jour « sparse » d'en-tête seulement. Sans ça, le flux QB « Get unsent
+invoice reminder » (Paramètres > Automatisation des flux de travaux)
+ouvrait une tâche « Review Invoice » par facture dans « Nécessite votre
+attention ».
