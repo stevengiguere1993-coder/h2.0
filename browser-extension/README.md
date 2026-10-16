@@ -18,15 +18,23 @@ scrapers automatiques sur VPS mais laissent passer ton vrai navigateur
 5. Sélectionne le dossier `browser-extension/` de ce repo
 6. L'icône Horizon apparaît dans la barre d'extensions
 
-## Configuration (1 fois)
+## Configuration : automatique
 
-1. Clique sur l'icône Horizon dans la barre d'extensions
-2. Remplis :
-   - **Backend URL** : `https://h2-0.onrender.com` (production)
-     ou `http://localhost:8000` (dev local)
-   - **API Key** : récupère-la dans h2.0 → Paramètres → Extension
-     (admin uniquement)
-3. Clique **Enregistrer** puis **Tester** — tu dois voir « ✅ Connexion OK »
+Rien à saisir. Une fois l'extension installée, ouvre dans le MÊME
+navigateur, connecté à Kratos, une page qui s'en sert : Entreprises →
+Comptabilité → **Projets QB** ou Prospection → **Immeubles MTL**. La page
+transmet à l'extension l'adresse du serveur et la clé
+(`GET /api/v1/extension/config`) et affiche « Extension configurée ».
+Dans QuickBooks, clique ensuite **Actualiser** dans le panneau Horizon.
+Après une réinstallation : recharger une de ces pages suffit.
+
+Dépannage seulement (icône Horizon → formulaire) :
+
+- **Backend URL** : `https://h2-0.onrender.com` (production)
+  ou `http://localhost:8000` (dev local)
+- **API Key** : la valeur de `EXTENSION_API_KEY` du serveur (Render,
+  service h2-0), à demander à l'admin
+- **Enregistrer** puis **Tester** → « ✅ Connexion OK »
 
 ## Utilisation
 
@@ -42,9 +50,9 @@ scrapers automatiques sur VPS mais laissent passer ton vrai navigateur
 ### Configuration automatique (1.2.1)
 
 Plus rien à saisir dans la fenêtre de l'icône : en ouvrant la page
-Prospection → Rôles fonciers de Kratos, la page transmet à l'extension
-l'adresse du serveur et la clé (`GET /api/v1/extension/config`, utilisateur
-connecté). L'extension n'accepte cette configuration que depuis une page
+Prospection → Immeubles MTL de Kratos (ou, depuis 1.3.0, Comptabilité →
+Projets QB), la page transmet à l'extension l'adresse du serveur et la clé
+(`GET /api/v1/extension/config`, utilisateur connecté). L'extension n'accepte cette configuration que depuis une page
 Kratos et vers un serveur Kratos. Corrige « Échec envoi : Backend URL non
 configurée » après une réinstallation (2026-09-29).
 
@@ -134,9 +142,13 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 - Ouvre la console DevTools (F12) → onglet Console → cherche
   `[h2.0 EvalWeb]` pour voir les logs du content script
 
-### « ❌ Backend URL non configurée »
-- Clique l'icône extension → re-enregistre la config
+### « Extension pas encore reliée à Kratos »
+- Ouvre Kratos → Entreprises → Comptabilité → Projets QB (ou Prospection →
+  Immeubles MTL) dans ce navigateur, connecté, et recharge la page : elle
+  configure l'extension. Puis « Actualiser » dans le panneau QuickBooks.
+- L'icône Horizon dit si l'extension est reliée et à quelle adresse.
 
 ### « ❌ HTTP 401 »
-- L'API key dans la popup ne match pas `EXTENSION_API_KEY` côté serveur
-- Vérifie avec l'admin h2.0 que la clé est la bonne
+- La clé enregistrée dans l'extension n'est plus celle du serveur
+  (`EXTENSION_API_KEY` changée ?) : rouvre une page Kratos dans ce
+  navigateur, elle retransmet la bonne clé.

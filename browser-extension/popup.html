@@ -60,21 +60,35 @@
     .status.error { background: #f8d7da; color: #721c24; display: block; }
     .help {
       font-size: 11px;
-      color: #777;
+      color: #666;
       margin-top: 4px;
+    }
+    .intro {
+      font-size: 12px;
+      color: #333;
+      line-height: 1.4;
+      margin: 0 0 8px 0;
     }
   </style>
 </head>
 <body>
   <h1>Horizon h2.0 Helper</h1>
 
+  <p class="intro">
+    Normalement, rien à saisir ici : ouvre
+    <strong>Kratos → Entreprises → Comptabilité → Projets QB</strong>
+    (ou Prospection → Immeubles MTL) dans ce navigateur, connecté, et la
+    page configure l'extension toute seule. Ce formulaire sert au dépannage.
+  </p>
+  <div id="etat" class="status"></div>
+
   <label for="backendUrl">Backend URL</label>
-  <input type="text" id="backendUrl" placeholder="https://h20-backend.onrender.com">
-  <div class="help">URL de ton API h2.0 (sans / final)</div>
+  <input type="text" id="backendUrl" placeholder="https://h2-0.onrender.com">
+  <div class="help">Adresse de l'API Kratos, sans / final (production : https://h2-0.onrender.com)</div>
 
   <label for="apiKey">API Key</label>
-  <input type="password" id="apiKey" placeholder="extension-token-...">
-  <div class="help">Récupère-la dans h2.0 → Paramètres → Extension</div>
+  <input type="password" id="apiKey" placeholder="clé partagée du serveur Kratos">
+  <div class="help">La clé partagée du serveur Kratos (EXTENSION_API_KEY sur Render) : demande-la à l'admin si tu dois la saisir à la main</div>
 
   <div>
     <button id="save">Enregistrer</button>
