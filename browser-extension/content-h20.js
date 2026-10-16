@@ -13,13 +13,13 @@
 
   const log = (...args) => console.log("[h2.0 Bridge]", ...args);
 
-  const VERSION = "1.3.0";
+  const VERSION = "1.3.1";
 
   // Marqueur que l'extension est installée — h2.0 peut le checker
   // pour savoir si elle peut compter sur le scraping auto (et sur la
   // collecte en lot à partir de 1.2.0).
   try {
-    window.__h2_extension = "1.3.0";
+    window.__h2_extension = "1.3.1";
   } catch (_) {}
 
   const BATCH_MESSAGES = {

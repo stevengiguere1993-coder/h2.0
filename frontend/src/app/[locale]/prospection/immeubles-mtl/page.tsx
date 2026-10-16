@@ -111,7 +111,7 @@ type BatchState = {
 //: sur montreal.ca) — zip servi par Kratos (Phil 2026-09-30 : lien de
 //: téléchargement en haut à droite). Version = browser-extension/
 //: manifest.json (vérifié par tests/test_extension_zip.py).
-const EXTENSION_VERSION = "1.3.0";
+const EXTENSION_VERSION = "1.3.1";
 const EXTENSION_ZIP = "/telechargements/extension-horizon-h2.zip";
 
 //: Détection de l'extension (Phil 2026-09-29 : « Backend URL non

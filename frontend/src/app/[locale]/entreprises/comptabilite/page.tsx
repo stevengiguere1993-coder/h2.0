@@ -27,6 +27,10 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
+import {
+  QboConnexionExpiree,
+  estConnexionQboExpiree
+} from "@/components/qbo-connexion-expiree";
 import { ReceiptScanner } from "@/components/receipt-scanner";
 import { authedFetch } from "@/lib/auth";
 import { CLE_ENTREPRISE, sansAccents } from "./_shared";
@@ -702,7 +706,14 @@ export default function NouveauRecuPage() {
           </section>
         ) : erreurChoix ? (
           <section className="rounded-2xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm">
-            <p className="text-rose-300">{erreurChoix}</p>
+            {entreprise && estConnexionQboExpiree(erreurChoix) ? (
+              // Intuit refuse le jeton (invalid_grant) : la reconnexion de la
+              // compagnie choisie se lance ici même, au lieu d'envoyer dans
+              // Paramètres (Steven 2026-10-16).
+              <QboConnexionExpiree scope={entreprise.qbo_scope} />
+            ) : (
+              <p className="text-rose-300">{erreurChoix}</p>
+            )}
             <button
               type="button"
               className="btn-secondary btn-xs mt-3 inline-flex items-center gap-1.5"
