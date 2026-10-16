@@ -72,9 +72,11 @@ class QuickBooksReconnexionRequise(QuickBooksError):
 def ou_reconnecter(scope: str) -> str:
     """Où reconnecter, dans Kratos, la compagnie QuickBooks d'un scope."""
     if scope.startswith("inc:"):
+        # Le menu s'appelle « Gestion documentaire Drive » (Steven
+        # 2026-10-16 : le chemin doit se lire tel quel dans Kratos).
         return (
-            "Paramètres → Drive → « Reçus QuickBooks → Drive », bouton "
-            "« Reconnecter » de l'entreprise"
+            "Paramètres → Gestion documentaire Drive → « Reçus QuickBooks → "
+            "Drive », bouton « Reconnecter » de l'entreprise"
         )
     if scope in ("entreprise", "immobilier"):
         return (

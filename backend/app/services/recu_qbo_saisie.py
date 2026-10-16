@@ -386,7 +386,7 @@ async def _entreprise_connectee(db: AsyncSession, entreprise_id: int) -> Tuple[E
     if not etat["connectee"]:
         raise SaisieErreur(
             "QuickBooks n'est pas connecté pour cette entreprise. Connecte-le "
-            "dans Paramètres → Drive → Reçus QuickBooks.",
+            "dans Paramètres → Gestion documentaire Drive → Reçus QuickBooks.",
             statut=409,
         )
     return e, scope, etat
