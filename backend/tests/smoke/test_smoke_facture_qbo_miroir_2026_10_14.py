@@ -77,6 +77,7 @@ ACTIONS_JOURNAL = (
     "facture.qbo_resynchronisee",
     "facture.qbo_ecart_persistant",
     "facture.qbo_ecart_a_verifier",
+    "facture.qbo_marquage_envoi",
 )
 
 

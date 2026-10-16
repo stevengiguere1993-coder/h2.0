@@ -62,6 +62,15 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
   cc_christian: "CC Christian Villiard"
 };
 
+// Libellé court du mode de paiement, affiché dans la colonne Échéance
+// d'un achat payé (« CC Steven », « Chèque »).
+function paidMethodShort(pm: string | null): string {
+  if (!pm || pm === "bill_to_pay") return "";
+  if (pm === "cheque_horizon") return "Chèque";
+  const label = PAYMENT_METHOD_LABELS[pm];
+  return label ? label.split(" ").slice(0, 2).join(" ") : "";
+}
+
 // Options reelles de paiement (exclut bill_to_pay qui signifie
 // « pas encore paye »).
 const REAL_PAYMENT_METHODS: { value: string; label: string }[] = [
@@ -624,8 +633,23 @@ export default function AchatsPage() {
                       </td>
                       <td className="px-4 py-3 text-white/70">
                         {a.status === "paid" ? (
-                          <span className="text-[10px] uppercase tracking-wider text-emerald-300">
-                            Payé · {fmtDate(a.paid_at)}
+                          // Payé : plus d'échéance. On montre le mode de
+                          // paiement plutôt qu'une date — sur un achat payé
+                          // comptant (CC, chèque), paid_at reprend la date de
+                          // saisie et se lisait comme une échéance (retour
+                          // Steven 2026-10-16). Date du paiement en infobulle.
+                          <span
+                            className="text-[10px] uppercase tracking-wider text-emerald-300"
+                            title={
+                              a.paid_at
+                                ? `Payé le ${fmtDate(a.paid_at)}`
+                                : undefined
+                            }
+                          >
+                            Payé
+                            {paidMethodShort(a.payment_method)
+                              ? ` · ${paidMethodShort(a.payment_method)}`
+                              : ""}
                           </span>
                         ) : a.due_at ? (
                           (() => {

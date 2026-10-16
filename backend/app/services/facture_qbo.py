@@ -1901,4 +1901,22 @@ async def marquer_factures_envoyees_dans_qb(
             "%d facture(s) marquée(s) envoyée(s) dans QB : %s",
             len(marquees), ", ".join(marquees),
         )
+    if marquees or echecs:
+        # Une ligne au journal par passage qui a fait quelque chose : ce que
+        # QB a accepté ou refusé se lit dans Kratos, sans les logs serveur.
+        from app.services.audit import log_action
+
+        try:
+            async with AsyncSessionLocal() as s:
+                await log_action(
+                    s,
+                    user=None,
+                    action="facture.qbo_marquage_envoi",
+                    entity_type="facture",
+                    entity_id=None,
+                    details={"marquees": marquees, "echecs": echecs},
+                )
+                await s.commit()
+        except Exception:  # noqa: BLE001
+            log.warning("Marquage « envoyée » : journal non écrit", exc_info=True)
     return {"marquees": marquees, "echecs": echecs}
