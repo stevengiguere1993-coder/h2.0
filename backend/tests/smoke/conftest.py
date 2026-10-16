@@ -47,6 +47,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.api_key_deps import hash_api_key
+from app.core.essai import SessionKratos
 from app.core.security import create_access_token, get_password_hash
 from app.db.base import Base
 from app.db.session import engine as app_engine
@@ -65,12 +66,43 @@ EMPLOYEE_PASSWORD = "Sm0keEmploye!42"
 API_KEY_PLAINTEXT = "krts_smoketest0123456789abcdefghijklmnopqrstuv"
 
 
+# ── Transactions SQLite fidèles pendant un ESSAI d'aperçu ───────────
+# pysqlite/aiosqlite n'émettent pas BEGIN eux-mêmes et gèrent mal les
+# SAVEPOINT : une « libération » de savepoint validait tout. Pour la
+# connexion d'un essai (app/core/essai.py) SEULEMENT, on applique la
+# recette documentée SQLAlchemy (isolation_level=None + BEGIN explicite),
+# puis on rétablit le mode par défaut quand la connexion revient au pool.
+# Les autres tests gardent le comportement SQLite d'origine. Sous Postgres
+# (prod), c'est le comportement natif.
+from sqlalchemy import event
+
+from app.core.essai import essai_actif
+
+
+@event.listens_for(app_engine.sync_engine, "begin")
+def _sqlite_begin_essai(conn):  # noqa: ANN001
+    if not essai_actif():
+        return
+    conn.connection.dbapi_connection.isolation_level = None
+    conn.connection.info["essai_sqlite"] = True
+    conn.exec_driver_sql("BEGIN")
+
+
+@event.listens_for(app_engine.sync_engine.pool, "checkin")
+def _sqlite_fin_essai(dbapi_connection, record):  # noqa: ANN001
+    if record.info.pop("essai_sqlite", False):
+        dbapi_connection.isolation_level = ""
+
+
 # ── Session factory de test (même fichier SQLite que l'app) ─────────
 # On réutilise l'engine de l'app (il pointe déjà sur le SQLite de test
 # via DATABASE_URL) : un seul pool de connexions, un seul loop.
 TestSessionLocal = async_sessionmaker(
     app_engine,
     class_=AsyncSession,
+    # Même classe de session que la prod (AsyncSessionLocal) : le mode
+    # essai de l'aperçu (app/core/essai.py) passe par SessionKratos.
+    sync_session_class=SessionKratos,
     expire_on_commit=False,
     autocommit=False,
     autoflush=False,

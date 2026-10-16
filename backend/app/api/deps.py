@@ -12,14 +12,21 @@ reconnaît ce jeton, expose l'id de l'admin dans ``request.state.apercu_par``
 (lu par ``apercu_par_de``, consommé par ``/auth/me``) et REFUSE toute
 méthode HTTP autre que GET/HEAD/OPTIONS (403) : un aperçu ne peut jamais
 modifier des données, peu importe les droits de l'utilisateur regardé.
+
+Exception : le MODE ESSAI (``app/core/essai.py``, en-tête
+``X-Kratos-Essai: 1``) laisse passer l'écriture avec les droits exacts de
+l'utilisateur regardé, mais tout est annulé en fin de requête et aucun
+appel externe ne part.
 """
 
+import re
 from typing import Annotated, Optional
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.essai import essai_actif
 from app.core.security import verify_token
 from app.db.session import get_db
 from app.models.user import User
@@ -38,6 +45,14 @@ oauth2_scheme = OAuth2PasswordBearer(
 #: d'atteindre l'endpoint, quels que soient les droits de l'utilisateur
 #: regardé.
 APERCU_METHODES_LECTURE = frozenset({"GET", "HEAD", "OPTIONS"})
+
+#: Chemins refusés à un jeton d'aperçu QUELLE QUE SOIT la méthode, y compris
+#: en mode essai : chacun remettrait au navigateur un jeton utilisable en
+#: dehors de l'essai.
+APERCU_CHEMINS_INTERDITS = (
+    re.compile(r"^/api/v1/users/[^/]+/apercu/?$"),  # aperçu en chaîne
+    re.compile(r"^/api/v1/voice/sdk/token/?$"),  # appels Twilio réels
+)
 
 
 async def get_current_user(
@@ -117,13 +132,32 @@ async def get_current_user(
             request.state.apercu_par = int(apercu_par)
         except (TypeError, ValueError):
             raise credentials_exception
-        if request.method.upper() not in APERCU_METHODES_LECTURE:
+        # Chemins TOUJOURS refusés en aperçu, même en mode essai : ils
+        # émettent un jeton/identifiant utilisable hors de l'essai
+        # (aperçu en chaîne, jeton Twilio qui passerait de vrais appels).
+        if any(m.match(request.url.path) for m in APERCU_CHEMINS_INTERDITS):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "Mode aperçu : cette fonction n'est pas disponible en "
+                    "voyant Kratos comme un autre utilisateur."
+                ),
+            )
+        # Écriture : permise SEULEMENT en mode ESSAI (app/core/essai.py —
+        # tout est annulé en fin de requête et aucun appel externe ne
+        # part). Hors essai, lecture seule stricte.
+        if (
+            request.method.upper() not in APERCU_METHODES_LECTURE
+            and not essai_actif()
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(
                     "Mode aperçu (lecture seule) : impossible de modifier "
                     "des données en voyant Kratos comme un autre "
-                    "utilisateur. Quitte l'aperçu pour agir."
+                    "utilisateur. Active le mode essai pour tester "
+                    "l'action sans rien enregistrer, ou quitte l'aperçu "
+                    "pour agir."
                 ),
             )
 

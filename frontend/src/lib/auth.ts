@@ -93,6 +93,83 @@ export function hasMinRole(user: CurrentUser | null, min: UserRole): boolean {
  */
 const APERCU_ADMIN_TOKEN_KEY = "hsi_apercu_admin_token";
 const APERCU_INFO_KEY = "hsi_apercu_info";
+const APERCU_ESSAI_KEY = "hsi_apercu_essai";
+
+/* ---------------------------------------------------------------------
+ * MODE ESSAI de l'aperçu (interrupteur du bandeau <ApercuBanner />)
+ * ---------------------------------------------------------------------
+ * Activé, chaque écriture (POST/PUT/PATCH/DELETE) passée par authedFetch
+ * porte l'en-tête `X-Kratos-Essai: 1` : le backend l'exécute avec les
+ * droits EXACTS de l'utilisateur regardé, puis annule tout en fin de
+ * requête et bloque tout appel externe (backend app/core/essai.py). La
+ * réponse porte `X-Kratos-Essai: annule` ; authedFetch émet alors
+ * l'événement APERCU_ESSAI_EVENT pour que le bandeau affiche « permis,
+ * rien n'a été enregistré » ou le refus reçu.
+ */
+export const APERCU_ESSAI_EVENT = "kratos:apercu-essai";
+
+/** Résultat d'une écriture faite en mode essai (affiché par le bandeau). */
+export type ApercuEssaiResultat = {
+  methode: string;
+  chemin: string;
+  statut: number;
+  detail: string | null;
+  /** Hôtes externes dont l'appel a été bloqué (QuickBooks, Drive…). */
+  externes: string[];
+};
+
+/** True quand l'interrupteur « Mode essai » est activé pendant un aperçu. */
+export function isApercuEssai(): boolean {
+  if (!isApercu()) return false;
+  try {
+    return window.localStorage.getItem(APERCU_ESSAI_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function setApercuEssai(actif: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (actif) window.localStorage.setItem(APERCU_ESSAI_KEY, "1");
+    else window.localStorage.removeItem(APERCU_ESSAI_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function signalerEssai(method: string, path: string, res: Response): void {
+  if (typeof window === "undefined") return;
+  const externes = (res.headers.get("x-kratos-essai-externe") || "")
+    .split(",")
+    .map((h) => h.trim())
+    .filter(Boolean);
+  const emettre = (detail: string | null) =>
+    window.dispatchEvent(
+      new CustomEvent<ApercuEssaiResultat>(APERCU_ESSAI_EVENT, {
+        detail: {
+          methode: method,
+          chemin: path.split("?")[0],
+          statut: res.status,
+          detail,
+          externes
+        }
+      })
+    );
+  if (res.ok) {
+    emettre(null);
+    return;
+  }
+  // Message d'erreur du backend (`detail`) lu sur un CLONE : l'appelant
+  // garde le corps intact pour son propre traitement.
+  res
+    .clone()
+    .json()
+    .then((b: { detail?: unknown }) =>
+      emettre(typeof b?.detail === "string" ? b.detail : null)
+    )
+    .catch(() => emettre(null));
+}
 
 /** Fiche minimale de l'utilisateur regardé en aperçu (pour le bandeau). */
 export type ApercuInfo = {
@@ -156,6 +233,7 @@ export function stopApercu(): boolean {
   try {
     window.localStorage.removeItem(APERCU_ADMIN_TOKEN_KEY);
     window.localStorage.removeItem(APERCU_INFO_KEY);
+    window.localStorage.removeItem(APERCU_ESSAI_KEY);
   } catch {
     /* ignore */
   }
@@ -232,6 +310,12 @@ export async function authedFetch(
   if (init.body && !isFormData && !headers.has("content-type"))
     headers.set("content-type", "application/json");
 
+  const method = (init.method || "GET").toUpperCase();
+  const retryable = method === "GET" || method === "HEAD";
+  // Mode essai de l'aperçu : l'écriture est exécutée puis annulée.
+  const essai = !retryable && isApercuEssai();
+  if (essai) headers.set("x-kratos-essai", "1");
+
   const url = `${DEFAULT_BASE}${path}`;
   const doFetch = () =>
     fetch(url, { ...init, headers, cache: "no-store" });
@@ -247,8 +331,6 @@ export async function authedFetch(
   // (ex. deux factures pour un seul clic). Pour une mutation, on remonte
   // l'erreur à l'appelant (qui l'affiche déjà) plutôt que de risquer un
   // rejeu silencieux.
-  const method = (init.method || "GET").toUpperCase();
-  const retryable = method === "GET" || method === "HEAD";
   let res: Response;
   try {
     res = await doFetch();
@@ -257,6 +339,8 @@ export async function authedFetch(
     await new Promise((r) => setTimeout(r, 1500));
     res = await doFetch();
   }
+  if (essai && res.headers.get("x-kratos-essai") === "annule")
+    signalerEssai(method, path, res);
 
   // Session expirée / token invalide : le backend renvoie 401 sur TOUT
   // appel authentifié. Sans ça, chaque page avalait le 401 et affichait

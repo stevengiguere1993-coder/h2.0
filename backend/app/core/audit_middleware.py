@@ -165,6 +165,13 @@ class AuditMiddleware:
 
         if statut is None or statut >= 400:
             return
+        # Essai d'aperçu « voir comme » (app/core/essai.py) : rien n'a été
+        # gardé, donc rien à journaliser — et surtout aucune action
+        # imputée à l'utilisateur regardé.
+        from app.core.essai import essai_actif
+
+        if essai_actif():
+            return
         auth = request.headers.get("authorization") or ""
         await self._journaliser(
             methode, auth, path, b"".join(morceaux), statut, octets
