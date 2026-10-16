@@ -495,6 +495,20 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet factures en retard dans QB échoué", exc_info=True)
 
+    # ── Factures émises encore « Non envoyé » dans QB ──
+    # C'est Kratos qui envoie les factures ; QB ouvrait une tâche « Review
+    # Invoice » pour chacune (flux « Get unsent invoice reminder », Steven
+    # 2026-10-16). En-tête seulement : lignes, montants et paiements
+    # intacts.
+    try:
+        from app.services.facture_qbo import marquer_factures_envoyees_dans_qb
+
+        out["factures_marquees_envoyees"] = (
+            await marquer_factures_envoyees_dans_qb()
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("Filet factures « envoyées » dans QB échoué", exc_info=True)
+
     # ── Dépenses actives sans lien QB → re-push ──
     # NON gated : « tous les reçus sont envoyés dans QuickBooks
     # automatiquement ». Un reçu saisi dans Kratos dont le push immédiat a
