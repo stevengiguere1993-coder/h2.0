@@ -274,21 +274,6 @@ class Achat(Base, TimestampUpdateMixin):
         index=True,
     )
 
-    # « Ne pas refacturer » AUTORISÉ explicitement depuis la page « À
-    # refacturer » (Steven 2026-10-16) : qui, quand et pourquoi. Posé en
-    # même temps que is_billable=False + billable_manual=True ; l'achat
-    # sort alors des alertes (reçu après la facture finale, BT fermé).
-    # Colonnes → ensure_critical_columns.
-    refacturation_dispense_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    refacturation_dispense_par_user_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
-    refacturation_dispense_raison: Mapped[Optional[str]] = mapped_column(
-        Text, nullable=True
-    )
-
     @property
     def has_receipt_image(self) -> bool:
         return self.receipt_image_content_type is not None

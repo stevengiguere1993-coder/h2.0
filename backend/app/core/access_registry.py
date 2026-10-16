@@ -119,10 +119,6 @@ PAGES: list[PageEntry] = [
        "/app/po"),
     _p("construction.achats", "Achats / dépenses", "construction", "manager",
        "/app/achats"),
-    # Filet anti-perte (Steven 2026-10-16) : achats reçus après la
-    # facture finale ou restés sur un BT fermé sans être refacturés.
-    _p("construction.a_refacturer", "À refacturer", "construction", "admin",
-       "/app/a-refacturer"),
     _p("construction.assignations", "Assignations", "construction",
        "manager", "/app/assignations"),
     _p("construction.conges", "Vacances & congés", "construction", "manager",
