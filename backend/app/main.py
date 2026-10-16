@@ -638,6 +638,8 @@ def create_application() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # En-têtes du mode essai d'aperçu lus par le frontend.
+        expose_headers=["X-Kratos-Essai", "X-Kratos-Essai-Externe"],
     )
 
     # ── Journal d'événements automatique (« IA au courant de tout »,
@@ -650,6 +652,30 @@ def create_application() -> FastAPI:
         app.add_middleware(AuditMiddleware)
     except Exception as _exc:  # noqa: BLE001
         logger.warning("AuditMiddleware non monté : %s", _exc)
+
+    # ── Mode ESSAI de l'aperçu « voir comme » (Steven 2026-10-16) :
+    # monté EN DERNIER = le plus à l'extérieur, pour que l'annulation de
+    # fin de requête couvre l'endpoint, ses BackgroundTasks et l'audit.
+    # PAS best-effort : sans ce middleware, un jeton d'aperçu reste en
+    # lecture seule stricte (get_current_user refuse toute écriture).
+    from fastapi.responses import JSONResponse
+
+    from app.core.essai import (
+        EffetExterneBloque,
+        EssaiMiddleware,
+        installer_garde_sorties,
+    )
+
+    installer_garde_sorties()
+
+    @app.exception_handler(EffetExterneBloque)
+    async def _essai_effet_externe(_request, exc: EffetExterneBloque):
+        return JSONResponse(
+            status_code=409,
+            content={"detail": str(exc), "essai_bloque": exc.cible},
+        )
+
+    app.add_middleware(EssaiMiddleware)
 
     app.include_router(api_router, prefix="/api/v1")
 

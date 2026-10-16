@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
+from app.core.essai import bloquer_si_essai
 
 from fastapi import (
     APIRouter,
@@ -3202,6 +3203,8 @@ async def _ai_estimate_expenses(
     (1500 req/jour) — couvre largement les besoins d'estimation."""
     if not settings.gemini_api_key:
         return None
+    # gRPC hors httpx/requests : refus explicite en mode essai d'aperçu.
+    bloquer_si_essai("generativelanguage.googleapis.com")
     import google.generativeai as genai
 
     prompt = _estimate_prompt(rec)
@@ -3322,6 +3325,8 @@ async def debug_extract_url(
             "raw_response": "(IA non configurée)",
         }
 
+    # gRPC hors httpx/requests : refus explicite en mode essai d'aperçu.
+    bloquer_si_essai("generativelanguage.googleapis.com")
     import google.generativeai as genai
 
     try:

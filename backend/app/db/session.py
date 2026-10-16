@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.core.config import settings
+from app.core.essai import SessionKratos
 
 
 # Create async engine
@@ -31,10 +32,14 @@ engine = create_async_engine(
     max_overflow=10,
 )
 
-# Session factory
+# Session factory — ``SessionKratos`` = ``Session`` standard, sauf pendant
+# un ESSAI d'aperçu « voir comme » (app/core/essai.py) : la session se
+# greffe alors en SAVEPOINT sur la transaction de l'essai, annulée en fin
+# de requête.
 AsyncSessionLocal = async_sessionmaker(
     engine,
     class_=AsyncSession,
+    sync_session_class=SessionKratos,
     expire_on_commit=False,
     autocommit=False,
     autoflush=False,
