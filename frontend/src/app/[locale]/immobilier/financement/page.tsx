@@ -71,6 +71,11 @@ type RentRollLigne = {
   document_signe: boolean | null;
   loyer_demande: number | null;
   nb_paralleles: number;
+  //: Bail principal (le locataire sous-loue) : la ligne est son bail ; les
+  //: baux de chambre sont ses sous-locations (information, hors totaux).
+  categorie?: string;
+  mention?: string | null;
+  sous_locations?: { bail_id: number; locataire_id: number | null; locataire: string | null; loyer: number | null; date_debut: string | null; date_fin: string | null; au_mois: boolean; document_signe: boolean }[];
   //: Unité louée en chambres : un bail par chambre, la ligne porte le total.
   baux?: { bail_id: number; locataire_id: number | null; locataire: string | null; loyer: number | null; date_debut: string | null; date_fin: string | null; au_mois: boolean; document_signe: boolean }[];
   prochain?: { bail_id: number; locataire: string | null; date_debut: string | null; loyer: number | null; statut: string };
@@ -191,6 +196,7 @@ type BailParallele = {
   parallele_type: string | null;
   type_label: string;
   parallele_locateur: string | null;
+  locateur_effectif?: string | null;
   parallele_locateur_courriel: string | null;
   parallele_locateur_telephone: string | null;
   parallele_note: string | null;
@@ -258,7 +264,7 @@ const OCCUPATION_LABEL: Record<string, string> = {
 };
 const PARALLELE_TYPES: [string, string][] = [
   ["sous_location", "Sous-location"],
-  ["bail_principal", "Bail principal (exploitant)"],
+  ["bail_principal", "Bail principal (le locataire sous-loue)"],
   ["colocation", "Colocation"],
   ["autre", "Autre"]
 ];
@@ -1171,9 +1177,16 @@ function RentRollTab({ immeuble, dossier, onPatchDossier }: { immeuble: Immeuble
                         {l.numero}
                         {l.nb_pieces ? <span className="ml-1 font-normal text-white/40">{String(l.nb_pieces).replace(".5", "½")}</span> : null}
                         {l.nb_paralleles ? <span className="badge badge-violet ml-1">+{l.nb_paralleles} parallèle</span> : null}
+                        {l.categorie === "bail_principal" ? <span className="badge badge-sky ml-1">bail principal</span> : null}
                       </td>
                       <td className="px-3 py-2 text-white/70">
                         {OCCUPATION_LABEL[l.occupation] || l.occupation}
+                        {l.mention ? <div className="text-[11px] text-white/40">{l.mention}</div> : null}
+                        {l.sous_locations?.length ? (
+                          <div className="text-[11px] text-white/40">
+                            sous-locations : {l.sous_locations.map((s) => `${s.locataire || "—"} (${money(s.loyer)})`).join(", ")}
+                          </div>
+                        ) : null}
                         {l.prochain ? (
                           <div className="text-[11px] text-white/40">
                             prochain : {l.prochain.locataire || "—"} · {fmtDate(l.prochain.date_debut)} · {money(l.prochain.loyer)}
@@ -1504,7 +1517,7 @@ function ParallelesTab({ immeuble, onChanged }: { immeuble: ImmeubleLite; onChan
                     {b.locataire_email ? <div className="text-[11px] text-white/40">{b.locataire_email}</div> : null}
                   </td>
                   <td className="px-3 py-2 text-white/70">
-                    {b.parallele_locateur || "—"}
+                    {b.parallele_locateur || b.locateur_effectif || "Propriétaire"}
                     {b.parallele_locateur_courriel ? <div className="text-[11px] text-white/40">{b.parallele_locateur_courriel}</div> : null}
                   </td>
                   <td className="px-3 py-2 text-white/60">{b.type_label}</td>
@@ -1749,9 +1762,14 @@ function BailParalleleModal({ immeuble, existant, onClose, onSaved }: { immeuble
       ) : null}
 
       <div className="mt-3 grid gap-3 sm:grid-cols-3">
-        <Champ label="Locateur du bail (ex. exploitant)" value={f.parallele_locateur} onChange={(v) => setF({ ...f, parallele_locateur: v })} />
+        <Champ label="Locateur du bail (vide = le propriétaire)" value={f.parallele_locateur} onChange={(v) => setF({ ...f, parallele_locateur: v })} />
         <Champ label="Courriel du locateur" value={f.parallele_locateur_courriel} onChange={(v) => setF({ ...f, parallele_locateur_courriel: v })} type="email" />
         <Champ label="Téléphone du locateur" value={f.parallele_locateur_telephone} onChange={(v) => setF({ ...f, parallele_locateur_telephone: v })} inputMode="tel" />
+        {f.parallele_type === "bail_principal" && !f.parallele_locateur.trim() ? (
+          <p className="text-xs text-white/50 sm:col-span-3">
+            Bail principal avec le propriétaire comme locateur : le locataire loue toute l&apos;unité et sous-loue les chambres. Une fois en vigueur, il devient LE bail de l&apos;unité dans le rent roll ; les baux de chambre y figurent dessous comme ses sous-locations, hors des totaux.
+          </p>
+        ) : null}
         <Champ label="Début" value={f.date_debut} onChange={(v) => setF({ ...f, date_debut: v })} type="date" />
         <Champ label="Fin" value={f.date_fin} onChange={(v) => setF({ ...f, date_fin: v })} type="date" />
         <Champ label="Loyer mensuel au contrat ($)" value={f.loyer_mensuel} onChange={(v) => setF({ ...f, loyer_mensuel: v })} inputMode="decimal" />
