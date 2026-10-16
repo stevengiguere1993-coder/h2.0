@@ -273,6 +273,9 @@ async def ensure_critical_columns() -> None:
         # donc jamais SELECTée) manquait en prod et le POST /sign plantait
         # en HTTP 500 à l'écriture (retour Phil 2026-07-10).
         ("factures", "is_final", "BOOLEAN NOT NULL DEFAULT FALSE"),
+        # Interrupteur « rappels suspendus » de la fiche facture
+        # (lu par le cron facture_reminders à chaque passage).
+        ("factures", "reminders_paused", "BOOLEAN NOT NULL DEFAULT FALSE"),
         ("factures", "signature_token", "VARCHAR(64)"),
         ("factures", "signed_name", "VARCHAR(255)"),
         ("factures", "signed_ip", "VARCHAR(64)"),
@@ -1721,6 +1724,7 @@ async def init_db() -> None:
             ("achats", "due_at", "TIMESTAMP WITH TIME ZONE"),
             ("achats", "qbo_bill_payment_id", "VARCHAR(64)"),
             ("factures", "next_reminder_at", "TIMESTAMP WITH TIME ZONE"),
+            ("factures", "reminders_paused", "BOOLEAN NOT NULL DEFAULT FALSE"),
             ("voice_calls", "verbatim_transcript", "TEXT"),
             ("imm_immeubles", "urgence_phone", "VARCHAR(32)"),
             ("soumissions", "qbo_estimate_id", "VARCHAR(64)"),

@@ -84,6 +84,14 @@ class Facture(Base, TimestampUpdateMixin):
     next_reminder_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Rappels automatiques suspendus pour CETTE facture (interrupteur
+    # sur la fiche). Ex. client qui paie par versements : les suivis
+    # n'ont plus de sens. Le cron passe la facture sans rien envoyer ;
+    # l'historique (reminder_count, last_reminder_at) est conservé et
+    # les rappels reprennent dès qu'on remet l'interrupteur.
+    reminders_paused: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     # Internal-only staff notes (jamais rendues sur le PDF client).
     internal_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
