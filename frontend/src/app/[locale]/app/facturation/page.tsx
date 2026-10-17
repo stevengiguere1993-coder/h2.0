@@ -80,12 +80,11 @@ function amountFor(fa: Facture): number | null {
   return null;
 }
 
-function fmtDate(iso: string | null, timeZone?: string): string {
+function fmtDate(iso: string | null): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("fr-CA", {
     day: "2-digit",
-    month: "short",
-    timeZone
+    month: "short"
   });
 }
 
@@ -617,9 +616,7 @@ function Card({
         </span>
       </div>
       <p className="mt-1 text-[10px] text-white/40">
-        {/* Une échéance est un jour (stocké à minuit UTC) : lue en UTC,
-            sinon elle s'affiche la veille à Montréal. */}
-        {fa.due_at ? `Échéance ${fmtDate(fa.due_at, "UTC")}` : fmtDate(fa.created_at)}
+        {fa.due_at ? `Échéance ${fmtDate(fa.due_at)}` : fmtDate(fa.created_at)}
       </p>
       {fa.qbo_invoice_id ? (
         <p className="mt-2 text-[10px] text-emerald-400">

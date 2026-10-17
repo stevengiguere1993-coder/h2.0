@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.facture import Facture
 from app.models.payment import Payment
 from app.models.project import Project
-from app.services.facture_echeance import conditions_deduites, jour_local
 
 log = logging.getLogger(__name__)
 
@@ -365,8 +364,6 @@ async def pull_invoices_from_qbo(
                 ref = f"QB-{iid}"
             ref = ref[:32]
             existing_refs.add(ref)
-            emise = _parse_date(inv.get("TxnDate"))
-            echeance = _parse_date(inv.get("DueDate"))
             new_fac = Facture(
                 reference=ref,
                 client_id=proj.client_id,
@@ -374,11 +371,8 @@ async def pull_invoices_from_qbo(
                 total=total,
                 balance=balance,
                 status=status,
-                issued_at=emise,
-                due_at=echeance,
-                # Conditions QB (sur réception, net 30…) : affichées sur la
-                # fiche et recomptées si Kratos renvoie la facture.
-                due_in_days=conditions_deduites(jour_local(emise), echeance),
+                issued_at=_parse_date(inv.get("TxnDate")),
+                due_at=_parse_date(inv.get("DueDate")),
                 qbo_invoice_id=iid,
                 qbo_doc_number=doc or None,
                 qbo_sync_token=str(inv.get("SyncToken") or "") or None,

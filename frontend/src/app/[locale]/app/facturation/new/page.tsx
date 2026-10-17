@@ -12,9 +12,9 @@ import { authedFetch } from "@/lib/auth";
 type Client = { id: number; name: string; email: string | null };
 type Project = { id: number; name: string; client_id: number | null };
 
-// Aujourd'hui à Montréal (AAAA-MM-JJ), le jour que le serveur compare.
-function aujourdhui(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+function yyyyMmDd(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 export default function NewFacturePage() {
@@ -27,8 +27,7 @@ export default function NewFacturePage() {
   const [clientId, setClientId] = useState("");
   const [projectId, setProjectId] = useState("");
   // Défaut : « Payable sur réception » (échéance = aujourd'hui), pas net 30.
-  const [today] = useState(aujourdhui);
-  const [dueAt, setDueAt] = useState(today);
+  const [dueAt, setDueAt] = useState(() => yyyyMmDd(new Date()));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -67,10 +66,7 @@ export default function NewFacturePage() {
       const payload: Record<string, unknown> = {};
       if (clientId) payload.client_id = Number(clientId);
       if (projectId) payload.project_id = Number(projectId);
-      // Aujourd'hui = « Payable sur réception » : l'échéance suivra le jour
-      // de l'envoi. Une autre date est personnalisée (jamais avant l'envoi).
-      if (dueAt === today) payload.due_in_days = 0;
-      else if (dueAt) payload.due_at = new Date(dueAt).toISOString();
+      if (dueAt) payload.due_at = new Date(dueAt).toISOString();
 
       const res = await authedFetch("/api/v1/factures", {
         method: "POST",
@@ -181,14 +177,9 @@ export default function NewFacturePage() {
               id="due"
               type="date"
               value={dueAt}
-              min={today}
               onChange={(e) => setDueAt(e.target.value)}
               className="input sm:w-56"
             />
-            <p className="mt-1 text-[11px] text-white/50">
-              Au plus tôt le jour de l&apos;envoi : une échéance dépassée
-              quand la facture part est ramenée à ce jour-là.
-            </p>
           </div>
 
           {error ? <p className="text-sm text-rose-400">{error}</p> : null}

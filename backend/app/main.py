@@ -167,60 +167,6 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning("regroupement des lignes de matériaux failed: %s", exc)
 
-    # Échéance au plus tôt le jour de l'envoi (2026-10-17, facture 160) :
-    # les factures déjà envoyées dont l'échéance précède l'envoi y sont
-    # ramenées (les rappels suivent), les admins en reçoivent la liste dans
-    # la cloche Kratos et QuickBooks suit. Une seule fois
-    # (applied_backfills), après la colonne factures.due_in_days.
-    try:
-        from app.db.session import AsyncSessionLocal as _EchSession
-        from app.services.facture_echeance import (
-            corriger_echeances_envoyees_une_fois,
-        )
-
-        async with _EchSession() as session:
-            corrigees = await corriger_echeances_envoyees_une_fois(session)
-            if corrigees:
-                lignes = [
-                    f"Facture {c['reference']} : {c['avant']} → {c['apres']}"
-                    for c in corrigees
-                ]
-                logger.info(
-                    "Startup : %d échéance(s) ramenée(s) au jour de l'envoi : %s",
-                    len(corrigees),
-                    " ; ".join(lignes),
-                )
-                try:
-                    from app.services.notifications import notify_role
-
-                    await notify_role(
-                        session,
-                        min_role="admin",
-                        kind="facture_echeance",
-                        title=(
-                            f"{len(corrigees)} échéance(s) ramenée(s) au "
-                            "jour de l'envoi"
-                        ),
-                        body="\n".join(lignes),
-                        href="/app/facturation",
-                        push=False,
-                    )
-                    await session.commit()
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("notification des échéances failed: %s", exc)
-        liees = [c["id"] for c in corrigees if c["qbo"]]
-        if liees:
-            from app.integrations.quickbooks import get_qbo
-            from app.services.qbo_auto_sync import push_facture_now
-
-            qbo = get_qbo()
-            await qbo._load_refresh_from_db()
-            if qbo.ready:
-                for facture_id in liees:
-                    await push_facture_now(facture_id)
-    except Exception as exc:
-        logger.warning("correction des échéances avant l'envoi failed: %s", exc)
-
     # STAGING : premier compte owner sur base vide (no-op partout ailleurs).
     try:
         from app.services.bootstrap_admin import ensure_bootstrap_admin

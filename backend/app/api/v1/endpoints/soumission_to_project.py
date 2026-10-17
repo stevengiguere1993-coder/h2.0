@@ -16,7 +16,7 @@ so that automatic acceptance flows (status change, public client
 signature) can reuse it without going through this HTTP handler.
 """
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, status
@@ -32,7 +32,6 @@ from app.models.project import Project, ProjectStatus
 from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
 from app.schemas.project import ProjectRead
-from app.services.facture_echeance import aujourd_hui, echeance_du_jour
 from app.services.numbering import provisional_facture_reference
 
 
@@ -308,9 +307,9 @@ async def provision_project_for_soumission(
             status=FactureStatus.DRAFT.value,
             # issued_at reste vide : la facture n'est « émise » qu'à
             # l'envoi au client, pas à sa création (cf. send_facture).
-            # Conditions comptées depuis l'envoi (facture_echeance).
-            due_at=echeance_du_jour(aujourd_hui() + timedelta(days=due_in_days)),
-            due_in_days=due_in_days,
+            due_at=(
+                datetime.now(timezone.utc) + timedelta(days=due_in_days)
+            ),
             subtotal=deposit_subtotal,
             tps=tps,
             tvq=tvq,

@@ -44,9 +44,6 @@ type Facture = {
   status: string;
   issued_at: string | null;
   due_at: string | null;
-  // Conditions en jours après l'envoi (0 = payable sur réception) ;
-  // null = date d'échéance personnalisée.
-  due_in_days: number | null;
   paid_at: string | null;
   last_reminder_at: string | null;
   reminder_count: number;
@@ -172,25 +169,6 @@ function isoToDateInput(iso: string | null): string {
   return iso.slice(0, 10);
 }
 
-// Jour civil de Montréal d'un horodatage (aujourd'hui sans argument),
-// comme le serveur : une facture envoyée le soir est du jour même, et une
-// date sans heure (minuit UTC pile, ex. import QuickBooks) garde son jour.
-function jourMontreal(iso: string | null): string {
-  const d = iso ? new Date(iso) : new Date();
-  if (iso && d.getTime() % 86400000 === 0) return d.toISOString().slice(0, 10);
-  return d.toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
-}
-
-// Conditions proposées (jours après l'envoi).
-const TERMES_ECHEANCE: { jours: number; label: string }[] = [
-  { jours: 0, label: "Payable sur réception" },
-  { jours: 10, label: "Net 10 jours" },
-  { jours: 15, label: "Net 15 jours" },
-  { jours: 30, label: "Net 30 jours" },
-  { jours: 45, label: "Net 45 jours" },
-  { jours: 60, label: "Net 60 jours" }
-];
-
 async function explainError(res: Response): Promise<string> {
   try {
     const data = await res.json();
@@ -243,10 +221,6 @@ export default function FactureDetailPage() {
   const [sendMessage, setSendMessage] = useState("");
 
   const [dueAt, setDueAt] = useState("");
-  // L'échéance affichée suit celle du serveur (envoi, conditions, statut).
-  useEffect(() => {
-    setDueAt(isoToDateInput(f?.due_at ?? null));
-  }, [f?.due_at]);
   const [nextReminderAt, setNextReminderAt] = useState("");
   const [internalNotes, setInternalNotes] = useState("");
   const [clientNote, setClientNote] = useState("");
@@ -537,29 +511,8 @@ export default function FactureDetailPage() {
     }
   }
 
-  // Échéance au plus tôt le jour de l'envoi (aujourd'hui pour un
-  // brouillon) : même règle que le serveur, qui refuse une date antérieure.
-  const minDueDate: string | undefined = !f
-    ? undefined
-    : f.status === "draft"
-      ? jourMontreal(null)
-      : f.status === "void" || !f.issued_at
-        ? undefined
-        : jourMontreal(f.issued_at);
-
   async function saveDueAt(value: string = dueAt) {
     if (!f) return;
-    const actuelle = isoToDateInput(f.due_at);
-    // Champ quitté sans changement : rien à enregistrer (les conditions
-    // choisies, « Net 30 »…, restent).
-    if (value === actuelle) return;
-    if (value && minDueDate && value < minDueDate) {
-      setDueAt(actuelle);
-      setError(
-        `L'échéance ne peut pas précéder le ${minDueDate} : une facture est due au plus tôt le jour de son envoi.`
-      );
-      return;
-    }
     setSaving(true);
     try {
       const res = await authedFetch(`/api/v1/factures/${id}`, {
@@ -568,33 +521,11 @@ export default function FactureDetailPage() {
           due_at: value ? new Date(value).toISOString() : null
         })
       });
-      if (!res.ok) throw new Error(await explainError(res));
-      setF((await res.json()) as Facture);
-    } catch (err) {
-      setDueAt(actuelle);
-      setError(`Sauvegarde échéance échouée : ${(err as Error).message}`);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  // Conditions choisies : le serveur calcule l'échéance depuis le jour de
-  // l'envoi (aujourd'hui pour un brouillon, recalculée quand il part).
-  async function saveDueTerms(value: string) {
-    if (!f) return;
-    if (value === "custom" && f.due_in_days == null) return;
-    setSaving(true);
-    try {
-      const res = await authedFetch(`/api/v1/factures/${id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          due_in_days: value === "custom" ? null : Number(value)
-        })
-      });
-      if (!res.ok) throw new Error(await explainError(res));
-      setF((await res.json()) as Facture);
-    } catch (err) {
-      setError(`Sauvegarde des conditions échouée : ${(err as Error).message}`);
+      if (!res.ok) throw new Error();
+      const u = (await res.json()) as Facture;
+      setF(u);
+    } catch {
+      setError("Sauvegarde échéance échouée.");
     } finally {
       setSaving(false);
     }
@@ -1647,28 +1578,61 @@ export default function FactureDetailPage() {
               <div className="flex flex-wrap items-center gap-3">
                 <label className="label mb-0">Échéance</label>
                 <select
-                  value={f.due_in_days != null ? String(f.due_in_days) : "custom"}
-                  onChange={(e) => void saveDueTerms(e.target.value)}
-                  disabled={saving}
+                  value={(() => {
+                    if (!dueAt) return "custom";
+                    const issued = f?.issued_at
+                      ? new Date(f.issued_at)
+                      : new Date();
+                    const due = new Date(dueAt);
+                    const diffDays = Math.round(
+                      (due.getTime() -
+                        new Date(
+                          issued.getFullYear(),
+                          issued.getMonth(),
+                          issued.getDate()
+                        ).getTime()) /
+                        86400000
+                    );
+                    if (diffDays === 0) return "0";
+                    if ([10, 15, 30, 45, 60].includes(diffDays))
+                      return String(diffDays);
+                    return "custom";
+                  })()}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "custom") return; // user éditera la date à droite
+                    const issued = f?.issued_at
+                      ? new Date(f.issued_at)
+                      : new Date();
+                    const base = new Date(
+                      issued.getFullYear(),
+                      issued.getMonth(),
+                      issued.getDate()
+                    );
+                    base.setDate(base.getDate() + Number(v));
+                    const yyyy = base.getFullYear();
+                    const mm = String(base.getMonth() + 1).padStart(2, "0");
+                    const dd = String(base.getDate()).padStart(2, "0");
+                    const next = `${yyyy}-${mm}-${dd}`;
+                    setDueAt(next);
+                    // #4 — l'échéance choisie est enregistrée tout de suite
+                    // (avant on devait cliquer l'icône de sauvegarde, vite
+                    // oubliée → le changement était perdu en quittant).
+                    void saveDueAt(next);
+                  }}
                   className="input w-48"
                 >
-                  {TERMES_ECHEANCE.map((t) => (
-                    <option key={t.jours} value={String(t.jours)}>
-                      {t.label}
-                    </option>
-                  ))}
-                  {f.due_in_days != null &&
-                  !TERMES_ECHEANCE.some((t) => t.jours === f.due_in_days) ? (
-                    <option value={String(f.due_in_days)}>
-                      Net {f.due_in_days} jours
-                    </option>
-                  ) : null}
+                  <option value="0">Payable sur réception</option>
+                  <option value="10">Net 10 jours</option>
+                  <option value="15">Net 15 jours</option>
+                  <option value="30">Net 30 jours</option>
+                  <option value="45">Net 45 jours</option>
+                  <option value="60">Net 60 jours</option>
                   <option value="custom">Date personnalisée</option>
                 </select>
                 <input
                   type="date"
                   value={dueAt}
-                  min={minDueDate}
                   onChange={(e) => setDueAt(e.target.value)}
                   onBlur={() => void saveDueAt()}
                   className="input w-44"
@@ -1692,19 +1656,6 @@ export default function FactureDetailPage() {
                 <strong>sur réception</strong>. Les soldes finaux suivent
                 tes conditions habituelles (souvent net 30).
               </p>
-              {f.status === "draft" ? (
-                <p className="mt-1 text-[11px] text-white/50">
-                  {f.due_in_days != null
-                    ? "Les conditions comptent à partir du jour de l'envoi : l'échéance sera recalculée quand la facture partira."
-                    : "Si la facture part après cette date, l'échéance sera ramenée au jour de l'envoi."}
-                </p>
-              ) : f.status === "sent" || f.status === "overdue" ? (
-                <p className="mt-1 text-[11px] text-white/50">
-                  Jamais avant le jour de l&apos;envoi
-                  {minDueDate ? ` (${minDueDate})` : ""}. Un nouvel envoi la
-                  recalcule à partir du jour où il part.
-                </p>
-              ) : null}
             </section>
 
             {project && projFin ? (
