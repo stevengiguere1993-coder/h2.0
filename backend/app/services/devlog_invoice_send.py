@@ -35,7 +35,7 @@ from app.services.devlog_invoice_pdf import (
     compute_invoice_totals,
     generate_invoice_pdf,
 )
-from app.services.numbering import aligner_compteur_factures, next_facture_number
+from app.services.numbering import next_facture_number
 from app.services.public_links import public_base
 
 
@@ -152,12 +152,6 @@ async def _ensure_invoice_metadata(
     atomique partagé avec les factures de construction)."""
     changed = False
     if not (invoice.number or "").strip():
-        # Compteur partagé avec les factures de construction : d'abord
-        # au-dessus de tout ce qui existe (Kratos et QuickBooks).
-        try:
-            await aligner_compteur_factures(db)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Recalage du compteur de factures impossible : %s", exc)
         raw = await next_facture_number(db)
         year = (invoice.issued_date or datetime.utcnow().date()).year
         try:

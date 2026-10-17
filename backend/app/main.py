@@ -164,22 +164,6 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning("relance des refus QB « catégorie » failed: %s", exc)
 
-    # Compteur de factures : prochain numéro = plus haut numéro existant
-    # (Kratos ou QuickBooks) + 1, dès le démarrage (Steven 2026-10-17). Le
-    # filet horaire refait le même recalage.
-    try:
-        from app.services.numbering import aligner_compteur_factures_une_session
-
-        res = await aligner_compteur_factures_une_session()
-        if res["apres"] != res["avant"]:
-            logger.info(
-                "Startup : compteur de factures recalé de %s à %s "
-                "(Kratos %s, QuickBooks %s)",
-                res["avant"], res["apres"], res["kratos_max"], res["qb_max"],
-            )
-    except Exception as exc:
-        logger.warning("recalage du compteur de factures failed: %s", exc)
-
     # Matériaux sur une seule ligne (2026-10-17) : dans les BROUILLONS, les
     # lignes « Matériel — <achat> » importées fusionnent en une ligne
     # « Matériaux » par facture. Une seule fois (applied_backfills), après

@@ -311,40 +311,6 @@ async def numero_pris_hors_kratos(
     return inv
 
 
-#: Factures QB relues pour trouver le plus haut numéro : les plus récentes
-#: (création), plafond d'une page QuickBooks — des années de facturation,
-#: et le compteur garde de toute façon ce qu'il a déjà appris (jamais
-#: abaissé).
-_FACTURES_QB_RELUES = 1000
-
-
-async def plus_haut_numero_facture_qb() -> Optional[int]:
-    """Le plus haut numéro de facture (DocNumber numérique) parmi les
-    factures les plus récentes de QuickBooks, Kratos ou pas. None si QB
-    n'est pas configuré ou ne répond pas (on ne bloque jamais la
-    numérotation pour ça). Sert à garder le compteur de Kratos au-dessus
-    des factures créées directement dans QB (Steven 2026-10-17 : « le
-    compteur doit toujours être 1 plus haut que QB ou Kratos »)."""
-    try:
-        qbo = get_qbo()
-        await qbo._load_refresh_from_db()
-        if not qbo.ready:
-            return None
-        rows = await qbo.query(
-            "SELECT DocNumber FROM Invoice ORDERBY MetaData.CreateTime DESC "
-            f"MAXRESULTS {_FACTURES_QB_RELUES}"
-        )
-    except Exception as exc:  # noqa: BLE001
-        log.warning("Lecture du plus haut numéro de facture QB impossible : %s", exc)
-        return None
-    nums = [
-        int(str(r.get("DocNumber")).strip())
-        for r in rows
-        if str(r.get("DocNumber") or "").strip().isdigit()
-    ]
-    return max(nums) if nums else 0
-
-
 async def detacher_facture_qbo(db: AsyncSession, facture_id: int) -> Dict[str, Any]:
     """Oublie le lien Kratos ↔ Invoice QB (et les liens de paiements) SANS
     toucher à QuickBooks. Sert quand Kratos s'est accroché à la mauvaise

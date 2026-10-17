@@ -25,16 +25,6 @@ type Numbering = {
   next_po_number: number;
 };
 
-/** Résultat de POST /settings/numbering/aligner-factures. */
-type Alignement = {
-  avant: number;
-  apres: number;
-  kratos_max: number;
-  qb_max: number | null;
-  qb_consulte: boolean;
-  compteurs: Numbering;
-};
-
 function NumberingSection() {
   const [data, setData] = useState<Numbering | null>(null);
   const [loading, setLoading] = useState(true);
@@ -45,8 +35,6 @@ function NumberingSection() {
   const [poN, setPoN] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
-  const [aligning, setAligning] = useState(false);
-  const [alignement, setAlignement] = useState<Alignement | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -102,33 +90,6 @@ function NumberingSection() {
       setErr((e as Error).message || "Sauvegarde échouée.");
     } finally {
       setSaving(false);
-    }
-  }
-
-  /** Recale le compteur de factures sur le plus haut numéro (Kratos ou
-   *  QuickBooks) + 1. Le serveur le fait déjà au démarrage, à chaque
-   *  attribution et toutes les heures ; ici c'est pour vérifier ou
-   *  forcer tout de suite. */
-  async function aligner() {
-    setAligning(true);
-    setErr(null);
-    setAlignement(null);
-    try {
-      const res = await authedFetch(
-        "/api/v1/settings/numbering/aligner-factures",
-        { method: "POST" }
-      );
-      if (!res.ok) throw new Error(`http_${res.status}`);
-      const a = (await res.json()) as Alignement;
-      setAlignement(a);
-      setData(a.compteurs);
-      setFactureN(String(a.compteurs.next_facture_number));
-      setSoumissionN(String(a.compteurs.next_soumission_number));
-      setPoN(String(a.compteurs.next_po_number));
-    } catch (e) {
-      setErr((e as Error).message || "Alignement échoué.");
-    } finally {
-      setAligning(false);
     }
   }
 
@@ -257,20 +218,6 @@ function NumberingSection() {
             Modifier les compteurs
           </button>
         )}
-        {!editing ? (
-          <button
-            type="button"
-            onClick={aligner}
-            disabled={aligning || loading}
-            className="btn-secondary text-xs"
-            title="Prochaine facture = plus haut numéro (Kratos ou QuickBooks) + 1"
-          >
-            {aligning ? (
-              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-            ) : null}
-            Aligner sur QuickBooks
-          </button>
-        ) : null}
         {savedAt && Date.now() - savedAt < 5000 ? (
           <span className="text-[11px] text-emerald-300">
             ✓ Compteurs mis à jour.
@@ -278,39 +225,10 @@ function NumberingSection() {
         ) : null}
       </div>
 
-      {alignement ? (
-        <p className="mt-3 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-xs text-white/70">
-          Plus haut numéro : Kratos{" "}
-          <span className="font-mono text-white">{alignement.kratos_max}</span>
-          , QuickBooks{" "}
-          {alignement.qb_consulte ? (
-            <span className="font-mono text-white">{alignement.qb_max}</span>
-          ) : (
-            <span className="text-amber-300">
-              injoignable (Kratos seul pris en compte)
-            </span>
-          )}
-          .{" "}
-          {alignement.apres !== alignement.avant ? (
-            <span className="text-emerald-300">
-              Compteur avancé de {alignement.avant} à {alignement.apres}.
-            </span>
-          ) : (
-            <span>
-              Compteur déjà aligné : prochaine facture {alignement.apres}.
-            </span>
-          )}
-        </p>
-      ) : null}
-
       <p className="mt-3 text-[11px] text-white/40">
-        Le compteur de factures se recale tout seul au-dessus du plus haut
-        numéro existant, dans Kratos comme dans QuickBooks (au démarrage,
-        à chaque numéro attribué et toutes les heures) ; il n&apos;est
-        jamais abaissé automatiquement. Astuce : si tu bascules
-        QuickBooks de sandbox vers production plus tard, reviens ici
-        réinitialiser les compteurs au dernier numéro QB de ta vraie
-        compagnie + 1.
+        Astuce : si tu bascules QuickBooks de sandbox vers production
+        plus tard, reviens ici réinitialiser les compteurs au dernier
+        numéro QB de ta vraie compagnie + 1.
       </p>
     </section>
   );
