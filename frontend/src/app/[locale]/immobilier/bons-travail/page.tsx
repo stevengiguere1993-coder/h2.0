@@ -89,6 +89,9 @@ const COLUMNS: Column[] = [
   { id: "facture", label: "Facturé", dot: "bg-emerald-400" },
   { id: "cancelled", label: "Annulé", dot: "bg-white/20" }
 ];
+// Colonnes fermées à l'arrivée sur la page (Steven 2026-10-16).
+const CLOSED_BY_DEFAULT = ["facture", "cancelled"];
+
 const STATUS_LABEL: Record<string, string> = Object.fromEntries(
   COLUMNS.map((c) => [c.id, c.label])
 );
@@ -126,9 +129,19 @@ export default function BonsTravailPage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BonResult | null>(null);
   const [formOpen, setFormOpen] = useState(false);
-  // Zone « Facturé » du suivi : fermée à chaque arrivée sur la page,
-  // ouverte au besoin d'un clic sur son en-tête.
-  const [factureOpen, setFactureOpen] = useState(false);
+  // Chaque colonne du suivi s'ouvre ou se ferme d'un clic sur son
+  // en-tête ; « Facturé » et « Annulé » arrivent fermées.
+  const [closedCols, setClosedCols] = useState<Set<string>>(
+    () => new Set(CLOSED_BY_DEFAULT)
+  );
+  function setColOpen(colId: string, open: boolean) {
+    setClosedCols((prev) => {
+      const next = new Set(prev);
+      if (open) next.delete(colId);
+      else next.add(colId);
+      return next;
+    });
+  }
 
   const [bons, setBons] = useState<BonListItem[] | null>(null);
   // Filtre immeuble du suivi (kanban + mini dashboard).
@@ -721,10 +734,10 @@ export default function BonsTravailPage() {
             <div className="mt-4 flex gap-4 overflow-x-auto pb-4">
               {COLUMNS.map((col) => {
                 const cards = byColumn[col.id] || [];
-                // Zone « Facturé » repliable dès qu'elle contient un bon ;
-                // fermée, seuls l'en-tête et le compteur restent.
-                const foldable = col.id === "facture" && cards.length > 0;
-                const closed = foldable && !factureOpen;
+                // Fermée, une colonne ne garde que son en-tête et son
+                // compteur.
+                const open = !closedCols.has(col.id);
+                const closed = !open;
                 const dot = (
                   <span className={`h-2 w-2 rounded-full ${col.dot}`} />
                 );
@@ -738,49 +751,37 @@ export default function BonsTravailPage() {
                       closed ? "self-start" : ""
                     }`}
                   >
-                    {foldable ? (
-                      <h3 className="border-b border-brand-800">
-                        <button
-                          type="button"
-                          onClick={() => setFactureOpen(!factureOpen)}
-                          aria-expanded={factureOpen}
-                          title={
-                            factureOpen
-                              ? "Fermer la zone Facturé"
-                              : "Ouvrir la zone Facturé"
-                          }
-                          className="flex w-full items-center justify-between rounded-t-xl px-4 py-3 transition hover:bg-accent-500/10"
-                        >
-                          <span className="flex items-center gap-2 text-sm font-semibold text-white">
-                            {dot}
-                            {col.label}
-                          </span>
-                          <span className="flex items-center gap-1.5">
-                            {count}
-                            {factureOpen ? (
-                              <ChevronUp className="h-4 w-4 text-white/60" />
-                            ) : (
-                              <ChevronDown className="h-4 w-4 text-white/60" />
-                            )}
-                          </span>
-                        </button>
-                      </h3>
-                    ) : (
-                      <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
-                        <div className="flex items-center gap-2">
+                    <h3 className="border-b border-brand-800">
+                      <button
+                        type="button"
+                        onClick={() => setColOpen(col.id, !open)}
+                        aria-expanded={open}
+                        title={
+                          open
+                            ? `Fermer la colonne ${col.label}`
+                            : `Ouvrir la colonne ${col.label}`
+                        }
+                        className="flex w-full items-center justify-between rounded-t-xl px-4 py-3 transition hover:bg-accent-500/10"
+                      >
+                        <span className="flex items-center gap-2 text-sm font-semibold text-white">
                           {dot}
-                          <h3 className="text-sm font-semibold text-white">
-                            {col.label}
-                          </h3>
-                        </div>
-                        {count}
-                      </div>
-                    )}
-                    <div className="flex-1 space-y-3 p-3">
+                          {col.label}
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                          {count}
+                          {open ? (
+                            <ChevronUp className="h-4 w-4 text-white/60" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4 text-white/60" />
+                          )}
+                        </span>
+                      </button>
+                    </h3>
+                    <div className={closed && cards.length === 0 ? "hidden" : "flex-1 space-y-3 p-3"}>
                       {closed ? (
                         <button
                           type="button"
-                          onClick={() => setFactureOpen(true)}
+                          onClick={() => setColOpen(col.id, true)}
                           className="flex w-full items-center justify-center gap-1.5 rounded-md bg-brand-950 px-3 py-1.5 text-xs font-semibold text-white/70 transition hover:text-white"
                         >
                           <ChevronDown className="h-3.5 w-3.5" />
@@ -826,14 +827,14 @@ export default function BonsTravailPage() {
                           </button>
                         ))
                       )}
-                      {foldable && factureOpen ? (
+                      {open && cards.length > 0 ? (
                         <button
                           type="button"
-                          onClick={() => setFactureOpen(false)}
+                          onClick={() => setColOpen(col.id, false)}
                           className="flex w-full items-center justify-center gap-1.5 rounded-md bg-brand-950 px-3 py-1.5 text-xs font-semibold text-white/70 transition hover:text-white"
                         >
                           <ChevronUp className="h-3.5 w-3.5" />
-                          Fermer la zone
+                          Fermer la colonne
                         </button>
                       ) : null}
                     </div>
