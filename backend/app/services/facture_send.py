@@ -12,10 +12,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.email_graph import EmailAttachment, get_mailer
 from app.models.facture import Facture, FactureStatus
+from app.services.facture_echeance import appliquer_a_l_envoi
 from app.services.facture_pdf import render_facture_pdf
 from app.services.public_links import public_base
 
 log = logging.getLogger(__name__)
+
+#: États « ouverts » : l'envoi (re)passe la facture à SENT et la date du
+#: jour (émission, échéance).
+_STATUTS_ENVOI = (
+    FactureStatus.DRAFT.value,
+    FactureStatus.SENT.value,
+    FactureStatus.OVERDUE.value,
+)
 
 
 class FactureSendError(Exception):
@@ -146,6 +155,18 @@ async def send_facture(
         if is_provisional_facture_reference(subject.replace("Facture ", "").strip()):
             subject = None
 
+    # « Émise le » = dernière fois où la facture a été envoyée au client :
+    # remis à jour à CHAQUE envoi (y compris les renvois), et AVANT le rendu
+    # pour que le PDF et le courriel portent le jour réel d'expédition.
+    # L'échéance suit : jamais avant ce jour-là, conditions comptées depuis
+    # l'envoi (facture 160, 2026-10-16 : créée le 14 « sur réception »,
+    # envoyée le 16, échéance restée au 14). Une facture payée ou annulée
+    # renvoyée garde ses dates. Rien n'est validé si l'envoi échoue.
+    if _fa0 is not None and _fa0.status in _STATUTS_ENVOI:
+        _fa0.issued_at = datetime.now(timezone.utc)
+        appliquer_a_l_envoi(_fa0)
+        await db.flush()
+
     rendered = await render_facture_pdf(
         db, facture_id, include_statement=include_statement,
     )
@@ -195,16 +216,8 @@ async def send_facture(
     # facture PAYÉE ou ANNULÉE n'écrase PAS son statut — sinon une
     # facture payée re-rentrerait dans le cron de relances (SENT/OVERDUE)
     # ou une facture VOID reviendrait active. Le courriel part toujours.
-    if fa.status in (
-        FactureStatus.DRAFT.value,
-        FactureStatus.SENT.value,
-        FactureStatus.OVERDUE.value,
-    ):
+    if fa.status in _STATUTS_ENVOI:
         fa.status = FactureStatus.SENT.value
-        # « Émise le » = dernière fois où la facture a été envoyée au
-        # client. On remet à jour à CHAQUE envoi (y compris les renvois)
-        # pour que la date affichée soit la date réelle d'expédition.
-        fa.issued_at = datetime.now(timezone.utc)
         await db.flush()
 
     # Facture d'un BON DE TRAVAIL envoyée au client → le bon passe en
