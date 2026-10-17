@@ -152,3 +152,16 @@ jour « sparse » d'en-tête seulement. Sans ça, le flux QB « Get unsent
 invoice reminder » (Paramètres > Automatisation des flux de travaux)
 ouvrait une tâche « Review Invoice » par facture dans « Nécessite votre
 attention ».
+
+## Factures — QuickBooks d'abord, le client ensuite (2026-10-17)
+
+Steven : « si une facture bloque en envoi à QB, ne pas l'envoyer au
+client, la laisser en brouillon et mettre une notification dessus ».
+`send_facture` (`app/services/facture_send.py`) attribue le numéro, date
+la facture, puis la pousse dans QuickBooks (`sync_facture_to_qbo(...,
+avant_envoi=True)`) AVANT le PDF et le courriel. Refus de QB → 409, rien
+ne part, la facture garde son statut et son numéro, le motif va dans
+`qbo_sync_error` (bandeau rouge sur la fiche, alerte dans la liste) et
+une notification `facture_envoi_bloque` va aux admins (une par motif).
+Plus aucun push QB en arrière-plan après l'envoi. Sans clés Intuit
+(staging), la facture part comme avant (`quickbooks_branche()`).
