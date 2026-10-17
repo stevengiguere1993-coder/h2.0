@@ -352,6 +352,9 @@ async def ensure_critical_columns() -> None:
         ("achats", "refacturation_dispense_at", "TIMESTAMP WITH TIME ZONE"),
         ("achats", "refacturation_dispense_par_user_id", "INTEGER"),
         ("achats", "refacturation_dispense_raison", "TEXT"),
+        # Montant refacturé par achat (ligne « Matériaux » unique,
+        # 2026-10-17).
+        ("achats", "montant_refacture", "NUMERIC(12, 2)"),
         # Gestion externe d'un immeuble (compagnie tierce) : sans ces
         # colonnes, tout SELECT sur imm_immeubles plante → 500 sur tout
         # le volet immobilier. Table préexistante → create_all ne les
