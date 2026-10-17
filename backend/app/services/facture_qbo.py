@@ -121,9 +121,12 @@ def _est_introuvable(m: str, codes: set[str]) -> bool:
 
 def _date_emission(facture: Facture) -> str:
     """Date de la facture dans QuickBooks : sa date d'émission Kratos, la
-    même que « Émise le » du PDF client (à défaut, aujourd'hui)."""
-    quand = facture.issued_at or facture.created_at
-    return (quand.date() if quand else date.today()).isoformat()
+    même que « Émise le » du PDF client (jour de Montréal ; à défaut,
+    aujourd'hui) — jamais après l'échéance, qui suit le jour de l'envoi."""
+    from app.services.facture_echeance import aujourd_hui, jour_local
+
+    jour = jour_local(facture.issued_at or facture.created_at)
+    return (jour or aujourd_hui()).isoformat()
 
 
 def _qb_total(inv: Dict[str, Any]) -> Optional[float]:

@@ -448,6 +448,10 @@ class FactureCreate(BaseModel):
     balance: Optional[float] = None
     issued_at: Optional[datetime] = None
     due_at: Optional[datetime] = None
+    # Conditions en jours après l'envoi (0 = payable sur réception) :
+    # l'échéance en découle et suit le jour de l'envoi. Sans conditions,
+    # `due_at` est une date personnalisée (jamais avant aujourd'hui).
+    due_in_days: Optional[int] = Field(default=None, ge=0, le=365)
     internal_notes: Optional[str] = None
     client_note: Optional[str] = None
     is_final: bool = False
@@ -468,7 +472,11 @@ class FactureUpdate(BaseModel):
     balance: Optional[float] = None
     status: Optional[str] = None
     issued_at: Optional[datetime] = None
+    # `due_in_days` (conditions) recalcule l'échéance depuis le jour de
+    # l'envoi ; `due_at` seul = date personnalisée, refusée si elle
+    # précède le jour de l'envoi (aujourd'hui pour un brouillon).
     due_at: Optional[datetime] = None
+    due_in_days: Optional[int] = Field(default=None, ge=0, le=365)
     paid_at: Optional[datetime] = None
     next_reminder_at: Optional[datetime] = None
     reminders_paused: Optional[bool] = None
@@ -493,6 +501,7 @@ class FactureRead(_Base):
     status: str
     issued_at: Optional[datetime]
     due_at: Optional[datetime]
+    due_in_days: Optional[int] = None
     paid_at: Optional[datetime]
     last_reminder_at: Optional[datetime] = None
     reminder_count: int = 0
