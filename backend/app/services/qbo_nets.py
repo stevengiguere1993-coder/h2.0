@@ -748,6 +748,23 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet bons de travail → QB échoué", exc_info=True)
 
+    # ── Compteur de factures au-dessus de QuickBooks ──
+    # Une facture créée directement dans QB (ou importée) doit faire
+    # avancer le compteur de Kratos : prochain numéro = plus haut numéro
+    # existant (Kratos ou QB) + 1 (Steven 2026-10-17).
+    try:
+        from app.services.numbering import aligner_compteur_factures_une_session
+
+        res = await aligner_compteur_factures_une_session()
+        out["compteur_factures"] = res
+        if res["apres"] != res["avant"]:
+            log.warning(
+                "Filet compteur de factures : %s → %s (Kratos %s, QB %s)",
+                res["avant"], res["apres"], res["kratos_max"], res["qb_max"],
+            )
+    except Exception:  # noqa: BLE001
+        log.warning("Filet compteur de factures échoué", exc_info=True)
+
     # (Plus aucun filet gated : tout le miroir Kratos ↔ QB est automatique.
     # L'interrupteur `qbo_auto_sync` ne conditionne plus que les outils de
     # migration de masse explicites, hors de ce runner.)
