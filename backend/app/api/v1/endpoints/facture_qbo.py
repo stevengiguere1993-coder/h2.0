@@ -69,17 +69,6 @@ async def sync_facture(
         await db.rollback()
         await record_facture_sync_error(facture_id, str(exc))
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
-    if result.get("skipped") and result.get("status") == "draft":
-        # Jamais un faux « synchronisée » : un brouillon entre dans
-        # QuickBooks à l'envoi au client, juste avant le courriel.
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail=(
-                "Brouillon : la facture entre dans QuickBooks quand on "
-                "l'envoie au client (« Envoyer au client »), juste avant "
-                "le courriel."
-            ),
-        )
     return QboSyncResult(
         qbo_invoice_id=str(result.get("qbo_invoice_id") or ""),
         qbo_doc_number=str(result.get("qbo_doc_number") or ""),

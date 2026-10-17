@@ -22,8 +22,7 @@ import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { PaymentsPanel } from "@/components/payments-panel";
 import {
   QboConnexionExpiree,
-  estConnexionQboExpiree,
-  motifRefusQbo
+  estConnexionQboExpiree
 } from "@/components/qbo-connexion-expiree";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
@@ -237,9 +236,6 @@ export default function FactureDetailPage() {
   const [includeStatement, setIncludeStatement] = useState(false);
   const [sendBusy, setSendBusy] = useState(false);
   const [sendNotice, setSendNotice] = useState<string | null>(null);
-  // Échec d'envoi affiché DANS la fenêtre d'envoi (le bandeau de la page
-  // est caché derrière elle).
-  const [sendError, setSendError] = useState<string | null>(null);
   const [stmtSendBusy, setStmtSendBusy] = useState(false);
   const [sendTo, setSendTo] = useState("");
   const [sendCc, setSendCc] = useState("");
@@ -457,9 +453,9 @@ export default function FactureDetailPage() {
   const tvq = +(subtotal * TVQ_RATE).toFixed(2);
   const total = +(subtotal + tps + tvq).toFixed(2);
 
-  async function refreshFacture(): Promise<Facture | null> {
+  async function refreshFacture() {
     const r = await authedFetch(`/api/v1/factures/${id}`);
-    if (!r.ok) return null;
+    if (!r.ok) return;
     const fd = (await r.json()) as Facture;
     setF(fd);
     if (fd.client_id && (!client || client.id !== fd.client_id)) {
@@ -470,7 +466,6 @@ export default function FactureDetailPage() {
         if (cd.email) setSendTo(cd.email);
       }
     }
-    return fd;
   }
 
   async function openClientPick() {
@@ -1063,7 +1058,6 @@ export default function FactureDetailPage() {
       .filter(Boolean);
     setSendBusy(true);
     setSendNotice(null);
-    setSendError(null);
     try {
       const res = await authedFetch(`/api/v1/factures/${id}/send`, {
         method: "POST",
@@ -1075,39 +1069,15 @@ export default function FactureDetailPage() {
           include_statement: includeStatement
         })
       });
-      if (res.status === 409) {
-        // QuickBooks n'a pas accepté la facture : rien n'est parti au
-        // client. Elle garde son statut et le motif est posé sur la fiche
-        // (bandeau ci-dessous) ; on la relit pour l'afficher. Le bandeau
-        // d'un brouillon dit déjà « non envoyée » ; pour un renvoi, le
-        // message le dit.
-        const detail = await explainError(res);
-        setSendOpen(false);
-        setQboNotice(null);
-        const fd = await refreshFacture();
-        if (!fd?.qbo_sync_error || fd.status !== "draft") setSendNotice(detail);
-        return;
-      }
       if (!res.ok) {
         throw new Error(await explainError(res));
       }
       const updated = (await res.json()) as Facture;
-      // Numéro déjà pris dans QuickBooks par une autre facture : il a été
-      // remplacé AVANT l'envoi, le client a reçu le nouveau.
-      const ancien =
-        f.reference && !f.reference.startsWith("BR-") && f.reference !== updated.reference
-          ? f.reference
-          : null;
       setF(updated);
       setSendOpen(false);
-      setSendNotice(
-        `Facture envoyée à ${to.join(", ")}.` +
-          (ancien
-            ? ` Elle est partie sous le numéro ${updated.reference} : le ${ancien} était déjà pris dans QuickBooks.`
-            : "")
-      );
+      setSendNotice(`Facture envoyée à ${to.join(", ")}.`);
     } catch (err) {
-      setSendError(`Erreur d'envoi : ${(err as Error).message}`);
+      setSendNotice(`Erreur d'envoi : ${(err as Error).message}`);
     } finally {
       setSendBusy(false);
     }
@@ -1344,42 +1314,10 @@ export default function FactureDetailPage() {
                 </p>
               )
             ) : null}
-            {/* Brouillon retenu à l'envoi (Steven 2026-10-17) : QuickBooks
-                reçoit la facture AVANT le client ; s'il la refuse, rien ne
-                part et le motif reste affiché ici jusqu'au prochain envoi. */}
-            {!qboNotice && f.qbo_sync_error && f.status === "draft" ? (
-              <div className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm">
-                <p className="font-semibold text-rose-300">
-                  ⛔ Facture non envoyée au client : QuickBooks ne l&apos;a pas
-                  acceptée. Elle reste en brouillon.
-                </p>
-                {estConnexionQboExpiree(f.qbo_sync_error) ? (
-                  <QboConnexionExpiree className="mt-2" echecEnregistre />
-                ) : (
-                  <p className="mt-1 text-rose-200" title={f.qbo_sync_error}>
-                    Motif : {motifRefusQbo(f.qbo_sync_error) || f.qbo_sync_error}
-                  </p>
-                )}
-                <p className="mt-1 text-xs text-white/70">
-                  Corrige le problème (numéro avec le crayon, lignes, client…),
-                  puis renvoie-la : elle repasse par QuickBooks avant de partir.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSendError(null);
-                    setSendOpen(true);
-                  }}
-                  className="btn-secondary btn-xs mt-2"
-                >
-                  Réessayer l&apos;envoi au client
-                </button>
-              </div>
-            ) : null}
             {/* Dernière erreur de synchro QBO PERSISTÉE (backend) : visible
                 automatiquement, sans clic — c'est le motif exact renvoyé
                 par QuickBooks au dernier push (envoi, filet ou resync). */}
-            {!qboNotice && f.qbo_sync_error && f.status !== "draft" ? (
+            {!qboNotice && f.qbo_sync_error ? (
               estConnexionQboExpiree(f.qbo_sync_error) ? (
                 // Connexion QuickBooks rompue : bouton de reconnexion
                 // plutôt que le message technique (2026-10-09).
@@ -1432,10 +1370,7 @@ export default function FactureDetailPage() {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setSendError(null);
-                  setSendOpen(true);
-                }}
+                onClick={() => setSendOpen(true)}
                 className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-accent-500"
               >
                 <Mail className="mt-0.5 h-5 w-5 flex-shrink-0 text-accent-500" />
@@ -1448,20 +1383,6 @@ export default function FactureDetailPage() {
                   </p>
                 </div>
               </button>
-              {f.status === "draft" ? (
-                <div
-                  className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left"
-                  title="QuickBooks reçoit le brouillon quand tu l'envoies au client, juste avant le courriel : s'il le refuse, rien ne part au client."
-                >
-                  <RefreshCw className="mt-0.5 h-5 w-5 flex-shrink-0 text-white/40" />
-                  <div>
-                    <p className="text-sm font-semibold text-white">QuickBooks</p>
-                    <p className="mt-0.5 text-xs text-white/60">
-                      Reçoit la facture à l&apos;envoi au client, avant le courriel.
-                    </p>
-                  </div>
-                </div>
-              ) : (
               <button
                 type="button"
                 onClick={syncToQbo}
@@ -1492,7 +1413,6 @@ export default function FactureDetailPage() {
                   </p>
                 </div>
               </button>
-              )}
               {isQboSynced ? (
                 <button
                   type="button"
@@ -2456,12 +2376,6 @@ export default function FactureDetailPage() {
                 </span>
               </label>
             </div>
-
-            {sendError ? (
-              <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
-                {sendError}
-              </p>
-            ) : null}
 
             <div className="mt-6 flex items-center justify-between gap-3">
               <button

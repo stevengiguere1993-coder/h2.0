@@ -208,14 +208,12 @@ async def public_pdf(token: str, db: DBSession) -> Response:
 
 async def _auto_send_deposit_facture(facture_id: int) -> None:
     """Envoie au client la facture d'acompte générée à la signature :
-    QuickBooks d'abord, puis status → sent + courriel + PDF. Si QuickBooks
-    la refuse, elle reste en brouillon avec le motif sur sa fiche et les
-    admins sont prévenus (send_facture). Best-effort — n'interrompt jamais
-    le flux de signature."""
+    status → sent + courriel + PDF, puis push QBO (si auto-sync). Best-
+    effort — n'interrompt jamais le flux de signature."""
     from app.db.session import AsyncSessionLocal
     from app.models.client import Client
     from app.models.facture import Facture, FactureStatus
-    from app.services.facture_send import FactureBloqueeQB, send_facture
+    from app.services.facture_send import send_facture
 
     try:
         async with AsyncSessionLocal() as db:
@@ -250,18 +248,24 @@ async def _auto_send_deposit_facture(facture_id: int) -> None:
                 ),
             )
             await db.commit()
-    except FactureBloqueeQB as exc:
-        # Motif posé sur la fiche, admins prévenus : rien d'autre à faire.
-        log.warning("Acompte %s retenu, non envoyé au client : %s", facture_id, exc)
     except Exception:  # noqa: BLE001
         log.warning(
             "Auto-envoi facture d'acompte %s échoué", facture_id,
             exc_info=True,
         )
-    # Plus de push QBO après l'envoi : send_facture fait entrer la facture
-    # dans QuickBooks AVANT le courriel (une facture d'acompte envoyée au
-    # client doit exister dans QuickBooks, retour 2026-09-21 — l'acompte
-    # du 1616 Saint-Alexandre n'y était pas).
+        return
+    # Facture maintenant ENVOYÉE → on la pousse vers QBO. Push DÉLIBÉRÉ
+    # (non conditionné à l'interrupteur de migration `qbo_auto_sync`),
+    # comme l'envoi manuel d'une facture depuis sa fiche : une facture
+    # d'acompte envoyée au client doit exister dans QuickBooks (retour
+    # 2026-09-21 — l'acompte du 1616 Saint-Alexandre n'y était pas).
+    # Idempotent (qbo_invoice_id) ; l'échec est persisté sur la facture.
+    try:
+        from app.services.qbo_auto_sync import push_facture_now
+
+        await push_facture_now(facture_id)
+    except Exception:  # noqa: BLE001
+        log.warning("Push QBO acompte %s échoué", facture_id)
 
 
 @router.post(

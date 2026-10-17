@@ -221,8 +221,8 @@ class FakeMailer:
 
 @pytest.fixture()
 def envoi(monkeypatch):
-    """Courriel et PDF simulés ; mémorise les dates vues au rendu.
-    QuickBooks n'est pas branché ici : la facture part sans y passer."""
+    """Courriel et PDF simulés ; mémorise les dates vues au rendu."""
+    import app.api.v1.endpoints.facture_send as endpoint
     import app.services.facture_send as service
 
     mailer = FakeMailer()
@@ -238,8 +238,12 @@ def envoi(monkeypatch):
         )
         return fa, b"%PDF-1.4"
 
+    async def _pas_de_qbo(facture_id):
+        return None
+
     monkeypatch.setattr(service, "get_mailer", lambda: mailer)
     monkeypatch.setattr(service, "render_facture_pdf", _rendu)
+    monkeypatch.setattr(endpoint, "_autopush_to_qbo", _pas_de_qbo)
     return mailer, rendus
 
 
