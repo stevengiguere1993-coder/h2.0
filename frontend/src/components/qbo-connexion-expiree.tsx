@@ -20,6 +20,15 @@ export function estConnexionQboExpiree(message?: string | null): boolean {
   );
 }
 
+/** Raison lisible d'un refus QuickBooks, sans le détail technique ajouté
+ *  par le serveur (« QBO refus : <raison> — QBO POST /invoice failed: 400
+ *  (intuit_tid=…) {…} »). */
+export function motifRefusQbo(message?: string | null): string {
+  let m = (message || "").trim();
+  if (m.startsWith("QBO refus : ")) m = m.slice("QBO refus : ".length);
+  return m.split(" — QBO ")[0].trim();
+}
+
 export function QboConnexionExpiree({
   scope = "construction",
   echecEnregistre = false,

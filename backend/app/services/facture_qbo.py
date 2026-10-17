@@ -953,9 +953,30 @@ async def void_qbo_invoice_now(qbo_invoice_id: str) -> None:
         )
 
 
+def quickbooks_branche() -> bool:
+    """QuickBooks est-il branché dans cet environnement (clés de l'app
+    Intuit présentes) ? Le staging n'en a volontairement aucune
+    (render.yaml) : ses factures partent au client sans passer par QB. En
+    prod, une connexion rompue reste « branchée » : la facture est alors
+    retenue (voir facture_send)."""
+    qbo = get_qbo()
+    return bool(
+        getattr(qbo, "ready", False)
+        or (getattr(qbo, "client_id", None) and getattr(qbo, "client_secret", None))
+    )
+
+
 async def sync_facture_to_qbo(
-    db: AsyncSession, facture_id: int
+    db: AsyncSession, facture_id: int, *, avant_envoi: bool = False
 ) -> Dict[str, Any]:
+    """Crée ou met à jour l'Invoice QB de la facture (lignes, client,
+    classe, paiements).
+
+    ``avant_envoi`` : poussée faite par l'envoi au client, AVANT le
+    courriel (facture_send). Un brouillon part alors dans QuickBooks, et
+    tout refus de QuickBooks lève FactureSyncError, même sur une facture
+    déjà liée : rien ne part au client tant que QuickBooks n'a pas accepté
+    la facture telle qu'elle sera envoyée (Steven 2026-10-17)."""
     qbo = get_qbo()
     # Charge les tokens persistés avant de vérifier ready — sinon après
     # un redeploy l'in-memory client ne sait pas qu'on a OAuth-connecté.
@@ -971,9 +992,10 @@ async def sync_facture_to_qbo(
 
     # On NE pousse PAS une facture en BROUILLON vers QBO : seules les
     # factures ENVOYÉES (sent / paid / overdue) deviennent des Invoice QB.
-    # Le brouillon n'est pas un document émis — il partira quand on
-    # cliquera « Envoyer au client ».
-    if (fa.status or "") in ("draft", "void"):
+    # Le brouillon n'est pas un document émis — il part dans QuickBooks
+    # quand on clique « Envoyer au client », juste avant le courriel.
+    statut = fa.status or ""
+    if statut == "void" or (statut == "draft" and not avant_envoi):
         return {
             "skipped": True,
             "reason": "facture_draft_ou_annulee",
@@ -1341,8 +1363,10 @@ async def sync_facture_to_qbo(
         # Invoice QB existe DÉJÀ (facture déjà synchronisée), on NE bloque
         # PAS les paiements : on garde l'Invoice existante et on tente quand
         # même de les pousser (le besoin réel de l'utilisateur). Sans
-        # Invoice, impossible d'imputer un paiement → on lève.
-        if not (fa.qbo_invoice_id or "").strip():
+        # Invoice, impossible d'imputer un paiement → on lève. À l'envoi au
+        # client, on lève aussi : le client ne reçoit pas une version que
+        # QuickBooks a refusée.
+        if avant_envoi or not (fa.qbo_invoice_id or "").strip():
             raise FactureSyncError(str(exc)) from exc
         log.error(
             "Facture %s : MAJ du corps QB échouée, on tente quand même les "
