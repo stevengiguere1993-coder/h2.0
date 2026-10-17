@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertTriangle,
   ChevronDown,
   ChevronRight,
   DollarSign,
@@ -11,7 +10,6 @@ import {
   Plus
 } from "lucide-react";
 
-import { ARefacturerListe } from "@/components/a-refacturer-liste";
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
@@ -113,30 +111,8 @@ export default function FacturationPage() {
   // « Brouillons », « Envoyées » et « En retard » restent dépliées.
   // Cliquer l'en-tête d'une colonne bascule son état.
   const [collapsed, setCollapsed] = useState<Set<string>>(
-    () => new Set(["paid", "void", "a_refacturer"])
+    () => new Set(["paid", "void"])
   );
-  // Colonne « À refacturer » (après « Annulées », repliée par défaut) :
-  // achats reçus après la facture finale ou restés sur un BT fermé. Son
-  // compteur est lu à l'ouverture ; null = pas d'accès (non-admin) →
-  // colonne masquée. Retour Steven 2026-10-16 : ici plutôt qu'au menu.
-  const [aRefacturerCompte, setARefacturerCompte] = useState<number | null>(
-    null
-  );
-  useEffect(() => {
-    let cancelled = false;
-    authedFetch("/api/v1/achats-a-refacturer/compte")
-      .then(async (res) => {
-        if (!res.ok) return;
-        const body = (await res.json()) as { compte?: number };
-        if (!cancelled) setARefacturerCompte(Number(body.compte) || 0);
-      })
-      .catch(() => {
-        /* colonne masquée */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
   const toggleCollapsed = (id: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -425,46 +401,6 @@ export default function FacturationPage() {
                 </div>
               );
             })}
-            {aRefacturerCompte !== null ? (
-              <div
-                className="flex w-96 min-w-[384px] flex-shrink-0 flex-col rounded-xl border border-brand-800 bg-brand-900/60"
-              >
-                <button
-                  type="button"
-                  onClick={() => toggleCollapsed("a_refacturer")}
-                  title={
-                    collapsed.has("a_refacturer")
-                      ? "Cliquer pour déplier"
-                      : "Cliquer pour replier"
-                  }
-                  className="flex w-full items-center justify-between border-b border-brand-800 px-4 py-3 text-left transition hover:bg-brand-900"
-                >
-                  <div className="flex items-center gap-2">
-                    {collapsed.has("a_refacturer") ? (
-                      <ChevronRight className="h-3.5 w-3.5 text-white/50" />
-                    ) : (
-                      <ChevronDown className="h-3.5 w-3.5 text-white/50" />
-                    )}
-                    <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />
-                    <h2 className="text-sm font-semibold text-white">
-                      À refacturer
-                    </h2>
-                  </div>
-                  <span
-                    className={`badge ${
-                      aRefacturerCompte > 0 ? "badge-rose" : "badge-neutral"
-                    }`}
-                  >
-                    {aRefacturerCompte}
-                  </span>
-                </button>
-                {collapsed.has("a_refacturer") ? null : (
-                  <div className="flex-1 p-3">
-                    <ARefacturerListe onCompte={setARefacturerCompte} />
-                  </div>
-                )}
-              </div>
-            ) : null}
           </div>
         )}
       </div>

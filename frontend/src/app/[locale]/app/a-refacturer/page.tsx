@@ -1,9 +1,7 @@
 "use client";
 
 /**
- * « À refacturer » — filet anti-perte (Steven 2026-10-16). Rendu dans la
- * colonne repliable « À refacturer » du tableau Facturation (après
- * « Annulées »), plus dans le menu latéral (retour Steven 2026-10-16).
+ * « À refacturer » — filet anti-perte (Steven 2026-10-16).
  *
  * Liste les achats qui risquent de ne jamais être refacturés :
  *  - reçu ajouté APRÈS la facture finale émise du projet ;
@@ -14,10 +12,13 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Check, Loader2, Undo2, X } from "lucide-react";
+import { AlertTriangle, Check, Loader2, Undo2, X } from "lucide-react";
 
+import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
+import { EVT_A_REFACTURER } from "@/lib/a-refacturer";
 import { authedFetch } from "@/lib/auth";
+import { useAppLayout } from "../layout";
 
 type Ligne = {
   achat_id: number;
@@ -92,12 +93,8 @@ async function detail(res: Response): Promise<string> {
   return typeof body?.detail === "string" ? body.detail : `Erreur ${res.status}`;
 }
 
-export function ARefacturerListe({
-  onCompte
-}: {
-  /** Nombre de lignes à traiter, remonté à l'en-tête de la colonne. */
-  onCompte?: (n: number) => void;
-}) {
+export default function ARefacturerPage() {
+  const { onOpenSidebar } = useAppLayout();
   const [tab, setTab] = useState<Tab>("a_traiter");
   const [liste, setListe] = useState<Liste | null>(null);
   const [dispenses, setDispenses] = useState<Dispense[]>([]);
@@ -126,16 +123,14 @@ export function ARefacturerListe({
       ]);
       if (!r1.ok) throw new Error(await detail(r1));
       if (!r2.ok) throw new Error(await detail(r2));
-      const l = (await r1.json()) as Liste;
-      setListe(l);
-      onCompte?.(l.compte);
+      setListe((await r1.json()) as Liste);
       setDispenses((await r2.json()) as Dispense[]);
     } catch (err) {
       setError(`Chargement échoué : ${(err as Error).message}`);
     } finally {
       setLoading(false);
     }
-  }, [onCompte]);
+  }, []);
 
   useEffect(() => {
     void load();
@@ -145,6 +140,7 @@ export function ARefacturerListe({
     setOuvert(null);
     setRaison("");
     setNotice({ texte, factureId });
+    window.dispatchEvent(new Event(EVT_A_REFACTURER));
     await load();
   }
 
@@ -236,30 +232,42 @@ export function ARefacturerListe({
   const lignes = liste?.lignes ?? [];
 
   return (
-    <div className="space-y-3">
-        <p className="text-xs text-white/70">
-          Reçus ajoutés après la facture finale d&apos;un projet et achats restés
-          sur un BT fermé sans être refacturés.
+    <>
+      <AppTopbar
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "À refacturer" }]}
+        onOpenSidebar={onOpenSidebar}
+      />
+
+      <div className="p-4 lg:p-6">
+        <div className="mb-2 flex flex-wrap items-center gap-3">
+          <AlertTriangle className="h-5 w-5 text-amber-400" />
+          <h1 className="text-xl font-bold text-white">À refacturer</h1>
           {liste && liste.compte > 0 ? (
-            <span className="font-semibold text-white">
-              {" "}
-              Total : {fmt$(liste.total_refacturable)}.
+            <span className="badge-rose">
+              {liste.compte} achat{liste.compte > 1 ? "s" : ""} ·{" "}
+              {fmt$(liste.total_refacturable)} à refacturer
             </span>
           ) : null}
+        </div>
+        <p className="mb-4 max-w-3xl text-sm text-white/70">
+          Reçus ajoutés après la facture finale d&apos;un projet, et achats restés
+          sur un bon de travail fermé sans avoir été refacturés. Chaque ligne
+          reste ici tant qu&apos;elle n&apos;est pas refacturée ou qu&apos;on
+          n&apos;autorise pas explicitement de ne pas la refacturer.
         </p>
 
-        <div className="flex rounded-lg border border-brand-800 bg-brand-950 p-1 text-xs">
+        <div className="mb-4 flex rounded-lg border border-brand-800 bg-brand-900 p-1 text-sm">
           {(
             [
               { id: "a_traiter" as Tab, label: `À traiter (${lignes.length})` },
-              { id: "dispenses" as Tab, label: `Autorisés (${dispenses.length})` }
+              { id: "dispenses" as Tab, label: `Non refacturés autorisés (${dispenses.length})` }
             ]
           ).map((t) => (
             <button
               key={t.id}
               type="button"
               onClick={() => setTab(t.id)}
-              className={`flex-1 rounded-md px-2 py-1 font-semibold transition ${
+              className={`flex-1 rounded-md px-3 py-1.5 font-semibold transition ${
                 tab === t.id ? "bg-accent-500 text-brand-950" : "text-white/70 hover:text-white"
               }`}
             >
@@ -269,7 +277,7 @@ export function ARefacturerListe({
         </div>
 
         {error ? (
-          <div className="flex items-start justify-between gap-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+          <div className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
             <span>{error}</span>
             <button type="button" onClick={() => setError(null)} aria-label="Fermer">
               <X className="h-4 w-4" />
@@ -277,7 +285,7 @@ export function ARefacturerListe({
           </div>
         ) : null}
         {notice ? (
-          <div className="flex items-start justify-between gap-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+          <div className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
             <span>
               {notice.texte}{" "}
               {notice.factureId ? (
@@ -294,12 +302,12 @@ export function ARefacturerListe({
         ) : null}
 
         {loading && !liste ? (
-          <div className="flex justify-center py-6">
+          <div className="flex justify-center py-12">
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : tab === "a_traiter" ? (
           lignes.length === 0 ? (
-            <div className="rounded-lg border border-brand-800 bg-brand-950 px-3 py-6 text-center text-xs text-white/70">
+            <div className="rounded-xl border border-brand-800 bg-brand-900 px-4 py-10 text-center text-sm text-white/70">
               <Check className="mx-auto mb-2 h-6 w-6 text-emerald-400" />
               Rien à refacturer : tous les achats sont refacturés ou autorisés.
             </div>
@@ -310,7 +318,7 @@ export function ARefacturerListe({
                 return (
                   <li
                     key={l.achat_id}
-                    className="rounded-lg border border-brand-800 bg-brand-950 p-3"
+                    className="rounded-xl border border-brand-800 bg-brand-900 p-4"
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
@@ -332,17 +340,17 @@ export function ARefacturerListe({
                         </div>
                         <Link
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                          href={`/app/achats/${l.achat_id}?from=/app/facturation` as any}
-                          className="block truncate text-sm font-semibold text-white hover:text-accent-500"
+                          href={`/app/achats/${l.achat_id}?from=/app/a-refacturer` as any}
+                          className="block truncate font-semibold text-white hover:text-accent-500"
                         >
                           {l.description || `Achat #${l.achat_id}`}
                         </Link>
-                        <p className="text-xs text-white/70">
+                        <p className="text-sm text-white/70">
                           {l.fournisseur || "Fournisseur inconnu"}
                           {l.supplier_invoice_number ? ` · facture ${l.supplier_invoice_number}` : ""}
                           {l.invoice_date ? ` du ${fmtDate(l.invoice_date)}` : ""}
                         </p>
-                        <p className="text-xs text-white/70">
+                        <p className="text-sm text-white/70">
                           {l.bon_id ? (
                             <Link
                               // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -364,7 +372,7 @@ export function ARefacturerListe({
                         </p>
                       </div>
                       <div className="text-right">
-                        <p className="font-bold text-white">{fmt$(l.montant_refacturable)}</p>
+                        <p className="text-lg font-bold text-white">{fmt$(l.montant_refacturable)}</p>
                         <p className="text-xs text-white/60">
                           coût {fmt$(l.montant)} · {l.regle}
                         </p>
@@ -401,7 +409,7 @@ export function ARefacturerListe({
                               Verser l&apos;achat sur
                             </label>
                             <select
-                              className="input mb-2 w-full text-xs"
+                              className="input mb-2 w-full text-sm"
                               value={cible}
                               onChange={(e) => setCible(e.target.value)}
                             >
@@ -447,7 +455,7 @@ export function ARefacturerListe({
                           Pourquoi cet achat ne sera-t-il pas refacturé ?
                         </label>
                         <textarea
-                          className="input mb-2 w-full text-xs"
+                          className="input mb-2 w-full text-sm"
                           rows={2}
                           value={raison}
                           onChange={(e) => setRaison(e.target.value)}
@@ -478,27 +486,27 @@ export function ARefacturerListe({
             </ul>
           )
         ) : dispenses.length === 0 ? (
-          <div className="rounded-lg border border-brand-800 bg-brand-950 px-3 py-6 text-center text-xs text-white/70">
+          <div className="rounded-xl border border-brand-800 bg-brand-900 px-4 py-10 text-center text-sm text-white/70">
             Aucun achat autorisé à ne pas être refacturé pour l&apos;instant.
           </div>
         ) : (
           <ul className="space-y-3">
             {dispenses.map((d) => (
-              <li key={d.achat_id} className="rounded-lg border border-brand-800 bg-brand-950 p-3">
+              <li key={d.achat_id} className="rounded-xl border border-brand-800 bg-brand-900 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <Link
                       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                      href={`/app/achats/${d.achat_id}?from=/app/facturation` as any}
-                      className="block truncate text-sm font-semibold text-white hover:text-accent-500"
+                      href={`/app/achats/${d.achat_id}?from=/app/a-refacturer` as any}
+                      className="block truncate font-semibold text-white hover:text-accent-500"
                     >
                       {d.description || `Achat #${d.achat_id}`}
                     </Link>
-                    <p className="text-xs text-white/70">
+                    <p className="text-sm text-white/70">
                       {d.fournisseur || "Fournisseur inconnu"}
                       {d.project_name ? ` · ${d.project_name}` : ""}
                     </p>
-                    <p className="mt-1 text-xs text-white">« {d.raison} »</p>
+                    <p className="mt-1 text-sm text-white">« {d.raison} »</p>
                     <p className="text-xs text-white/60">
                       Autorisé par {d.dispense_par || "?"} le {fmtDate(d.dispense_le)}
                     </p>
@@ -520,6 +528,7 @@ export function ARefacturerListe({
             ))}
           </ul>
         )}
-    </div>
+      </div>
+    </>
   );
 }
