@@ -15,7 +15,7 @@ import { useAppLayout } from "../layout";
 import { authedFetch, hasMinRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { Link } from "@/i18n/navigation";
-import { projectLabel, trierParNom } from "@/lib/project";
+import { projectLabel } from "@/lib/project";
 
 type Achat = {
   id: number;
@@ -292,20 +292,6 @@ export default function AchatsPage() {
     () => new Set(bonProjects.map((p) => p.id)),
     [bonProjects]
   );
-  // Filtre « Fournisseur » : seulement les fiches qu'au moins un achat
-  // utilise (une fiche orpheline, ex. un client mis par erreur comme
-  // bénéficiaire dans QB puis corrigé, n'y apparaît plus), en ordre
-  // alphabétique.
-  const fournisseursFiltre = useMemo(() => {
-    const utilises = new Set(
-      items.map((a) => a.fournisseur_id).filter((x): x is number => !!x)
-    );
-    return trierParNom(
-      fournisseurs.filter(
-        (f) => utilises.has(f.id) || String(f.id) === fFournisseur
-      )
-    );
-  }, [items, fournisseurs, fFournisseur]);
   const frById = useMemo(() => {
     const m = new Map<number, Fournisseur>();
     fournisseurs.forEach((f) => m.set(f.id, f));
@@ -559,7 +545,7 @@ export default function AchatsPage() {
             className="w-48"
             emptyLabel="Tous les fournisseurs"
             placeholder="Fournisseur — tape pour chercher…"
-            options={fournisseursFiltre.map((fr) => ({
+            options={fournisseurs.map((fr) => ({
               value: String(fr.id),
               label: fr.name
             }))}

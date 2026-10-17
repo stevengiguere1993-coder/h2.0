@@ -1376,33 +1376,6 @@ async def pull_project_costs_from_qbo(
                     (p.get("EntityRef") or {}).get("value"),
                 )
                 updated.append("fournisseur")
-            # Bénéficiaire CHANGÉ dans QB (ex. dépense d'abord mise au nom
-            # d'un client, corrigée ensuite vers le vrai fournisseur) : on
-            # le reflète sur une dépense ORIGINAIRE de QB, seulement si la
-            # fiche actuelle vient elle-même d'un import (hors annuaire)
-            # et ne correspond ni par nom ni par id Vendor au bénéficiaire
-            # QB — une fiche choisie ou renommée dans Kratos reste.
-            elif (
-                not dry_run
-                and vendor_fourn
-                and existing.fournisseur_id is not None
-                and float(existing.amount_taxes or 0) == 0
-            ):
-                _cur = await db.get(Fournisseur, existing.fournisseur_id)
-                _ref_id = str((p.get("EntityRef") or {}).get("value") or "")
-                if (
-                    _cur is not None
-                    and not _cur.in_directory
-                    and (_cur.name or "").strip().lower()
-                    != vendor_fourn.strip().lower()
-                    and (not _ref_id or (_cur.qbo_vendor_id or "") != _ref_id)
-                ):
-                    _fid = await _fournisseur_id_for(
-                        db, fourn_by_name, vendor_fourn, _ref_id or None
-                    )
-                    if _fid and _fid != existing.fournisseur_id:
-                        existing.fournisseur_id = _fid
-                        updated.append("fournisseur")
             # Reflète les MODIFS QB (montant / description) sur une dépense
             # ORIGINAIRE de QB (TTC, sans ventilation de taxe Kratos). On ne
             # touche PAS un achat maître-Kratos (amount = HT + amount_taxes).
