@@ -491,9 +491,16 @@ async def pull_new_bills_from_qbo(
             paid_at = None
             method = PaymentMethod.BILL_TO_PAY.value
             status_value = AchatStatus.RECEIVED.value
-            terms = await _fournisseur_terms(db, fournisseur.id)
-            base = invoice_date or datetime.now(timezone.utc)
-            due_at = base + timedelta(days=terms)
+            # Échéance prévue dans QB (DueDate) en priorité ; sinon
+            # date de facture + conditions du fournisseur.
+            # Midi UTC pour ne pas reculer d'un jour en heure de l'Est.
+            due_at = _parse_qbo_date(bill.get("DueDate"))
+            if due_at is not None:
+                due_at = due_at.replace(hour=12)
+            else:
+                terms = await _fournisseur_terms(db, fournisseur.id)
+                base = invoice_date or datetime.now(timezone.utc)
+                due_at = base + timedelta(days=terms)
 
         # Facture DIVISEE sur plusieurs projets (une Class differente par
         # ligne) → un achat PAR projet : HT = somme des lignes du projet,
