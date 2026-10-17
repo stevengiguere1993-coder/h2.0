@@ -5,7 +5,7 @@ seeds the line items from the project's approved (or all) punches —
 grouped by employee × hourly_rate.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -27,6 +27,7 @@ from app.models.soumission import Soumission, SoumissionStatus
 from app.models.soumission_item import SoumissionItem
 from app.models.user import User
 from app.schemas.business import FactureRead
+from app.services.facture_echeance import aujourd_hui, echeance_du_jour
 from app.services.facture_lignes import (
     KIND_SERVICE,
     clause_hors_soumission,
@@ -151,9 +152,11 @@ async def convert_project_to_facture(
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
 
+    # Conditions comptées depuis l'ENVOI : l'échéance du brouillon n'est
+    # qu'un aperçu, recalculé quand la facture part (facture_echeance).
     due_at = None
     if data.due_in_days is not None:
-        due_at = datetime.now(timezone.utc) + timedelta(days=data.due_in_days)
+        due_at = echeance_du_jour(aujourd_hui() + timedelta(days=data.due_in_days))
 
     facture = Facture(
         # Référence PROVISOIRE : le vrai numéro est attribué à l'ENVOI
@@ -165,6 +168,7 @@ async def convert_project_to_facture(
         # issued_at reste vide : la facture n'est « émise » qu'à l'envoi
         # au client, pas à sa création (cf. send_facture).
         due_at=due_at,
+        due_in_days=data.due_in_days,
     )
     db.add(facture)
     await db.flush()

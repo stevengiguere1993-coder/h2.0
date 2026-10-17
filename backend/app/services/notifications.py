@@ -89,12 +89,14 @@ async def notify_role(
     title: str,
     body: Optional[str] = None,
     href: Optional[str] = None,
+    push: bool = True,
 ) -> int:
     """Fan-out a notification to every user at or above `min_role`.
 
     Utile pour « nouveau prospect », « punch à approuver » — on notifie
     tous les managers/admins d'un coup. Retourne le nombre de notifs
-    créées.
+    créées. ``push=False`` : cloche Kratos seulement, sans notification
+    sur les téléphones.
     """
     from sqlalchemy import select
 
@@ -122,7 +124,7 @@ async def notify_role(
             )
             cibles.append(u.id)
             count += 1
-    if cibles:
+    if cibles and push:
         await _push_best_effort(
             db, cibles, kind=kind, title=title, body=body, href=href
         )
