@@ -272,6 +272,30 @@ def _txn_customer_refs(txn: dict) -> set[str]:
     return out
 
 
+def _classe_generique(cname: str) -> bool:
+    """Vrai si la classe QB est une classe de VOLET posée par Kratos
+    (« Construction » sur les achats et le shop, « Kratos » sur les reçus
+    saisis dans Comptabilité) et non l'adresse d'un chantier : elle ne
+    désigne aucun projet — un projet nommé « Construction garage » ne
+    doit pas l'adopter (Steven 2026-10-16 : la classe d'un reçu poussé
+    est « Construction », le chantier passe par Client : Projet)."""
+    from app.core.config import settings
+    from app.services.qbo_project_resolve import _norm
+
+    c = _norm(cname)
+    if not c:
+        return False
+    generiques = {
+        _norm(getattr(settings, k, "") or "")
+        for k in (
+            "qbo_achat_class_name",
+            "qbo_shop_class_name",
+            "qbo_recus_class_name",
+        )
+    }
+    return c in generiques
+
+
 def _project_allocations(
     txn: dict,
     proj_by_job: dict[str, Project],
@@ -753,7 +777,8 @@ async def pull_project_costs_from_qbo(
     def _resolve_class_project(cname: str) -> Optional[Project]:
         c = _norm_cls(cname)
         # Trop court = risque de faux positif par inclusion → on ignore.
-        if len(c) < 5:
+        # Classe de VOLET (« Construction », « Kratos »…) = pas un chantier.
+        if len(c) < 5 or _classe_generique(cname):
             return None
         hit = _class_exact.get(c)
         if hit is not None:

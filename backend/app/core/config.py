@@ -96,6 +96,11 @@ class Settings(BaseSettings):
     qbo_sales_tax_code: Optional[str] = None
     #: Classe QB des achats « Shop » (non reliés à un projet).
     qbo_shop_class_name: str = "Construction"
+    #: Classe QB de TOUT achat/reçu poussé depuis Kratos vers QB, projet ou
+    #: bon de travail compris (Steven 2026-10-16) : le chantier passe par
+    #: « Client : Projet » (sous-client), la classe dit le volet — jamais
+    #: l'adresse du chantier. Vide = aucune classe.
+    qbo_achat_class_name: str = "Construction"
     #: Classe QB de chaque reçu saisi dans Comptabilité → Nouveau reçu
     #: (Steven 2026-10-14) : les techniciennes comptables repèrent ainsi
     #: dans QB tout ce qui vient de Kratos. Vide = aucune classe.
