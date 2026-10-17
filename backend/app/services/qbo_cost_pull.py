@@ -205,6 +205,42 @@ def _parse_date(s: Any) -> Optional[date]:
         return None
 
 
+def _est_lien_client_mere(job_id: str, parent_qbo_id: str) -> bool:
+    """Vrai si le « job » QB mémorisé sur un projet est le CLIENT MÈRE
+    lui-même (ancien repli, liaison manuelle) : ce n'est pas un
+    sous-client, donc pas une clé pour rapporter sur ce projet tout ce
+    qui est imputé au client dans QB (même lecture que
+    qbo_project_resolve côté push)."""
+    j = (job_id or "").strip()
+    return bool(j) and j == (parent_qbo_id or "").strip()
+
+
+def _projet_unique_par_client(projects) -> dict[int, Project]:
+    """Repli CLIENT MÈRE : par client Kratos, le projet sur lequel une
+    transaction QB imputée au client PARENT (pas au sous-client) peut
+    être rapportée sans ambiguïté = son UNIQUE projet relié, et
+    seulement s'il est RÉGULIER.
+
+    Jamais un BON DE TRAVAIL (kind="bon_travail") : un bon est identifié
+    dans QB par SON sous-client (« BT-… ») ; une dépense laissée sur le
+    client mère (ménage, entretien de l'immeuble…) ne lui appartient
+    pas et deviendrait à tort refacturable T&M au client (retour Steven
+    2026-10-16 : « Frais de ménage du 22 juin » importée sur
+    BT-20260612-131757). Client à plusieurs projets → on ne devine pas."""
+    by_client: dict[int, list] = {}
+    for p in projects:
+        if getattr(p, "client_id", None):
+            by_client.setdefault(int(p.client_id), []).append(p)
+    out: dict[int, Project] = {}
+    for cid, ps in by_client.items():
+        if len(ps) != 1:
+            continue
+        if (getattr(ps[0], "kind", None) or "") == "bon_travail":
+            continue
+        out[cid] = ps[0]
+    return out
+
+
 def _project_for_txn(
     txn: dict, proj_by_job: dict[str, Project]
 ) -> Optional[Project]:
@@ -554,8 +590,39 @@ async def pull_project_costs_from_qbo(
                 )
         return out
 
+    # Client mère QB (qbo_customer_id) de chaque projet relié : un « job »
+    # mémorisé qui est en fait le client mère lui-même n'est PAS un
+    # sous-client → il ne sert pas de clé (sinon tout ce qui est imputé
+    # au client dans QB atterrirait sur ce projet). Le repli CLIENT MÈRE
+    # plus bas décide, lui, explicitement (projet régulier unique).
+    _client_mere_qbo: dict[int, str] = {}
+    try:
+        from app.models.client import Client as _ClientMere
+
+        _cids_m = {int(p.client_id) for p in _projects if p.client_id}
+        if _cids_m:
+            _client_mere_qbo = {
+                int(_cid): str(_q or "").strip()
+                for _cid, _q in (
+                    await db.execute(
+                        select(
+                            _ClientMere.id, _ClientMere.qbo_customer_id
+                        ).where(_ClientMere.id.in_(list(_cids_m)))
+                    )
+                ).all()
+            }
+    except Exception:  # noqa: BLE001
+        log.warning("Lecture des clients mères QB échouée", exc_info=True)
+
+    def _job_valide(p: Project, jid: str) -> str:
+        """Id de sous-client à mapper pour ``p`` ('' = aucun)."""
+        parent_ = (
+            _client_mere_qbo.get(int(p.client_id), "") if p.client_id else ""
+        )
+        return "" if _est_lien_client_mere(jid, parent_) else jid
+
     proj_by_job: dict[str, Project] = _map_sans_collision(
-        [(str(p.qbo_job_id or ""), p) for p in _projects]
+        [(_job_valide(p, str(p.qbo_job_id or "")), p) for p in _projects]
     )
 
     # RÉPARATION des qbo_job_id PÉRIMÉS (sous-client converti en projet QB) :
@@ -623,25 +690,23 @@ async def pull_project_costs_from_qbo(
             await db.flush()
         # Reconstruit le mapping avec les ids réparés (couvre le converti).
         proj_by_job = _map_sans_collision(
-            [(_resolved.get(p.id) or "", p) for p in _projects]
+            [
+                (_job_valide(p, _resolved.get(p.id) or ""), p)
+                for p in _projects
+            ]
         )
     # Repli CLIENT MÈRE : une facture QB imputée au customer PARENT (pas
     # au sous-client/projet) n'était JAMAIS importée (« sans_projet »,
     # cas Atlant #177 imputée « 2020 St-Thimothee inc. »). Quand la fiche
-    # client Kratos est reliée à ce customer ET n'a qu'UN SEUL projet,
-    # l'imputation est sans ambiguïté → on mappe l'id du customer parent
-    # sur ce projet. Client à plusieurs projets → on ne devine pas (le
-    # repli par classe de ligne reste disponible).
+    # client Kratos est reliée à ce customer ET n'a qu'UN SEUL projet
+    # RÉGULIER, l'imputation est sans ambiguïté → on mappe l'id du
+    # customer parent sur ce projet. Client à plusieurs projets → on ne
+    # devine pas (le repli par classe de ligne reste disponible). Jamais
+    # sur un BON DE TRAVAIL (cf. _projet_unique_par_client).
     try:
         from app.models.client import Client as _ClientMap
 
-        _by_client: dict[int, list[Project]] = {}
-        for _p in _projects:
-            if _p.client_id:
-                _by_client.setdefault(int(_p.client_id), []).append(_p)
-        _single = {
-            cid: ps[0] for cid, ps in _by_client.items() if len(ps) == 1
-        }
+        _single = _projet_unique_par_client(_projects)
         if _single:
             _crows = (
                 await db.execute(
