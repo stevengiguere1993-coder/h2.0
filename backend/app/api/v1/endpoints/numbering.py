@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from app.api.deps import CurrentAdmin, DBSession
 from app.models.numbering_counter import NumberingCounter
-from app.services.numbering import _ensure_row
+from app.services.numbering import _ensure_row, aligner_compteur_factures
 
 
 router = APIRouter(prefix="/settings/numbering", tags=["numbering"])
@@ -33,6 +33,40 @@ class NumberingUpdate(BaseModel):
     next_facture_number: Optional[int] = Field(default=None, ge=1, le=999_999_999)
     next_soumission_number: Optional[int] = Field(default=None, ge=1, le=999_999_999)
     next_po_number: Optional[int] = Field(default=None, ge=1, le=999_999_999)
+
+
+class AlignementFactures(BaseModel):
+    """Résultat du recalage du compteur de factures sur Kratos + QB."""
+
+    avant: int
+    apres: int
+    kratos_max: int
+    #: Plus haut numéro dans QuickBooks ; None si QB n'a pas répondu.
+    qb_max: Optional[int] = None
+    qb_consulte: bool
+    compteurs: NumberingRead
+
+
+@router.post(
+    "/aligner-factures",
+    response_model=AlignementFactures,
+    summary="Recale le compteur de factures sur le plus haut numéro (Kratos ou QuickBooks) + 1",
+)
+async def aligner_factures(db: DBSession, _: CurrentAdmin) -> AlignementFactures:
+    """Prochain numéro de facture = plus haut numéro existant + 1, entre
+    Kratos et QuickBooks. Ne baisse jamais le compteur. Le même recalage
+    tourne au démarrage, à chaque attribution de numéro et toutes les
+    heures ; ce bouton sert à vérifier ou à forcer tout de suite."""
+    res = await aligner_compteur_factures(db)
+    await db.commit()
+    fresh = (
+        await db.execute(
+            select(NumberingCounter).where(NumberingCounter.id == 1)
+        )
+    ).scalar_one()
+    return AlignementFactures(
+        **res, compteurs=NumberingRead.model_validate(fresh)
+    )
 
 
 @router.get("", response_model=NumberingRead)
