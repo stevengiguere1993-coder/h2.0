@@ -148,22 +148,6 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning("reclassement des lignes importées failed: %s", exc)
 
-    # Factures refusées par QB parce qu'une ligne pointait une CATÉGORIE
-    # de Produits et services (facture 160, 2026-10-17) : renvoi en
-    # arrière-plan, maintenant que ensure_item écarte les catégories.
-    try:
-        from app.services.qbo_auto_sync import relancer_factures_refus_categorie
-
-        n = await relancer_factures_refus_categorie()
-        if n:
-            logger.info(
-                "Startup : %d facture(s) refusée(s) par QB (catégorie) "
-                "renvoyée(s)",
-                n,
-            )
-    except Exception as exc:
-        logger.warning("relance des refus QB « catégorie » failed: %s", exc)
-
     # Matériaux sur une seule ligne (2026-10-17) : dans les BROUILLONS, les
     # lignes « Matériel — <achat> » importées fusionnent en une ligne
     # « Matériaux » par facture. Une seule fois (applied_backfills), après

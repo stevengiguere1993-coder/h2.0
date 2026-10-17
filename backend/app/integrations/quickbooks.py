@@ -1117,25 +1117,14 @@ class QuickBooksClient:
             s = s.replace(ch, " ")
         return " ".join(s.split())[:100]
 
-    async def _items_nommes(self, name: str) -> list[Dict[str, Any]]:
+    async def find_item_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         safe = self._clean_item_name(name)
         if not safe:
-            return []
-        return await self.query(
-            f"SELECT * FROM Item WHERE Name = '{safe}' MAXRESULTS 10"
+            return None
+        rows = await self.query(
+            f"SELECT * FROM Item WHERE Name = '{safe}' MAXRESULTS 1"
         )
-
-    async def find_item_by_name(self, name: str) -> Optional[Dict[str, Any]]:
-        """Produit ou service QB à ce nom. Une CATÉGORIE de la liste
-        Produits et services porte aussi un nom d'Item, mais une ligne de
-        transaction qui la référence est refusée (400, code 2500 « un
-        élément est configuré comme une catégorie au lieu d'un produit ou
-        d'un service ») — facture 160, 2026-10-17 : la ligne « Matériaux »
-        tombait sur la catégorie « Matériaux »."""
-        for row in await self._items_nommes(name):
-            if str(row.get("Type") or "") != "Category":
-                return row
-        return None
+        return rows[0] if rows else None
 
     async def create_item(
         self, name: str, description: Optional[str] = None
@@ -1163,20 +1152,10 @@ class QuickBooksClient:
     async def ensure_item(
         self, name: str, description: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Find an Item by name, otherwise create a Service Item.
-
-        Si le nom est pris par une CATÉGORIE (inutilisable sur une ligne),
-        on passe par un service « <nom> (service) » : QB refuse un second
-        Item au même nom."""
-        rows = await self._items_nommes(name)
-        for row in rows:
-            if str(row.get("Type") or "") != "Category":
-                return row
-        if rows:
-            name = f"{self._clean_item_name(name)[:90]} (service)"
-            existing = await self.find_item_by_name(name)
-            if existing:
-                return existing
+        """Find an Item by name, otherwise create a Service Item."""
+        existing = await self.find_item_by_name(name)
+        if existing:
+            return existing
         return await self.create_item(name, description=description)
 
     # ------------------------------------------------------------------
