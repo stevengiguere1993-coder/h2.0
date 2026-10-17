@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy import select
@@ -203,6 +203,19 @@ def _parse_date(s: Any) -> Optional[date]:
         return datetime.strptime(str(s)[:10], "%Y-%m-%d").date()
     except (TypeError, ValueError):
         return None
+
+
+def _echeance_bill(b: dict) -> Optional[datetime]:
+    """Date limite de paiement d'un Bill QB : son `DueDate` (conditions du
+    fournisseur appliquées par QB), sinon date de facture + 30 j. Midi UTC
+    pour ne pas changer de jour en heure de l'Est."""
+    jour = _parse_date(b.get("DueDate"))
+    if jour is None:
+        txn = _parse_date(b.get("TxnDate"))
+        if txn is None:
+            return None
+        jour = txn + timedelta(days=30)
+    return datetime.combine(jour, time(12, 0), tzinfo=timezone.utc)
 
 
 def _est_lien_client_mere(job_id: str, parent_qbo_id: str) -> bool:
@@ -993,9 +1006,17 @@ async def pull_project_costs_from_qbo(
             if not dry_run:
                 _new_date = _parse_date(b.get("TxnDate"))
                 _real_pm = paid_bill_methods.get(bid)
+                _due = None if paid else _echeance_bill(b)
                 for ach in achs_bill:
                     if _new_date and _new_date != ach.invoice_date:
                         ach.invoice_date = _new_date
+                    # Échéance à payer = celle de QB (DueDate).
+                    if (
+                        _due is not None
+                        and ach.status != "paid"
+                        and ach.due_at != _due
+                    ):
+                        ach.due_at = _due
                     if paid and ach.status != "paid":
                         ach.status = "paid"
                         ach.paid_at = ach.paid_at or now
@@ -1080,6 +1101,18 @@ async def pull_project_costs_from_qbo(
             _new_date = _parse_date(b.get("TxnDate"))
             if not dry_run and _new_date and _new_date != ach.invoice_date:
                 ach.invoice_date = _new_date
+                updated = True
+            # Échéance d'un achat à payer = la date prévue dans QB
+            # (DueDate du Bill) — retour Steven 2026-10-17, factures Rona
+            # importées sans échéance.
+            _due = None if paid else _echeance_bill(b)
+            if (
+                not dry_run
+                and _due is not None
+                and ach.status != "paid"
+                and ach.due_at != _due
+            ):
+                ach.due_at = _due
                 updated = True
             # Reflète les MODIFS faites dans QB (montant / description) sur un
             # coût ORIGINAIRE de QB — stocké en TTC, SANS ventilation de taxe
@@ -1218,6 +1251,7 @@ async def pull_project_costs_from_qbo(
                         payment_method=_pm,
                         received_at=now,
                         paid_at=now if paid else None,
+                        due_at=None if paid else _echeance_bill(b),
                         invoice_date=_parse_date(b.get("TxnDate")),
                         supplier_invoice_number=doc or None,
                         qbo_bill_id=bid,
