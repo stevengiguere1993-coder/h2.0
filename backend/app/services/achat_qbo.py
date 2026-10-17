@@ -195,28 +195,6 @@ def _txn_date(achat: Achat) -> str:
     return date.today().isoformat()
 
 
-async def _classe_achats_id(qbo, achat_id: int) -> Optional[str]:
-    """Id de la classe QB posée sur chaque ligne d'achat poussée depuis
-    Kratos : « Construction » (settings.qbo_achat_class_name), jamais
-    l'adresse du chantier (Steven 2026-10-16) — le suivi par chantier
-    passe par Client : Projet (sous-client), la classe dit le volet.
-    Find-or-create, comme la classe shop. None si le réglage est vide, si
-    le suivi des classes est désactivé ou si QB refuse : la dépense part
-    sans classe, motif journalisé."""
-    name = (settings.qbo_achat_class_name or "").strip()
-    if not name:
-        return None
-    try:
-        klass = await qbo.ensure_class(name=name)
-    except QuickBooksError as exc:
-        log.warning(
-            "QBO: classe « %s » introuvable (achat %s): %s",
-            name, achat_id, exc,
-        )
-        return None
-    return str(klass.get("Id")) if klass and klass.get("Id") else None
-
-
 def _private_note(
     achat: Achat, po_reference: Optional[str], project_name: Optional[str]
 ) -> str:
@@ -743,11 +721,9 @@ async def sync_achat_to_qbo(
             )
         ).scalar_one_or_none()
         # Organisation QBO demandée :
-        #   - Client (CustomerRef) = le client réel : Projet (sous-client),
-        #     créé s'il n'existe pas.
-        #   - Classe (ClassRef)    = « Construction » (le volet), créée si
-        #     absente (si le suivi des classes est activé) — plus l'adresse
-        #     du chantier depuis le 2026-10-16 (Steven).
+        #   - Client (CustomerRef) = le client réel, créé s'il n'existe pas.
+        #   - Classe (ClassRef)    = le projet (nom/adresse du chantier),
+        #     créée si absente (si le suivi des classes est activé).
         if project:
             # RATTACHEMENT AU PROJET QBO : le coût doit pointer vers le
             # SOUS-CLIENT du projet (project.qbo_job_id) pour apparaître
@@ -791,10 +767,17 @@ async def sync_achat_to_qbo(
                 )
             elif getattr(project, "qbo_job_id", None):
                 customer_id = str(project.qbo_job_id)
-            # Classe = « Construction » (settings.qbo_achat_class_name), pas
-            # l'adresse du chantier (Steven 2026-10-16) : le chantier est
-            # porté par Client : Projet (CustomerRef), la classe par le volet.
-            class_id = await _classe_achats_id(qbo, int(achat.id))
+            # Classe = adresse du chantier (repli sur le nom du projet
+            # si l'adresse est vide).
+            class_name = (
+                (getattr(project, "address", None) or "").strip()
+                or (project.name or "").strip()
+            )
+            if class_name:
+                klass = await qbo.ensure_class(name=class_name)
+                class_id = (
+                    str(klass.get("Id")) if klass and klass.get("Id") else None
+                )
     # Reçu SANS projet/BT mais rattaché à un CLIENT : la dépense QB porte
     # le CustomerRef du client mère — le coût lui est attribué dans QB
     # (sans classe chantier). Le projet, s'il existe, prime (sous-client).
