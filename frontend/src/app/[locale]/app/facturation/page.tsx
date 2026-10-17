@@ -13,6 +13,7 @@ import {
 
 import { ARefacturerListe } from "@/components/a-refacturer-liste";
 import { AppTopbar } from "@/components/app-topbar";
+import { motifRefusQbo } from "@/components/qbo-connexion-expiree";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { fetchAllPages } from "@/lib/fetch-all";
@@ -34,6 +35,9 @@ type Facture = {
   paid_at: string | null;
   qbo_invoice_id: string | null;
   qbo_doc_number: string | null;
+  // Dernier refus QuickBooks ; sur un brouillon, la facture a été retenue
+  // à l'envoi (rien n'est parti au client).
+  qbo_sync_error?: string | null;
   created_at: string;
 };
 
@@ -624,6 +628,14 @@ function Card({
       {fa.qbo_invoice_id ? (
         <p className="mt-2 text-[10px] text-emerald-400">
           QBO Invoice #{fa.qbo_doc_number || fa.qbo_invoice_id}
+        </p>
+      ) : null}
+      {fa.status === "draft" && fa.qbo_sync_error ? (
+        <p
+          className="mt-2 text-[11px] font-semibold text-rose-300"
+          title={motifRefusQbo(fa.qbo_sync_error) || fa.qbo_sync_error}
+        >
+          ⛔ Non envoyée : refusée par QuickBooks
         </p>
       ) : null}
     </div>
