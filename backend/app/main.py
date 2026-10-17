@@ -253,27 +253,6 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning("correction des échéances avant l'envoi failed: %s", exc)
 
-    # Soumissions terminées (Steven 2026-10-17) : les soumissions dont le
-    # projet était déjà livré passent dans la colonne « Terminées ». Une
-    # seule fois (applied_backfills) : une soumission ressortie ensuite à
-    # la main n'y est jamais remise.
-    try:
-        from app.db.session import AsyncSessionLocal as _TermSession
-        from app.services.project_auto_status import (
-            archive_soumissions_of_delivered_projects_once,
-        )
-
-        async with _TermSession() as session:
-            n = await archive_soumissions_of_delivered_projects_once(session)
-            if n:
-                logger.info(
-                    "Startup : %d soumission(s) au projet livré passée(s) "
-                    "dans « Terminées »",
-                    n,
-                )
-    except Exception as exc:
-        logger.warning("rattrapage des soumissions terminées failed: %s", exc)
-
     # STAGING : premier compte owner sur base vide (no-op partout ailleurs).
     try:
         from app.services.bootstrap_admin import ensure_bootstrap_admin

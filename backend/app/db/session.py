@@ -236,7 +236,7 @@ async def ensure_critical_columns() -> None:
         ("soumissions", "signed_ip", "VARCHAR(64)"),
         ("soumissions", "signature_image", "BYTEA"),
         ("soumissions", "signature_image_content_type", "VARCHAR(100)"),
-        # Colonne « Terminées » du tableau des soumissions —
+        # Archivage (colonne « Archivée » du tableau des soumissions) —
         # posé quand le projet lié est livré/terminé, ou à la main.
         ("soumissions", "archived_at", "TIMESTAMP WITH TIME ZONE"),
         # Accusé de lecture des soumissions devlog (le client a-t-il ouvert

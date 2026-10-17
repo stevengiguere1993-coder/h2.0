@@ -57,11 +57,10 @@ class Soumission(Base, TimestampUpdateMixin):
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     valid_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    # Soumission terminée : la soumission quitte les colonnes actives du
-    # tableau pour la colonne « Terminées » (repliée). Drapeau SÉPARÉ du
-    # statut — on conserve le vrai statut (accepted/etc.). Posé
-    # automatiquement quand le projet lié est livré (terminé), retiré s'il
-    # est rouvert ; ou à la main par drag.
+    # Archivage : la soumission quitte les colonnes actives du tableau
+    # pour la colonne « Archivée » (repliée). Drapeau SÉPARÉ du statut —
+    # on conserve le vrai statut (accepted/etc.). Posé automatiquement
+    # quand le projet lié est livré (terminé), ou à la main par drag.
     archived_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )

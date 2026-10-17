@@ -54,7 +54,7 @@ _SOUMISSION_TO_CRM = {
 @router.patch(
     "/{soumission_id}/archive",
     response_model=SoumissionRead,
-    summary="Met / retire une soumission de la colonne « Terminées »",
+    summary="Archive / désarchive une soumission (colonne « Archivée »)",
 )
 async def archive_soumission(
     soumission_id: int,
@@ -64,7 +64,7 @@ async def archive_soumission(
 ) -> SoumissionRead:
     """Pose/retire le drapeau d'archivage. Le STATUT (accepted/etc.) est
     conservé tel quel — l'archivage ne fait que déplacer la carte dans la
-    colonne « Terminées » du tableau (et inversement)."""
+    colonne « Archivée » du tableau (et inversement)."""
     sm = (
         await db.execute(select(Soumission).where(Soumission.id == soumission_id))
     ).scalar_one_or_none()

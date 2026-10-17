@@ -70,10 +70,9 @@ const COLUMNS: Column[] = [
   { id: "accepted", label: "Acceptées", dot: "bg-emerald-500", edge: "border-emerald-500" },
   { id: "rejected", label: "Refusées", dot: "bg-rose-500", edge: "border-rose-500" },
   { id: "expired", label: "Expirées", dot: "bg-amber-500", edge: "border-amber-500" },
-  // « Terminées » : projet lié livré (la soumission y passe d'elle-même
-  // à la livraison et en ressort si le projet est rouvert), ou carte
-  // déposée à la main. Repliée par défaut.
-  { id: "archived", label: "Terminées", dot: "bg-slate-500", edge: "border-slate-500" }
+  // « Archivée » : projets terminés (soumission archivée auto à la
+  // livraison du projet, ou par drag). Repliée par défaut.
+  { id: "archived", label: "Archivée", dot: "bg-slate-500", edge: "border-slate-500" }
 ];
 
 // Id de la colonne d'archivage (drapeau `archived_at` côté API, et non un
@@ -81,9 +80,8 @@ const COLUMNS: Column[] = [
 const ARCHIVED_COL = "archived";
 
 // Colonnes repliées par défaut : « Refusées », « Expirées » et
-// « Terminées » (du bruit la plupart du temps). Toutes les colonnes
-// restent repliables/dépliables au clic ; le choix est mémorisé par
-// navigateur.
+// « Archivée » (du bruit la plupart du temps). Toutes les colonnes restent
+// repliables/dépliables au clic ; le choix est mémorisé par navigateur.
 const COLLAPSED_COLS_KEY = "hsi_soumissions_collapsed_columns_v1";
 const DEFAULT_COLLAPSED = ["rejected", "expired", "archived"];
 
@@ -308,7 +306,7 @@ export default function SoumissionsPage() {
       COLUMNS.map((c) => [c.id, [] as Soumission[]])
     );
     for (const s of filtered) {
-      // Une soumission archivée va dans « Terminées » quel que soit son
+      // Une soumission archivée va dans « Archivée » quel que soit son
       // statut réel (qu'on conserve). Sinon, on groupe par statut.
       const target = s.archived_at
         ? ARCHIVED_COL
@@ -343,7 +341,7 @@ export default function SoumissionsPage() {
         if (!res.ok) throw new Error();
       } catch {
         setItems(prev);
-        setError("Déplacement vers « Terminées » échoué.");
+        setError("Archivage échoué.");
       }
       return;
     }
