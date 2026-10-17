@@ -132,6 +132,17 @@ async def create_project(
             project.id,
         )
 
+    # Projet créé déjà livré et relié à une soumission (import, API) → la
+    # soumission passe dans « Terminées », comme à la livraison.
+    from app.models.project import ProjectStatus
+
+    if project.soumission_id and project.status == ProjectStatus.DELIVERED.value:
+        from app.services.project_auto_status import (
+            archive_soumission_on_delivery,
+        )
+
+        await archive_soumission_on_delivery(db, project.id)
+
     return out
 
 
@@ -319,18 +330,22 @@ async def update_project(
 ) -> ProjectRead:
     """Update a project. Requires admin privileges."""
     service = ProjectService(db)
-    # Statut AVANT mise à jour : on n'archive la soumission liée QUE sur la
-    # TRANSITION vers « livré ». Sinon, sauvegarder un projet DÉJÀ livré
-    # ré-archiverait une soumission qu'on aurait sortie à la main de la
-    # colonne « Archivée » → la carte « changeait de colonne toute seule ».
+    # Statut et soumission AVANT mise à jour : on ne déplace la soumission
+    # liée QUE sur une TRANSITION (livré ↔ autre, ou projet livré relié à
+    # une soumission). Sinon, sauvegarder un projet DÉJÀ livré remettrait
+    # dans « Terminées » une soumission qu'on en aurait sortie à la main
+    # → la carte « changeait de colonne toute seule ».
     from sqlalchemy import select as _sel
     from app.models.project import Project as _Proj
 
-    prev_status = (
+    prev = (
         await db.execute(
-            _sel(_Proj.status).where(_Proj.id == project_id)
+            _sel(_Proj.status, _Proj.soumission_id).where(
+                _Proj.id == project_id
+            )
         )
-    ).scalar_one_or_none()
+    ).first()
+    prev_status, prev_soumission_id = prev if prev is not None else (None, None)
     project = await service.update(project_id, data)
     if project is None:
         raise HTTPException(
@@ -338,9 +353,10 @@ async def update_project(
             detail="Project not found or invalid client_id",
         )
 
-    # Projet livré (= terminé) → on archive la soumission liée : elle
-    # quitte la colonne « Acceptées » pour « Archivée » dans le tableau
-    # des soumissions. Idempotent (ne réécrit pas si déjà archivée).
+    # Projet livré (= terminé) → la soumission liée quitte « Acceptées »
+    # pour « Terminées » dans le tableau des soumissions (dès que tous
+    # ses projets sont livrés). Projet rouvert (livré → autre statut)
+    # → elle revient dans « Acceptées ». Idempotent.
     #
     # IMPORTANT : c'est un effet SECONDAIRE. Il est isolé dans un savepoint
     # + try/except pour qu'un éventuel échec (ex. colonne Soumission
@@ -351,16 +367,26 @@ async def update_project(
     # via un UPDATE direct, pour ne pas dépendre du reste du schéma.
     from app.models.project import ProjectStatus
 
+    livre = ProjectStatus.DELIVERED.value
     if (
-        prev_status != ProjectStatus.DELIVERED.value
-        and project.status == ProjectStatus.DELIVERED.value
+        project.status == livre
         and project.soumission_id
+        and (
+            prev_status != livre
+            or prev_soumission_id != project.soumission_id
+        )
     ):
         from app.services.project_auto_status import (
             archive_soumission_on_delivery,
         )
 
         await archive_soumission_on_delivery(db, project.id)
+    elif prev_status == livre and project.status != livre:
+        from app.services.project_auto_status import (
+            unarchive_soumission_on_reopen,
+        )
+
+        await unarchive_soumission_on_reopen(db, project.id)
 
     # Passage en « Correction / Amélioration » → prépare automatiquement
     # le bon de correction (idempotent, lignes semées depuis les points).
