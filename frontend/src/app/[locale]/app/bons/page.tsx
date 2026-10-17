@@ -70,6 +70,8 @@ const COLUMNS: Column[] = [
   { id: "facture", label: "Facturé", dot: "bg-emerald-400" },
   { id: "cancelled", label: "Annulé", dot: "bg-white/20" }
 ];
+// Colonnes fermées à l'arrivée sur la page (Steven 2026-10-16).
+const CLOSED_BY_DEFAULT = ["facture", "cancelled"];
 
 function money(n: number | string | null): string {
   if (n == null || n === "") return "—";
@@ -92,22 +94,33 @@ export default function BonsPage() {
   const [search, setSearch] = useState("");
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
   const dragIdRef = useRef<number | null>(null);
-  // Vrai pendant un glisser (souris ou doigt) : la zone « Facturé »
-  // fermée garde alors toute sa hauteur pour rester une grande cible.
+  // Vrai pendant un glisser (souris ou doigt) : une colonne fermée
+  // garde alors toute sa hauteur pour rester une grande cible.
   const [dragging, setDragging] = useState(false);
-  // Zone « Facturé » : fermée à chaque arrivée sur la page, ouverte au
-  // besoin d'un clic sur son en-tête (même mécanique que la zone
-  // « Terminé » des tâches).
-  const [factureOpen, setFactureOpen] = useState(false);
-  const factureHeaderRef = useRef<HTMLHeadingElement | null>(null);
+  // Chaque colonne s'ouvre ou se ferme d'un clic sur son en-tête (même
+  // mécanique que la zone « Terminé » des tâches). À chaque arrivée sur
+  // la page, « Facturé » et « Annulé » sont fermées, les autres ouvertes.
+  const [closedCols, setClosedCols] = useState<Set<string>>(
+    () => new Set(CLOSED_BY_DEFAULT)
+  );
   const finePointer = useFinePointer();
 
-  // Le bouton « Fermer la zone » du bas ramène l'en-tête à l'écran, la
-  // zone rétrécissant d'un coup après une longue liste.
-  function closeFactureFromBottom() {
-    setFactureOpen(false);
+  function setColOpen(colId: string, open: boolean) {
+    setClosedCols((prev) => {
+      const next = new Set(prev);
+      if (open) next.delete(colId);
+      else next.add(colId);
+      return next;
+    });
+  }
+
+  // Le bouton « Fermer la colonne » du bas ramène l'en-tête à l'écran,
+  // la colonne rétrécissant d'un coup après une longue liste.
+  function closeColFromBottom(colId: string, el: HTMLElement) {
+    const col = el.closest<HTMLElement>("[data-kanban-col]");
+    setColOpen(colId, false);
     window.requestAnimationFrame(() => {
-      factureHeaderRef.current?.scrollIntoView({ block: "center" });
+      col?.scrollIntoView({ block: "nearest" });
     });
   }
   // Au doigt : appui long sur la carte (le glisser HTML5 ne sert qu'à la
@@ -317,12 +330,11 @@ export default function BonsPage() {
                 {COLUMNS.map((col) => {
               const cards = byColumn[col.id] || [];
               const isOver = dragOverCol === col.id;
-              // Zone « Facturé » repliable dès qu'elle contient un bon ;
-              // fermée, elle ne montre que son en-tête et son compteur,
-              // sans s'étirer — sauf pendant un glisser, pour rester une
-              // grande cible de dépôt.
-              const foldable = col.id === "facture" && cards.length > 0;
-              const closed = foldable && !factureOpen;
+              // Fermée, une colonne ne montre que son en-tête et son
+              // compteur, sans s'étirer — sauf pendant un glisser, pour
+              // rester une grande cible de dépôt.
+              const open = !closedCols.has(col.id);
+              const closed = !open;
               const shrunk = closed && !dragging;
               const dot = (
                 <span className={`h-2 w-2 rounded-full ${col.dot}`} />
@@ -356,52 +368,37 @@ export default function BonsPage() {
                     if (id != null) moveTo(id, col.id);
                   }}
                 >
-                  {foldable ? (
-                    <h2
-                      ref={factureHeaderRef}
-                      className="border-b border-brand-800"
+                  <h2 className="border-b border-brand-800">
+                    <button
+                      type="button"
+                      onClick={() => setColOpen(col.id, !open)}
+                      aria-expanded={open}
+                      title={
+                        open
+                          ? `Fermer la colonne ${col.label}`
+                          : `Ouvrir la colonne ${col.label}`
+                      }
+                      className="flex w-full items-center justify-between rounded-t-xl px-4 py-3 transition hover:bg-accent-500/10"
                     >
-                      <button
-                        type="button"
-                        onClick={() => setFactureOpen(!factureOpen)}
-                        aria-expanded={factureOpen}
-                        title={
-                          factureOpen
-                            ? "Fermer la zone Facturé"
-                            : "Ouvrir la zone Facturé"
-                        }
-                        className="flex w-full items-center justify-between rounded-t-xl px-4 py-3 transition hover:bg-accent-500/10"
-                      >
-                        <span className="flex items-center gap-2 text-sm font-semibold text-white">
-                          {dot}
-                          {col.label}
-                        </span>
-                        <span className="flex items-center gap-1.5">
-                          {count}
-                          {factureOpen ? (
-                            <ChevronUp className="h-4 w-4 text-white/60" />
-                          ) : (
-                            <ChevronDown className="h-4 w-4 text-white/60" />
-                          )}
-                        </span>
-                      </button>
-                    </h2>
-                  ) : (
-                    <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
-                      <div className="flex items-center gap-2">
+                      <span className="flex items-center gap-2 text-sm font-semibold text-white">
                         {dot}
-                        <h2 className="text-sm font-semibold text-white">
-                          {col.label}
-                        </h2>
-                      </div>
-                      {count}
-                    </div>
-                  )}
-                  <div className="flex-1 space-y-3 p-3">
+                        {col.label}
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        {count}
+                        {open ? (
+                          <ChevronUp className="h-4 w-4 text-white/60" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4 text-white/60" />
+                        )}
+                      </span>
+                    </button>
+                  </h2>
+                  <div className={closed && cards.length === 0 ? "hidden" : "flex-1 space-y-3 p-3"}>
                     {closed ? (
                       <button
                         type="button"
-                        onClick={() => setFactureOpen(true)}
+                        onClick={() => setColOpen(col.id, true)}
                         className="flex w-full items-center justify-center gap-1.5 rounded-md bg-brand-950 px-3 py-1.5 text-xs font-semibold text-white/70 transition hover:text-white"
                       >
                         <ChevronDown className="h-3.5 w-3.5" />
@@ -518,14 +515,16 @@ export default function BonsPage() {
                         );
                       })
                     )}
-                    {foldable && factureOpen ? (
+                    {open && cards.length > 0 ? (
                       <button
                         type="button"
-                        onClick={closeFactureFromBottom}
+                        onClick={(e) =>
+                          closeColFromBottom(col.id, e.currentTarget)
+                        }
                         className="flex w-full items-center justify-center gap-1.5 rounded-md bg-brand-950 px-3 py-1.5 text-xs font-semibold text-white/70 transition hover:text-white"
                       >
                         <ChevronUp className="h-3.5 w-3.5" />
-                        Fermer la zone
+                        Fermer la colonne
                       </button>
                     ) : null}
                   </div>
