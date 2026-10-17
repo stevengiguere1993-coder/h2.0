@@ -137,6 +137,34 @@ async def _push_facture(facture_id: int) -> None:
         await record_facture_sync_error(facture_id, str(exc))
 
 
+#: Refus QB d'une ligne qui référençait une CATÉGORIE de Produits et
+#: services au lieu d'un produit ou service (code 2500).
+REFUS_CATEGORIE = "catégorie au lieu d'un produit"
+
+
+async def relancer_factures_refus_categorie() -> int:
+    """Renvoie vers QB les factures émises restées sur ce refus (facture
+    160, 2026-10-17 : la ligne « Matériaux » tombait sur la catégorie
+    « Matériaux ») — ensure_item ne choisit plus jamais une catégorie.
+    Une facture qui passe perd son message d'erreur et n'est plus reprise."""
+    from sqlalchemy import select
+
+    from app.models.facture import Facture
+
+    async with AsyncSessionLocal() as db:
+        ids = (
+            await db.execute(
+                select(Facture.id).where(
+                    Facture.qbo_sync_error.ilike(f"%{REFUS_CATEGORIE}%"),
+                    Facture.status.not_in(("draft", "void")),
+                )
+            )
+        ).scalars().all()
+    for fid in ids:
+        await push_facture_now(int(fid))
+    return len(ids)
+
+
 async def autopush_soumission(soumission_id: int) -> None:
     if not await is_qbo_auto_sync_enabled():
         return
