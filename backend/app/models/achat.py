@@ -274,15 +274,6 @@ class Achat(Base, TimestampUpdateMixin):
         index=True,
     )
 
-    # Montant facturé au client pour cet achat (majoration ou contrat
-    # appliqués), noté à l'import. Plusieurs achats de matériel partagent
-    # la même ligne « Matériaux » : c'est ce qui permet d'afficher, dans
-    # l'éditeur, la part de chacun. NULL pour les achats refacturés avant
-    # 2026-10-17. Colonne → ensure_critical_columns.
-    montant_refacture: Mapped[Optional[float]] = mapped_column(
-        Numeric(12, 2), nullable=True
-    )
-
     # « Ne pas refacturer » AUTORISÉ explicitement depuis la page « À
     # refacturer » (Steven 2026-10-16) : qui, quand et pourquoi. Posé en
     # même temps que is_billable=False + billable_manual=True ; l'achat

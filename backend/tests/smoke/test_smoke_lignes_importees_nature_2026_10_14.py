@@ -234,7 +234,7 @@ def _lignes(client, headers, facture_id: int) -> dict[str, dict]:
             out["main_oeuvre"] = it
         elif "Sous-traitant" in d:
             out["sous_traitant"] = it
-        elif d.rsplit("\n", 1)[-1] == "Matériaux":
+        elif "Matériel" in d:
             out["materiel"] = it
         else:
             out[d] = it

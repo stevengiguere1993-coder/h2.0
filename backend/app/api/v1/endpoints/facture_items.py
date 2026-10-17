@@ -11,7 +11,6 @@ Garantit que les totaux Facture sont toujours synchros pour les
 KPIs projet (« Facturé », « Reste à facturer ») et pour QBO.
 """
 
-from datetime import date
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, status
@@ -99,24 +98,6 @@ class FactureItemUpdate(BaseModel):
     hors_soumission: Optional[bool] = None
 
 
-class AchatRegroupe(BaseModel):
-    """Achat refacturé porté par une ligne (AFFICHAGE Kratos) : le détail
-    dépliable sous la ligne « Matériaux », qui additionne tout le matériel
-    de la facture — on sait toujours quels achats y sont refacturés."""
-
-    id: int
-    fournisseur: Optional[str] = None
-    reference: Optional[str] = None
-    supplier_invoice_number: Optional[str] = None
-    invoice_date: Optional[date] = None
-    description: Optional[str] = None
-    #: Coût HT de l'achat.
-    amount: Optional[float] = None
-    #: Montant facturé au client (majoration comprise) ; NULL pour un achat
-    #: refacturé avant 2026-10-17.
-    montant_refacture: Optional[float] = None
-
-
 class FactureItemRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -142,8 +123,6 @@ class FactureItemRead(BaseModel):
     # soumission lié — somme des lignes de TOUTES les factures non
     # annulées du même item (celle-ci incluse). NULL hors soumission.
     billed_to_date: Optional[float] = None
-    # AFFICHAGE Kratos (dérivé) : achats refacturés sur cette ligne.
-    achats: List[AchatRegroupe] = []
 
 
 async def _ensure_facture(db, facture_id: int) -> Facture:
@@ -207,13 +186,7 @@ async def reorder_items(
             .order_by(FactureItem.position.asc(), FactureItem.id.asc())
         )
     ).scalars().all()
-    achats_par_ligne = await _achats_par_ligne(db, [int(r.id) for r in fresh])
-    out: List[FactureItemRead] = []
-    for r in fresh:
-        m = FactureItemRead.model_validate(r)
-        m.achats = achats_par_ligne.get(int(r.id), [])
-        out.append(m)
-    return out
+    return [FactureItemRead.model_validate(r) for r in fresh]
 
 
 @router.get(
@@ -276,55 +249,13 @@ async def list_items(
         billed_by_sid = {
             int(sid): round(float(tot or 0), 2) for sid, tot in brows
         }
-    achats_par_ligne = await _achats_par_ligne(db, [int(r.id) for r in rows])
     out: List[FactureItemRead] = []
     for r in rows:
         m = FactureItemRead.model_validate(r)
         if r.soumission_item_id is not None:
             m.contract_total = contract_by_sid.get(int(r.soumission_item_id))
             m.billed_to_date = billed_by_sid.get(int(r.soumission_item_id))
-        m.achats = achats_par_ligne.get(int(r.id), [])
         out.append(m)
-    return out
-
-
-async def _achats_par_ligne(
-    db, item_ids: List[int]
-) -> dict[int, List[AchatRegroupe]]:
-    """Achats refacturés, par ligne de facture (un seul aller-retour)."""
-    if not item_ids:
-        return {}
-    from app.models.achat import Achat
-    from app.models.fournisseur import Fournisseur
-    from app.models.sous_traitant import SousTraitant
-
-    rows = (
-        await db.execute(
-            select(Achat, Fournisseur.name, SousTraitant.full_name)
-            .outerjoin(Fournisseur, Fournisseur.id == Achat.fournisseur_id)
-            .outerjoin(SousTraitant, SousTraitant.id == Achat.sous_traitant_id)
-            .where(Achat.facture_item_id.in_(item_ids))
-            .order_by(Achat.invoice_date.asc().nulls_last(), Achat.id.asc())
-        )
-    ).all()
-    out: dict[int, List[AchatRegroupe]] = {}
-    for a, fournisseur, sous_traitant in rows:
-        out.setdefault(int(a.facture_item_id), []).append(
-            AchatRegroupe(
-                id=int(a.id),
-                fournisseur=fournisseur or sous_traitant,
-                reference=a.reference,
-                supplier_invoice_number=a.supplier_invoice_number,
-                invoice_date=a.invoice_date,
-                description=a.description,
-                amount=float(a.amount) if a.amount is not None else None,
-                montant_refacture=(
-                    float(a.montant_refacture)
-                    if a.montant_refacture is not None
-                    else None
-                ),
-            )
-        )
     return out
 
 

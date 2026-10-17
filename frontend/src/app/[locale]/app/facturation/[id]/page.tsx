@@ -82,20 +82,6 @@ type Item = {
   // Cumul facturé à date pour cet item de soumission (toutes factures non
   // annulées, celle-ci incluse). NULL hors soumission.
   billed_to_date?: number | null;
-  // Achats refacturés portés par la ligne : le détail dépliable de la
-  // ligne « Matériaux », qui additionne tout le matériel de la facture.
-  achats?: AchatRegroupe[];
-};
-
-type AchatRegroupe = {
-  id: number;
-  fournisseur: string | null;
-  reference: string | null;
-  supplier_invoice_number: string | null;
-  invoice_date: string | null;
-  description: string | null;
-  amount: number | null;
-  montant_refacture: number | null;
 };
 
 const KIND_LABELS: Record<string, string> = {
@@ -735,12 +721,7 @@ export default function FactureDetailPage() {
         // pour refléter le nouvel ordre.
         await reloadItems();
       } else {
-        // Le détail des achats regroupés n'est pas renvoyé par le PATCH.
-        setItems((xs) =>
-          xs.map((x) =>
-            x.id === item_id ? { ...updated, achats: x.achats } : x
-          )
-        );
+        setItems((xs) => xs.map((x) => (x.id === item_id ? updated : x)));
       }
     } catch (e) {
       setError(`Mise à jour échouée : ${(e as Error).message}`);
@@ -2712,55 +2693,6 @@ function ItemRow({
           ) : null}
         </div>
       ) : null}
-      {/* Achats refacturés sur la ligne (AFFICHAGE Kratos, jamais sur le
-          PDF ni dans QuickBooks) : la ligne « Matériaux » additionne tout
-          le matériel de la facture — le détail dit quels achats y sont. */}
-      {item.achats && item.achats.length > 0 ? (
-        <details className="mt-1.5 text-[11px] text-white/60">
-          <summary className="cursor-pointer select-none hover:text-white">
-            {item.achats.length === 1
-              ? "1 achat refacturé sur cette ligne"
-              : `${item.achats.length} achats refacturés sur cette ligne`}
-          </summary>
-          <ul className="mt-1 space-y-0.5 border-l border-white/10 pl-3">
-            {item.achats.map((a) => {
-              const no = a.supplier_invoice_number || a.reference;
-              return (
-                <li
-                  key={a.id}
-                  className="flex flex-wrap items-baseline gap-x-2"
-                >
-                  <span className="font-semibold text-white">
-                    {a.fournisseur || "Fournisseur inconnu"}
-                  </span>
-                  {no ? <span>no {no}</span> : null}
-                  {a.invoice_date ? (
-                    <span>
-                      {new Date(
-                        `${a.invoice_date}T12:00:00`
-                      ).toLocaleDateString("fr-CA")}
-                    </span>
-                  ) : null}
-                  {a.description ? (
-                    <span className="truncate">{a.description}</span>
-                  ) : null}
-                  <span className="ml-auto whitespace-nowrap">
-                    {a.amount != null ? `coût ${fmtMoney(a.amount)}` : null}
-                    {a.montant_refacture != null ? (
-                      <>
-                        {" → "}
-                        <span className="font-semibold text-white">
-                          {fmtMoney(a.montant_refacture)}
-                        </span>
-                      </>
-                    ) : null}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        </details>
-      ) : null}
     </div>
   );
 }
@@ -2909,12 +2841,8 @@ function BonPickerModal({
       setDone((prev) => ({
         ...prev,
         [bon.id]:
-          r.added > 0 || (r.achats_importes ?? 0) > 0
-            ? `${
-                r.added > 0
-                  ? `${r.added} ligne${r.added > 1 ? "s" : ""} importée${r.added > 1 ? "s" : ""}`
-                  : "Ajouté à la ligne Matériaux"
-              }${
+          r.added > 0
+            ? `${r.added} ligne${r.added > 1 ? "s" : ""} importée${r.added > 1 ? "s" : ""}${
                 parts.length ? ` (${parts.join(", ")})` : ""
               }${notes.length ? ` · ${notes.join(", ")}` : ""}`
             : `rien à importer${notes.length ? ` (${notes.join(", ")})` : " (heures et achats déjà facturés ?)"}`

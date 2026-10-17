@@ -23,13 +23,8 @@ from app.models.punch import Punch
 from app.models.soumission import Soumission, SoumissionStatus
 from app.models.soumission_item import SoumissionItem
 from app.services.facture_lignes import (
-    KIND_MATERIAUX,
     KIND_SERVICE,
-    ajouter_au_montant,
-    cle_libelle,
     kind_ligne_achat,
-    libelle_materiaux,
-    ligne_materiaux_existante,
     projet_a_soumission,
 )
 
@@ -55,35 +50,14 @@ def achat_line_prefix(kind: str | None) -> str:
 
 
 def _merge_label_key(label: str) -> str:
-    """Clé de REGROUPEMENT des lignes d'achat au même descriptif (voir
-    ``facture_lignes.cle_libelle``)."""
-    return cle_libelle(label)
+    """Clé de REGROUPEMENT des lignes d'achat au même descriptif : accents
+    retirés, casse et espaces normalisés — « Matériel — Matériaux Divers »
+    et « Matériel — Materiaux Divers » fusionnent sur la même ligne."""
+    import unicodedata
 
-
-async def libelle_ligne_achat(
-    db,
-    facture_id: int,
-    ac: Achat,
-    entete: Optional[str],
-    merged: dict[str, FactureItem],
-) -> str:
-    """Libellé client de la ligne d'un achat refacturé. Le matériel (outils
-    et location compris) s'additionne sur UNE ligne « Matériaux » par
-    facture — y compris celle qu'un import précédent a déjà posée, qu'on
-    amorce ici dans ``merged`` (Steven 2026-10-17 : plus une ligne
-    « Matériel — facture -146 » par achat). Une facture de sous-traitant
-    garde sa ligne « Sous-traitant — <descriptif> »."""
-    if kind_ligne_achat(ac.kind) == KIND_MATERIAUX:
-        label = libelle_materiaux(entete)
-        key = _merge_label_key(label)
-        if key not in merged:
-            prev = await ligne_materiaux_existante(db, facture_id, label)
-            if prev is not None:
-                merged[key] = prev
-        return label
-    base_desc = ac.description or f"Achat {ac.reference or ac.id}"
-    label = f"{achat_line_prefix(ac.kind)} — {base_desc}"
-    return f"{entete}\n{label}" if entete else label
+    s = unicodedata.normalize("NFKD", label or "")
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return " ".join(s.lower().split())
 
 
 def _compute_billed_amount(
@@ -395,10 +369,10 @@ async def import_into_facture(
             contracts_by_st = {c.sous_traitant_id: c for c in ctr_rows}
 
         new_items: list[tuple[Achat, FactureItem]] = []
-        # REGROUPEMENT : tout le matériel s'additionne sur UNE ligne
-        # « Matériaux » (celle de la facture si un import l'a déjà posée) ;
-        # les factures de sous-traitants au MÊME descriptif (accents/casse
-        # ignorés) fusionnent aussi. Chaque montant inclut sa majoration.
+        # REGROUPEMENT : plusieurs achats au MÊME descriptif (accents/casse
+        # ignorés) fusionnent en UNE seule ligne dont le montant additionne
+        # chaque facture sélectionnée AVEC sa majoration (ex. 6 factures
+        # Rona « Matériel — Materiaux Divers » → une ligne au total cumulé).
         # Les lignes HORAIRES (contrat sous-traitant flat_hourly, quantité =
         # heures × taux) ne fusionnent jamais. Chaque achat garde son lien
         # retour (facture_item_id → la ligne fusionnée) pour la
@@ -408,10 +382,11 @@ async def import_into_facture(
             billed, _rule_label = _compute_billed_amount(
                 ac, data.achat_markup_overrides, contracts_by_st
             )
-            ac.montant_refacture = billed
+            base_desc = ac.description or f"Achat {ac.reference or ac.id}"
+            line_prefix = achat_line_prefix(ac.kind)
             # La majoration / règle (`rule_label`) est INTERNE : appliquée
             # au montant mais jamais affichée dans la description client.
-            label = await libelle_ligne_achat(db, fa.id, ac, None, merged)
+            label = f"{line_prefix} — {base_desc}"
             contract = (
                 contracts_by_st.get(ac.sous_traitant_id or 0)
                 if ac.kind == "sub_invoice"
@@ -423,7 +398,10 @@ async def import_into_facture(
             if not is_hourly:
                 existing = merged.get(_merge_label_key(label))
                 if existing is not None:
-                    ajouter_au_montant(existing, billed)
+                    existing.total = round(
+                        float(existing.total) + billed, 2
+                    )
+                    existing.unit_price = existing.total
                     new_items.append((ac, existing))
                     continue
             item = FactureItem(
@@ -733,8 +711,10 @@ async def import_bon_into_facture(
     merged: dict[str, FactureItem] = {}
     for ac in achats:
         billed, _rule = _compute_billed_amount(ac, {}, contracts_by_st)
-        ac.montant_refacture = billed
-        label = await libelle_ligne_achat(db, facture_id, ac, demande, merged)
+        base_desc = ac.description or f"Achat {ac.reference or ac.id}"
+        label = (
+            f"{demande}\n{achat_line_prefix(ac.kind)} — {base_desc}"
+        )
         contract = (
             contracts_by_st.get(ac.sous_traitant_id or 0)
             if ac.kind == "sub_invoice"
@@ -746,7 +726,8 @@ async def import_bon_into_facture(
         if not is_hourly:
             prev = merged.get(_merge_label_key(label))
             if prev is not None:
-                ajouter_au_montant(prev, billed)
+                prev.total = round(float(prev.total) + billed, 2)
+                prev.unit_price = prev.total
                 ac.invoiced_at = now
                 ac.facture_item_id = prev.id
                 continue

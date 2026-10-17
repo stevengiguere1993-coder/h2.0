@@ -148,25 +148,6 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning("reclassement des lignes importées failed: %s", exc)
 
-    # Matériaux sur une seule ligne (2026-10-17) : dans les BROUILLONS, les
-    # lignes « Matériel — <achat> » importées fusionnent en une ligne
-    # « Matériaux » par facture. Une seule fois (applied_backfills), après
-    # la colonne achats.montant_refacture.
-    try:
-        from app.db.session import AsyncSessionLocal as _MatSession
-        from app.services.facture_lignes import regrouper_materiaux_une_fois
-
-        async with _MatSession() as session:
-            n = await regrouper_materiaux_une_fois(session)
-            if n:
-                logger.info(
-                    "Startup : %d ligne(s) de matériel de brouillons "
-                    "fusionnée(s) dans la ligne « Matériaux »",
-                    n,
-                )
-    except Exception as exc:
-        logger.warning("regroupement des lignes de matériaux failed: %s", exc)
-
     # STAGING : premier compte owner sur base vide (no-op partout ailleurs).
     try:
         from app.services.bootstrap_admin import ensure_bootstrap_admin
