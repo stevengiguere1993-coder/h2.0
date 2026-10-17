@@ -124,6 +124,137 @@ async def numero_pris_dans_kratos(db: AsyncSession, ref: str, *, sauf_id=None):
     return (await db.execute(stmt)).first()
 
 
+#: Numéro d'une facture du pôle logiciel : « INV-2026-00161 » → 161.
+_RE_NUMERO_DEVLOG = re.compile(r"^INV-\d{4}-(\d+)$")
+
+
+def numero_compteur_de_reference(ref: Optional[str]) -> Optional[int]:
+    """Numéro issu du compteur porté par une référence de facture : la
+    référence est le numéro tout nu (« 173 », comme le compteur les
+    attribue et comme QuickBooks les numérote) ou une facture du pôle
+    logiciel (« INV-2026-00173 »). Tout autre libellé (« BR-… »
+    provisoire, « ECH-57986972 », « FA-173 » saisi à la main…) n'est PAS
+    un numéro du compteur et ne doit jamais le faire sauter."""
+    r = (ref or "").strip()
+    if r.isdigit():
+        return int(r)
+    m = _RE_NUMERO_DEVLOG.match(r)
+    return int(m.group(1)) if m else None
+
+
+async def plus_haut_numero_facture_kratos(db: AsyncSession) -> int:
+    """Le plus haut numéro porté par une facture de Kratos : factures de
+    construction (référence numérique, les brouillons « BR-… » exclus) et
+    factures du pôle logiciel (« INV-2026-00161 » → 161, même compteur)."""
+    from app.models.facture import Facture
+
+    plus_haut = 0
+    for ref in (await db.execute(select(Facture.reference))).scalars().all():
+        n = numero_compteur_de_reference(ref)
+        if n is not None and n > plus_haut:
+            plus_haut = n
+    try:
+        from app.models.devlog_invoice import DevlogInvoice
+
+        numeros = (await db.execute(select(DevlogInvoice.number))).scalars().all()
+    except Exception:  # noqa: BLE001 — table absente (tests partiels)
+        numeros = []
+    for num in numeros:
+        n = numero_compteur_de_reference(num)
+        if n is not None and n > plus_haut:
+            plus_haut = n
+    return plus_haut
+
+
+#: Au-delà, une « référence » n'est pas un numéro de facture (date collée,
+#: numéro de téléphone…) : on ne recale jamais le compteur dessus. Même
+#: plafond que le réglage manuel (NumberingUpdate, le=999_999_999).
+NUMERO_FACTURE_MAX = 999_999_999
+
+
+async def cible_compteur_factures(
+    db: AsyncSession, *, consulter_qb: bool = True
+) -> dict:
+    """Ce que devrait valoir au minimum le compteur de factures : plus
+    haut numéro existant (Kratos, et QuickBooks s'il répond) + 1. Lecture
+    seule."""
+    kratos_max = min(await plus_haut_numero_facture_kratos(db), NUMERO_FACTURE_MAX)
+    qb_max: Optional[int] = None
+    if consulter_qb:
+        from app.services.facture_qbo import plus_haut_numero_facture_qb
+
+        qb_max = await plus_haut_numero_facture_qb()
+        if qb_max is not None:
+            qb_max = min(qb_max, NUMERO_FACTURE_MAX)
+    return {
+        "kratos_max": kratos_max,
+        "qb_max": qb_max,
+        "qb_consulte": qb_max is not None,
+        "cible": max(kratos_max, qb_max or 0) + 1,
+    }
+
+
+async def aligner_compteur_factures(
+    db: AsyncSession, *, consulter_qb: bool = True
+) -> dict:
+    """Recale le compteur de factures sur le plus haut numéro existant + 1,
+    entre Kratos et QuickBooks (Steven 2026-10-17 : « quand des factures
+    se créent dans QB, le compteur ne se met pas à jour dans Kratos […] le
+    compteur doit toujours être 1 plus haut que QB ou Kratos, le plus
+    élevé des deux »). Le compteur n'est jamais ABAISSÉ ici (un numéro
+    attribué reste consommé) ; le recyclage après suppression reste à
+    part. Si QB ne répond pas, seul Kratos compte et on réessaie au
+    prochain passage. Flush mais ne committe pas."""
+    await _ensure_row(db)
+    avant = int(
+        (
+            await db.execute(
+                select(NumberingCounter.next_facture_number).where(
+                    NumberingCounter.id == 1
+                )
+            )
+        ).scalar_one()
+        or 1
+    )
+    cible_info = await cible_compteur_factures(db, consulter_qb=consulter_qb)
+    kratos_max = cible_info["kratos_max"]
+    qb_max = cible_info["qb_max"]
+    cible = cible_info["cible"]
+    apres = avant
+    if cible > avant:
+        await db.execute(
+            update(NumberingCounter)
+            .where(NumberingCounter.id == 1)
+            .values(next_facture_number=cible)
+        )
+        await db.flush()
+        apres = cible
+        log.warning(
+            "Compteur de factures recalé de %s à %s (plus haut numéro : "
+            "Kratos %s, QuickBooks %s)",
+            avant, cible, kratos_max,
+            qb_max if qb_max is not None else "non consulté",
+        )
+    return {
+        "avant": avant,
+        "apres": apres,
+        "kratos_max": kratos_max,
+        "qb_max": qb_max,
+        "qb_consulte": qb_max is not None,
+    }
+
+
+async def aligner_compteur_factures_une_session() -> dict:
+    """Même recalage dans une session à lui (démarrage, filet horaire).
+    Commite."""
+    from app.db.session import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        res = await aligner_compteur_factures(db)
+        await db.commit()
+    return res
+
+
 async def ensure_facture_number(db: AsyncSession, fa) -> bool:
     """Attribue le VRAI numéro séquentiel à une facture qui n'en a pas
     encore (référence vide ou provisoire « BR-… »). Renvoie True si un
@@ -144,8 +275,9 @@ async def attribuer_numero_libre(db: AsyncSession, fa) -> list[str]:
     renumérotation automatique quand QuickBooks refuse le numéro (déjà
     pris par une autre facture, Steven 2026-10-09).
 
-    Deux garde-fous — jamais deux factures différentes sous le même
-    numéro :
+    Le compteur est d'abord recalé au-dessus du plus haut numéro existant,
+    Kratos et QuickBooks confondus (aligner_compteur_factures). Puis deux
+    garde-fous — jamais deux factures différentes sous le même numéro :
     - Kratos (incident facture 149, 2026-10-03) : une facture importée
       de QuickBooks (synchro QB → Kratos) garde son DocNumber comme
       référence ; le compteur, lui, ne le sait pas. Si le candidat est
@@ -155,6 +287,13 @@ async def attribuer_numero_libre(db: AsyncSession, fa) -> list[str]:
     - QuickBooks (incident facture 145, 2026-10-01) : si le numéro est
       DÉJÀ pris dans QB par une facture qui n'est pas de Kratos (saisie
       à la main pour un autre projet), on le saute aussi."""
+    # D'abord au-dessus de tout ce qui existe (Kratos ET QuickBooks) : une
+    # facture saisie directement dans QB ne doit jamais laisser le compteur
+    # derrière elle.
+    try:
+        await aligner_compteur_factures(db)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Recalage du compteur de factures impossible : %s", exc)
     sautes: list[str] = []
     cand = None
     for _ in range(MAX_SAUTS):
@@ -212,6 +351,12 @@ async def apercu_prochain_numero_libre(
         ).scalar_one()
         or 1
     )
+    # Même point de départ que l'attribution réelle : au-dessus de tout ce
+    # qui existe dans Kratos et QuickBooks (lecture seule ici).
+    try:
+        n = max(n, (await cible_compteur_factures(db))["cible"])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Recalage (aperçu) du compteur de factures impossible : %s", exc)
     from app.services.facture_qbo import numero_pris_hors_kratos
 
     for k in range(max_essais):

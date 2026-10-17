@@ -364,17 +364,18 @@ def test_la_boucle_continue_tant_que_le_numero_est_pris(faux_qb, run):
     res = _sync(run, fid)
 
     fa = _facture(run, fid)
-    # 153 pris dans QB (autre client), 154 libre.
-    assert fa.reference == str(b + 154)
-    assert faux_qb.invoices[fa.qbo_invoice_id]["DocNumber"] == str(b + 154)
-    assert res["reference"] == str(b + 154)
+    # 153 pris dans QB (autre client), 154 libre mais SOUS la facture
+    # Kratos 155 : depuis le 2026-10-17 le compteur se place toujours
+    # au-dessus du plus haut numéro existant (Kratos ou QB) → 156.
+    assert fa.reference == str(b + 156)
+    assert faux_qb.invoices[fa.qbo_invoice_id]["DocNumber"] == str(b + 156)
+    assert res["reference"] == str(b + 156)
 
-    # Et si 154 et 155 sont pris à leur tour (QB, Kratos), on va au 156.
-    faux_qb2 = faux_qb
-    faux_qb2.ajouter(str(b + 1152))
-    fid2 = _seed(run, faux_qb, reference=str(b + 1152), compteur=b + 154)
+    # Une facture 1152 saisie dans QB entre-temps : la suivante est 1153.
+    faux_qb.ajouter(str(b + 1152))
+    fid2 = _seed(run, faux_qb, reference=f"BR-{uuid.uuid4().hex[:6]}", compteur=b + 157)
     _sync(run, fid2)
-    assert _facture(run, fid2).reference == str(b + 156)
+    assert _facture(run, fid2).reference == str(b + 1153)
 
 
 def test_doublon_refuse_par_qb_sans_etre_visible_renumerote(faux_qb, run):
@@ -523,7 +524,9 @@ def test_crayon_refuse_un_numero_pris_dans_qb_et_propose_le_libre(
     assert f"Le prochain numéro libre est {b + 154}." in detail
     assert _facture(run, fid).reference == str(b + 152)
 
-    # Un numéro déjà porté par une facture Kratos : même suggestion.
+    # Un numéro déjà porté par une facture Kratos : la suggestion passe
+    # au-dessus de cette facture (compteur = plus haut numéro + 1,
+    # 2026-10-17), pas dans le trou.
     _seed(run, faux_qb, reference=str(b + 160), compteur=b + 153)
     r = client.patch(
         f"/api/v1/factures/{fid}",
@@ -531,9 +534,10 @@ def test_crayon_refuse_un_numero_pris_dans_qb_et_propose_le_libre(
         json={"reference": str(b + 160)},
     )
     assert r.status_code == 409, r.text
-    assert f"Le prochain numéro libre est {b + 154}." in r.json()["detail"]
+    assert f"Le prochain numéro libre est {b + 161}." in r.json()["detail"]
 
-    # Le numéro libre proposé passe, et part tel quel dans QB.
+    # Un numéro libre (même dans un trou, sous le compteur) passe, et part
+    # tel quel dans QB.
     r = client.patch(
         f"/api/v1/factures/{fid}",
         headers=auth_headers,
