@@ -120,7 +120,8 @@ class Achat(Base, TimestampUpdateMixin):
     # Nature de l'achat — détermine la logique de refacturation au
     # client : 'material' (matériel/marchandise, refacturé au coûtant +
     # markup), 'sub_invoice' (facture de sous-traitant, refacturée
-    # selon le contrat de projet).
+    # selon le contrat de projet), 'inventaire' (sortie de l'inventaire
+    # interne, refacturée comme le matériel — voir KIND_INVENTAIRE).
     kind: Mapped[str] = mapped_column(
         String(16), nullable=False, default="material",
         server_default="material", index=True,
@@ -306,6 +307,13 @@ class Achat(Base, TimestampUpdateMixin):
 #: Majoration par défaut appliquée à un achat refacturable quand l'admin
 #: ne saisit rien. Modifiable à tout moment (fiche achat + import facture).
 DEFAULT_BILLABLE_MARKUP = 10.0
+
+#: Nature « inventaire » (Steven 2026-10-18) : matériel SORTI DE
+#: L'INVENTAIRE INTERNE et chargé à un projet (services/inventaire.py).
+#: Coût du projet, refacturé comme le matériel, mais JAMAIS poussé dans
+#: QuickBooks : le stock y est entré à son achat, le repousser compterait
+#: la dépense deux fois.
+KIND_INVENTAIRE = "inventaire"
 
 
 @event.listens_for(Achat, "before_insert")
