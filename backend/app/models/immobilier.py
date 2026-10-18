@@ -272,6 +272,33 @@ class ImmeubleOwnership(Base):
     )
 
 
+class ImmeubleCode(Base, TimestampUpdateMixin):
+    """Code d'accès rattaché à un immeuble : porte d'entrée, lock box,
+    garage, alarme, boîte aux lettres, Wi-Fi… (bug mvilliard 2026-10-17 :
+    « un endroit pour code de porte, code lock box et autre code relié à
+    l'immeuble »). Visible par quiconque voit la fiche de l'immeuble.
+    Nouvelle table → ensure_immobilier_aux_tables."""
+
+    __tablename__ = "imm_immeuble_codes"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    immeuble_id: Mapped[int] = mapped_column(
+        ForeignKey("imm_immeubles.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    #: « Porte d'entrée », « Lock box », « Garage », « Alarme »…
+    libelle: Mapped[str] = mapped_column(String(120), nullable=False)
+    code: Mapped[str] = mapped_column(String(255), nullable=False)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    #: Ordre d'affichage sur la fiche (0 = premier).
+    position: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    created_by_email: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True
+    )
+
+
 # ─── LOGEMENT (unité dans un immeuble) ─────────────────────────────────
 
 
