@@ -128,6 +128,7 @@ from app.schemas.immobilier import (
     LocataireCommunicationRead,
     LocataireCreate,
     LocataireDossier,
+    DossierFrais,
     LocataireListItem,
     LocataireRead,
     LocataireUpdate,
@@ -3945,6 +3946,36 @@ async def locataire_dossier(
                 )
             )
 
+    # Lignes des mois (frais, crédits, rabais du bail, loyer dû fixé à la
+    # main) : l'historique montre aussi CE QUI ÉTAIT DÛ, pas seulement
+    # ce qui a été reçu (bugs 4 et 10, 2026-10-18).
+    frais_360: list[DossierFrais] = []
+    if bail_ids:
+        for f in (
+            await db.execute(
+                select(FraisLocatif)
+                .where(
+                    FraisLocatif.bail_id.in_(bail_ids),
+                    FraisLocatif.mois_couvert >= depuis,
+                )
+                .order_by(FraisLocatif.mois_couvert.desc(), FraisLocatif.id)
+            )
+        ).scalars().all():
+            if f.mois_couvert is not None and f.mois_couvert < _depuis_bail_360(
+                f.bail_id
+            ):
+                continue
+            frais_360.append(
+                DossierFrais(
+                    id=f.id,
+                    bail_id=f.bail_id,
+                    mois_couvert=f.mois_couvert,
+                    montant=float(f.montant or 0),
+                    libelle=f.libelle or "",
+                    origine=getattr(f, "origine", None),
+                )
+            )
+
     # Avis d'augmentation / renouvellements de tous ses baux — le hub
     # locataire montre tout ce qui lui a été envoyé et où ça en est.
     renouvellements: list[DossierRenouvellement] = []
@@ -3997,6 +4028,7 @@ async def locataire_dossier(
         locataire=LocataireRead.model_validate(loc),
         baux=dossier_baux,
         paiements=paiements,
+        frais=frais_360,
         renouvellements=renouvellements,
         communications=communications,
         nb_baux_actifs=len(actifs),
@@ -5572,6 +5604,12 @@ async def update_paiement(
         "mois_couvert": obj.mois_couvert,
         "en_retard": bool(obj.en_retard),
     }
+    date_changee = (
+        "paye_le" in data and data["paye_le"] != avant["paye_le"]
+    ) or (
+        data.get("mois_couvert") is not None
+        and data["mois_couvert"].replace(day=1) != avant["mois_couvert"]
+    )
     if data.get("mois_couvert") is not None:
         m = data["mois_couvert"].replace(day=1)
         if bail is not None and not _bail_couvre_mois(bail, m):
@@ -5591,7 +5629,7 @@ async def update_paiement(
     if data.get("en_retard") is not None:
         # Décision humaine explicite : elle prime sur le calcul.
         obj.en_retard = bool(data["en_retard"])
-    elif ("paye_le" in data or "mois_couvert" in data) and bail is not None:
+    elif date_changee and bail is not None:
         obj.en_retard = paiement_en_retard(
             obj.mois_couvert, obj.paye_le, bail.jour_echeance
         )

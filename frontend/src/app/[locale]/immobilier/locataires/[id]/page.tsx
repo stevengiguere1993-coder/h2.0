@@ -122,6 +122,17 @@ type DossierPaiement = {
   created_at?: string | null;
 };
 
+/** Ligne d'un mois (frais, crédit, rabais du bail, loyer dû fixé à la
+ *  main) — l'historique montre aussi ce qui était DÛ (bugs 4 et 10). */
+type DossierFrais = {
+  id: number;
+  bail_id: number;
+  mois_couvert: string;
+  montant: number;
+  libelle: string;
+  origine?: string | null;
+};
+
 type RenouvellementStatus =
   | "propose"
   | "accepte"
@@ -161,6 +172,7 @@ type Dossier = {
   locataire: Locataire;
   baux: DossierBail[];
   paiements: DossierPaiement[];
+  frais?: DossierFrais[];
   renouvellements: DossierRenouvellement[];
   communications: Communication[];
   nb_baux_actifs: number;
@@ -1247,6 +1259,49 @@ export default function LocataireDetailPage({
                   </table>
                 </div>
               )}
+              {/* Ce qui a changé le DÛ des mois : rabais du bail, frais,
+                  crédits, loyer dû fixé à la main (bugs 4 et 10). Se
+                  corrige depuis « Loyer du mois » ci-dessus (Corriger) ou,
+                  pour un rabais, sur le bail. */}
+              {dossier && (dossier.frais ?? []).length > 0 ? (
+                <div className="mt-4">
+                  <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/50">
+                    Rabais, frais et ajustements
+                  </h3>
+                  <ul className="divide-y divide-brand-800/70 rounded-xl border border-brand-800">
+                    {(dossier.frais ?? []).map((f) => (
+                      <li
+                        key={f.id}
+                        className="flex items-center justify-between gap-3 px-3 py-2 text-xs"
+                      >
+                        <span className="min-w-0">
+                          <span className="capitalize text-white/80">
+                            {moisLabel(f.mois_couvert)}
+                          </span>
+                          <span className="text-white/60"> · {f.libelle}</span>
+                          {f.origine === "rabais_bail" ? (
+                            <span className="badge badge-emerald ml-1.5">
+                              Rabais du bail
+                            </span>
+                          ) : f.origine === "ajustement_mois" ? (
+                            <span className="badge badge-sky ml-1.5">
+                              Loyer dû fixé
+                            </span>
+                          ) : null}
+                        </span>
+                        <span
+                          className={`shrink-0 font-semibold tabular-nums ${
+                            f.montant < 0 ? "text-emerald-300" : "text-amber-300"
+                          }`}
+                        >
+                          {f.montant < 0 ? "− " : "+ "}
+                          {money(Math.abs(f.montant))}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </section>
 
             {/* Baux */}

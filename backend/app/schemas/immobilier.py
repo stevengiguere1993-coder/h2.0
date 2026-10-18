@@ -914,12 +914,29 @@ class DossierRenouvellement(BaseModel):
     document_id: Optional[int] = None
 
 
+class DossierFrais(BaseModel):
+    """Ligne du mois d'un bail (frais, crédit, rabais du bail, loyer dû
+    fixé à la main) — visible dans l'historique du locataire à côté des
+    versements (bug 10 : le rabais doit se voir dans l'historique)."""
+
+    id: int
+    bail_id: int
+    mois_couvert: date
+    montant: float
+    libelle: str
+    #: NULL = saisi à la main ; « rabais_bail » ; « ajustement_mois ».
+    origine: Optional[str] = None
+
+
 class LocataireDossier(BaseModel):
     """Vue 360 d'un locataire : baux, historique de paiements, agrégats."""
 
     locataire: LocataireRead
     baux: List[DossierBail] = Field(default_factory=list)
     paiements: List[DossierPaiement] = Field(default_factory=list)
+    #: Frais, crédits, rabais et ajustements des mois (même borne que les
+    #: paiements : démarrage du pôle).
+    frais: List[DossierFrais] = Field(default_factory=list)
     renouvellements: List[DossierRenouvellement] = Field(default_factory=list)
     communications: List[LocataireCommunicationRead] = Field(
         default_factory=list

@@ -20,7 +20,7 @@
  * `confirmer`, `modifierVersement`, `supprimerVersement`.
  */
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Loader2, Lock, Pencil, Trash2 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
@@ -87,9 +87,15 @@ export const METHODES_PAIEMENT = [
 
 // ─── Coquille commune ─────────────────────────────────────────────────
 
-/** Fenêtre centrée sur ordinateur, feuille du bas sur téléphone
- *  (contenu défilant, boutons larges). Se ferme par Échap, par le fond
- *  ou par ses propres boutons. */
+//: Fenêtres ouvertes, de la plus ancienne à la plus récente : Échap ne
+//: ferme que celle du dessus (la correction reste ouverte quand on
+//: referme le versement qu'elle a ouvert).
+const pileFenetres: number[] = [];
+let prochaineFenetre = 1;
+
+/** Fenêtre centrée (même gabarit que la fenêtre Frais/crédit), contenu
+ *  défilant pour les petits écrans. Se ferme par Échap, par le fond ou
+ *  par ses propres boutons. */
 export function Fenetre({
   titre,
   sousTitre,
@@ -107,25 +113,37 @@ export function Fenetre({
   onClose: () => void;
   children: ReactNode;
 }) {
+  const fermer = useRef(onClose);
   useEffect(() => {
+    fermer.current = onClose;
+  });
+  useEffect(() => {
+    const id = prochaineFenetre++;
+    pileFenetres.push(id);
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && pileFenetres[pileFenetres.length - 1] === id) {
+        fermer.current();
+      }
     }
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      const i = pileFenetres.indexOf(id);
+      if (i >= 0) pileFenetres.splice(i, 1);
+    };
+  }, []);
 
   return (
     <div
       className={`fixed inset-0 ${
         niveau === 80 ? "z-[80]" : "z-[70]"
-      } flex items-end justify-center bg-black/70 backdrop-blur-sm sm:items-center sm:p-4`}
+      } flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm`}
       onClick={onClose}
     >
       <div
         role="dialog"
         aria-modal="true"
-        className="max-h-[92vh] w-full max-w-md overflow-y-auto rounded-t-2xl border border-brand-800 bg-brand-950 shadow-2xl sm:rounded-2xl"
+        className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="sticky top-0 z-10 border-b border-brand-800 bg-brand-950 px-5 py-3">
@@ -496,6 +514,7 @@ export function VersementModal({
               type="month"
               value={moisCouvert}
               onChange={(e) => setMoisCouvert(e.target.value)}
+              placeholder="AAAA-MM"
               className="input mt-0.5 block w-full"
             />
           </Champ>
@@ -1181,15 +1200,25 @@ export function usePaiementActions<R extends PaiementRowBase>({
       );
     } else {
       const p = versement.paiement;
-      const body: Record<string, unknown> = {
-        montant: v.montant,
-        paye_le: v.paye_le,
-        methode: v.methode,
-        reference: v.reference,
-        notes: v.notes
-      };
-      if (v.mois_couvert) body.mois_couvert = `${v.mois_couvert}-01`;
-      if (v.en_retard !== undefined) body.en_retard = v.en_retard;
+      // N'envoyer que ce qui a CHANGÉ : la trace « champs modifiés » reste
+      // exacte, et corriger un montant ne ré-évalue pas un retard tranché
+      // à la main plus tôt.
+      const body: Record<string, unknown> = {};
+      if (Math.abs(v.montant - p.montant) > 0.004) body.montant = v.montant;
+      if (v.paye_le !== (p.paye_le ?? "").slice(0, 10)) body.paye_le = v.paye_le;
+      if ((v.methode ?? null) !== (p.methode ?? null)) body.methode = v.methode;
+      if ((v.reference ?? null) !== (p.reference ?? null))
+        body.reference = v.reference;
+      if ((v.notes ?? null) !== (p.notes ?? null)) body.notes = v.notes;
+      if (v.mois_couvert && v.mois_couvert !== (p.mois_couvert ?? "").slice(0, 7))
+        body.mois_couvert = `${v.mois_couvert}-01`;
+      if (v.en_retard !== undefined && v.en_retard !== !!p.en_retard)
+        body.en_retard = v.en_retard;
+      if (Object.keys(body).length === 0) {
+        setVersement(null);
+        onInfo?.("Aucun changement.");
+        return;
+      }
       const r = await authedFetch(`/api/v1/immobilier/paiements/${p.id}`, {
         method: "PATCH",
         body: JSON.stringify(body)
