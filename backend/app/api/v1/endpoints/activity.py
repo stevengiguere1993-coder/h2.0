@@ -60,6 +60,7 @@ from app.models.prospection_deal import ProspectionDeal
 from app.models.prospection_deal_task import ProspectionDealTask
 from app.models.sales_task import SalesTask, sales_task_assignees
 from app.models.user import User
+from app.models.voice import VoiceRoutingRule, VoiceUserCallHours
 from app.services.api_capabilities import POLE_LABELS, readable_poles
 from app.services.audit import log_action
 from app.services.entity_serializers import serialize_entity
@@ -1983,6 +1984,24 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         list_cap="immobilier:tal_dossiers:list",
         order_attr="updated_at", stage_attr="statut", supports_active=False,
     ),
+    # Téléphonie (bug 19, 2026-10-18) : règles d'acheminement des appels —
+    # sujet (suivi_projet | nouveau_client | urgence_locataire |
+    # demande_locataire | general), chantier optionnel, liste ordonnée des
+    # personnes à appeler. `stage` filtre le sujet. Rattaché au pôle
+    # Construction (c'est le chantier qui dicte qui répond).
+    "regles_acheminement": _ListSpec(
+        model=VoiceRoutingRule, pole="construction",
+        entity_type="voice_routing_rule",
+        list_cap="construction:projects:list",
+        order_attr="updated_at", stage_attr="subject", supports_active=False,
+    ),
+    # Heures d'appel personnelles des utilisateurs (une ligne par plage).
+    "heures_appel": _ListSpec(
+        model=VoiceUserCallHours, pole="construction",
+        entity_type="voice_user_call_hours",
+        list_cap="construction:projects:list",
+        order_attr="id", stage_attr=None, supports_active=False,
+    ),
 }
 
 #: Alias supplémentaires (noms « complets ») vers les mêmes specs, pour que
@@ -2019,6 +2038,11 @@ _LIST_ALIASES: dict[str, str] = {
     "dossiers_financement": "financements",
     "baux_tal": "tal_transmissions",
     "bail_tal": "tal_transmissions",
+    "voice_routing_rule": "regles_acheminement",
+    "routing_rules": "regles_acheminement",
+    "acheminement": "regles_acheminement",
+    "voice_user_call_hours": "heures_appel",
+    "call_hours": "heures_appel",
 }
 
 
