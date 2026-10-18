@@ -309,3 +309,56 @@ class TimesheetUserCompany(Base, TimestampUpdateMixin):
         nullable=False,
         index=True,
     )
+
+
+class TimesheetPunch(Base, TimestampUpdateMixin):
+    """Punch de la feuille de temps (bug 16, Steven 2026-10-18).
+
+    L'employé « autre » (pôle Entreprises, sans fiche Employé
+    Construction) démarre un chronomètre sur une compagnie et une tâche ;
+    à l'arrêt, la durée devient une ligne « par tâche » de sa feuille, au
+    jour du début (heure de Montréal). Un seul punch ouvert par compte
+    (``ended_at`` NULL). La ligne reste une ligne ordinaire, modifiable
+    tant que la feuille est en brouillon ; le punch garde le début et la
+    fin réels comme trace.
+    """
+
+    __tablename__ = "timesheet_punches"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    company_id: Mapped[int] = mapped_column(
+        ForeignKey("timesheet_companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Tâche Gestion d'entreprises (NULL = tâche saisie à la main).
+    entreprise_tache_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("entreprise_taches.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    ended_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    #: Heures du punch (plafonnées à 24, comme une ligne de la feuille).
+    hours: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    #: Feuille et jour (0–13) qui ont reçu les heures à l'arrêt.
+    timesheet_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("timesheets.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    day_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    #: Qui a arrêté le punch : l'employé, ou un gestionnaire (oubli).
+    stopped_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
