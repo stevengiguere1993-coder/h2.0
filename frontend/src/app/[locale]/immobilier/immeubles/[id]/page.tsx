@@ -37,6 +37,7 @@ import { useSearchParams } from "next/navigation";
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch, getToken } from "@/lib/auth";
 import { parseNombre } from "@/lib/nombre";
+import { AddressInput } from "@/components/address-input";
 import { compareNumero } from "@/components/immobilier/numero-sort";
 import {
   ouvrirDossierTal,
@@ -1334,10 +1335,19 @@ export default function ImmeubleDetailPage({
                 />
               </EditField>
               <EditField label="Adresse *">
-                <input
+                {/* Champ d'adresse partagé (autocomplete + case Suffixe du
+                    numéro civique) : « n° rue » ici, Ville / Code postal
+                    remplis en dessous quand on choisit une suggestion. */}
+                <AddressInput
                   value={editForm.address}
-                  onChange={(e) =>
-                    setEditForm((f) => ({ ...f, address: e.target.value }))
+                  onChange={(v) => setEditForm((f) => ({ ...f, address: v }))}
+                  format="rue"
+                  onPick={(a) =>
+                    setEditForm((f) => ({
+                      ...f,
+                      city: a.ville || f.city,
+                      postal_code: a.codePostal || f.postal_code
+                    }))
                   }
                   className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500"
                 />
