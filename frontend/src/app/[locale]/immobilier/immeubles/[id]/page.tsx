@@ -45,6 +45,7 @@ import {
 import { ImmobilierTopbar, useImmobilierLayout } from "../../layout";
 import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { ContratGestionTab } from "./contrat-gestion-tab";
+import { CodesAccesSection } from "@/components/immobilier/codes-acces";
 import { BandeauAvisRenouvellement } from "@/components/immobilier/bandeau-avis";
 import { ApercuEnvoiModal } from "@/components/immobilier/apercu-envoi";
 import { BandeauBailManquant } from "@/components/immobilier/bandeau-bail-manquant";
@@ -1121,6 +1122,12 @@ export default function ImmeubleDetailPage({
                 hypotheques={hypotheques}
                 evaluations={evaluations}
               />
+              {/* Codes d'accès (porte, lock box, garage…) — bug
+                  mvilliard 2026-10-17 : un endroit pour tous les codes
+                  reliés à l'immeuble. */}
+              <div className="mt-4">
+                <CodesAccesSection immeubleId={immeubleId} />
+              </div>
               {/* Import des documents DÉJÀ SIGNÉS de l'immeuble
                   (règlement d'immeuble, bail papier…) — retour
                   2026-09-12, point 14. */}
