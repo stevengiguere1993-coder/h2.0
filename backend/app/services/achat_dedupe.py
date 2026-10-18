@@ -24,7 +24,7 @@ from collections import defaultdict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.achat import KIND_INVENTAIRE, Achat
+from app.models.achat import Achat
 
 
 log = logging.getLogger(__name__)
@@ -212,14 +212,7 @@ async def dedupe_achats(db: AsyncSession) -> int:
     Retourne le nombre d'achats supprimés. Ne committe pas (l'appelant
     gère la transaction).
     """
-    # Les sorties d'inventaire interne (réf. « INV-<id> », sans
-    # fournisseur ni lien QB) ne sont jamais des doublons d'un document :
-    # hors du regroupement, pour qu'aucune ne soit fusionnée par hasard.
-    achats = list(
-        (
-            await db.execute(select(Achat).where(Achat.kind != KIND_INVENTAIRE))
-        ).scalars().all()
-    )
+    achats = list((await db.execute(select(Achat))).scalars().all())
 
     uf = _UnionFind()
     # Index : clé de signal → premier achat vu portant cette clé. On unionne

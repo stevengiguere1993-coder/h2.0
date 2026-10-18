@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 
 from app.api.deps import CurrentUser, DBSession
 from app.core.taxes import TPS_RATE, TVQ_RATE, TAX_FACTOR, ht_from_ttc
-from app.models.achat import KIND_INVENTAIRE, Achat, AchatStatus
+from app.models.achat import Achat, AchatStatus
 from app.models.employe import Employe
 from app.models.facture import Facture, FactureStatus
 from app.models.payment import Payment
@@ -566,22 +566,8 @@ async def _compute_finances(
     # matériaux est récupérable (CTI/RTI) et n'est donc PAS un coût. Le
     # coût réel matériel HORS TAXES = TTC / 1.14975 ; il sert aussi de base
     # aux CTI/RTI récupérables dans le bloc « taxes à remettre ».
-    #
-    # Exception : une sortie de l'INVENTAIRE INTERNE est déjà hors taxes
-    # (taxes payées et récupérées à l'achat du stock) — ni divisée par le
-    # facteur de taxe, ni comptée dans les CTI/RTI de ce projet.
-    inventaire_ht = round(
-        sum(
-            float(a.amount or 0)
-            for a in achats
-            if (a.kind or "") == KIND_INVENTAIRE
-        ),
-        2,
-    )
-    recoverable_materials_ht = ht_from_ttc(
-        round(actual_material_cost - inventaire_ht, 2)
-    )
-    actual_material_cost_ht = round(recoverable_materials_ht + inventaire_ht, 2)
+    actual_material_cost_ht = ht_from_ttc(actual_material_cost)
+    recoverable_materials_ht = actual_material_cost_ht
 
     # Labour — sum of approved punches on this project
     punches = (

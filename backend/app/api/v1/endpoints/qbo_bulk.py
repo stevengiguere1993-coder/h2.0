@@ -290,7 +290,7 @@ async def reclass_projects(
     et la main-d'œuvre sont concernés. Lancé en ARRIÈRE-PLAN (idempotent) ;
     suivre via GET /qbo/backfill-status.
     """
-    from app.models.achat import KIND_INVENTAIRE, Achat
+    from app.models.achat import Achat
 
     # On ne pousse PAS les factures clients ici (demande : ce sont les achats
     # du projet qu'on veut dans QB, pas les factures de vente).
@@ -304,8 +304,6 @@ async def reclass_projects(
     astmt = select(Achat.id).where(
         Achat.project_id.is_not(None),
         Achat.qbo_purchase_id.is_(None),
-        # Sortie d'inventaire interne : jamais dans QB.
-        Achat.kind != KIND_INVENTAIRE,
     )
     if client_id is not None:
         from app.models.project import Project as _Project

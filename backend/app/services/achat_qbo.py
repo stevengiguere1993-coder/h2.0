@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.integrations.quickbooks import QuickBooksError, get_qbo
-from app.models.achat import KIND_INVENTAIRE, Achat
+from app.models.achat import Achat
 from app.models.fournisseur import Fournisseur
 from app.models.project import Project
 from app.models.qbo_account_map import QboAccountMap
@@ -701,18 +701,6 @@ async def _resolve_expense_account(
 async def sync_achat_to_qbo(
     db: AsyncSession, achat_id: int
 ) -> Dict[str, Any]:
-    # Sortie de l'inventaire interne (Steven 2026-10-18) : coût du projet
-    # dans Kratos seulement. Le stock est entré dans QB à son achat ; le
-    # pousser encore compterait la dépense deux fois. Garde commune à tous
-    # les chemins (auto-push, bouton, filet horaire, synchro de masse).
-    kind = (
-        await db.execute(select(Achat.kind).where(Achat.id == achat_id))
-    ).scalar_one_or_none()
-    if kind == KIND_INVENTAIRE:
-        raise AchatSyncError(
-            "Sortie de l'inventaire interne : elle reste dans Kratos et ne "
-            "va pas dans QuickBooks (le stock y est entré à son achat)."
-        )
     qbo = get_qbo()
     await qbo._load_refresh_from_db()
     if not qbo.ready:

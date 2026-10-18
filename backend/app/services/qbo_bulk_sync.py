@@ -349,7 +349,7 @@ async def run_migration(
         # (commit indépendant). Ainsi un achat en erreur ne peut PAS
         # empoisonner la transaction de la migration (cause du HTTP 500).
         from app.db.session import AsyncSessionLocal
-        from app.models.achat import KIND_INVENTAIRE, Achat
+        from app.models.achat import Achat
         from app.services.achat_qbo import sync_achat_to_qbo
 
         proj_ids = [p.id for p in projects]
@@ -362,8 +362,6 @@ async def run_migration(
                             Achat.project_id.in_(proj_ids),
                             Achat.status != "cancelled",
                             Achat.amount.is_not(None),
-                            # Sortie d'inventaire interne : jamais dans QB.
-                            Achat.kind != KIND_INVENTAIRE,
                         )
                     )
                 ).all()

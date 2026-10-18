@@ -371,8 +371,6 @@ export default function AchatsPage() {
       if (a.fournisseur_id) return frById.get(a.fournisseur_id)?.name || "";
       if (a.sous_traitant_id)
         return stById.get(a.sous_traitant_id)?.full_name || "";
-      // Sortie de l'inventaire interne (pas de fournisseur : le stock).
-      if (a.kind === "inventaire") return "Inventaire interne";
       return "";
     },
     [frById, stById]
