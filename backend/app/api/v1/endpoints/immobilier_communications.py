@@ -16,9 +16,11 @@ propres variables, et chaque courriel laisse une trace : ligne d'audit
 locataire. Les avis TAL à signature restent dans le flux Documents.
 
 Expéditeur : boîte du tenant M365 (Graph n'envoie pas depuis un domaine
-externe). Un gestionnaire contractuel (ex. kyle.gestion@gmail.com) est
-géré par ``from_name`` (nom affiché) + ``reply_to`` (les réponses des
+externe). Un gestionnaire contractuel (ex. Kyle, kyle@gestionmagnifica.com)
+est géré par ``from_name`` (nom affiché) + ``reply_to`` (les réponses des
 locataires vont chez lui). Défauts réglables ici, modifiables à l'envoi.
+Son adresse de réponse est posée au démarrage par
+``app.services.locatif_expediteurs`` (Steven, 2026-10-18).
 """
 
 from __future__ import annotations
@@ -54,6 +56,7 @@ from app.services.automation_state import (
     get_automation_config,
     set_automation_config,
 )
+from app.services.locatif_expediteurs import REGLAGES_COMMUNICATIONS
 from app.services.tal_forms import (
     GABARITS_DEFAUT,
     SIGNATURE_NON_REQUISE,
@@ -71,7 +74,7 @@ router = APIRouter(
 #: relevé 31 reste dans Suivis annuels — demande Phil) + message libre.
 TYPES_ENVOYABLES = tuple(GABARITS_DEFAUT.keys()) + ("libre",)
 
-_REGLAGES_KEY = "immo.communications"
+_REGLAGES_KEY = REGLAGES_COMMUNICATIONS
 
 
 async def expediteur_defaut() -> tuple:
