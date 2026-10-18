@@ -959,6 +959,7 @@ async def ensure_immobilier_aux_tables() -> None:
             ImmDocument,
             ImmLocataireContact,
             ImmTalDossier,
+            ImmeubleCode,
             PaiementExterne,
             LocataireCommunication,
             LocationAnnonce,
@@ -992,6 +993,8 @@ async def ensure_immobilier_aux_tables() -> None:
                         FactureExterne.__table__,
                         FactureGestion.__table__,
                         FraisManuelGestion.__table__,
+                        # Codes d'accès de l'immeuble (2026-10-18).
+                        ImmeubleCode.__table__,
                     ],
                 )
             )

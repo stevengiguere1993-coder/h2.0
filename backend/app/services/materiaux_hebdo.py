@@ -36,6 +36,7 @@ LIMITE_RECHERCHE = 300
 
 DERNIER_HEBDO: dict = {"en_cours": False, "lance_a": None, "termine_a": None, "etapes": None}
 _TACHES: set = set()
+_TACHE_EN_COURS: Optional[asyncio.Task] = None
 
 
 def est_la_nuit(now: Optional[datetime] = None) -> bool:
@@ -45,21 +46,25 @@ def est_la_nuit(now: Optional[datetime] = None) -> bool:
 
 async def job_hebdo(*, relever: bool = True, chercher: bool = True, analyser: bool = True) -> dict:
     """Le job lui-même (séquentiel, un seul à la fois par processus)."""
+    global _TACHE_EN_COURS
     from app.db.session import AsyncSessionLocal
 
     if DERNIER_HEBDO.get("en_cours"):
         return {"skipped": "deja_en_cours"}
     etapes: dict = {}
+    _TACHE_EN_COURS = asyncio.current_task()
     DERNIER_HEBDO.update(en_cours=True, lance_a=datetime.now(timezone.utc).isoformat(), termine_a=None, etapes=etapes)
     try:
         if relever:
             try:
-                from app.services.materiaux_prix_auto import relever_tout
+                # Même course que le bouton « Actualiser les prix » : état
+                # visible à l'écran, session par domaine, durée maximale,
+                # arrêtable (alertes de rabais comprises).
+                from app.services.materiaux_prix_auto import lancer_releve_en_fond
 
-                async with AsyncSessionLocal() as db:
-                    r = await relever_tout(db, max_age_hours=None)
-                    await db.commit()
-                etapes["releve"] = {k: v for k, v in r.items() if k != "erreurs"} | {"erreurs": len(r.get("erreurs") or [])}
+                tache = lancer_releve_en_fond(max_age_hours=None)
+                r = (await tache) if tache is not None else {"skipped": "releve_deja_en_cours"}
+                etapes["releve"] = {k: v for k, v in r.items() if k not in ("erreurs", "dernier")} | {"erreurs": len(r.get("erreurs") or [])}
             except Exception as exc:  # noqa: BLE001
                 log.exception("Hebdo matériaux : relevé échoué")
                 etapes["releve"] = {"error": str(exc)[:200]}
@@ -82,14 +87,21 @@ async def job_hebdo(*, relever: bool = True, chercher: bool = True, analyser: bo
             etapes["alertes"] = {"error": str(exc)[:200]}
         if analyser:
             try:
-                from app.services.materiaux_analyse_ia import analyser_tout
+                from app.services.materiaux_analyse_ia import lancer_analyse_en_fond
 
-                async with AsyncSessionLocal() as db:
-                    etapes["analyse_ia"] = await analyser_tout(db, limit=400, max_age_days=6)
+                tache = lancer_analyse_en_fond(limit=400, max_age_days=6)
+                etapes["analyse_ia"] = (await tache) if tache is not None else {"skipped": "analyse_deja_en_cours"}
             except Exception as exc:  # noqa: BLE001
                 log.exception("Hebdo matériaux : analyse IA échouée")
                 etapes["analyse_ia"] = {"error": str(exc)[:200]}
+    except asyncio.CancelledError:
+        # Bouton « Arrêter » sur le job de nuit : l'étape en cours s'arrête
+        # (son propre état est libéré par sa course), les suivantes ne
+        # tournent pas ; le prochain passage nocturne reprendra.
+        log.info("Hebdo matériaux : arrêté à la demande")
+        etapes["annule"] = True
     finally:
+        _TACHE_EN_COURS = None
         DERNIER_HEBDO.update(en_cours=False, termine_a=datetime.now(timezone.utc).isoformat())
     log.info("Hebdo matériaux terminé : %s", etapes)
     return etapes
@@ -103,6 +115,19 @@ def lancer_en_fond(**kwargs) -> bool:
     _TACHES.add(task)
     task.add_done_callback(_TACHES.discard)
     return True
+
+
+def annuler_hebdo() -> bool:
+    """Arrête le job de nuit en cours (et l'étape qu'il attend) ; True si
+    un job tournait."""
+    t = _TACHE_EN_COURS
+    if t is not None and not t.done():
+        t.cancel()
+        return True
+    if DERNIER_HEBDO.get("en_cours"):
+        DERNIER_HEBDO.update(en_cours=False, termine_a=datetime.now(timezone.utc).isoformat())
+        return True
+    return False
 
 
 async def lancer_si_nuit_hebdo(now: Optional[datetime] = None) -> dict:
