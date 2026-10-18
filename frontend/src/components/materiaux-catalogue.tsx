@@ -24,7 +24,8 @@ import {
   Trash2,
   Upload,
   Wand2,
-  X
+  X,
+  CircleStop
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
@@ -174,6 +175,50 @@ function fmtDateTime(iso: string | null | undefined): string {
   });
 }
 
+function fmtDuree(s: number | null | undefined): string {
+  if (s == null || !Number.isFinite(s)) return "";
+  const t = Math.max(0, Math.floor(s));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  if (h) return `${h} h ${String(m).padStart(2, "0")} min`;
+  if (m) return `${m} min`;
+  return `${t} s`;
+}
+
+type ReleveStats = {
+  offres?: number;
+  examinees?: number;
+  ok?: number;
+  echecs?: number;
+  changes?: number;
+  rabais?: number;
+  error?: string;
+  annule?: boolean;
+  skipped?: string;
+  dernier?: {
+    domaine: string;
+    ok: boolean;
+    price: number | null;
+    error: string | null;
+  } | null;
+};
+
+type ReleveEtat = {
+  en_cours: boolean;
+  lance_a: string | null;
+  termine_a: string | null;
+  duree_s?: number | null;
+  duree_max_s?: number | null;
+  stats: ReleveStats | null;
+};
+
+type CourseArretable = "releve" | "recherche" | "analyse" | "hebdo";
+
+function resumeReleve(st: ReleveStats | null | undefined): string {
+  const x = st || {};
+  return `${x.examinees ?? 0}${x.offres ? ` / ${x.offres}` : ""} offres examinées, ${x.ok ?? 0} prix lus, ${x.changes ?? 0} changements, ${x.rabais ?? 0} en rabais, ${x.echecs ?? 0} échecs.`;
+}
+
 type RechercheStats = {
   total?: number;
   examines?: number;
@@ -181,6 +226,7 @@ type RechercheStats = {
   aucun?: number;
   erreurs?: number;
   error?: string;
+  annule?: boolean;
   dernier?: {
     magasin: string;
     statut: string;
@@ -194,6 +240,7 @@ type RechercheEtat = {
   en_cours: boolean;
   lance_a: string | null;
   termine_a: string | null;
+  duree_s?: number | null;
   stats: RechercheStats | null;
   scraper?: { en_ligne: boolean | null; detail: string | null; verifie_a: string | null } | null;
   ia?: { configuree: boolean; web: boolean } | null;
@@ -203,8 +250,9 @@ type AnalyseEtat = {
   en_cours: boolean;
   lance_a: string | null;
   termine_a: string | null;
-  stats: { total?: number; analyses?: number; lots?: number; erreurs?: number; skipped?: string | null; error?: string } | null;
-  hebdo?: { en_cours: boolean; lance_a: string | null; termine_a: string | null; etapes: Record<string, unknown> | null } | null;
+  duree_s?: number | null;
+  stats: { total?: number; analyses?: number; lots?: number; erreurs?: number; skipped?: string | null; error?: string; annule?: boolean } | null;
+  hebdo?: { en_cours: boolean; lance_a: string | null; termine_a: string | null; duree_s?: number | null; etapes: Record<string, unknown> | null } | null;
 };
 
 function resumeRecherche(st: RechercheStats | null | undefined): string {
@@ -293,11 +341,9 @@ export function MateriauxCatalogue() {
   const [analyseEtat, setAnalyseEtat] = useState<AnalyseEtat | null>(null);
   const [classifying, setClassifying] = useState(false);
   const [storesOpen, setStoresOpen] = useState(false);
-  const [releveEtat, setReleveEtat] = useState<{
-    en_cours: boolean;
-    termine_a: string | null;
-    stats: Record<string, unknown> | null;
-  } | null>(null);
+  const [releveEtat, setReleveEtat] = useState<ReleveEtat | null>(null);
+  const suiviReleveRef = useRef(false);
+  const [arret, setArret] = useState<CourseArretable | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   async function loadMagasins() {
@@ -421,7 +467,7 @@ export function MateriauxCatalogue() {
           const st = e.stats || {};
           setNotice(
             st.error
-              ? `Recherche terminée avec une erreur : ${st.error}`
+              ? `Recherche ${st.annule ? "arrêtée" : "terminée avec une erreur"} : ${st.error} ${resumeRecherche(st)}`
               : `Recherche terminée : ${resumeRecherche(st)} Sans correspondance : précise le nom (dimensions, format, marque).`
           );
           await load();
@@ -434,22 +480,82 @@ export function MateriauxCatalogue() {
     }
   }
 
-  async function loadReleveEtat() {
+  async function loadReleveEtat(): Promise<ReleveEtat | null> {
     try {
       const r = await authedFetch("/api/v1/materiaux/prix/etat");
       if (r.ok) {
-        const e = (await r.json()) as {
-          en_cours: boolean;
-          termine_a: string | null;
-          stats: Record<string, unknown> | null;
-        };
+        const e = (await r.json()) as ReleveEtat;
         setReleveEtat(e);
+        // Relevé lancé avant un rechargement de la page, par le cron ou le
+        // job de nuit : on reprend le suivi au lieu de le perdre de vue.
+        if (e.en_cours && !suiviReleveRef.current) void suivreReleve();
         return e;
       }
     } catch {
       /* ignore */
     }
     return null;
+  }
+
+  /** Suit un relevé en cours (état toutes les 5 s) jusqu'à sa fin, puis
+   *  recharge le catalogue pour afficher les prix relevés. */
+  async function suivreReleve() {
+    if (suiviReleveRef.current) return;
+    suiviReleveRef.current = true;
+    setRefreshing(true);
+    try {
+      for (let i = 0; i < 2160; i += 1) {
+        await new Promise((r) => setTimeout(r, 5000));
+        const er = await authedFetch("/api/v1/materiaux/prix/etat");
+        if (!er.ok) continue;
+        const e = (await er.json()) as ReleveEtat;
+        setReleveEtat(e);
+        if (!e.en_cours) {
+          const st = e.stats || {};
+          setNotice(
+            st.error
+              ? `Relevé ${st.annule ? "arrêté" : "terminé avec une erreur"} : ${st.error} ${resumeReleve(st)}`
+              : Number(st.offres ?? 0) === 0
+                ? "Aucune offre n'a de lien produit : rien à relever. Clique « Trouver les prix » pour chercher chaque matériau sur les sites des quincailleries et poser un prix de base."
+                : `Relevé terminé : ${resumeReleve(st)}`
+          );
+          await load();
+          break;
+        }
+      }
+    } finally {
+      suiviReleveRef.current = false;
+      setRefreshing(false);
+    }
+  }
+
+  /** Bouton « Arrêter » d'une course de fond (relevé, recherche, analyse
+   *  IA, job de nuit) : la tâche est annulée côté serveur, l'état « en
+   *  cours » libéré, ce qui a déjà été enregistré reste. */
+  async function arreterCourse(job: CourseArretable) {
+    if (arret) return;
+    setArret(job);
+    setError(null);
+    try {
+      const res = await authedFetch("/api/v1/materiaux/prix/arreter", {
+        method: "POST",
+        body: JSON.stringify({ job })
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      const j = (await res.json()) as { arrete: boolean; en_cours: boolean };
+      const libelle =
+        job === "releve" ? "Relevé des prix" : job === "recherche" ? "Recherche de prix" : job === "analyse" ? "Analyse IA" : "Job de nuit";
+      setNotice(
+        j.arrete
+          ? `${libelle} arrêté${job === "recherche" ? "e" : ""} : ce qui a été lu jusque-là est enregistré, tu peux relancer quand tu veux.`
+          : `${libelle} : rien n'était en cours.`
+      );
+      await Promise.all([loadReleveEtat(), loadRechercheEtat(), loadAnalyseEtat()]);
+    } catch (e) {
+      setError(`Arrêt impossible : ${(e as Error).message}`);
+    } finally {
+      setArret(null);
+    }
   }
 
   const principaux = useMemo(
@@ -583,26 +689,23 @@ export function MateriauxCatalogue() {
         body: JSON.stringify({})
       });
       if (!res.ok) throw new Error(await readError(res));
-      setNotice("Relevé des prix lancé : un magasin à la fois, ça peut prendre quelques minutes.");
-      for (let i = 0; i < 120; i += 1) {
-        await new Promise((r) => setTimeout(r, 5000));
-        const e = await loadReleveEtat();
-        if (e && !e.en_cours) {
-          const st = (e.stats || {}) as Record<string, number | string>;
-          setNotice(
-            st.error
-              ? `Relevé terminé avec une erreur : ${st.error}`
-              : Number(st.offres ?? 0) === 0
-                ? "Aucune offre n'a de lien produit : rien à relever. Clique « Trouver les prix » pour chercher chaque matériau sur les sites des quincailleries et poser un prix de base."
-                : `Relevé terminé : ${st.offres ?? 0} offres avec lien, ${st.ok ?? 0} prix lus, ${st.changes ?? 0} changements, ${st.rabais ?? 0} en rabais, ${st.echecs ?? 0} échecs.`
-          );
-          await load();
-          break;
-        }
-      }
+      const launched = (await res.json()) as { lance: boolean; raison?: string } & Partial<ReleveEtat>;
+      setNotice(
+        launched.lance
+          ? "Relevé des prix lancé : un magasin à la fois, la progression s'affiche ci-dessous (bouton « Arrêter » pour l'interrompre)."
+          : `${launched.raison || "Un relevé est déjà en cours."}${launched.lance_a ? ` Lancé ${fmtDateTime(launched.lance_a)}${launched.duree_s ? ` (depuis ${fmtDuree(launched.duree_s)})` : ""}.` : ""} Clique « Arrêter » pour le libérer.`
+      );
+      setReleveEtat((prev) => ({
+        en_cours: true,
+        lance_a: launched.lance_a ?? prev?.lance_a ?? null,
+        termine_a: null,
+        duree_s: launched.duree_s ?? prev?.duree_s ?? null,
+        duree_max_s: launched.duree_max_s ?? prev?.duree_max_s ?? null,
+        stats: launched.stats ?? null
+      }));
+      await suivreReleve();
     } catch (e) {
       setError(`Relevé non lancé : ${(e as Error).message}`);
-    } finally {
       setRefreshing(false);
     }
   }
@@ -622,14 +725,16 @@ export function MateriauxCatalogue() {
       setNotice(
         launched.lance
           ? "Recherche lancée : chaque matériau sans lien est cherché sur le site de chaque quincaillerie principale. La progression s'affiche ci-dessous."
-          : launched.raison || "Une recherche est déjà en cours."
+          : `${launched.raison || "Une recherche est déjà en cours."}${launched.lance_a ? ` Lancée ${fmtDateTime(launched.lance_a)}${launched.duree_s ? ` (depuis ${fmtDuree(launched.duree_s)})` : ""}.` : ""} Clique « Arrêter » pour la libérer.`
       );
       setRechercheEtat((prev) => ({
         en_cours: true,
         lance_a: launched.lance_a ?? prev?.lance_a ?? null,
         termine_a: null,
+        duree_s: launched.duree_s ?? prev?.duree_s ?? null,
         stats: launched.stats ?? null,
-        scraper: prev?.scraper
+        scraper: prev?.scraper,
+        ia: prev?.ia
       }));
       await suivreRecherche();
     } catch (e) {
@@ -777,11 +882,15 @@ export function MateriauxCatalogue() {
           <button
             type="button"
             onClick={findAllPrices}
-            disabled={searching}
+            disabled={searching || Boolean(rechercheEtat?.en_cours)}
             className="btn-secondary btn-sm disabled:opacity-60"
-            title="Chercher chaque matériau sans lien sur les sites des quincailleries principales et poser un prix de base"
+            title={
+              rechercheEtat?.en_cours
+                ? "Une recherche est déjà en cours (voir la progression ci-dessous, bouton « Arrêter » pour l'interrompre)"
+                : "Chercher chaque matériau sans lien sur les sites des quincailleries principales et poser un prix de base"
+            }
           >
-            {searching ? (
+            {searching || rechercheEtat?.en_cours ? (
               <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
             ) : (
               <Search className="mr-1 h-3.5 w-3.5" />
@@ -805,11 +914,15 @@ export function MateriauxCatalogue() {
           <button
             type="button"
             onClick={refreshAllPrices}
-            disabled={refreshing}
+            disabled={refreshing || Boolean(releveEtat?.en_cours)}
             className="btn-secondary btn-sm disabled:opacity-60"
-            title="Relever aujourd'hui les prix de toutes les offres qui ont un lien produit"
+            title={
+              releveEtat?.en_cours
+                ? "Un relevé est déjà en cours (voir la progression ci-dessous, bouton « Arrêter » pour l'interrompre)"
+                : "Relever aujourd'hui les prix de toutes les offres qui ont un lien produit"
+            }
           >
-            {refreshing ? (
+            {refreshing || releveEtat?.en_cours ? (
               <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
             ) : (
               <RefreshCw className="mr-1 h-3.5 w-3.5" />
@@ -832,12 +945,63 @@ export function MateriauxCatalogue() {
           {notice}
         </p>
       ) : null}
+      {releveEtat?.en_cours ? (
+        <div className="rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2 text-sm text-white">
+          <p className="flex flex-wrap items-center gap-2 font-semibold">
+            <Loader2 className="h-4 w-4 animate-spin text-accent-500" />
+            <span className="flex-1">
+              Relevé des prix en cours depuis {fmtDateTime(releveEtat.lance_a)}
+              {releveEtat.duree_s ? ` (${fmtDuree(releveEtat.duree_s)})` : ""} — {resumeReleve(releveEtat.stats)}
+            </span>
+            <button
+              type="button"
+              onClick={() => arreterCourse("releve")}
+              disabled={arret !== null}
+              className="btn-secondary btn-sm disabled:opacity-60"
+              title="Arrêter ce relevé : les prix déjà lus restent enregistrés"
+            >
+              {arret === "releve" ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <CircleStop className="mr-1 h-3.5 w-3.5" />}
+              Arrêter
+            </button>
+          </p>
+          {releveEtat.stats?.dernier ? (
+            <p className="mt-1 text-xs text-white/70">
+              Dernier examiné : {releveEtat.stats.dernier.domaine} —{" "}
+              {releveEtat.stats.dernier.ok
+                ? `prix lu${releveEtat.stats.dernier.price != null ? ` : ${money(releveEtat.stats.dernier.price)}` : ""}`
+                : `échec (${releveEtat.stats.dernier.error || "inconnu"})`}
+            </p>
+          ) : null}
+          {releveEtat.duree_max_s ? (
+            <p className="mt-1 text-xs text-white/70">
+              S&apos;arrête de lui-même après {fmtDuree(releveEtat.duree_max_s)} au plus ; ce qui est lu reste enregistré.
+            </p>
+          ) : null}
+        </div>
+      ) : releveEtat?.termine_a && releveEtat.stats?.error ? (
+        <p className="text-xs text-white/60">
+          Dernier relevé des prix {releveEtat.stats.annule ? "arrêté" : "terminé sur une erreur"} le {fmtDateTime(releveEtat.termine_a)} :{" "}
+          {releveEtat.stats.error} {resumeReleve(releveEtat.stats)}
+        </p>
+      ) : null}
       {rechercheEtat?.en_cours ? (
         <div className="rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2 text-sm text-white">
-          <p className="flex items-center gap-2 font-semibold">
+          <p className="flex flex-wrap items-center gap-2 font-semibold">
             <Loader2 className="h-4 w-4 animate-spin text-accent-500" />
-            Recherche de prix en cours depuis {fmtDateTime(rechercheEtat.lance_a)} —{" "}
-            {resumeRecherche(rechercheEtat.stats)}
+            <span className="flex-1">
+              Recherche de prix en cours depuis {fmtDateTime(rechercheEtat.lance_a)}
+              {rechercheEtat.duree_s ? ` (${fmtDuree(rechercheEtat.duree_s)})` : ""} — {resumeRecherche(rechercheEtat.stats)}
+            </span>
+            <button
+              type="button"
+              onClick={() => arreterCourse("recherche")}
+              disabled={arret !== null}
+              className="btn-secondary btn-sm disabled:opacity-60"
+              title="Arrêter cette recherche : les prix déjà posés restent"
+            >
+              {arret === "recherche" ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <CircleStop className="mr-1 h-3.5 w-3.5" />}
+              Arrêter
+            </button>
           </p>
           {rechercheEtat.stats?.dernier ? (
             <p className="mt-1 text-xs text-white/70">
@@ -854,16 +1018,48 @@ export function MateriauxCatalogue() {
         </div>
       ) : rechercheEtat?.termine_a ? (
         <p className="text-xs text-white/60">
-          Dernière recherche de prix terminée le {fmtDateTime(rechercheEtat.termine_a)} :{" "}
+          Dernière recherche de prix {rechercheEtat.stats?.annule ? "arrêtée" : "terminée"} le {fmtDateTime(rechercheEtat.termine_a)} :{" "}
           {rechercheEtat.stats?.error
-            ? `arrêtée sur une erreur (${rechercheEtat.stats.error})`
+            ? `${rechercheEtat.stats.annule ? "" : "arrêtée sur une erreur : "}${rechercheEtat.stats.error} ${resumeRecherche(rechercheEtat.stats)}`
             : resumeRecherche(rechercheEtat.stats)}
         </p>
       ) : null}
-      {analyseEtat?.hebdo?.en_cours ? (
-        <p className="flex items-center gap-2 text-xs text-accent-500">
+      {analyseEtat?.en_cours ? (
+        <p className="flex flex-wrap items-center gap-2 text-xs text-accent-500">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Job de nuit hebdomadaire en cours depuis {fmtDateTime(analyseEtat.hebdo.lance_a)} (relevé complet, recherche, alertes, analyse IA).
+          <span className="flex-1">
+            Analyse IA des prix en cours depuis {fmtDateTime(analyseEtat.lance_a)}
+            {analyseEtat.duree_s ? ` (${fmtDuree(analyseEtat.duree_s)})` : ""}.
+          </span>
+          <button
+            type="button"
+            onClick={() => arreterCourse("analyse")}
+            disabled={arret !== null}
+            className="btn-secondary btn-sm disabled:opacity-60"
+            title="Arrêter l'analyse IA : les analyses déjà écrites restent"
+          >
+            {arret === "analyse" ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <CircleStop className="mr-1 h-3.5 w-3.5" />}
+            Arrêter
+          </button>
+        </p>
+      ) : null}
+      {analyseEtat?.hebdo?.en_cours ? (
+        <p className="flex flex-wrap items-center gap-2 text-xs text-accent-500">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <span className="flex-1">
+            Job de nuit hebdomadaire en cours depuis {fmtDateTime(analyseEtat.hebdo.lance_a)}
+            {analyseEtat.hebdo.duree_s ? ` (${fmtDuree(analyseEtat.hebdo.duree_s)})` : ""} (relevé complet, recherche, alertes, analyse IA).
+          </span>
+          <button
+            type="button"
+            onClick={() => arreterCourse("hebdo")}
+            disabled={arret !== null}
+            className="btn-secondary btn-sm disabled:opacity-60"
+            title="Arrêter le job de nuit (l'étape en cours s'arrête, les suivantes attendront la prochaine nuit)"
+          >
+            {arret === "hebdo" ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <CircleStop className="mr-1 h-3.5 w-3.5" />}
+            Arrêter
+          </button>
         </p>
       ) : analyseEtat?.hebdo?.termine_a ? (
         <p className="text-xs text-white/60">
