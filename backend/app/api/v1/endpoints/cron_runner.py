@@ -1097,7 +1097,7 @@ async def trigger_all_hourly(
         if not await is_qbo_auto_sync_enabled():
             return {"skipped": "qbo_auto_sync_off"}
         from sqlalchemy import select
-        from app.models.achat import Achat
+        from app.models.achat import KIND_INVENTAIRE, Achat
         from app.services.achat_qbo import sync_achat_to_qbo
 
         from datetime import datetime, timedelta, timezone
@@ -1120,6 +1120,8 @@ async def trigger_all_hourly(
                             Achat.status.in_(("received", "paid")),
                             Achat.qbo_bill_id.is_(None),
                             Achat.qbo_purchase_id.is_(None),
+                            # Sortie d'inventaire interne : jamais dans QB.
+                            Achat.kind != KIND_INVENTAIRE,
                         )
                     )
                 ).all()

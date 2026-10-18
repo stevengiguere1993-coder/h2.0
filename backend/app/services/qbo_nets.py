@@ -518,7 +518,7 @@ async def run_qbo_nets() -> Dict[str, Any]:
     try:
         from sqlalchemy import select
 
-        from app.models.achat import Achat
+        from app.models.achat import KIND_INVENTAIRE, Achat
         from app.services.achat_qbo import sync_achat_to_qbo
 
         async with AsyncSessionLocal() as db:
@@ -542,6 +542,8 @@ async def run_qbo_nets() -> Dict[str, Any]:
                             Achat.fournisseur_id.is_not(None),
                             Achat.amount.is_not(None),
                             Achat.amount > 0,
+                            # Sortie d'inventaire interne : jamais dans QB.
+                            Achat.kind != KIND_INVENTAIRE,
                         )
                     )
                 ).all()

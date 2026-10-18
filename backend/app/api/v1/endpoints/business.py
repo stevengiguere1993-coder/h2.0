@@ -1114,6 +1114,18 @@ def make_crud_router(
             if model is Facture
             else ""
         )
+        # Sortie de l'inventaire interne supprimée depuis les achats : la
+        # marchandise revient en stock (refusé si déjà refacturée).
+        if model is Achat:
+            from app.services.inventaire import (
+                InventaireErreur,
+                remettre_en_stock_achat,
+            )
+
+            try:
+                await remettre_en_stock_achat(db, obj)
+            except InventaireErreur as exc:
+                raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
         await crud.delete(obj)
         if _punch_ta_id:
             import asyncio as _asyncio
