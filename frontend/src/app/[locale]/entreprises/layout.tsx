@@ -22,7 +22,6 @@ import {
   ExternalLink,
   FileSignature,
   Grid3x3,
-  HardHat,
   LayoutGrid,
   Loader2,
   Menu,
@@ -274,12 +273,6 @@ export default function EntreprisesLayout({
   const NAVIGATION: NavItem[] = [
     { href: "/entreprises", label: "Entreprises", icon: Briefcase },
     { href: "/entreprises/dashboards", label: "Tableaux de bord", icon: LayoutGrid },
-    // Coût à l'heure contre les entrées de fonds (Steven 2026-10-03, bug 14).
-    {
-      href: "/entreprises/depenses-construction",
-      label: "Dépenses construction",
-      icon: HardHat
-    },
     {
       href: "/entreprises/taches",
       label: "Tâches",

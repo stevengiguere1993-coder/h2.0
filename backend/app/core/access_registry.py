@@ -237,10 +237,6 @@ PAGES: list[PageEntry] = [
        "/entreprises"),
     _p("entreprises.dashboards", "Tableaux de bord", "entreprises", "admin",
        "/entreprises/dashboards"),
-    # Vue d'ensemble des dépenses de la construction et coût à l'heure
-    # contre les entrées de fonds (Steven 2026-10-03, bug 14).
-    _p("entreprises.depenses_construction", "Dépenses construction",
-       "entreprises", "admin", "/entreprises/depenses-construction"),
     _p("entreprises.kratos", "Kratos · Cerveau", "entreprises", "admin",
        "/entreprises/kratos"),
     _p("entreprises.rencontres", "Rencontres", "entreprises", "admin",
