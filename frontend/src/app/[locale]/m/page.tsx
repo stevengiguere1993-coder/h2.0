@@ -22,7 +22,6 @@ import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { useZoneEmploye } from "./zone-employe-context";
 import { AccueilAutre } from "./_autre/accueil-autre";
-import { BlocNotesBanner } from "./bloc-notes-banner";
 
 type EmployeMini = {
   id: number;
@@ -294,9 +293,6 @@ function MobileHomeConstruction() {
             onDismiss={() => dismissLeave(recentLeave.id)}
           />
         ) : null}
-
-        {/* Notes jamais ouvertes dans le bloc-notes (bug 13, 2026-10-18) */}
-        <BlocNotesBanner />
 
         {/* Profile card */}
         <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">

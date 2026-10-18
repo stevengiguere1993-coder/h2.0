@@ -9,9 +9,7 @@ import {
   Clock,
   LogOut,
   Monitor,
-  NotebookPen,
   Palmtree,
-  Send,
   ShieldCheck,
   User
 } from "lucide-react";
@@ -22,7 +20,6 @@ import { canEnterVolet } from "@/lib/access";
 import { useConfirm } from "@/components/confirm-dialog";
 import { InstallAppButton } from "@/components/install-app-button";
 import { useZoneEmploye } from "../zone-employe-context";
-import { useBlocNotesResume } from "../bloc-notes-banner";
 
 export default function MobilePlus() {
   const confirm = useConfirm();
@@ -37,11 +34,6 @@ export default function MobilePlus() {
   // remplit sa feuille de temps par tâche depuis la zone employés.
   const hasEntreprises = canEnterVolet(me, "entreprises");
   const [pendingPunches, setPendingPunches] = useState(0);
-  // Bloc-notes (bug 13, 2026-10-18) : badge des notes jamais ouvertes ;
-  // un admin / propriétaire peut en envoyer à n'importe quel employé.
-  const blocNotesResume = useBlocNotesResume();
-  const notesNonLues = blocNotesResume?.non_lues ?? 0;
-  const peutEnvoyerNotes = role === "owner" || role === "admin";
 
   useEffect(() => {
     if (!isManagerPlus) return;
@@ -99,39 +91,6 @@ export default function MobilePlus() {
       </span>
     </Link>
   );
-
-  const blocNotes = (
-    <Link
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      href={"/m/notes" as any}
-      className="flex w-full items-center gap-3 rounded-xl border border-brand-800 bg-brand-900 px-4 py-3.5 text-white"
-    >
-      <NotebookPen className="h-5 w-5 text-accent-500" />
-      <span className="flex-1 text-left text-sm font-semibold">
-        Bloc-notes
-      </span>
-      {notesNonLues > 0 ? (
-        <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] font-bold text-white">
-          {notesNonLues}
-        </span>
-      ) : null}
-    </Link>
-  );
-
-  // Raccourci admin / propriétaire : ouvrir le bloc-notes directement en
-  // mode « nouvelle note » avec le choix des destinataires.
-  const envoyerNote = peutEnvoyerNotes ? (
-    <Link
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      href={"/m/notes?nouvelle=1" as any}
-      className="flex w-full items-center gap-3 rounded-xl bg-emerald-600 px-4 py-3.5 text-white"
-    >
-      <Send className="h-5 w-5" />
-      <span className="flex-1 text-left text-sm font-bold">
-        Envoyer une note à un employé
-      </span>
-    </Link>
-  ) : null;
 
   const application = (
     <>
@@ -207,8 +166,6 @@ export default function MobilePlus() {
               Mes tâches
             </span>
           </Link>
-          {blocNotes}
-          {envoyerNote}
 
           {application}
         </div>
@@ -284,8 +241,6 @@ export default function MobilePlus() {
             Mes tâches
           </span>
         </Link>
-        {blocNotes}
-        {envoyerNote}
         {hasEntreprises ? (
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
