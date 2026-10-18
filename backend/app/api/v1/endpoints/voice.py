@@ -20,7 +20,8 @@ import asyncio
 import logging
 import os
 import json
-from datetime import datetime, timezone
+import re
+from datetime import datetime, time as dt_time, timezone
 from typing import List, Optional
 from urllib.parse import quote
 
@@ -30,10 +31,31 @@ from sqlalchemy import func, select
 
 from app.api.deps import CurrentAdmin, CurrentUser, DBSession
 from app.integrations.voice import get_voice_provider
+from app.integrations.voice.call_routing_rules import (
+    DEFAULT_STEP_TIMEOUT_SEC,
+    MODES,
+    SUBJECT_KEYS,
+    SUBJECT_LABELS,
+    SUBJECTS,
+    TARGET_KIND_LABELS,
+    TARGET_KINDS,
+    PlannedTarget,
+    RoutingPlan,
+    clamp_step_timeout,
+    dumps_targets,
+    fit_forwarded,
+    line_default_field,
+    loads_targets,
+    normalize_targets,
+    select_rule,
+)
 from app.integrations.voice.routing import (
     RoutingAction,
     decide_routing,
+    filter_users_available_now,
+    is_user_available_now,
     is_within_business_hours,
+    load_user_call_hours,
 )
 from app.integrations.voice.caller_identity import (
     CallerKind,
@@ -59,6 +81,7 @@ from app.integrations.voice.spam_filter import (
 )
 from app.integrations.voice.voice_sdk import (
     build_dial_clients_xml,
+    client_identity_for_user,
     generate_access_token,
     list_online_user_ids,
     update_presence,
@@ -75,8 +98,10 @@ from app.models.voice import (
     PhoneNumber,
     VoiceBusinessHours,
     VoiceFilter,
+    VoiceRoutingRule,
     VoiceSms,
     VoiceUsageDaily,
+    VoiceUserCallHours,
 )
 from app.models.email_log import EmailLog
 
@@ -713,111 +738,170 @@ async def _phone_for_user_id(db, user_id: int) -> Optional[str]:
     return None
 
 
-async def _find_responsible_for_call(
-    db, call: "Call"
-) -> tuple[Optional[int], Optional[str]]:
-    """Renvoie (user_id, téléphone) du **responsable du dossier** de
-    l'appelant identifié — la personne à qui l'appel doit être référé :
+async def _user_available(db, user_id: Optional[int]) -> bool:
+    """Heures d'appel personnelles (bug 19) : True si la personne peut
+    recevoir un transfert maintenant (dans ses plages, ou aucune plage
+    définie). Best-effort : un souci de lecture ne retire jamais
+    quelqu'un du routage."""
+    if not user_id:
+        return False
+    try:
+        return await is_user_available_now(db, int(user_id))
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "heures d'appel : vérification impossible (user %s)",
+            user_id, exc_info=True,
+        )
+        return True
+
+
+async def _available_user_ids(db, user_ids) -> List[int]:
+    """Sous-liste (ordre conservé) des utilisateurs dans leurs heures
+    d'appel personnelles. Best-effort : en cas d'erreur, tout le monde."""
+    ids = [int(u) for u in (user_ids or []) if u]
+    if not ids:
+        return []
+    try:
+        return await filter_users_available_now(db, ids)
+    except Exception:  # noqa: BLE001
+        log.warning("heures d'appel : filtre impossible", exc_info=True)
+        return list(dict.fromkeys(ids))
+
+
+async def _available_online_user_ids(db) -> List[int]:
+    """Utilisateurs en ligne dans le portail (Voice SDK) ET dans leurs
+    heures d'appel personnelles — les seuls qu'on sonne en WebRTC."""
+    return await _available_user_ids(db, await list_online_user_ids(db))
+
+
+async def _dossier_responsible_uid(
+    db, call: "Call", *, project=None
+) -> Optional[int]:
+    """user_id du **responsable du dossier** de l'appelant identifié, sans
+    regarder ses heures d'appel :
 
       1. le responsable désigné du projet actif (`responsible_user_id`) ;
       2. à défaut, l'utilisateur assigné à la demande CRM
          (`contact_request.assigned_to_user_id`) — directement pour un
          lead web, via `client.contact_request_id` pour un client.
 
+    ``project`` : projet déjà trouvé pour l'appel (évite une 2e lecture).
+    None si l'appelant n'a pas de dossier ou pas de responsable."""
+    if project is None:
+        project = await _find_project_for_call(db, call)
+    uid: Optional[int] = None
+    if project is not None:
+        uid = getattr(project, "responsible_user_id", None)
+    if not uid and call.entity_id:
+        from app.models.contact_request import ContactRequest
+
+        cr_id: Optional[int] = None
+        if call.entity_type == "contact_request":
+            cr_id = int(call.entity_id)
+        elif call.entity_type == "client":
+            from app.models.client import Client
+
+            cli = (
+                await db.execute(
+                    select(Client.contact_request_id).where(
+                        Client.id == call.entity_id
+                    )
+                )
+            ).first()
+            if cli and cli[0]:
+                cr_id = int(cli[0])
+        if cr_id:
+            row = (
+                await db.execute(
+                    select(ContactRequest.assigned_to_user_id).where(
+                        ContactRequest.id == cr_id
+                    )
+                )
+            ).first()
+            if row and row[0]:
+                uid = int(row[0])
+    return int(uid) if uid else None
+
+
+async def _find_responsible_for_call(
+    db, call: "Call"
+) -> tuple[Optional[int], Optional[str]]:
+    """Renvoie (user_id, téléphone) du **responsable du dossier** de
+    l'appelant identifié (cf. ``_dossier_responsible_uid``) — la personne
+    à qui l'appel doit être référé.
+
     (None, None) si l'appelant n'a pas de dossier ou pas de responsable.
     """
-    uid: Optional[int] = None
     try:
-        project = await _find_project_for_call(db, call)
-        if project is not None:
-            uid = getattr(project, "responsible_user_id", None)
-        if not uid and call.entity_id:
-            from app.models.contact_request import ContactRequest
-
-            cr_id: Optional[int] = None
-            if call.entity_type == "contact_request":
-                cr_id = int(call.entity_id)
-            elif call.entity_type == "client":
-                from app.models.client import Client
-
-                cli = (
-                    await db.execute(
-                        select(Client.contact_request_id).where(
-                            Client.id == call.entity_id
-                        )
-                    )
-                ).first()
-                if cli and cli[0]:
-                    cr_id = int(cli[0])
-            if cr_id:
-                row = (
-                    await db.execute(
-                        select(ContactRequest.assigned_to_user_id).where(
-                            ContactRequest.id == cr_id
-                        )
-                    )
-                ).first()
-                if row and row[0]:
-                    uid = int(row[0])
+        uid = await _dossier_responsible_uid(db, call)
     except Exception:  # noqa: BLE001
         log.warning("_find_responsible_for_call failed", exc_info=True)
         return None, None
     if not uid:
         return None, None
+    # Heures d'appel personnelles (bug 19) : hors plage, le responsable
+    # n'est pas dérangé et l'appel suit le flux générique / la cible
+    # suivante.
+    if not await _user_available(db, uid):
+        log.info(
+            "Responsable %s hors de ses heures d'appel (call %s) — flux générique",
+            uid, call.id,
+        )
+        return None, None
     phone = await _phone_for_user_id(db, uid)
     return uid, phone
 
 
+async def _project_member_user_ids(db, project_id: int) -> List[int]:
+    """Membres ACTIFS du projet, dans l'ordre d'assignation."""
+    from app.models.project_member import ProjectMember
+    from app.models.user import User
+
+    rows = (
+        await db.execute(
+            select(ProjectMember.user_id)
+            .join(User, User.id == ProjectMember.user_id)
+            .where(
+                ProjectMember.project_id == project_id,
+                User.is_active.is_(True),
+            )
+            .order_by(ProjectMember.assigned_at, ProjectMember.user_id)
+        )
+    ).scalars().all()
+    return [int(r) for r in rows]
+
+
 async def _find_project_lead_phone(
-    db, *, call: "Call"
+    db, *, call: "Call", project=None
 ) -> Optional[str]:
     """Renvoie le téléphone vers qui router un appel de suivi.
 
     Priorité :
       1. le **responsable désigné** du projet (`responsible_user_id`) —
-         son `phone_e164`, sinon le `phone` de sa fiche Employe ;
-      2. à défaut, le premier ProjectMember actif ayant un téléphone ;
+         s'il est dans ses heures d'appel personnelles — son
+         `phone_e164`, sinon le `phone` de sa fiche Employe ;
+      2. à défaut, le premier ProjectMember actif joignable (heures
+         personnelles respectées) ayant un téléphone ;
       3. à défaut, le `followup_forward_e164` du PhoneNumber appelé
          (back-office / réception).
-    Utilisé pour transfer_project_lead."""
-    project = await _find_project_for_call(db, call)
+    Utilisé pour transfer_project_lead (quand aucune règle
+    d'acheminement ne s'applique)."""
+    if project is None:
+        project = await _find_project_for_call(db, call)
     if project:
-        from app.models.employe import Employe
-        from app.models.project_member import ProjectMember
-        from app.models.user import User
-
-        # 1. Responsable désigné du projet.
-        if getattr(project, "responsible_user_id", None):
-            resp_phone = await _phone_for_user_id(
-                db, int(project.responsible_user_id)
-            )
+        # 1. Responsable désigné du projet (dans ses heures d'appel).
+        resp_uid = getattr(project, "responsible_user_id", None)
+        if resp_uid and await _user_available(db, int(resp_uid)):
+            resp_phone = await _phone_for_user_id(db, int(resp_uid))
             if resp_phone:
                 return resp_phone
 
-        rows = (
-            await db.execute(
-                select(User.email)
-                .join(ProjectMember, ProjectMember.user_id == User.id)
-                .where(
-                    ProjectMember.project_id == project.id,
-                    User.is_active.is_(True),
-                )
-            )
-        ).all()
-        emails = [r[0] for r in rows if r[0]]
-        if emails:
-            emp = (
-                await db.execute(
-                    select(Employe.phone)
-                    .where(
-                        Employe.email.in_(emails),
-                        Employe.phone.is_not(None),
-                    )
-                    .limit(1)
-                )
-            ).first()
-            if emp and emp[0]:
-                return emp[0]
+        # 2. Premier membre actif joignable ayant un téléphone.
+        member_ids = await _project_member_user_ids(db, project.id)
+        for uid in await _available_user_ids(db, member_ids):
+            phone = await _phone_for_user_id(db, uid)
+            if phone:
+                return phone
 
     # Fallback : numéro back-office configuré sur le PhoneNumber appelé.
     pn = (
@@ -833,21 +917,23 @@ async def _find_project_lead_phone(
 
 
 async def _find_project_lead_online_user_ids(
-    db, *, call: "Call"
+    db, *, call: "Call", project=None
 ) -> List[int]:
     """Renvoie les `user_id` des membres du projet ACTUELLEMENT
-    « online » dans le portail (Voice SDK heartbeat). On ring d'abord
-    ceux-là via WebRTC (gratuit + reach instantané).
+    « online » dans le portail (Voice SDK heartbeat) ET dans leurs heures
+    d'appel personnelles. On ring d'abord ceux-là via WebRTC (gratuit +
+    reach instantané).
 
-    Si le **responsable désigné** du projet est online, on ne ring QUE
-    lui : c'est son dossier, l'appel lui revient — pas au premier membre
-    qui décroche."""
-    project = await _find_project_for_call(db, call)
+    Si le **responsable désigné** du projet est online (et joignable), on
+    ne ring QUE lui : c'est son dossier, l'appel lui revient — pas au
+    premier membre qui décroche."""
+    if project is None:
+        project = await _find_project_for_call(db, call)
     if not project:
         return []
     from app.models.project_member import ProjectMember
 
-    online = await list_online_user_ids(db)
+    online = await _available_online_user_ids(db)
     resp_uid = getattr(project, "responsible_user_id", None)
     if resp_uid and int(resp_uid) in set(online):
         return [int(resp_uid)]
@@ -1354,6 +1440,324 @@ async def _find_project_for_call(db, call: "Call"):
 
 
 # ---------------------------------------------------------------------
+# Règles d'acheminement (bug 19, 2026-10-18)
+#
+# Une règle = un SUJET d'appel (suivi de chantier, nouveau client,
+# urgence locataire, demande de locataire, autre), au choix un CHANTIER
+# précis, et la liste ORDONNÉE des personnes à appeler. À l'appel :
+# règle du chantier de l'appelant d'abord, sinon règle générale du
+# sujet ; chaque cible est résolue en destinations (mobile, et
+# navigateur « client:user_N » si la personne est en ligne), les
+# personnes hors de leurs heures d'appel personnelles sont sautées si
+# la règle respecte les heures ; puis sonnerie en cascade (étape par
+# étape, musique d'attente) ou simultanée. Sans règle, sans cible
+# joignable ou en cas d'erreur → flux historique, jamais d'échec.
+# ---------------------------------------------------------------------
+
+#: Annonce du transfert direct (sans secrétaire) quand une règle
+#: d'acheminement met l'appelant en file d'attente.
+_DIRECT_TRANSFER_SAY = (
+    "Bonjour, vous avez joint Horizon Services Immobiliers. "
+    "Un instant, je vous mets en relation."
+)
+
+
+def _consent_suffix(lang: str) -> str:
+    """Annonce de consentement à l'enregistrement (Loi 25), dans la
+    langue de l'appel."""
+    if (lang or "").startswith("en"):
+        return "This call may be recorded for quality purposes."
+    return "Cet appel pourrait être enregistré pour fins de qualité."
+
+
+async def _load_routing_rules(
+    db, *, subject: str, phone_number_id: Optional[int]
+) -> List[VoiceRoutingRule]:
+    """Règles ACTIVES du sujet qui couvrent la ligne appelée (règle de la
+    ligne ou règle « toutes les lignes »)."""
+    from sqlalchemy import or_
+
+    conds = [
+        VoiceRoutingRule.subject == subject,
+        VoiceRoutingRule.active.is_(True),
+    ]
+    if phone_number_id is not None:
+        conds.append(
+            or_(
+                VoiceRoutingRule.phone_number_id.is_(None),
+                VoiceRoutingRule.phone_number_id == phone_number_id,
+            )
+        )
+    rows = (
+        await db.execute(
+            select(VoiceRoutingRule)
+            .where(*conds)
+            .order_by(VoiceRoutingRule.priority.desc(), VoiceRoutingRule.id.asc())
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+async def _resolve_rule_plan(
+    db,
+    *,
+    rule: VoiceRoutingRule,
+    project,
+    call: Optional["Call"],
+    phone_number: Optional[PhoneNumber] = None,
+) -> RoutingPlan:
+    """Résout les cibles d'une règle en destinations concrètes, dans
+    l'ordre de la règle. Chaque cible garde son motif si elle ne sonne
+    pas (hors heures, sans téléphone, aucun responsable…) — c'est ce que
+    montre l'aperçu « qui sonnerait maintenant ? » de l'interface.
+
+    ``call`` peut être None (aperçu) : les cibles qui dépendent de
+    l'appelant (contact d'urgence de l'immeuble) sont alors annotées."""
+    from app.models.user import User
+
+    plan = RoutingPlan(
+        rule_id=rule.id,
+        mode=rule.mode if rule.mode in MODES else "cascade",
+        step_timeout_sec=clamp_step_timeout(rule.step_timeout_sec),
+    )
+    online: set[int] = set()
+    if voice_sdk_configured():
+        try:
+            online = set(await list_online_user_ids(db))
+        except Exception:  # noqa: BLE001
+            online = set()
+    users_cache: dict[int, Optional[User]] = {}
+
+    async def _user(uid: int) -> Optional[User]:
+        if uid not in users_cache:
+            users_cache[uid] = await db.get(User, uid) if uid > 0 else None
+        return users_cache[uid]
+
+    async def _user_target(
+        uid: int, *, kind: str, label: Optional[str] = None
+    ) -> PlannedTarget:
+        u = await _user(uid)
+        name = label or (u.display_name if u is not None else f"utilisateur #{uid}")
+        t = PlannedTarget(kind=kind, label=name, user_id=uid or None)
+        if u is None or not u.is_active:
+            t.skipped = "compte introuvable ou désactivé"
+            return t
+        if rule.respect_hours and not await _user_available(db, uid):
+            t.skipped = "hors de ses heures d'appel"
+            return t
+        if uid in online:
+            t.destinations.append(f"client:{client_identity_for_user(uid)}")
+        # La fiche Employe peut porter « 514-555-0123 » : l'API REST de
+        # Twilio veut du E.164.
+        raw_phone = await _phone_for_user_id(db, uid)
+        phone = _normalize_e164(raw_phone or "")
+        if phone:
+            t.destinations.append(phone)
+        if not t.destinations:
+            t.skipped = (
+                "téléphone invalide dans son profil"
+                if raw_phone
+                else "aucun téléphone dans son profil"
+            )
+        return t
+
+    for raw in loads_targets(rule.targets_json):
+        kind = raw["kind"]
+        if kind == "user":
+            try:
+                uid = int(raw.get("user_id") or 0)
+            except (TypeError, ValueError):
+                uid = 0
+            plan.targets.append(
+                await _user_target(uid, kind="user", label=raw.get("label"))
+            )
+        elif kind == "project_responsible":
+            # Responsable du chantier de l'appelant ; sans chantier (ou
+            # chantier sans responsable), la personne assignée à son
+            # dossier dans le CRM (lead web, client).
+            resp_uid = getattr(project, "responsible_user_id", None) if project else None
+            prefix = "Responsable du chantier"
+            if not resp_uid and call is not None:
+                try:
+                    resp_uid = await _dossier_responsible_uid(
+                        db, call, project=project
+                    )
+                except Exception:  # noqa: BLE001
+                    resp_uid = None
+                prefix = "Responsable du dossier"
+            if not resp_uid:
+                if project is not None:
+                    reason = "aucun responsable désigné sur ce chantier"
+                elif call is None:
+                    reason = "dépend de l'appelant (chantier ou dossier)"
+                else:
+                    reason = "aucun chantier ni dossier avec un responsable pour cet appelant"
+                plan.targets.append(
+                    PlannedTarget(
+                        kind=kind,
+                        label="Responsable du chantier / du dossier",
+                        skipped=reason,
+                    )
+                )
+            else:
+                t = await _user_target(int(resp_uid), kind=kind)
+                t.label = f"{prefix} : {t.label}"
+                plan.targets.append(t)
+        elif kind == "project_members":
+            t = PlannedTarget(kind=kind, label="Membres du projet")
+            if project is None:
+                t.skipped = "aucun chantier reconnu pour cet appel"
+            else:
+                names: list[str] = []
+                member_ids = await _project_member_user_ids(db, project.id)
+                for uid in member_ids:
+                    sub = await _user_target(uid, kind="user")
+                    if sub.skipped:
+                        continue
+                    t.destinations.extend(sub.destinations)
+                    names.append(sub.label)
+                if names:
+                    t.label = "Membres du projet : " + ", ".join(names)
+                elif member_ids:
+                    t.skipped = "aucun membre joignable (heures ou téléphone)"
+                else:
+                    t.skipped = "aucun membre sur ce chantier"
+            plan.targets.append(t)
+        elif kind == "immeuble_urgence":
+            t = PlannedTarget(kind=kind, label="Contact d'urgence de l'immeuble")
+            if call is None:
+                t.skipped = "dépend du locataire qui appelle"
+            else:
+                try:
+                    phone = await _immeuble_urgence_phone_for_call(db, call)
+                except Exception:  # noqa: BLE001
+                    phone = None
+                dests = _parse_e164_list(phone or "")
+                if dests:
+                    t.destinations = dests
+                else:
+                    t.skipped = "aucun contact d'urgence pour l'immeuble de l'appelant"
+            plan.targets.append(t)
+        elif kind == "line_default":
+            field_name = line_default_field(rule.subject)
+            pn = phone_number
+            if pn is None and call is not None:
+                pn = await db.get(PhoneNumber, call.phone_number_id)
+            raw_numbers = (getattr(pn, field_name, None) if pn else None) or ""
+            if not raw_numbers and field_name == "urgency_forward_e164":
+                raw_numbers = os.getenv("URGENCY_FORWARD_E164") or ""
+            if not raw_numbers:
+                raw_numbers = (
+                    (pn.forward_to_e164 if pn else None)
+                    or os.getenv("TWILIO_FORWARD_TO")
+                    or ""
+                )
+            dests = _parse_e164_list(raw_numbers)
+            t = PlannedTarget(kind=kind, label="Numéros par défaut de la ligne")
+            if dests:
+                t.destinations = dests
+            else:
+                t.skipped = "aucun numéro configuré sur la ligne"
+            plan.targets.append(t)
+        elif kind == "e164":
+            e164 = raw.get("e164")
+            label = raw.get("label")
+            plan.targets.append(
+                PlannedTarget(
+                    kind=kind,
+                    label=f"{label} ({e164})" if label else (e164 or "numéro"),
+                    destinations=[e164] if e164 else [],
+                    skipped=None if e164 else "numéro manquant",
+                )
+            )
+    return plan
+
+
+async def _rule_transfer_twiml(
+    db,
+    provider,
+    *,
+    call: "Call",
+    subject: str,
+    project,
+    say: str,
+    lang: str,
+) -> Optional[str]:
+    """Applique la règle d'acheminement du sujet (règle du chantier de
+    l'appelant d'abord, sinon règle générale) et renvoie le TwiML de
+    transfert : file d'attente + jambes en cascade ou simultanées, repli
+    <Dial> si l'origination REST échoue. None si aucune règle ne
+    s'applique ou qu'aucune cible n'est joignable : l'appelant suit alors
+    le flux historique. Ne lève jamais."""
+    try:
+        rules = await _load_routing_rules(
+            db, subject=subject, phone_number_id=call.phone_number_id
+        )
+        rule = select_rule(rules, project_id=getattr(project, "id", None))
+        if rule is None:
+            return None
+        plan = await _resolve_rule_plan(db, rule=rule, project=project, call=call)
+        steps = plan.steps
+        if not steps:
+            log.info(
+                "règle d'acheminement #%s (%s) : aucune cible joignable, flux "
+                "historique (call %s) — %s",
+                rule.id, subject, call.id,
+                "; ".join(f"{t.label}: {t.skipped}" for t in plan.targets if t.skipped),
+            )
+            return None
+        log.info(
+            "règle d'acheminement #%s (%s) appliquée (call %s) : %s",
+            rule.id, subject, call.id,
+            " → ".join(" + ".join(step) for step in steps),
+        )
+        call.forwarded_to_e164 = fit_forwarded(plan.flat)
+        say_full = f"{say} {_consent_suffix(lang)}".strip() if say else _consent_suffix(lang)
+        queue_twiml: Optional[str] = None
+        try:
+            queue_twiml = await _start_queue_transfer(
+                db,
+                provider,
+                call=call,
+                targets=plan.pstn,
+                say=say_full,
+                lang=lang,
+                steps=steps,
+                step_timeout_sec=plan.step_timeout_sec,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception(
+                "queue transfer (règle #%s) a échoué, repli <Dial>", rule.id
+            )
+        if queue_twiml:
+            return queue_twiml
+        pstn = plan.pstn
+        if not pstn:
+            return None
+        # Repli : <Dial> multi classique (sonnerie, pas de musique), tout le
+        # monde en même temps, whisper + boîte vocale conservés.
+        action_url = (
+            f"{_secretary_base_url()}/api/v1/voice/twilio/"
+            f"dial-followup?call_id={call.id}"
+        )
+        return provider.build_say_and_dial_multi(
+            say=say_full,
+            lang=lang,
+            targets_e164=pstn,
+            action_url=action_url,
+            timeout_sec=20,
+            record=True,
+            whisper_url=_transfer_whisper_url(call.id),
+        )
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "règle d'acheminement en échec (sujet %s, call %s) — flux historique",
+            subject, getattr(call, "id", None),
+        )
+        return None
+
+
+# ---------------------------------------------------------------------
 # Helper : fallback TwiML en cas d'erreur inattendue
 # ---------------------------------------------------------------------
 
@@ -1691,6 +2095,27 @@ async def _twilio_incoming_call_impl(request: Request, db: DBSession) -> Respons
         action == RoutingAction.SECRETARY
         and identified.kind == CallerKind.CLIENT
     ):
+        # Règle d'acheminement « suivi de chantier » (règle du chantier du
+        # client, sinon règle générale) : liste ordonnée, heures d'appel
+        # personnelles respectées. Seulement si un chantier est reconnu :
+        # un client sans chantier garde son responsable CRM, sinon Léa.
+        # Sans règle → responsable du dossier.
+        try:
+            _project = await _find_project_for_call(db, existing)
+        except Exception:  # noqa: BLE001
+            _project = None
+        rule_twiml = (
+            await _rule_transfer_twiml(
+                db, provider, call=existing, subject="suivi_projet",
+                project=_project, say=_DIRECT_TRANSFER_SAY, lang="fr-CA",
+            )
+            if _project is not None
+            else None
+        )
+        if rule_twiml:
+            existing.intent = "suivi_projet"
+            await db.flush()
+            return Response(content=rule_twiml, media_type="application/xml")
         try:
             _resp_uid, _resp_phone = await _find_responsible_for_call(
                 db, existing
@@ -1718,6 +2143,23 @@ async def _twilio_incoming_call_impl(request: Request, db: DBSession) -> Respons
         )
 
     # ----- FORWARD (Phase 1) : transfert direct -----
+    # Règle d'acheminement d'abord : « suivi de chantier » si l'appelant
+    # est rattaché à un projet, sinon « autre appel ». Liste ordonnée,
+    # heures d'appel personnelles respectées.
+    try:
+        _project = await _find_project_for_call(db, existing)
+    except Exception:  # noqa: BLE001
+        _project = None
+    rule_twiml = await _rule_transfer_twiml(
+        db, provider, call=existing,
+        subject="suivi_projet" if _project is not None else "general",
+        project=_project, say=_DIRECT_TRANSFER_SAY, lang="fr-CA",
+    )
+    if rule_twiml:
+        if _project is not None:
+            existing.intent = "suivi_projet"
+        await db.flush()
+        return Response(content=rule_twiml, media_type="application/xml")
     # Appelant identifié avec un responsable de dossier → on sonne LE
     # responsable plutôt que le numéro générique (best-effort).
     try:
@@ -1934,6 +2376,38 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
                 call=call,
                 reason=decision.lead_reason or "Urgence détectée",
             )
+
+        async def _tache_locataire() -> None:
+            # Tâche d'entreprise pour tracer/suivre l'urgence locataire
+            # (l'IA route vers la bonne entreprise). Fire-and-forget : ne
+            # casse jamais l'appel en cours.
+            try:
+                from app.integrations.voice.lea_task import create_task_from_call
+
+                await create_task_from_call(
+                    db,
+                    reason=decision.lead_reason
+                    or ("Urgence locataire signalée" if _urgent else "Demande locataire"),
+                    caller_name=decision.lead_name,
+                    caller_phone=decision.lead_callback_phone,
+                    intent="urgence locataire" if _urgent else "demande locataire",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Règle d'acheminement (urgence / demande de locataire) : liste
+        # ordonnée de personnes, heures d'appel personnelles respectées si
+        # la règle le demande. Sans règle ou sans cible joignable → numéros
+        # d'urgence historiques ci-dessous.
+        rule_twiml = await _rule_transfer_twiml(
+            db, provider, call=call,
+            subject="urgence_locataire" if _urgent else "demande_locataire",
+            project=None, say=decision.say, lang=decision.lang,
+        )
+        if rule_twiml:
+            call.intent = "urgence_locataire" if _urgent else "gestion_immo"
+            await _tache_locataire()
+            return Response(content=rule_twiml, media_type="application/xml")
         if not targets:
             # Pas de cible configurée → on ne raccroche pas sec : on
             # capture en callback urgent pour rappel manuel.
@@ -1949,22 +2423,7 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
             return Response(content=twiml, media_type="application/xml")
         call.forwarded_to_e164 = ",".join(targets)
         call.intent = "urgence_locataire" if _urgent else "gestion_immo"
-        # Tâche d'entreprise pour tracer/suivre l'urgence locataire
-        # (l'IA route vers la bonne entreprise). Fire-and-forget : ne
-        # casse jamais l'appel en cours.
-        try:
-            from app.integrations.voice.lea_task import create_task_from_call
-
-            await create_task_from_call(
-                db,
-                reason=decision.lead_reason
-                or ("Urgence locataire signalée" if _urgent else "Demande locataire"),
-                caller_name=decision.lead_name,
-                caller_phone=decision.lead_callback_phone,
-                intent="urgence locataire" if _urgent else "demande locataire",
-            )
-        except Exception:  # noqa: BLE001
-            pass
+        await _tache_locataire()
         # Multi-cible : premier qui décroche prend l'appel, les autres
         # cessent. Enregistrement audio activé (consentement annoncé
         # par Léa juste avant). Fallback callback si personne décroche.
@@ -1991,12 +2450,24 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
     #    online du projet via Voice SDK (browser ringing — gratuit),
     #    sinon fallback mobile.
     if decision.next_action == "transfer_project_lead":
+        project = await _find_project_for_call(db, call)
+        # Règle d'acheminement « suivi de chantier » (règle du chantier,
+        # sinon règle générale) : liste ordonnée, heures d'appel
+        # personnelles respectées. Sans règle / sans cible joignable →
+        # flux historique ci-dessous.
+        rule_twiml = await _rule_transfer_twiml(
+            db, provider, call=call, subject="suivi_projet", project=project,
+            say=decision.say, lang=decision.lang,
+        )
+        if rule_twiml:
+            call.intent = "suivi_projet"
+            return Response(content=rule_twiml, media_type="application/xml")
         project_lead_to = await _find_project_lead_phone(
-            db, call=call
+            db, call=call, project=project
         )
         if voice_sdk_configured():
             online_uids = await _find_project_lead_online_user_ids(
-                db, call=call
+                db, call=call, project=project
             )
             if online_uids:
                 clients_xml = build_dial_clients_xml(online_uids, parent_call_sid=call.provider_sid)
@@ -2203,14 +2674,38 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
             or ""
         ).strip()
 
+        # Règle d'acheminement d'abord (bug 19) : « suivi de chantier » si
+        # l'appelant est rattaché à un projet, « nouveau client » pour un
+        # prospect / inconnu, « autre appel » pour un client sans chantier.
+        # Liste ordonnée, heures d'appel personnelles respectées. Sans règle
+        # ou sans cible joignable → flux historique ci-dessous.
+        project = await _find_project_for_call(db, call)
+        if project is not None:
+            rule_subject = "suivi_projet"
+        elif identified.kind in (
+            CallerKind.CLIENT, CallerKind.LOCATAIRE, CallerKind.CONTACT
+        ):
+            rule_subject = "general"
+        else:
+            rule_subject = "nouveau_client"
+        rule_twiml = await _rule_transfer_twiml(
+            db, provider, call=call, subject=rule_subject, project=project,
+            say=decision.say, lang=decision.lang,
+        )
+        if rule_twiml:
+            if project is not None:
+                call.intent = "suivi_projet"
+            return Response(content=rule_twiml, media_type="application/xml")
+
         # PRIORITÉ RESPONSABLE DE DOSSIER : un appelant identifié
         # (client / lead) dont le dossier a un responsable est référé à
         # LUI — pas au premier online ni aux closers. S'il est online
         # dans le portail on le ring en WebRTC (mobile en fallback),
-        # sinon on sonne directement son mobile.
+        # sinon on sonne directement son mobile. (Hors de ses heures
+        # d'appel personnelles, le responsable n'est pas dérangé.)
         resp_uid, resp_phone = await _find_responsible_for_call(db, call)
         if resp_uid and voice_sdk_configured():
-            online_uids = await list_online_user_ids(db)
+            online_uids = await _available_online_user_ids(db)
             if resp_uid in set(online_uids):
                 call.forwarded_to_e164 = resp_phone or forward_to or None
                 clients_xml = build_dial_clients_xml(
@@ -2269,11 +2764,11 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
             )
             return Response(content=twiml, media_type="application/xml")
 
-        # Voice SDK hybride : si des users sont online dans le portail,
-        # on les ring d'abord via WebRTC (gratuit). Fallback mobile
-        # après 15 sec via /twilio/clients-fallback.
+        # Voice SDK hybride : si des users sont online dans le portail
+        # (et dans leurs heures d'appel), on les ring d'abord via WebRTC
+        # (gratuit). Fallback mobile après 15 sec via /twilio/clients-fallback.
         if voice_sdk_configured():
-            online_uids = await list_online_user_ids(db)
+            online_uids = await _available_online_user_ids(db)
             if online_uids:
                 call.forwarded_to_e164 = forward_to or None
                 clients_xml = build_dial_clients_xml(online_uids, parent_call_sid=call.provider_sid)
@@ -2611,31 +3106,21 @@ def _voicemail_fallback_twiml(provider, lang: str) -> str:
     )
 
 
-async def _start_queue_transfer(
-    db,
-    provider,
-    *,
-    call: "Call",
-    targets: list[str],
-    say: str,
-    lang: str,
-) -> Optional[str]:
-    """Origine une jambe REST par cible puis renvoie le TwiML <Enqueue>
-    (musique d'attente) pour l'appelant. Renvoie None si AUCUNE jambe
-    n'a pu être originée → l'appelant doit retomber sur le flux <Dial>."""
-    targets = [t for t in dict.fromkeys(targets) if t]
-    if not targets:
-        return None
-    queue_name = f"lea-{call.id}"
+async def _originate_queue_step(
+    provider, *, call: "Call", step: list[str], timeout_sec: int
+) -> dict[str, str]:
+    """Origine une jambe REST par destination de l'étape — un numéro
+    E.164 ou un navigateur « client:user_N » (Voice SDK). Renvoie
+    ``{CallSid: destination}`` des jambes qui sonnent."""
     legs: dict[str, str] = {}
-    for target in targets:
+    for target in step:
         try:
             sid = await provider.initiate_outbound_call(
                 from_e164=call.to_e164,
                 to_e164=target,
                 twiml_url=_queue_agent_leg_url(call.id),
                 status_callback_url=_queue_agent_status_url(call.id),
-                timeout_sec=25,
+                timeout_sec=timeout_sec,
             )
             if sid:
                 legs[sid] = target
@@ -2646,6 +3131,44 @@ async def _start_queue_transfer(
                 call.id,
                 exc,
             )
+    return legs
+
+
+async def _start_queue_transfer(
+    db,
+    provider,
+    *,
+    call: "Call",
+    targets: list[str],
+    say: str,
+    lang: str,
+    steps: Optional[list[list[str]]] = None,
+    step_timeout_sec: int = 25,
+) -> Optional[str]:
+    """Origine une jambe REST par cible puis renvoie le TwiML <Enqueue>
+    (musique d'attente) pour l'appelant. Renvoie None si AUCUNE jambe
+    n'a pu être originée → l'appelant doit retomber sur le flux <Dial>.
+
+    ``steps`` (règles d'acheminement, bug 19) : étapes de sonnerie
+    successives — la 1re sonne tout de suite, chaque suivante quand
+    toutes les jambes de l'étape courante ont échoué sans réponse
+    (``/twilio/queue-agent-status``). Sans ``steps`` : une seule étape avec
+    ``targets`` (comportement historique, tout le monde en même temps)."""
+    if steps is None:
+        steps = [list(targets or [])]
+    steps = [[t for t in dict.fromkeys(step or []) if t] for step in steps]
+    steps = [step for step in steps if step]
+    if not steps:
+        return None
+    queue_name = f"lea-{call.id}"
+    pending = list(steps)
+    legs: dict[str, str] = {}
+    # Une étape dont aucune jambe ne part (numéro refusé…) ne doit pas
+    # bloquer la cascade : on enchaîne tout de suite sur la suivante.
+    while pending and not legs:
+        legs = await _originate_queue_step(
+            provider, call=call, step=pending.pop(0), timeout_sec=step_timeout_sec
+        )
     if not legs:
         return None
     call.dial_state_json = json.dumps(
@@ -2655,9 +3178,13 @@ async def _start_queue_transfer(
             "targets": legs,
             "answered_sid": None,
             "outcome": None,
+            "pending_steps": pending,
+            "step_timeout_sec": int(step_timeout_sec),
         }
     )
-    call.forwarded_to_e164 = ",".join(targets)
+    call.forwarded_to_e164 = fit_forwarded(
+        [d for step in steps for d in step]
+    )
     # Les jambes sonnent déjà : on DOIT renvoyer l'<Enqueue>. Si la
     # persistance échoue, les webhooks retombent sur le nom de file par
     # défaut (lea-<id>) — la mise en relation marche quand même.
@@ -2813,6 +3340,32 @@ async def twilio_queue_agent_status(
     all_done = all(st == "done" for st in legs.values())
     nobody_answered = not state.get("answered_sid")
     if all_done and nobody_answered and not state.get("outcome"):
+        # Cascade (règles d'acheminement, bug 19) : l'étape courante a
+        # échoué sans réponse → on sonne l'étape suivante s'il en reste
+        # une ; l'appelant patiente toujours dans la file.
+        pending_steps = list(state.get("pending_steps") or [])
+        if pending_steps:
+            provider = _twilio_provider()
+            timeout = int(state.get("step_timeout_sec") or 25)
+            while pending_steps:
+                step = [str(d) for d in (pending_steps.pop(0) or []) if d]
+                new_legs = await _originate_queue_step(
+                    provider, call=call, step=step, timeout_sec=timeout
+                )
+                if new_legs:
+                    for sid, dest in new_legs.items():
+                        legs[sid] = "pending"
+                        state.setdefault("targets", {})[sid] = dest
+                    state["legs"] = legs
+                    state["pending_steps"] = pending_steps
+                    call.dial_state_json = json.dumps(state)
+                    await db.flush()
+                    log.info(
+                        "queue transfer: étape suivante (call %s) → %s",
+                        call.id, ", ".join(new_legs.values()),
+                    )
+                    return Response(status_code=status.HTTP_204_NO_CONTENT)
+            state["pending_steps"] = []
         state["outcome"] = "no-answer"
         call.dial_state_json = json.dumps(state)
         await db.flush()
@@ -6135,3 +6688,663 @@ async def replace_business_hours(
         )
         for r in new_rows
     ]
+
+
+# ---------------------------------------------------------------------
+# Heures d'appel PERSONNELLES (bug 19, 2026-10-18)
+#
+# Chaque personne « qui peut être appelée » définit ses propres plages
+# (Profil → Mes heures d'appel) ; un admin voit et règle celles de toute
+# l'équipe (Téléphonie → Acheminement). Hors plage, la personne est
+# sautée par le routage. Aucune plage = joignable en tout temps.
+# ---------------------------------------------------------------------
+
+_HM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+class CallHoursItem(BaseModel):
+    day_of_week: int = Field(ge=0, le=6)
+    # Format "HH:MM" 24 h. Une plage dont la fin précède le début passe
+    # minuit (ex. 22:00 → 06:00).
+    open_time: str
+    close_time: str
+    timezone: str = "America/Montreal"
+
+
+class CallHoursRead(BaseModel):
+    id: int
+    user_id: int
+    day_of_week: int
+    open_time: str
+    close_time: str
+    timezone: str
+
+
+class CallHoursReplace(BaseModel):
+    """Remplace TOUTES les plages de la personne par celles fournies.
+    ``hours=[]`` = aucune plage = joignable en tout temps."""
+
+    hours: List[CallHoursItem]
+
+
+class TeamCallHoursRead(BaseModel):
+    user_id: int
+    display_name: str
+    email: str
+    phone_e164: Optional[str] = None
+    #: Dans ses plages en ce moment (ou aucune plage).
+    available_now: bool
+    #: Aucune plage définie → joignable en tout temps.
+    always_available: bool
+    hours: List[CallHoursRead]
+
+
+def _hours_read(r: VoiceUserCallHours) -> CallHoursRead:
+    return CallHoursRead(
+        id=r.id,
+        user_id=r.user_id,
+        day_of_week=r.day_of_week,
+        open_time=r.open_time.strftime("%H:%M"),
+        close_time=r.close_time.strftime("%H:%M"),
+        timezone=r.timezone,
+    )
+
+
+def _parse_hm_strict(value: str, *, label: str) -> dt_time:
+    v = (value or "").strip()
+    if not _HM_RE.match(v):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Heure {label} invalide « {value} » (format attendu HH:MM).",
+        )
+    h, m = v.split(":")
+    return dt_time(int(h), int(m))
+
+
+def _validate_timezone(tz: str) -> str:
+    from zoneinfo import ZoneInfo
+
+    name = (tz or "America/Montreal").strip() or "America/Montreal"
+    try:
+        ZoneInfo(name)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(
+            status_code=400, detail=f"Fuseau horaire inconnu « {tz} »."
+        )
+    return name
+
+
+async def _replace_user_call_hours(
+    db, *, user_id: int, items: List[CallHoursItem]
+) -> List[CallHoursRead]:
+    parsed = []
+    for it in items:
+        open_t = _parse_hm_strict(it.open_time, label="de début")
+        close_t = _parse_hm_strict(it.close_time, label="de fin")
+        if open_t == close_t:
+            raise HTTPException(
+                status_code=400,
+                detail="Une plage doit avoir une fin différente de son début.",
+            )
+        parsed.append((it.day_of_week, open_t, close_t, _validate_timezone(it.timezone)))
+
+    existing = (
+        await db.execute(
+            select(VoiceUserCallHours).where(VoiceUserCallHours.user_id == user_id)
+        )
+    ).scalars().all()
+    for row in existing:
+        await db.delete(row)
+    await db.flush()
+
+    new_rows: List[VoiceUserCallHours] = []
+    for dow, open_t, close_t, tz in sorted(parsed, key=lambda x: (x[0], x[1])):
+        r = VoiceUserCallHours(
+            user_id=user_id,
+            day_of_week=dow,
+            open_time=open_t,
+            close_time=close_t,
+            timezone=tz,
+        )
+        db.add(r)
+        new_rows.append(r)
+    await db.flush()
+    return [_hours_read(r) for r in new_rows]
+
+
+async def _list_user_call_hours(db, user_id: int) -> List[CallHoursRead]:
+    rows = (
+        await db.execute(
+            select(VoiceUserCallHours)
+            .where(VoiceUserCallHours.user_id == user_id)
+            .order_by(VoiceUserCallHours.day_of_week, VoiceUserCallHours.open_time)
+        )
+    ).scalars().all()
+    return [_hours_read(r) for r in rows]
+
+
+@router.get(
+    "/call-hours/me",
+    response_model=List[CallHoursRead],
+    summary="Mes heures d'appel personnelles",
+)
+async def get_my_call_hours(user: CurrentUser, db: DBSession) -> List[CallHoursRead]:
+    return await _list_user_call_hours(db, user.id)
+
+
+@router.put(
+    "/call-hours/me",
+    response_model=List[CallHoursRead],
+    summary="Remplace mes heures d'appel personnelles (atomique)",
+)
+async def replace_my_call_hours(
+    payload: CallHoursReplace, user: CurrentUser, db: DBSession
+) -> List[CallHoursRead]:
+    return await _replace_user_call_hours(db, user_id=user.id, items=payload.hours)
+
+
+async def _phones_for_users(db, users) -> dict[int, Optional[str]]:
+    """Téléphone de chaque utilisateur : ``User.phone_e164``, sinon la
+    fiche Employe (même courriel), en 1 requête pour toute l'équipe."""
+    from app.models.employe import Employe
+
+    out: dict[int, Optional[str]] = {}
+    missing_emails: dict[str, int] = {}
+    for u in users:
+        if getattr(u, "phone_e164", None):
+            out[u.id] = u.phone_e164
+        else:
+            out[u.id] = None
+            if u.email:
+                missing_emails[u.email.lower()] = u.id
+    if missing_emails:
+        rows = (
+            await db.execute(
+                select(Employe.email, Employe.phone).where(
+                    func.lower(Employe.email).in_(list(missing_emails)),
+                    Employe.phone.is_not(None),
+                )
+            )
+        ).all()
+        for email, phone in rows:
+            uid = missing_emails.get((email or "").lower())
+            if uid and phone and not out.get(uid):
+                out[uid] = phone
+    return out
+
+
+@router.get(
+    "/call-hours",
+    response_model=List[TeamCallHoursRead],
+    summary="Heures d'appel personnelles de toute l'équipe (admin)",
+)
+async def list_team_call_hours(_: CurrentAdmin, db: DBSession) -> List[TeamCallHoursRead]:
+    from app.models.user import User
+
+    users = (
+        await db.execute(
+            select(User).where(User.is_active.is_(True)).order_by(User.email.asc())
+        )
+    ).scalars().all()
+    ids = [u.id for u in users]
+    hours_by_user = await load_user_call_hours(db, ids)
+    available = set(await filter_users_available_now(db, ids))
+    phones = await _phones_for_users(db, users)
+    out: List[TeamCallHoursRead] = []
+    for u in sorted(users, key=lambda x: (x.display_name or x.email).lower()):
+        rows = sorted(
+            hours_by_user.get(u.id) or [], key=lambda r: (r.day_of_week, r.open_time)
+        )
+        out.append(
+            TeamCallHoursRead(
+                user_id=u.id,
+                display_name=u.display_name,
+                email=u.email,
+                phone_e164=phones.get(u.id),
+                available_now=u.id in available,
+                always_available=not rows,
+                hours=[_hours_read(r) for r in rows],
+            )
+        )
+    return out
+
+
+@router.put(
+    "/call-hours/{user_id}",
+    response_model=List[CallHoursRead],
+    summary="Remplace les heures d'appel d'un utilisateur (admin)",
+)
+async def replace_user_call_hours(
+    user_id: int, payload: CallHoursReplace, _: CurrentAdmin, db: DBSession
+) -> List[CallHoursRead]:
+    from app.models.user import User
+
+    if await db.get(User, user_id) is None:
+        raise HTTPException(status_code=404, detail="user_not_found")
+    return await _replace_user_call_hours(db, user_id=user_id, items=payload.hours)
+
+
+# ---------------------------------------------------------------------
+# Règles d'acheminement (bug 19, 2026-10-18) — CRUD admin + aperçu
+# ---------------------------------------------------------------------
+
+
+class RoutingTargetIn(BaseModel):
+    kind: str
+    user_id: Optional[int] = None
+    e164: Optional[str] = None
+    label: Optional[str] = Field(default=None, max_length=120)
+
+
+class RoutingTargetRead(RoutingTargetIn):
+    #: Libellé prêt à afficher (nom de la personne, numéro…).
+    display: str
+
+
+class RoutingRuleIn(BaseModel):
+    subject: str
+    project_id: Optional[int] = None
+    phone_number_id: Optional[int] = None
+    label: Optional[str] = Field(default=None, max_length=255)
+    mode: str = "cascade"
+    step_timeout_sec: int = DEFAULT_STEP_TIMEOUT_SEC
+    respect_hours: bool = True
+    priority: int = Field(default=0, ge=-100, le=100)
+    active: bool = True
+    targets: List[RoutingTargetIn] = Field(default_factory=list)
+
+
+class RoutingRuleRead(BaseModel):
+    id: int
+    subject: str
+    subject_label: str
+    project_id: Optional[int]
+    project_name: Optional[str]
+    phone_number_id: Optional[int]
+    label: Optional[str]
+    mode: str
+    step_timeout_sec: int
+    respect_hours: bool
+    priority: int
+    active: bool
+    targets: List[RoutingTargetRead]
+    created_at: datetime
+    updated_at: datetime
+
+
+class RoutingPreviewRead(BaseModel):
+    subject: str
+    subject_label: str
+    project_id: Optional[int]
+    project_name: Optional[str]
+    rule: Optional[RoutingRuleRead]
+    #: Plan résolu MAINTENANT : cibles (avec motif si sautée) et étapes.
+    plan: Optional[dict]
+    #: Ce qui se passe sans règle (ou si aucune cible n'est joignable).
+    fallback: str
+
+
+_FALLBACK_TEXT: dict[str, str] = {
+    "suivi_projet": (
+        "Sans règle : responsable désigné du chantier (dans ses heures d'appel), "
+        "sinon un membre du projet, sinon les numéros « suivi projet » de la ligne."
+    ),
+    "nouveau_client": (
+        "Sans règle : responsable du dossier s'il y en a un, sinon les "
+        "utilisateurs en ligne dans le portail, sinon les numéros « closers » "
+        "puis le transfert par défaut de la ligne."
+    ),
+    "urgence_locataire": (
+        "Sans règle : contact d'urgence de l'immeuble du locataire, sinon les "
+        "numéros « urgences » de la ligne — 24 h sur 24, sans égard aux heures "
+        "personnelles."
+    ),
+    "demande_locataire": (
+        "Sans règle : contact d'urgence de l'immeuble du locataire, sinon les "
+        "numéros « urgences » de la ligne."
+    ),
+    "general": (
+        "Sans règle : responsable du dossier, sinon les utilisateurs en ligne, "
+        "sinon le transfert par défaut de la ligne."
+    ),
+}
+
+
+async def _user_display_names(db, user_ids) -> dict[int, str]:
+    from app.models.user import User
+
+    ids = sorted({int(u) for u in user_ids if u})
+    if not ids:
+        return {}
+    rows = (await db.execute(select(User).where(User.id.in_(ids)))).scalars().all()
+    return {u.id: u.display_name for u in rows}
+
+
+async def _project_names(db, project_ids) -> dict[int, str]:
+    from app.models.project import Project
+
+    ids = sorted({int(p) for p in project_ids if p})
+    if not ids:
+        return {}
+    rows = (
+        await db.execute(select(Project.id, Project.name).where(Project.id.in_(ids)))
+    ).all()
+    return {int(pid): name for pid, name in rows}
+
+
+def _target_display(t: dict, names: dict[int, str]) -> str:
+    kind = t.get("kind")
+    if kind == "user":
+        uid = int(t.get("user_id") or 0)
+        return t.get("label") or names.get(uid) or f"utilisateur #{uid}"
+    if kind == "e164":
+        return f"{t['label']} ({t.get('e164')})" if t.get("label") else str(t.get("e164") or "")
+    return TARGET_KIND_LABELS.get(kind, kind)
+
+
+def _rule_read(
+    rule: VoiceRoutingRule, *, names: dict[int, str], projects: dict[int, str]
+) -> RoutingRuleRead:
+    targets = loads_targets(rule.targets_json)
+    return RoutingRuleRead(
+        id=rule.id,
+        subject=rule.subject,
+        subject_label=SUBJECT_LABELS.get(rule.subject, rule.subject),
+        project_id=rule.project_id,
+        project_name=projects.get(rule.project_id) if rule.project_id else None,
+        phone_number_id=rule.phone_number_id,
+        label=rule.label,
+        mode=rule.mode,
+        step_timeout_sec=rule.step_timeout_sec,
+        respect_hours=rule.respect_hours,
+        priority=rule.priority,
+        active=rule.active,
+        targets=[
+            RoutingTargetRead(
+                kind=t["kind"],
+                user_id=t.get("user_id"),
+                e164=t.get("e164"),
+                label=t.get("label"),
+                display=_target_display(t, names),
+            )
+            for t in targets
+        ],
+        created_at=rule.created_at,
+        updated_at=rule.updated_at,
+    )
+
+
+async def _rules_read(db, rules: List[VoiceRoutingRule]) -> List[RoutingRuleRead]:
+    user_ids: set[int] = set()
+    for r in rules:
+        for t in loads_targets(r.targets_json):
+            if t.get("kind") == "user" and t.get("user_id"):
+                user_ids.add(int(t["user_id"]))
+    names = await _user_display_names(db, user_ids)
+    projects = await _project_names(db, [r.project_id for r in rules])
+    return [_rule_read(r, names=names, projects=projects) for r in rules]
+
+
+async def _apply_rule_payload(
+    db, rule: VoiceRoutingRule, payload: RoutingRuleIn
+) -> None:
+    """Valide le corps et l'applique à la règle (création ou mise à jour)."""
+    from app.models.project import Project
+    from app.models.user import User
+
+    if payload.subject not in SUBJECT_KEYS:
+        raise HTTPException(status_code=400, detail=f"Sujet inconnu « {payload.subject} ».")
+    if payload.mode not in MODES:
+        raise HTTPException(status_code=400, detail=f"Mode inconnu « {payload.mode} ».")
+    if payload.project_id is not None:
+        if await db.get(Project, payload.project_id) is None:
+            raise HTTPException(status_code=404, detail="project_not_found")
+    if payload.phone_number_id is not None:
+        if await db.get(PhoneNumber, payload.phone_number_id) is None:
+            raise HTTPException(status_code=404, detail="phone_number_not_found")
+    try:
+        targets = normalize_targets([t.model_dump() for t in payload.targets])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not targets:
+        raise HTTPException(status_code=400, detail="Ajoute au moins une personne à appeler.")
+    user_ids = sorted({int(t["user_id"]) for t in targets if t.get("kind") == "user"})
+    if user_ids:
+        found = set(
+            (
+                await db.execute(select(User.id).where(User.id.in_(user_ids)))
+            ).scalars().all()
+        )
+        missing = [u for u in user_ids if u not in found]
+        if missing:
+            raise HTTPException(
+                status_code=400, detail=f"Utilisateur introuvable : {missing[0]}."
+            )
+
+    rule.subject = payload.subject
+    rule.project_id = payload.project_id
+    rule.phone_number_id = payload.phone_number_id
+    rule.label = (payload.label or "").strip() or None
+    rule.mode = payload.mode
+    rule.step_timeout_sec = clamp_step_timeout(payload.step_timeout_sec)
+    rule.respect_hours = bool(payload.respect_hours)
+    rule.priority = int(payload.priority)
+    rule.active = bool(payload.active)
+    rule.targets_json = dumps_targets(targets)
+
+
+@router.get(
+    "/routing-rules",
+    response_model=List[RoutingRuleRead],
+    summary="Règles d'acheminement des appels (admin)",
+)
+async def list_routing_rules(
+    _: CurrentAdmin,
+    db: DBSession,
+    phone_number_id: Optional[int] = Query(default=None),
+) -> List[RoutingRuleRead]:
+    from sqlalchemy import or_
+
+    stmt = select(VoiceRoutingRule)
+    if phone_number_id is not None:
+        stmt = stmt.where(
+            or_(
+                VoiceRoutingRule.phone_number_id.is_(None),
+                VoiceRoutingRule.phone_number_id == phone_number_id,
+            )
+        )
+    rows = (
+        await db.execute(
+            stmt.order_by(
+                VoiceRoutingRule.subject,
+                VoiceRoutingRule.project_id.is_not(None),
+                VoiceRoutingRule.priority.desc(),
+                VoiceRoutingRule.id,
+            )
+        )
+    ).scalars().all()
+    return await _rules_read(db, list(rows))
+
+
+@router.get(
+    "/routing-rules/options",
+    summary="Listes pour l'éditeur de règles : sujets, sortes de cibles, équipe, chantiers",
+)
+async def routing_rules_options(_: CurrentAdmin, db: DBSession) -> dict:
+    from app.models.project import Project
+    from app.models.project import ProjectStatus as _PSt
+    from app.models.user import User
+
+    users = (
+        await db.execute(
+            select(User).where(User.is_active.is_(True)).order_by(User.email.asc())
+        )
+    ).scalars().all()
+    ids = [u.id for u in users]
+    hours_by_user = await load_user_call_hours(db, ids)
+    available = set(await filter_users_available_now(db, ids))
+    phones = await _phones_for_users(db, users)
+    try:
+        online = set(await list_online_user_ids(db))
+    except Exception:  # noqa: BLE001
+        online = set()
+
+    projects = (
+        await db.execute(
+            select(Project)
+            .where(Project.kind != "bon_travail")
+            .order_by(
+                (Project.status == _PSt.DELIVERED.value).asc(),
+                Project.name.asc(),
+            )
+            .limit(500)
+        )
+    ).scalars().all()
+    resp_names = await _user_display_names(
+        db, [p.responsible_user_id for p in projects if p.responsible_user_id]
+    )
+    numbers = (
+        await db.execute(
+            select(PhoneNumber).where(PhoneNumber.active.is_(True)).order_by(PhoneNumber.id)
+        )
+    ).scalars().all()
+
+    return {
+        "subjects": [
+            {"key": k, "label": lbl, "description": desc} for k, lbl, desc in SUBJECTS
+        ],
+        "target_kinds": [
+            {"key": k, "label": lbl, "description": desc} for k, lbl, desc in TARGET_KINDS
+        ],
+        "modes": [
+            {"key": "cascade", "label": "L'un après l'autre (dans l'ordre)"},
+            {"key": "simultane", "label": "Tous en même temps"},
+        ],
+        "users": [
+            {
+                "id": u.id,
+                "display_name": u.display_name,
+                "email": u.email,
+                "phone_e164": phones.get(u.id),
+                "has_hours": bool(hours_by_user.get(u.id)),
+                "available_now": u.id in available,
+                "online": u.id in online,
+            }
+            for u in sorted(users, key=lambda x: (x.display_name or x.email).lower())
+        ],
+        "projects": [
+            {
+                "id": p.id,
+                "name": p.name,
+                "address": p.address,
+                "status": p.status,
+                "responsible_user_id": p.responsible_user_id,
+                "responsible_name": resp_names.get(p.responsible_user_id)
+                if p.responsible_user_id
+                else None,
+            }
+            for p in projects
+        ],
+        "phone_numbers": [
+            {"id": n.id, "e164": n.e164, "label": n.label} for n in numbers
+        ],
+    }
+
+
+@router.get(
+    "/routing-rules/preview",
+    response_model=RoutingPreviewRead,
+    summary="Qui sonnerait maintenant pour ce sujet (et ce chantier) ?",
+)
+async def preview_routing(
+    _: CurrentAdmin,
+    db: DBSession,
+    subject: str = Query(...),
+    project_id: Optional[int] = Query(default=None),
+    phone_number_id: Optional[int] = Query(default=None),
+) -> RoutingPreviewRead:
+    from app.models.project import Project
+
+    if subject not in SUBJECT_KEYS:
+        raise HTTPException(status_code=400, detail=f"Sujet inconnu « {subject} ».")
+    project = await db.get(Project, project_id) if project_id else None
+    if project_id and project is None:
+        raise HTTPException(status_code=404, detail="project_not_found")
+    pn: Optional[PhoneNumber] = None
+    if phone_number_id is not None:
+        pn = await db.get(PhoneNumber, phone_number_id)
+    if pn is None:
+        pn = (
+            await db.execute(
+                select(PhoneNumber).where(PhoneNumber.active.is_(True)).order_by(PhoneNumber.id).limit(1)
+            )
+        ).scalar_one_or_none()
+    rules = await _load_routing_rules(
+        db, subject=subject, phone_number_id=pn.id if pn else None
+    )
+    rule = select_rule(rules, project_id=project.id if project else None)
+    rule_read = (await _rules_read(db, [rule]))[0] if rule else None
+    plan = None
+    if rule is not None:
+        plan = (
+            await _resolve_rule_plan(db, rule=rule, project=project, call=None, phone_number=pn)
+        ).as_dict()
+    return RoutingPreviewRead(
+        subject=subject,
+        subject_label=SUBJECT_LABELS.get(subject, subject),
+        project_id=project.id if project else None,
+        project_name=project.name if project else None,
+        rule=rule_read,
+        plan=plan,
+        fallback=_FALLBACK_TEXT.get(subject, ""),
+    )
+
+
+@router.post(
+    "/routing-rules",
+    response_model=RoutingRuleRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crée une règle d'acheminement (admin)",
+)
+async def create_routing_rule(
+    payload: RoutingRuleIn, _: CurrentAdmin, db: DBSession
+) -> RoutingRuleRead:
+    rule = VoiceRoutingRule()
+    await _apply_rule_payload(db, rule, payload)
+    db.add(rule)
+    await db.flush()
+    await db.refresh(rule)
+    return (await _rules_read(db, [rule]))[0]
+
+
+@router.put(
+    "/routing-rules/{rule_id}",
+    response_model=RoutingRuleRead,
+    summary="Met à jour une règle d'acheminement (admin)",
+)
+async def update_routing_rule(
+    rule_id: int, payload: RoutingRuleIn, _: CurrentAdmin, db: DBSession
+) -> RoutingRuleRead:
+    rule = await db.get(VoiceRoutingRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="rule_not_found")
+    await _apply_rule_payload(db, rule, payload)
+    await db.flush()
+    await db.refresh(rule)
+    return (await _rules_read(db, [rule]))[0]
+
+
+@router.delete(
+    "/routing-rules/{rule_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Supprime une règle d'acheminement (admin)",
+)
+async def delete_routing_rule(
+    rule_id: int, _: CurrentAdmin, db: DBSession
+) -> Response:
+    rule = await db.get(VoiceRoutingRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="rule_not_found")
+    await db.delete(rule)
+    await db.flush()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

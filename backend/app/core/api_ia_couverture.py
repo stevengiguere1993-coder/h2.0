@@ -340,6 +340,14 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "user_immeubles",
     "users",
     "voice_business_hours",
+    #: Téléphonie (bug 19, 2026-10-18) : heures d'appel personnelles des
+    #: utilisateurs et règles d'acheminement (sujet / chantier → liste
+    #: ordonnée de personnes à appeler). Lecture IA : listes
+    #: « regles_acheminement » et « heures_appel » (activity.py, pôle
+    #: Construction) ; écritures via /api/v1/voice/routing-rules et
+    #: /api/v1/voice/call-hours (catalogue API).
+    "voice_routing_rules",
+    "voice_user_call_hours",
     "voice_call_routes",
     "voice_call_transcripts",
     "voice_call_turns",
