@@ -183,6 +183,9 @@ async def ensure_critical_columns() -> None:
         ("imm_baux", "depot_transfere_vers_bail_id", "INTEGER"),
         ("imm_baux", "transfere_depuis_bail_id", "INTEGER"),
         ("imm_baux", "transfert_ancienne_fin", "DATE"),
+        # Départ déclaré (2026-10-18) : fin opposable d'un bail au mois,
+        # arrêt de la dette après le départ, remplacement du locataire.
+        ("imm_baux", "depart_declare_le", "DATE"),
         ("imm_baux", "sans_document_motif", "VARCHAR(255)"),
         ("imm_baux", "sans_document_par", "VARCHAR(255)"),
         ("imm_baux", "sans_document_le", "TIMESTAMP WITH TIME ZONE"),

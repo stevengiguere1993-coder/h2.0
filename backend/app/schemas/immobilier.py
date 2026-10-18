@@ -495,7 +495,14 @@ class BailBase(BaseModel):
 
 
 class BailCreate(BailBase):
-    pass
+    #: REMPLACEMENT du locataire en place (Steven 2026-10-18 : « nous
+    #: devons pouvoir remplacer par le nouveau locataire ») : le bail
+    #: ACTIF de l'ancien locataire sur la même unité se termine à
+    #: ``remplacer_date_depart`` (défaut : la veille du début du nouveau
+    #: bail), sa dette éventuelle reste sur lui et visible, puis le
+    #: nouveau bail est créé — un seul geste.
+    remplacer_bail_id: Optional[int] = None
+    remplacer_date_depart: Optional[date] = None
 
 
 class BailUpdate(BaseModel):
@@ -553,6 +560,8 @@ class BailRead(BailBase):
     transfert_ancienne_fin: Optional[date] = None
     #: Dossier TAL ouvert (non-paiement).
     tal_dossier_ouvert_le: Optional[date] = None
+    #: Départ acté (fin opposable, même pour un bail au mois).
+    depart_declare_le: Optional[date] = None
     created_at: datetime
     updated_at: datetime
     signed_at: Optional[datetime] = None
@@ -823,6 +832,12 @@ class DossierBail(BaseModel):
     au_mois: Optional[bool] = None
     #: Jour d'échéance du loyer (affiché « payable le X » si ≠ 1).
     jour_echeance: Optional[int] = None
+    #: Départ acté (« Mettre fin au bail », remplacement…).
+    depart_declare_le: Optional[date] = None
+    #: SOLDE DÛ sur ce bail (loyers échus bornés à sa fin + frais −
+    #: paiements, ≥ 0) — la dette d'un locataire parti reste visible
+    #: sur sa fiche (Steven 2026-10-18).
+    solde_du: float = 0.0
 
 
 class DossierPaiement(BaseModel):
@@ -921,6 +936,17 @@ class LogementDossierBail(BaseModel):
     au_mois: Optional[bool] = None
     #: Jour d'échéance du loyer (affiché « payable le X » si ≠ 1).
     jour_echeance: Optional[int] = None
+    #: Départ acté (« Mettre fin au bail », remplacement…).
+    depart_declare_le: Optional[date] = None
+    #: SOLDE DÛ sur ce bail (≥ 0) : la trace d'un ANCIEN locataire dans
+    #: l'unité garde sa dette visible (Steven 2026-10-18).
+    solde_du: float = 0.0
+    #: Dépôt : rendu / gardé (miroir de la page Dépôts) — pour la liste
+    #: des anciens locataires de l'unité.
+    depot_garantie: Optional[float] = None
+    depot_rendu_le: Optional[date] = None
+    depot_saisi_le: Optional[date] = None
+    depot_saisi_montant: Optional[float] = None
 
 
 class LogementDossierBon(BaseModel):
