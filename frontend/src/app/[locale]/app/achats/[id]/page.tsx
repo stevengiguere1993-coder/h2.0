@@ -785,7 +785,7 @@ export default function AchatDetailPage() {
               </section>
 
               {parts && (parts.parts.length > 1 || parts.reste_qb != null) ? (
-                <section className="rounded-xl border border-sky-500/40 bg-brand-900 p-5">
+                <section className="rounded-xl border border-sky-500/30 bg-brand-900 p-5">
                   <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                     Facture QuickBooks divisée
                   </h2>
