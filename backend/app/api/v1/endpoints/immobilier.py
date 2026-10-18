@@ -52,6 +52,13 @@ from app.services.locatif_chambres import (
 )
 from app.services.locatif_demarrage import get_demarrage, set_demarrage
 from app.services.loyer_echeance import paiement_en_retard, seuil_retard
+from app.services.loyer_rabais import (
+    ORIGINE_AJUSTEMENT,
+    ORIGINE_RABAIS,
+    fixer_du_mois,
+    rabais_actif,
+    synchroniser_rabais_bail,
+)
 from app.services.tal_garants import (
     appliquer_date_miroir,
     chiffres,
@@ -123,6 +130,7 @@ from app.schemas.immobilier import (
     LocataireCommunicationRead,
     LocataireCreate,
     LocataireDossier,
+    DossierFrais,
     LocataireListItem,
     LocataireRead,
     LocataireUpdate,
@@ -148,6 +156,7 @@ from app.schemas.immobilier import (
     MaintenanceOverviewRow,
     PaiementLoyerCreate,
     PaiementLoyerRead,
+    PaiementLoyerUpdate,
     PlexImportBuilding,
     PlexImportCompany,
     PlexImportCreated,
@@ -1186,16 +1195,33 @@ async def update_immeuble(
 
 
 async def _bail_actif_chevauchant(
-    db, logement_id: int, date_debut, date_fin, exclure_bail_id=None
+    db,
+    logement_id: int,
+    date_debut,
+    date_fin,
+    exclure_bail_id=None,
+    *,
+    locataire_id: Optional[int] = None,
+    en_chambres: bool = False,
 ):
     """Bail ACTIF du même logement dont les dates chevauchent —
-    JAMAIS deux baux actifs simultanés (audit 2026-07-31)."""
+    JAMAIS deux baux actifs simultanés (audit 2026-07-31).
+
+    Logement loué EN CHAMBRES : plusieurs baux y cohabitent (une chambre
+    par locataire) — seul le MÊME locataire ne peut pas avoir deux baux
+    actifs qui se chevauchent (Steven 2026-10-18 : « il n'arrive pas à
+    mettre un nouveau locataire 8900 chambre E, l'ancien a quitté » —
+    le bail au mois de l'ancien, encore actif, bloquait le nouveau)."""
     q = select(Bail).where(
         Bail.logement_id == logement_id,
         Bail.status == BailStatus.ACTIF.value,
         Bail.date_debut <= date_fin,
         Bail.date_fin >= date_debut,
     )
+    if en_chambres:
+        if locataire_id is None:
+            return None
+        q = q.where(Bail.locataire_id == locataire_id)
     if exclure_bail_id is not None:
         q = q.where(Bail.id != exclure_bail_id)
     return (await db.execute(q)).scalars().first()
@@ -1245,7 +1271,11 @@ async def _refuser_si_unite_deja_en_signature(
             Bail.status == BailStatus.ACTIF.value,
             Bail.locataire_id != locataire_id,
             or_(
-                Bail.au_mois.is_(True),
+                # Bail au mois : il court sans fin… tant que le départ
+                # n'est pas DÉCLARÉ (Steven 2026-10-18) — déclaré, sa
+                # date de fin est une vraie fin et le suivant peut
+                # commencer après.
+                and_(Bail.au_mois.is_(True), Bail.depart_declare_le.is_(None)),
                 Bail.date_fin.is_(None),
                 Bail.date_fin >= date_debut,
             ),
@@ -3247,6 +3277,13 @@ async def logement_dossier(
             loc_by_id[loc.id] = loc
 
     reloc_par_bail = await _relocation_par_bail(db, [b.id for b in baux])
+    # Trace des ANCIENS locataires dans l'unité (Steven 2026-10-18 :
+    # « la dette doit rester et nous devons la voir ») : chaque bail,
+    # passé ou courant, porte son solde dû — même formule que la page
+    # Paiements.
+    from app.services.loyer_solde import soldes_par_bail
+
+    soldes = await soldes_par_bail(db, baux)
     dossier_baux = []
     for b in baux:
         loc = loc_by_id.get(b.locataire_id)
@@ -3264,6 +3301,20 @@ async def logement_dossier(
                 loyer_mensuel=float(b.loyer_mensuel or 0),
                 date_debut=b.date_debut,
                 date_fin=b.date_fin,
+                depart_declare_le=getattr(b, "depart_declare_le", None),
+                solde_du=soldes.get(b.id, 0.0),
+                depot_garantie=(
+                    float(b.depot_garantie)
+                    if b.depot_garantie is not None
+                    else None
+                ),
+                depot_rendu_le=b.depot_rendu_le,
+                depot_saisi_le=getattr(b, "depot_saisi_le", None),
+                depot_saisi_montant=(
+                    float(b.depot_saisi_montant)
+                    if getattr(b, "depot_saisi_montant", None) is not None
+                    else None
+                ),
                 status=b.status,
                 relocation_statut=reloc["statut"] if reloc else None,
                 relocation_dossier_id=(
@@ -3274,6 +3325,14 @@ async def logement_dossier(
                 document_id=b.document_id,
                 au_mois=b.au_mois,
                 jour_echeance=b.jour_echeance or 1,
+                rabais_mensuel=(
+                    float(b.rabais_mensuel)
+                    if getattr(b, "rabais_mensuel", None) is not None
+                    else None
+                ),
+                rabais_nb_mois=getattr(b, "rabais_nb_mois", None),
+                rabais_debut=getattr(b, "rabais_debut", None),
+                rabais_motif=getattr(b, "rabais_motif", None),
             )
         )
 
@@ -3834,6 +3893,9 @@ async def locataire_dossier(
             imm_by_id[im.id] = im
 
     reloc_par_bail = await _relocation_par_bail(db, [b.id for b in baux])
+    from app.services.loyer_solde import soldes_par_bail
+
+    soldes_360 = await soldes_par_bail(db, baux)
     dossier_baux = []
     for b in baux:
         lg = log_by_id.get(b.logement_id)
@@ -3848,6 +3910,8 @@ async def locataire_dossier(
                 logement_numero=(lg.numero if lg else None),
                 date_debut=b.date_debut,
                 date_fin=b.date_fin,
+                depart_declare_le=getattr(b, "depart_declare_le", None),
+                solde_du=soldes_360.get(b.id, 0.0),
                 loyer_mensuel=float(b.loyer_mensuel or 0),
                 depot_garantie=(
                     float(b.depot_garantie)
@@ -3871,6 +3935,14 @@ async def locataire_dossier(
                 signed_at=b.signed_at,
                 au_mois=b.au_mois,
                 jour_echeance=b.jour_echeance or 1,
+                rabais_mensuel=(
+                    float(b.rabais_mensuel)
+                    if getattr(b, "rabais_mensuel", None) is not None
+                    else None
+                ),
+                rabais_nb_mois=getattr(b, "rabais_nb_mois", None),
+                rabais_debut=getattr(b, "rabais_debut", None),
+                rabais_motif=getattr(b, "rabais_motif", None),
             )
         )
 
@@ -3914,6 +3986,42 @@ async def locataire_dossier(
                     paye_le=pmt.paye_le,
                     methode=pmt.methode,
                     en_retard=bool(pmt.en_retard),
+                    reference=pmt.reference,
+                    notes=pmt.notes,
+                    cree_par=getattr(pmt, "cree_par", None),
+                    modifie_par=getattr(pmt, "modifie_par", None),
+                    modifie_le=getattr(pmt, "modifie_le", None),
+                    created_at=pmt.created_at,
+                )
+            )
+
+    # Lignes des mois (frais, crédits, rabais du bail, loyer dû fixé à la
+    # main) : l'historique montre aussi CE QUI ÉTAIT DÛ, pas seulement
+    # ce qui a été reçu (bugs 4 et 10, 2026-10-18).
+    frais_360: list[DossierFrais] = []
+    if bail_ids:
+        for f in (
+            await db.execute(
+                select(FraisLocatif)
+                .where(
+                    FraisLocatif.bail_id.in_(bail_ids),
+                    FraisLocatif.mois_couvert >= depuis,
+                )
+                .order_by(FraisLocatif.mois_couvert.desc(), FraisLocatif.id)
+            )
+        ).scalars().all():
+            if f.mois_couvert is not None and f.mois_couvert < _depuis_bail_360(
+                f.bail_id
+            ):
+                continue
+            frais_360.append(
+                DossierFrais(
+                    id=f.id,
+                    bail_id=f.bail_id,
+                    mois_couvert=f.mois_couvert,
+                    montant=float(f.montant or 0),
+                    libelle=f.libelle or "",
+                    origine=getattr(f, "origine", None),
                 )
             )
 
@@ -3969,6 +4077,7 @@ async def locataire_dossier(
         locataire=LocataireRead.model_validate(loc),
         baux=dossier_baux,
         paiements=paiements,
+        frais=frais_360,
         renouvellements=renouvellements,
         communications=communications,
         nb_baux_actifs=len(actifs),
@@ -4708,7 +4817,12 @@ async def _creer_bail(
             db, payload.logement_id, payload.date_debut
         )
         chev = await _bail_actif_chevauchant(
-            db, payload.logement_id, payload.date_debut, payload.date_fin
+            db,
+            payload.logement_id,
+            payload.date_debut,
+            payload.date_fin,
+            locataire_id=payload.locataire_id,
+            en_chambres=bool(getattr(log_obj, "location_en_chambres", False)),
         )
         if chev is not None:
             raise HTTPException(
@@ -4720,7 +4834,11 @@ async def _creer_bail(
                 ),
             )
 
-    obj = Bail(**payload.model_dump())
+    obj = Bail(
+        **payload.model_dump(
+            exclude={"remplacer_bail_id", "remplacer_date_depart"}
+        )
+    )
     # « Louer indéfiniment (chambre) » : le logement impose le bail AU
     # MOIS — même loyer à l'infini, aucun avis d'augmentation, hors des
     # renouvellements (retour Phil 2026-08-13).
@@ -4848,6 +4966,10 @@ async def _creer_bail(
 
     await rattacher_pdf_bail_orphelin(db, obj)
     await recaler_statut_logement(db, obj.logement_id)
+    # Rabais sur les premiers mois (bug 10) : les crédits mensuels
+    # naissent avec le bail, peu importe la porte de création.
+    if rabais_actif(obj):
+        await synchroniser_rabais_bail(db, obj)
     await log_action(
         db, user=user, action="baux.created",
         entity_type="baux", entity_id=obj.id,
@@ -4860,6 +4982,78 @@ async def _creer_bail(
     )
 
     return obj
+
+
+async def _acter_depart_du_locataire_remplace(
+    db, payload: BailCreate, log_obj: Logement, nouveau: Locataire
+) -> Optional[Bail]:
+    """Ferme le bail du locataire SORTANT avant de créer celui du
+    remplaçant (``remplacer_bail_id`` de ``POST /baux``).
+
+    Date de départ = ``remplacer_date_depart`` ou la veille du début du
+    nouveau bail. Passée ou aujourd'hui → bail résilié sur-le-champ ;
+    future → il reste actif jusqu'à cette date, le recalage lazy le
+    terminera. Dans les deux cas le départ est DÉCLARÉ sur le bail
+    (``depart_declare_le``) : plus un loyer n'est dû après cette date,
+    même au mois, et le solde déjà dû reste sur le bail de l'ancien.
+    Un bail déjà terminé/résilié n'est pas retouché."""
+    from app.services.locatif_depart import declarer_depart
+
+    ancien = await db.get(Bail, payload.remplacer_bail_id)
+    if ancien is None or ancien.logement_id != log_obj.id:
+        raise HTTPException(
+            status_code=404,
+            detail="Bail de l'ancien locataire introuvable sur ce logement.",
+        )
+    if ancien.locataire_id == payload.locataire_id:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Le locataire remplaçant est le même que le locataire "
+                "sortant — modifie plutôt son bail (ou renouvelle-le)."
+            ),
+        )
+    if payload.date_debut is None:
+        raise HTTPException(
+            status_code=422,
+            detail="La date de début du nouveau bail est obligatoire.",
+        )
+    if ancien.status != BailStatus.ACTIF.value:
+        return ancien  # déjà fermé : rien à acter
+    date_depart = payload.remplacer_date_depart or (
+        payload.date_debut - timedelta(days=1)
+    )
+    if date_depart >= payload.date_debut:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "La date de départ de l'ancien locataire doit précéder le "
+                "début du nouveau bail."
+            ),
+        )
+    if ancien.date_debut is not None and date_depart < ancien.date_debut:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "La date de départ précède le début du bail de l'ancien "
+                f"locataire ({ancien.date_debut})."
+            ),
+        )
+    en_chambres = bool(getattr(log_obj, "location_en_chambres", False))
+    await declarer_depart(
+        db,
+        ancien.id,
+        date_depart=date_depart,
+        source=(
+            f"Remplacé par {nouveau.full_name} — nouveau bail au "
+            f"{payload.date_debut.isoformat()}"
+        ),
+        # Chambres : les dossiers de relocation sont par logement, pas
+        # par chambre — on n'en ouvre pas pour un simple remplacement.
+        ouvrir_dossier=not en_chambres,
+    )
+    await db.flush()
+    return ancien
 
 
 @router.post(
@@ -4882,6 +5076,13 @@ async def create_bail(
 
     if await immeuble_est_externe(db, log_obj.immeuble_id):
         raise erreur_externe("pas de bail dans Kratos.")
+    # Remplacement d'un locataire (Steven 2026-10-18 : « nous devons
+    # pouvoir remplacer par le nouveau locataire ») : le départ de
+    # l'ancien est ACTÉ ici même — son bail se ferme la veille du début
+    # du nouveau (ou à la date donnée), sa dette reste sur sa fiche et
+    # visible dans l'unité ; puis le nouveau bail se crée normalement.
+    if payload.remplacer_bail_id is not None:
+        await _acter_depart_du_locataire_remplace(db, payload, log_obj, loc_obj)
     obj = await _creer_bail(db, payload, log_obj, user)
     await db.commit()
     await db.refresh(obj)
@@ -4956,12 +5157,17 @@ async def update_bail(
                 data.get("date_debut", obj.date_debut),
                 exclure_bail_id=obj.id,
             )
+            log_u = await db.get(Logement, obj.logement_id)
             chev = await _bail_actif_chevauchant(
                 db,
                 obj.logement_id,
                 data.get("date_debut", obj.date_debut),
                 data.get("date_fin", obj.date_fin),
                 exclure_bail_id=obj.id,
+                locataire_id=obj.locataire_id,
+                en_chambres=bool(
+                    getattr(log_u, "location_en_chambres", False)
+                ),
             )
             if chev is not None:
                 raise HTTPException(
@@ -4996,6 +5202,17 @@ async def update_bail(
     # autres champs, par le service qui tient les deux sens cohérents.
     tal_miroir_present = "tal_dossier_ouvert_le" in data
     tal_miroir = data.pop("tal_dossier_ouvert_le", None)
+    # Rabais (bug 10) : un rabais se retire en envoyant null sur le
+    # montant OU le nombre de mois ; retirer l'un retire l'autre pour
+    # ne jamais laisser un demi-rabais en base.
+    rabais_cles = {"rabais_mensuel", "rabais_nb_mois", "rabais_debut", "rabais_motif"}
+    if (
+        ("rabais_mensuel" in data and data["rabais_mensuel"] in (None, 0))
+        or ("rabais_nb_mois" in data and data["rabais_nb_mois"] in (None, 0))
+    ):
+        data["rabais_mensuel"] = None
+        data["rabais_nb_mois"] = None
+        data["rabais_debut"] = None
     for k, v in data.items():
         setattr(obj, k, v)
     obj.updated_at = _now()
@@ -5003,6 +5220,13 @@ async def update_bail(
         await appliquer_date_miroir(
             db, obj, tal_miroir, getattr(user, "email", None)
         )
+    # Les crédits du rabais suivent ses paramètres — et le début du
+    # bail quand le rabais part « du premier mois » (rabais_debut vide).
+    if rabais_cles & set(data) or (
+        "date_debut" in data and rabais_actif(obj) and obj.rabais_debut is None
+    ):
+        await db.flush()
+        await synchroniser_rabais_bail(db, obj)
 
     # Statut du logement : règle UNIQUE du service (audit 2026-09-15 —
     # les assignations directes laissaient un logement « réservé » à vie
@@ -5382,6 +5606,7 @@ async def create_paiement(
             methode=payload.methode,
             reference=payload.reference,
             notes=payload.notes if obj is None else None,
+            cree_par=getattr(user, "email", None),
         )
         row.created_at = _now()
         # Marquer en retard si payé > 5 jours après l'ÉCHÉANCE du bail
@@ -5430,6 +5655,7 @@ async def create_paiement(
                 methode=payload.methode,
                 reference=payload.reference,
                 notes=payload.notes if obj is None else None,
+                cree_par=getattr(user, "email", None),
             )
             row.created_at = _now()
             if paiement_en_retard(mois, row.paye_le, bail.jour_echeance):
@@ -5481,6 +5707,99 @@ async def create_paiement(
     return PaiementLoyerRead.model_validate(obj)
 
 
+def _bail_couvre_mois(bail: Bail, mois: date) -> bool:
+    """Un bail RÉSILIÉ/TERMINÉ n'accepte de l'argent ou un ajustement que
+    sur un mois qu'il couvrait (même règle que la saisie d'un paiement et
+    d'un frais)."""
+    if bail.status not in (BailStatus.RESILIE.value, BailStatus.TERMINE.value):
+        return True
+    m = mois.replace(day=1)
+    return (
+        bail.date_debut is not None
+        and bail.date_fin is not None
+        and bail.date_debut.replace(day=1) <= m <= bail.date_fin.replace(day=1)
+    )
+
+
+@router.patch("/paiements/{paiement_id}", response_model=PaiementLoyerRead)
+async def update_paiement(
+    paiement_id: int,
+    payload: PaiementLoyerUpdate,
+    db: DBSession,
+    user: CurrentUser,
+) -> PaiementLoyerRead:
+    """Corrige un versement EN PLACE (bugs 4 à 6, 2026-10-18) : montant
+    réellement reçu, date, méthode, référence, note, mois visé — et le
+    marqueur « en retard » (mvilliard : « je ne peux dire qu'ils ne sont
+    pas en retard non plus »). La ligne garde son identité ; qui a
+    corrigé et quand reste sur la ligne. Le score de paiement du
+    locataire est recalculé."""
+    _require_volet(user)
+    obj = await db.get(PaiementLoyer, paiement_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Paiement introuvable.")
+    bail = await db.get(Bail, obj.bail_id)
+    data = payload.model_dump(exclude_unset=True)
+    avant = {
+        "montant": float(obj.montant or 0),
+        "paye_le": obj.paye_le,
+        "mois_couvert": obj.mois_couvert,
+        "en_retard": bool(obj.en_retard),
+    }
+    date_changee = (
+        "paye_le" in data and data["paye_le"] != avant["paye_le"]
+    ) or (
+        data.get("mois_couvert") is not None
+        and data["mois_couvert"].replace(day=1) != avant["mois_couvert"]
+    )
+    if data.get("mois_couvert") is not None:
+        m = data["mois_couvert"].replace(day=1)
+        if bail is not None and not _bail_couvre_mois(bail, m):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Ce bail est terminé — un versement ne peut viser "
+                    f"qu'un mois couvert par le bail ({bail.date_debut} → {bail.date_fin})."
+                ),
+            )
+        obj.mois_couvert = m
+    if data.get("montant") is not None:
+        obj.montant = round(float(data["montant"]), 2)
+    for champ in ("paye_le", "methode", "reference", "notes"):
+        if champ in data:
+            setattr(obj, champ, data[champ])
+    if data.get("en_retard") is not None:
+        # Décision humaine explicite : elle prime sur le calcul.
+        obj.en_retard = bool(data["en_retard"])
+    elif date_changee and bail is not None:
+        obj.en_retard = paiement_en_retard(
+            obj.mois_couvert, obj.paye_le, bail.jour_echeance
+        )
+    obj.modifie_par = getattr(user, "email", None)
+    obj.modifie_le = _now()
+    await db.flush()
+    if bail is not None:
+        await _recalc_paiement_score(db, bail)
+    await log_action(
+        db, user=user, action="paiements_loyer.updated",
+        entity_type="paiements_loyer", entity_id=obj.id,
+        details={
+            "bail_id": obj.bail_id,
+            "avant": {k: (v.isoformat() if isinstance(v, date) else v) for k, v in avant.items()},
+            "apres": {
+                "montant": float(obj.montant or 0),
+                "paye_le": obj.paye_le.isoformat() if obj.paye_le else None,
+                "mois_couvert": obj.mois_couvert.isoformat() if obj.mois_couvert else None,
+                "en_retard": bool(obj.en_retard),
+            },
+            "champs": sorted(data),
+        },
+    )
+    await db.commit()
+    await db.refresh(obj)
+    return PaiementLoyerRead.model_validate(obj)
+
+
 @router.delete(
     "/paiements/{paiement_id}", status_code=status.HTTP_204_NO_CONTENT
 )
@@ -5493,7 +5812,22 @@ async def delete_paiement(
     obj = await db.get(PaiementLoyer, paiement_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Paiement introuvable.")
+    bail = await db.get(Bail, obj.bail_id)
     await db.delete(obj)
+    await db.flush()
+    # Le score du locataire suit la suppression d'un versement (même
+    # règle que l'annulation d'un mois entier).
+    if bail is not None:
+        await _recalc_paiement_score(db, bail)
+    await log_action(
+        db, user=user, action="paiements_loyer.deleted",
+        entity_type="paiements_loyer", entity_id=paiement_id,
+        details={
+            "bail_id": obj.bail_id,
+            "mois_couvert": obj.mois_couvert.isoformat() if obj.mois_couvert else None,
+            "montant": float(obj.montant or 0),
+        },
+    )
     await db.commit()
 
 
@@ -5552,15 +5886,25 @@ class FraisRow(BaseModel):
     id: int
     montant: float
     libelle: str
+    #: NULL = frais/crédit saisi à la main ; « rabais_bail » = crédit du
+    #: rabais paramétré sur le bail (se change sur le bail, pas ici) ;
+    #: « ajustement_mois » = loyer dû du mois fixé à la main.
+    origine: Optional[str] = None
 
 
 class PaiementMoisRow(BaseModel):
     """Un VERSEMENT du mois (Phil 2026-10-08 : « si 2 dépôts, voir les 2
-    dépôts distincts avec leur date »)."""
+    dépôts distincts avec leur date »). Corrigeable en place (2026-10-18)."""
     id: int
     montant: float
     paye_le: Optional[date] = None
     methode: Optional[str] = None
+    reference: Optional[str] = None
+    notes: Optional[str] = None
+    en_retard: bool = False
+    cree_par: Optional[str] = None
+    modifie_par: Optional[str] = None
+    modifie_le: Optional[datetime] = None
 
 
 class LoyerOverviewRow(BaseModel):
@@ -5866,6 +6210,10 @@ async def loyers_overview(
                 paye_total_by_bail[bid] = paye_total_by_bail.get(bid, 0.0) + float(
                     montant or 0
                 )
+        # Même borne que les loyers échus (``_mois_echus``) : un mois
+        # AFFICHÉ dans le futur ne compte ni son loyer ni ses lignes —
+        # sinon les crédits de rabais des mois à venir (bug 10) auraient
+        # réduit le solde d'aujourd'hui.
         for bid, mc, montant in (
             await db.execute(
                 select(
@@ -5875,7 +6223,8 @@ async def loyers_overview(
                 ).where(
                     FraisLocatif.bail_id.in_(bail_ids),
                     FraisLocatif.mois_couvert >= solde_depuis,
-                    FraisLocatif.mois_couvert <= month_start,
+                    FraisLocatif.mois_couvert
+                    <= min(month_start, today.replace(day=1)),
                 )
             )
         ).all():
@@ -5936,24 +6285,22 @@ async def loyers_overview(
                 "statut": reloc_f["statut"] if reloc_f else "a_venir",
             }
 
+    from app.services.loyer_solde import apres_la_fin, nb_mois_echus
+
     def _mois_echus(b: Bail) -> int:
         """Nombre de 1ers de mois couverts par le bail jusqu'au mois
         affiché inclus (borné à aujourd'hui) — pour le solde cumulatif.
-        Ne remonte jamais avant la date de démarrage du pôle."""
-        debut = max(
-            b.date_debut.replace(day=1), depuis_bail.get(b.id, solde_depuis)
+        Ne remonte jamais avant la date de démarrage du pôle. La fin
+        OPPOSABLE du bail (service ``loyer_solde``) borne le cumul :
+        bail terminé/résilié, ou départ DÉCLARÉ même au mois (Steven
+        2026-10-18 : « il continue de s'accumuler une dette dans les
+        mois qui suivent ») ; un bail au mois sans départ court."""
+        return nb_mois_echus(
+            b,
+            depuis=depuis_bail.get(b.id, solde_depuis),
+            jusqua=month_start,
+            today=today,
         )
-        fin = min(month_start, today.replace(day=1))
-        # Bail AU MOIS : reconduction auto — les loyers courent sans
-        # egard a la date de fin (retour Phil 2026-07-28)… sauf s'il
-        # est terminé/résilié (M7) : la fin borne alors le cumul.
-        if b.date_fin and (
-            not b.au_mois or b.status != BailStatus.ACTIF.value
-        ):
-            fin = min(fin, b.date_fin.replace(day=1))
-        if fin < debut:
-            return 0
-        return (fin.year - debut.year) * 12 + (fin.month - debut.month) + 1
 
     # Départs ACTÉS : savoir qu'un locataire s'en va le 31 change la
     # façon de lire son retard de loyer, et évite de le relancer pour un
@@ -5997,19 +6344,9 @@ async def loyers_overview(
         # Vaut aussi pour un bail encore ACTIF dont la fin est posée
         # avant le mois affiché (départ / transfert à venir — audit
         # 2026-09-15 : octobre réclamait le loyer de l'ancienne unité).
-        apres_fin = (
-            b.date_fin is not None
-            and b.date_fin < month_start
-            and not b.au_mois
-            and (
-                b.status
-                in (
-                    BailStatus.RESILIE.value,
-                    BailStatus.TERMINE.value,
-                    BailStatus.ACTIF.value,
-                )
-            )
-        )
+        # Même règle pour un bail AU MOIS dont le départ est déclaré
+        # (chambres) : après la date de départ, plus rien n'est attendu.
+        apres_fin = apres_la_fin(b, month_start)
         loyer = 0.0 if apres_fin else loyer_bail_ref
         # Transfert d'unité en cours de mois (Phil 2026-09-15) : le mois
         # de bascule est dû UNE fois — sur l'ancien bail (qui garde son
@@ -6152,6 +6489,12 @@ async def loyers_overview(
                         montant=float(p.montant or 0),
                         paye_le=p.paye_le,
                         methode=p.methode,
+                        reference=p.reference,
+                        notes=p.notes,
+                        en_retard=bool(p.en_retard),
+                        cree_par=getattr(p, "cree_par", None),
+                        modifie_par=getattr(p, "modifie_par", None),
+                        modifie_le=getattr(p, "modifie_le", None),
                     )
                     for p in sorted(ps, key=lambda p: (p.paye_le or month_start, p.id))
                 ],
@@ -6162,6 +6505,7 @@ async def loyers_overview(
                         id=f.id,
                         montant=float(f.montant or 0),
                         libelle=f.libelle or "Frais",
+                        origine=getattr(f, "origine", None),
                     )
                     for f in (frais_mois_by_bail.get(b.id) or [])
                 ],
@@ -6303,18 +6647,25 @@ async def create_frais(
             detail="Un frais ne s'ajoute pas sur un bail proposé (pas encore en vigueur).",
         )
     if bail.status in (BailStatus.RESILIE.value, BailStatus.TERMINE.value):
+        # Steven 2026-10-18 (bug « crédit de 600 $ → erreur ») : la fiche
+        # propose le mois COURANT, souvent après la fin du bail — un
+        # crédit qui règle la dette d'un locataire parti vise donc
+        # n'importe quel mois du début du bail jusqu'à aujourd'hui (le
+        # solde du bail le compte, quel que soit le mois). Jamais un
+        # mois à venir : une dette se règle au présent.
         m_frais = payload.mois_couvert.replace(day=1)
+        mois_courant = _now().date().replace(day=1)
         couvre = (
             bail.date_debut is not None
-            and bail.date_fin is not None
-            and bail.date_debut.replace(day=1) <= m_frais <= bail.date_fin.replace(day=1)
+            and bail.date_debut.replace(day=1) <= m_frais <= mois_courant
         )
         if not couvre:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Ce bail est terminé — un frais ou un crédit ne peut viser "
-                    f"qu'un mois couvert par le bail ({bail.date_debut} → {bail.date_fin})."
+                    "qu'un mois couvert par le bail ou déjà écoulé (du "
+                    f"{bail.date_debut} au mois courant), jamais un mois à venir."
                 ),
             )
     obj = FraisLocatif(
@@ -6343,8 +6694,108 @@ async def delete_frais(
     _require_volet(user)
     obj = await db.get(FraisLocatif, frais_id)
     if obj is not None:
+        # Un crédit de rabais se régénère depuis le bail : le retirer à
+        # l'unité reviendrait au prochain enregistrement du bail. Le
+        # rabais se change (ou se retire) sur le bail lui-même.
+        if getattr(obj, "origine", None) == ORIGINE_RABAIS:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Ce crédit vient du rabais paramétré sur le bail — "
+                    "modifie ou retire le rabais sur le bail (fiche du "
+                    "logement ou du locataire)."
+                ),
+            )
         await db.delete(obj)
         await db.commit()
+
+
+class LoyerMoisFixe(BaseModel):
+    """Bug 4 (mvilliard 2026-10-12 : « je ne peux changer les montants
+    perçus et percevable ») : le loyer DÛ du mois, fixé à la main."""
+
+    mois: str = Field(..., description="Mois visé, YYYY-MM")
+    montant_du: float = Field(..., ge=0)
+    motif: Optional[str] = Field(default=None, max_length=128)
+
+
+class LoyerMoisFixeOut(BaseModel):
+    mois: str
+    loyer_mensuel: float
+    #: Dû du mois APRÈS la correction (loyer + lignes du mois).
+    du_mois: float
+    #: La ligne d'ajustement posée (None quand le dû voulu est le dû
+    #: naturel du mois : plus d'ajustement).
+    ajustement: Optional[FraisRow] = None
+
+
+@router.put("/baux/{bail_id}/loyer-mois", response_model=LoyerMoisFixeOut)
+async def fixer_loyer_mois(
+    bail_id: int,
+    payload: LoyerMoisFixe,
+    db: DBSession,
+    user: CurrentUser,
+) -> LoyerMoisFixeOut:
+    """Fixe le montant « percevable » d'un mois : une ligne d'ajustement
+    (origine « ajustement_mois ») fait tomber le dû du mois — loyer +
+    frais + crédits + rabais — sur le montant voulu. Remplace l'ajustement
+    précédent du même mois ; le dû naturel retrouvé retire la ligne. Le
+    loyer du bail ne bouge pas (il reste celui du bail TAL)."""
+    _require_volet(user)
+    bail = await db.get(Bail, bail_id)
+    if bail is None:
+        raise HTTPException(status_code=404, detail="Bail introuvable.")
+    try:
+        mois = datetime.strptime(payload.mois + "-01", "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Format mois attendu : YYYY-MM.")
+    if bail.status == BailStatus.PROPOSE.value:
+        raise HTTPException(
+            status_code=400,
+            detail="Le loyer d'un mois se fixe sur un bail en vigueur, pas sur un bail proposé.",
+        )
+    if not _bail_couvre_mois(bail, mois):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Ce bail est terminé — le loyer ne se fixe que sur un mois "
+                f"couvert par le bail ({bail.date_debut} → {bail.date_fin})."
+            ),
+        )
+    ligne = await fixer_du_mois(
+        db, bail, mois, payload.montant_du,
+        motif=payload.motif, par=getattr(user, "email", None),
+    )
+    total_lignes = float(
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(FraisLocatif.montant), 0)).where(
+                    FraisLocatif.bail_id == bail.id,
+                    FraisLocatif.mois_couvert == mois,
+                )
+            )
+        ).scalar() or 0
+    )
+    await log_action(
+        db, user=user, action="baux.loyer_mois_fixe",
+        entity_type="baux", entity_id=bail.id,
+        details={"mois": payload.mois, "montant_du": payload.montant_du,
+                 "ajustement": float(ligne.montant) if ligne is not None else 0.0},
+    )
+    await db.commit()
+    return LoyerMoisFixeOut(
+        mois=payload.mois,
+        loyer_mensuel=float(bail.loyer_mensuel or 0),
+        du_mois=round(float(bail.loyer_mensuel or 0) + total_lignes, 2),
+        ajustement=(
+            FraisRow(
+                id=ligne.id, montant=float(ligne.montant), libelle=ligne.libelle,
+                origine=ligne.origine,
+            )
+            if ligne is not None
+            else None
+        ),
+    )
 
 
 class RelanceLoyerRequest(BaseModel):

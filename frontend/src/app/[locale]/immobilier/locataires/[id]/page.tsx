@@ -52,14 +52,16 @@ import {
 } from "@/components/immobilier/fin-bail";
 import {
   CelluleLoyer,
-  CorrectionOptions,
-  duMois,
   FraisCreditModal,
   moisCouvertPourPaiement,
   montantMarquerPaye,
   type PaiementMois,
   RENOUVELLEMENT_BADGES
 } from "@/components/immobilier/paiements-actions";
+import {
+  usePaiementActions,
+  type PaiementRowBase
+} from "@/components/immobilier/paiement-modals";
 import { ImmobilierTopbar } from "../../layout";
 
 type Locataire = {
@@ -111,6 +113,24 @@ type DossierPaiement = {
   paye_le: string | null;
   methode: string | null;
   en_retard: boolean;
+  reference?: string | null;
+  notes?: string | null;
+  /** Trace : saisi par / corrigé par (bugs 4 à 6, 2026-10-18). */
+  cree_par?: string | null;
+  modifie_par?: string | null;
+  modifie_le?: string | null;
+  created_at?: string | null;
+};
+
+/** Ligne d'un mois (frais, crédit, rabais du bail, loyer dû fixé à la
+ *  main) — l'historique montre aussi ce qui était DÛ (bugs 4 et 10). */
+type DossierFrais = {
+  id: number;
+  bail_id: number;
+  mois_couvert: string;
+  montant: number;
+  libelle: string;
+  origine?: string | null;
 };
 
 type RenouvellementStatus =
@@ -152,6 +172,7 @@ type Dossier = {
   locataire: Locataire;
   baux: DossierBail[];
   paiements: DossierPaiement[];
+  frais?: DossierFrais[];
   renouvellements: DossierRenouvellement[];
   communications: Communication[];
   nb_baux_actifs: number;
@@ -395,6 +416,22 @@ export default function LocataireDetailPage({
   useEffect(() => {
     void loadDossier();
   }, [loadDossier]);
+
+  // Historique de paiements : chaque versement se corrige ou se retire
+  // EN PLACE (bugs 4 à 6, 2026-10-18) — mêmes fenêtres que la page
+  // Paiements, donc utilisables sur téléphone.
+  const [histoMsg, setHistoMsg] = useState<{
+    kind: "ok" | "err";
+    text: string;
+  } | null>(null);
+  const histoActions = usePaiementActions<PaiementRowBase>({
+    mois: new Date().toLocaleDateString("sv-SE").slice(0, 7),
+    rows: [],
+    fmt: money,
+    onChanged: loadDossier,
+    onInfo: (text) => setHistoMsg({ kind: "ok", text }),
+    onError: (text) => setHistoMsg({ kind: "err", text })
+  });
 
   //: MÊME endpoint que la page Baux, filtré sur ce locataire.
   const [suiviBaux, setSuiviBaux] = useState<SuiviBailRow[] | null>(null);
@@ -1105,23 +1142,41 @@ export default function LocataireDetailPage({
                   </span>
                 ) : null}
               </div>
+              {histoActions.elements}
+              {histoMsg ? (
+                <p
+                  className={`mb-3 rounded-lg border px-3 py-2 text-xs ${
+                    histoMsg.kind === "err"
+                      ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+                      : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                  }`}
+                >
+                  {histoMsg.text}
+                </p>
+              ) : null}
               {!dossier || dossier.paiements.length === 0 ? (
                 <p className="text-sm text-white/50">
                   Aucun paiement enregistré pour ce locataire.
                 </p>
               ) : (
                 <div className="max-h-96 overflow-y-auto">
-                  <table className="w-full min-w-[520px] text-left text-sm">
+                  <table className="w-full min-w-[600px] text-left text-sm">
                     <thead className="sticky top-0 bg-brand-900 text-[10px] uppercase tracking-wider text-white/45">
                       <tr>
                         <th className="py-2 pr-3">Mois couvert</th>
                         <th className="py-2 pr-3 text-right">Montant</th>
-                        <th className="py-2 pr-3">Payé le</th>
+                        <th className="py-2 pr-3">Reçu le</th>
                         <th className="py-2 pr-3">Méthode</th>
-                        <th className="py-2 text-right">État</th>
+                        <th className="py-2 pr-3 text-right">État</th>
+                        <th className="py-2 text-right">
+                          <span className="sr-only">Actions</span>
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-brand-800/70">
+                      {/* Un VERSEMENT par ligne, avec sa date (bug 6 :
+                          « si 2 dépôts, voir les 2 dépôts distincts »)
+                          — modifiable ou supprimable en place. */}
                       {dossier.paiements.map((p) => (
                         <tr key={p.id}>
                           <td className="py-2.5 pr-3 capitalize text-white/80">
@@ -1133,10 +1188,27 @@ export default function LocataireDetailPage({
                           <td className="py-2.5 pr-3 text-xs text-white/60">
                             {p.paye_le ?? "—"}
                           </td>
-                          <td className="py-2.5 pr-3 text-xs capitalize text-white/60">
-                            {p.methode ?? "—"}
+                          <td className="py-2.5 pr-3 text-xs text-white/60">
+                            <span className="capitalize">{p.methode ?? "—"}</span>
+                            {p.reference || p.notes ? (
+                              <div className="text-[10px] text-white/50">
+                                {[p.reference, p.notes].filter(Boolean).join(" · ")}
+                              </div>
+                            ) : null}
+                            {p.modifie_par ? (
+                              <div
+                                className="text-[10px] text-white/40"
+                                title={
+                                  p.modifie_le
+                                    ? `Corrigé le ${dateLabel(p.modifie_le)}`
+                                    : undefined
+                                }
+                              >
+                                Corrigé par {p.modifie_par}
+                              </div>
+                            ) : null}
                           </td>
-                          <td className="py-2.5 text-right">
+                          <td className="py-2.5 pr-3 text-right">
                             {p.paye_le ? (
                               <span
                                 className={`badge ${
@@ -1153,12 +1225,83 @@ export default function LocataireDetailPage({
                               </span>
                             )}
                           </td>
+                          <td className="py-2.5 text-right">
+                            <span className="inline-flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  histoActions.modifierVersement(p, {
+                                    locataireName: loc?.full_name
+                                  })
+                                }
+                                title="Modifier ce versement (montant, date, méthode, mois visé, retard)"
+                                className="rounded-md border border-brand-700 p-1.5 text-white/60 transition hover:text-white"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  histoActions.supprimerVersement(p, {
+                                    locataireName: loc?.full_name
+                                  })
+                                }
+                                title="Supprimer ce versement"
+                                className="rounded-md border border-brand-700 p-1.5 text-white/60 transition hover:text-rose-300"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </span>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
               )}
+              {/* Ce qui a changé le DÛ des mois : rabais du bail, frais,
+                  crédits, loyer dû fixé à la main (bugs 4 et 10). Se
+                  corrige depuis « Loyer du mois » ci-dessus (Corriger) ou,
+                  pour un rabais, sur le bail. */}
+              {dossier && (dossier.frais ?? []).length > 0 ? (
+                <div className="mt-4">
+                  <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/50">
+                    Rabais, frais et ajustements
+                  </h3>
+                  <ul className="divide-y divide-brand-800/70 rounded-xl border border-brand-800">
+                    {(dossier.frais ?? []).map((f) => (
+                      <li
+                        key={f.id}
+                        className="flex items-center justify-between gap-3 px-3 py-2 text-xs"
+                      >
+                        <span className="min-w-0">
+                          <span className="capitalize text-white/80">
+                            {moisLabel(f.mois_couvert)}
+                          </span>
+                          <span className="text-white/60"> · {f.libelle}</span>
+                          {f.origine === "rabais_bail" ? (
+                            <span className="badge badge-emerald ml-1.5">
+                              Rabais du bail
+                            </span>
+                          ) : f.origine === "ajustement_mois" ? (
+                            <span className="badge badge-sky ml-1.5">
+                              Loyer dû fixé
+                            </span>
+                          ) : null}
+                        </span>
+                        <span
+                          className={`shrink-0 font-semibold tabular-nums ${
+                            f.montant < 0 ? "text-emerald-300" : "text-amber-300"
+                          }`}
+                        >
+                          {f.montant < 0 ? "− " : "+ "}
+                          {money(Math.abs(f.montant))}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </section>
 
             {/* Baux */}
@@ -1708,7 +1851,6 @@ function LoyersMoisSection({
   //: Relance en attente de confirmation (aperçu partagé).
   const [relanceApercu, setRelanceApercu] =
     useState<LoyerMoisRow | null>(null);
-  const [correctingId, setCorrectingId] = useState<number | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -1734,6 +1876,19 @@ function LoyersMoisSection({
     await load();
     onMutated();
   }
+
+  // Fenêtres TACTILES partagées (bugs 4 à 6, 2026-10-18) : versement
+  // daté, correction en place de chaque versement, loyer dû du mois,
+  // confirmations — plus de window.prompt / confirm (muets dans Kratos
+  // installé sur un téléphone). Mêmes fenêtres que la page Paiements.
+  const actions = usePaiementActions<LoyerMoisRow>({
+    mois,
+    rows: rows ?? [],
+    fmt: money,
+    onChanged: apres,
+    onInfo: setInfo,
+    onError: setErr
+  });
 
   async function paiement(row: LoyerMoisRow, montant: number) {
     setBusyId(row.bail_id);
@@ -1771,20 +1926,10 @@ function LoyersMoisSection({
     await paiement(row, montantMarquerPaye(row));
   }
 
-  async function marquerPartiel(row: LoyerMoisRow) {
-    const restant =
-      Math.round((duMois(row) - (row.montant_paye ?? 0)) * 100) / 100;
-    const saisie = window.prompt(
-      `Montant reçu pour ${mois} ?\n(Restant du mois : ${money(restant)})`,
-      ""
-    );
-    if (saisie == null) return;
-    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
-    if (!Number.isFinite(montant) || montant <= 0) {
-      setErr("Montant invalide.");
-      return;
-    }
-    await paiement(row, Math.round(montant * 100) / 100);
+  // Paiement PARTIEL : versement daté (montant, date reçue, méthode,
+  // référence) — un versement par dépôt (bugs 5 et 6).
+  function marquerPartiel(row: LoyerMoisRow) {
+    actions.ouvrirVersement(row);
   }
 
   // Frais OU crédit — même fenêtre que la page Paiements et la fiche
@@ -1812,94 +1957,11 @@ function LoyersMoisSection({
     await apres();
   }
 
-  async function supprimerFrais(fraisId: number) {
-    if (!window.confirm("Retirer ce frais du solde ?")) return;
-    try {
-      const r = await authedFetch(`/api/v1/immobilier/frais/${fraisId}`, {
-        method: "DELETE"
-      });
-      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
-      await apres();
-    } catch (e) {
-      setErr(`Suppression du frais échouée : ${(e as Error).message}`);
-    }
-  }
-
-  // « Corriger » ouvre les OPTIONS (retour Phil 2026-07-31, mêmes choix
-  // que la page Paiements) : corriger le montant, marquer payé au
-  // complet, ou retirer — sans perdre la ligne.
-  async function supprimerPaiementsMois(row: LoyerMoisRow): Promise<void> {
-    const r = await authedFetch(
-      `/api/v1/immobilier/baux/${row.bail_id}/paiements-mois?mois=${mois}`,
-      { method: "DELETE" }
-    );
-    if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
-  }
-
-  async function retirerPaiement(row: LoyerMoisRow) {
-    if (
-      !window.confirm(
-        `Retirer le paiement de ${mois} (${money(row.montant_paye ?? 0)} reçu) ?\nLe mois redeviendra impayé.`
-      )
-    )
-      return;
-    setBusyId(row.bail_id);
-    try {
-      await supprimerPaiementsMois(row);
-      setInfo("Paiement retiré — le mois est de retour impayé.");
-      setCorrectingId(null);
-      await apres();
-    } catch (e) {
-      setErr(`Annulation échouée : ${(e as Error).message}`);
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function corrigerMontant(row: LoyerMoisRow) {
-    const saisie = window.prompt(
-      `Montant RÉELLEMENT reçu pour ${mois} ?\n(Enregistré : ${money(row.montant_paye ?? 0)} — dû du mois : ${money(duMois(row))})`,
-      ""
-    );
-    if (saisie == null) return;
-    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
-    if (!Number.isFinite(montant) || montant < 0) {
-      setErr("Montant invalide.");
-      return;
-    }
-    setBusyId(row.bail_id);
-    try {
-      await supprimerPaiementsMois(row);
-      setCorrectingId(null);
-      if (montant > 0) {
-        await paiement(row, Math.round(montant * 100) / 100);
-      } else {
-        setInfo("Paiements du mois retirés.");
-        await apres();
-        setBusyId(null);
-      }
-    } catch (e) {
-      setErr(`Correction échouée : ${(e as Error).message}`);
-      setBusyId(null);
-    }
-  }
-
-  async function payeAuComplet(row: LoyerMoisRow) {
-    if (
-      !window.confirm(
-        `Remplacer par un paiement COMPLET (${money(duMois(row))}) pour ${mois} ?`
-      )
-    )
-      return;
-    setBusyId(row.bail_id);
-    try {
-      await supprimerPaiementsMois(row);
-      setCorrectingId(null);
-      await paiement(row, duMois(row));
-    } catch (e) {
-      setErr(`Correction échouée : ${(e as Error).message}`);
-      setBusyId(null);
-    }
+  // « Corriger » ouvre la fenêtre du mois (bugs 4 à 6) : chaque
+  // versement se modifie ou se retire EN PLACE, le loyer dû du mois se
+  // fixe, les lignes du mois se retirent — sans perdre la ligne.
+  function corriger(row: LoyerMoisRow) {
+    actions.ouvrirCorrection(row);
   }
 
   // Rappel de loyer par courriel — même endpoint/payload que la page
@@ -1952,6 +2014,7 @@ function LoyersMoisSection({
         onClose={() => setFraisPour(null)}
         onConfirm={confirmerFrais}
       />
+      {actions.elements}
       {relanceApercu ? (
         <ApercuEnvoiModal
           titre="Relance de loyer"
@@ -2086,7 +2149,7 @@ function LoyersMoisSection({
                     fmt={money}
                     frais={r.frais_mois}
                     paiements={r.paiements}
-                    onSupprimerFrais={(id) => void supprimerFrais(id)}
+                    onSupprimerFrais={actions.supprimerFrais}
                   />
                 </span>
               </div>
@@ -2115,7 +2178,7 @@ function LoyersMoisSection({
                     </button>
                     <button
                       type="button"
-                      onClick={() => void marquerPartiel(r)}
+                      onClick={() => marquerPartiel(r)}
                       disabled={busyId === r.bail_id}
                       title="Enregistrer un paiement partiel (montant saisi)"
                       className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
@@ -2148,28 +2211,17 @@ function LoyersMoisSection({
                     Relancer
                   </button>
                 ) : null}
-                {(r.montant_paye ?? 0) > 0 ? (
-                  correctingId === r.bail_id ? (
-                    <CorrectionOptions
-                      r={r}
-                      busy={busyId === r.bail_id}
-                      onMontant={() => void corrigerMontant(r)}
-                      onComplet={() => void payeAuComplet(r)}
-                      onRetirer={() => void retirerPaiement(r)}
-                      onClose={() => setCorrectingId(null)}
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setCorrectingId(r.bail_id)}
-                      disabled={busyId === r.bail_id}
-                      title="Corriger le paiement : montant, complet, ou retrait"
-                      className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
-                    >
-                      Corriger
-                    </button>
-                  )
-                ) : null}
+                {/* Toujours offert, même sans versement : c'est aussi
+                    là que le loyer DÛ du mois se fixe (bug 4). */}
+                <button
+                  type="button"
+                  onClick={() => corriger(r)}
+                  disabled={busyId === r.bail_id}
+                  title="Corriger : versements du mois (montant, date, retrait) et loyer dû du mois"
+                  className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                >
+                  Corriger
+                </button>
               </div>
               {r.nb_relances > 0 ? (
                 <p className="mt-1 text-[10px] text-white/40">

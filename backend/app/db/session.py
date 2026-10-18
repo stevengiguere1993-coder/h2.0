@@ -171,6 +171,19 @@ async def ensure_critical_columns() -> None:
         ("imm_baux", "parallele_locateur_telephone", "VARCHAR(32)"),
         ("imm_baux", "parallele_note", "TEXT"),
         ("imm_locataires", "categorie", "VARCHAR(16) NOT NULL DEFAULT 'standard'"),
+        # Rabais sur les premiers mois du bail (bug 10, 2026-10-18) :
+        # paramètres sur le bail, crédits mensuels générés dans
+        # imm_frais_locatifs (colonne « origine »).
+        ("imm_baux", "rabais_mensuel", "NUMERIC(10, 2)"),
+        ("imm_baux", "rabais_nb_mois", "INTEGER"),
+        ("imm_baux", "rabais_debut", "DATE"),
+        ("imm_baux", "rabais_motif", "VARCHAR(255)"),
+        ("imm_frais_locatifs", "origine", "VARCHAR(32)"),
+        # Versements de loyer corrigés EN PLACE avec trace (bugs 4 à 6,
+        # 2026-10-18) : qui a saisi / corrigé, et quand.
+        ("imm_paiements_loyer", "cree_par", "VARCHAR(256)"),
+        ("imm_paiements_loyer", "modifie_par", "VARCHAR(256)"),
+        ("imm_paiements_loyer", "modifie_le", "TIMESTAMP WITH TIME ZONE"),
         # Refus d'un document signable (consentement notamment).
         ("imm_documents", "refuse_le", "TIMESTAMP WITH TIME ZONE"),
         ("imm_documents", "refuse_par", "VARCHAR(255)"),
@@ -183,6 +196,9 @@ async def ensure_critical_columns() -> None:
         ("imm_baux", "depot_transfere_vers_bail_id", "INTEGER"),
         ("imm_baux", "transfere_depuis_bail_id", "INTEGER"),
         ("imm_baux", "transfert_ancienne_fin", "DATE"),
+        # Départ déclaré (2026-10-18) : fin opposable d'un bail au mois,
+        # arrêt de la dette après le départ, remplacement du locataire.
+        ("imm_baux", "depart_declare_le", "DATE"),
         ("imm_baux", "sans_document_motif", "VARCHAR(255)"),
         ("imm_baux", "sans_document_par", "VARCHAR(255)"),
         ("imm_baux", "sans_document_le", "TIMESTAMP WITH TIME ZONE"),
@@ -355,6 +371,9 @@ async def ensure_critical_columns() -> None:
         # Montant refacturé par achat (ligne « Matériaux » unique,
         # 2026-10-17).
         ("achats", "montant_refacture", "NUMERIC(12, 2)"),
+        # Total TTC de la transaction QB d'origine d'un achat importé
+        # (facture fractionnée : part du projet vs facture entière).
+        ("achats", "qbo_txn_total", "NUMERIC(12, 2)"),
         # Gestion externe d'un immeuble (compagnie tierce) : sans ces
         # colonnes, tout SELECT sur imm_immeubles plante → 500 sur tout
         # le volet immobilier. Table préexistante → create_all ne les

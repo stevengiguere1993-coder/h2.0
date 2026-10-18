@@ -27,9 +27,17 @@ type Row = {
   montant_ccq: number;
   montant_hors_decret: number;
   montant_total: number;
-  // Dîners non payés déjà retirés des heures (case « dîner » de la fiche).
+  // Dîners non payés déjà retirés des heures (case « dîner » de la fiche),
+  // au total et par semaine ; heures punchées avant le retrait.
   hours_diner?: number;
   diners?: number;
+  hours_diner_week_1?: number;
+  hours_diner_week_2?: number;
+  diners_week_1?: number;
+  diners_week_2?: number;
+  hours_brutes_week_1?: number;
+  hours_brutes_week_2?: number;
+  hours_brutes?: number;
 };
 
 type Report = {
@@ -50,6 +58,8 @@ type Report = {
   total_montant_hors_decret: number;
   total_montant: number;
   total_hours_diner?: number;
+  total_diners?: number;
+  total_hours_brutes?: number;
 };
 
 function fmtMoney(n: number): string {
@@ -115,6 +125,32 @@ function periodLabel(periodEnd: string): string {
   const fmt = (d: Date) =>
     d.toLocaleDateString("fr-CA", { day: "2-digit", month: "short" });
   return `Paie ${fmt(start)} → ${fmt(end)}`;
+}
+
+/** « dîners −X h (n) » sous un total d'heures payées ; rien sans dîner.
+ *  `brutes` = heures punchées avant le retrait (en infobulle). */
+function LigneDiner({
+  heures,
+  nombre,
+  brutes
+}: {
+  heures?: number;
+  nombre?: number;
+  brutes?: number;
+}) {
+  if (!heures) return null;
+  return (
+    <span
+      className="block text-[11px] font-normal text-amber-300"
+      title={
+        brutes != null
+          ? `${brutes.toFixed(2)} h punchées − ${heures.toFixed(2)} h de dîners = heures payées`
+          : "Dîners non payés déjà retirés des heures"
+      }
+    >
+      dîners −{heures.toFixed(2)} h{nombre ? ` (${nombre})` : ""}
+    </span>
+  );
 }
 
 export default function PaiePage() {
@@ -347,7 +383,12 @@ export default function PaiePage() {
                         {fmtDateShort(report.period_end)}
                       </span>
                     </th>
-                    <th className="px-3 py-2 text-right">Total</th>
+                    <th className="px-3 py-2 text-right">
+                      Total
+                      <span className="block text-[10px] font-normal normal-case text-white/60">
+                        heures payées, dîners retirés
+                      </span>
+                    </th>
                     <th className="px-3 py-2 text-right">
                       <span className="text-sky-300">CCQ</span>
                     </th>
@@ -381,18 +422,29 @@ export default function PaiePage() {
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums text-white/85">
                           {r.hours_week_1.toFixed(2)} h
+                          <LigneDiner
+                            heures={r.hours_diner_week_1}
+                            nombre={r.diners_week_1}
+                            brutes={r.hours_brutes_week_1}
+                          />
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums text-white/85">
                           {r.hours_week_2.toFixed(2)} h
+                          <LigneDiner
+                            heures={r.hours_diner_week_2}
+                            nombre={r.diners_week_2}
+                            brutes={r.hours_brutes_week_2}
+                          />
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums font-semibold text-white">
                           {r.total_hours.toFixed(2)} h
                           {r.hours_diner ? (
                             <span
                               className="block text-[11px] font-normal text-amber-300"
-                              title="Dîners non payés déjà retirés du total"
+                              title="Heures punchées moins les dîners non payés = total payé"
                             >
-                              dîners −{r.hours_diner.toFixed(2)} h
+                              {(r.hours_brutes ?? r.total_hours + r.hours_diner).toFixed(2)}{" "}
+                              h punchées · dîners −{r.hours_diner.toFixed(2)} h
                               {r.diners ? ` (${r.diners})` : ""}
                             </span>
                           ) : null}
@@ -436,18 +488,43 @@ export default function PaiePage() {
                           .reduce((s, r) => s + r.hours_week_1, 0)
                           .toFixed(2)}{" "}
                         h
+                        <LigneDiner
+                          heures={report.rows.reduce(
+                            (s, r) => s + (r.hours_diner_week_1 ?? 0),
+                            0
+                          )}
+                          nombre={report.rows.reduce(
+                            (s, r) => s + (r.diners_week_1 ?? 0),
+                            0
+                          )}
+                        />
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums text-white/70">
                         {report.rows
                           .reduce((s, r) => s + r.hours_week_2, 0)
                           .toFixed(2)}{" "}
                         h
+                        <LigneDiner
+                          heures={report.rows.reduce(
+                            (s, r) => s + (r.hours_diner_week_2 ?? 0),
+                            0
+                          )}
+                          nombre={report.rows.reduce(
+                            (s, r) => s + (r.diners_week_2 ?? 0),
+                            0
+                          )}
+                        />
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums font-bold text-white">
                         {report.total_hours.toFixed(2)} h
                         {report.total_hours_diner ? (
                           <span className="block text-[11px] font-normal text-amber-300">
-                            dîners −{report.total_hours_diner.toFixed(2)} h
+                            {(
+                              report.total_hours_brutes ??
+                              report.total_hours + report.total_hours_diner
+                            ).toFixed(2)}{" "}
+                            h punchées · dîners −{report.total_hours_diner.toFixed(2)} h
+                            {report.total_diners ? ` (${report.total_diners})` : ""}
                           </span>
                         ) : null}
                       </td>
@@ -482,8 +559,9 @@ export default function PaiePage() {
               <p className="text-[11px] text-white/70">
                 Format CSV : <span className="font-mono">nom_employe</span>,{" "}
                 <span className="font-mono">heures_semaine_1</span>,{" "}
-                <span className="font-mono">heures_semaine_2</span> — prêt
-                pour EmployeurD.
+                <span className="font-mono">heures_semaine_2</span> (heures à
+                payer, dîners déjà retirés) — prêt pour EmployeurD ; puis, par
+                semaine, les heures punchées et le dîner retiré.
               </p>
               <div className="flex flex-wrap gap-2">
                 <button

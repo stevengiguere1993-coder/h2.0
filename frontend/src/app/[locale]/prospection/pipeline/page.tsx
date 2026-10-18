@@ -5,6 +5,8 @@ import {
   ChevronDown,
   ChevronRight,
   Eye,
+  LayoutGrid,
+  List,
   Loader2,
   Plus,
   Trash2
@@ -18,6 +20,7 @@ import {
   type LeadAnalysisCardBadge
 } from "@/components/lead-analysis-card";
 import { Link, useRouter } from "@/i18n/navigation";
+import { PipelineVueListe } from "@/components/pipeline-vue-liste";
 import { useProspectionLayout } from "../layout";
 
 /**
@@ -44,6 +47,12 @@ import { useProspectionLayout } from "../layout";
  * (`deal.lead_analysis`, eager-loaded côté backend). Fallback
  * minimal (juste adresse + date) pour les deals créés manuellement
  * sans `lead_analysis_id`.
+ *
+ * Deux vues, mémorisées dans localStorage (`kratos-pipeline-vue`) :
+ *   - « Cartes » : les 3 sections ci-dessus avec drag & drop ;
+ *   - « Liste »  : un tableau à plat de toutes les acquisitions
+ *     (`PipelineVueListe`) — triable, filtrable, priorité modifiable
+ *     en ligne, compteurs de tâches et totaux.
  */
 
 type DealLeadAnalysis = {
@@ -65,7 +74,15 @@ type Deal = {
   lead_analysis: DealLeadAnalysis | null;
   created_at: string;
   updated_at: string;
+  // Compteurs de tâches calculés côté API (vue Liste).
+  nb_taches?: number;
+  nb_taches_ouvertes?: number;
+  nb_taches_en_retard?: number;
+  prochaine_echeance?: string | null;
 };
+
+type Vue = "cartes" | "liste";
+const VUE_STORAGE_KEY = "kratos-pipeline-vue";
 
 type SectionKey = "active" | "termine" | "abandonne";
 
@@ -125,6 +142,26 @@ export default function PipelineDealsListPage() {
   // Sections terminés / abandonnés repliées par défaut.
   const [openTermine, setOpenTermine] = useState(false);
   const [openAbandonne, setOpenAbandonne] = useState(false);
+
+  // Vue Cartes / Liste — lue après montage (pas au premier rendu, pour
+  // ne pas diverger du HTML serveur) et mémorisée par navigateur.
+  const [vue, setVue] = useState<Vue>("cartes");
+  useEffect(() => {
+    try {
+      const v = window.localStorage.getItem(VUE_STORAGE_KEY);
+      if (v === "liste" || v === "cartes") setVue(v);
+    } catch {
+      /* navigation privée */
+    }
+  }, []);
+  function changerVue(v: Vue) {
+    setVue(v);
+    try {
+      window.localStorage.setItem(VUE_STORAGE_KEY, v);
+    } catch {
+      /* navigation privée */
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -283,11 +320,29 @@ export default function PipelineDealsListPage() {
       />
 
       <div className="p-4 lg:p-6">
-        <header className="mb-4 flex items-center gap-3">
+        <header className="mb-4 flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-bold text-white">Pipeline</h1>
           <span className="badge badge-neutral">
             {deals.length} deal{deals.length > 1 ? "s" : ""}
           </span>
+          <div
+            className="ml-auto inline-flex rounded-lg border border-brand-800 bg-brand-900 p-0.5"
+            role="group"
+            aria-label="Vue du pipeline"
+          >
+            <VueButton
+              active={vue === "cartes"}
+              onClick={() => changerVue("cartes")}
+              icon={<LayoutGrid className="h-3.5 w-3.5" />}
+              label="Cartes"
+            />
+            <VueButton
+              active={vue === "liste"}
+              onClick={() => changerVue("liste")}
+              icon={<List className="h-3.5 w-3.5" />}
+              label="Liste"
+            />
+          </div>
         </header>
 
         <form
@@ -335,6 +390,17 @@ export default function PipelineDealsListPage() {
               commencer ton pipeline.
             </p>
           </div>
+        ) : vue === "liste" ? (
+          <PipelineVueListe
+            deals={deals}
+            onChangePriority={(id, priority) => {
+              const current = deals.find((d) => d.id === id);
+              if (current && current.priority !== priority) {
+                void patchDealPriority(id, priority);
+              }
+            }}
+            onDelete={deleteDeal}
+          />
         ) : (
           <div className="space-y-4">
             <PipelineSection
@@ -402,6 +468,36 @@ export default function PipelineDealsListPage() {
         )}
       </div>
     </>
+  );
+}
+
+/** Bouton de la bascule Cartes / Liste — même rendu que la bascule
+ * Tableau / Kanban du TaskBoard (classes statiques). */
+function VueButton({
+  active,
+  onClick,
+  icon,
+  label
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+        active
+          ? "bg-accent-500 text-brand-950 shadow"
+          : "border border-brand-700 bg-brand-950/40 text-white hover:bg-brand-950/70"
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 

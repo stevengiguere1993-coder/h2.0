@@ -302,6 +302,11 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     #: Liste d'achats de matériaux par projet (étape 3, 2026-09-25) —
     #: liste générique « projet_materiaux » + GET /projects/{id}/materiaux.
     "projet_materiaux",
+    #: Inventaire interne (2026-10-18) : articles en stock et mouvements
+    #: (entrées, comptes, sorties vers un projet) — listes génériques
+    #: « inventaire » / « inventaire_mouvements » + routes /inventaire.
+    "inventaire_articles",
+    "inventaire_mouvements",
     "soumission_items",
     "soumissions",
     "sous_traitant_timesheets",

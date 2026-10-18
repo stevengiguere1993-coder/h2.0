@@ -78,6 +78,8 @@ type Achat = {
   markup_percent: number | null;
   invoiced_at: string | null;
   facture_item_id: number | null;
+  // « inventaire » : sortie de l'inventaire interne, jamais dans QB.
+  kind?: string | null;
 };
 
 type Project = {
@@ -108,6 +110,35 @@ type BonMini = {
   status: string;
   project_id?: number | null;
 };
+
+// Facture QuickBooks FRACTIONNÉE (retour Steven 2026-10-06, « importer la
+// séparation de factures ») : les achats Kratos qui partagent la même
+// transaction QB (un par projet) et la part restée dans QuickBooks.
+type AchatPart = {
+  id: number;
+  project_id: number | null;
+  description: string | null;
+  total: number;
+  status: string;
+};
+type AchatParts = {
+  qbo_id: string | null;
+  qbo_doc_number: string | null;
+  qbo_total: number | null;
+  total_kratos: number;
+  reste_qb: number | null;
+  parts: AchatPart[];
+};
+
+function fmtMoney(n: number | null | undefined): string {
+  if (n == null) return "—";
+  return new Intl.NumberFormat("fr-CA", {
+    style: "currency",
+    currency: "CAD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(n);
+}
 
 const STATUS_LABELS: Record<string, string> = {
   received: "À payer",
@@ -202,6 +233,7 @@ export default function AchatDetailPage() {
   const [showFournisseurModal, setShowFournisseurModal] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [pendingReceipt, setPendingReceipt] = useState<File | null>(null);
+  const [parts, setParts] = useState<AchatParts | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -238,6 +270,16 @@ export default function AchatDetailPage() {
         const data = (await aRes.json()) as Achat;
         if (cancelled) return;
         setA(data);
+        // Parts de la même facture QuickBooks (best-effort).
+        if (data.qbo_bill_id || data.qbo_purchase_id) {
+          try {
+            const prRes = await authedFetch(`/api/v1/achats/${id}/parts`);
+            if (prRes.ok && !cancelled)
+              setParts((await prRes.json()) as AchatParts);
+          } catch {
+            /* best-effort */
+          }
+        }
         setProjectId(data.project_id ? String(data.project_id) : "");
         setFournisseurId(
           data.fournisseur_id ? String(data.fournisseur_id) : ""
@@ -478,17 +520,36 @@ export default function AchatDetailPage() {
 
   async function onDelete() {
     if (!a) return;
-    if (!(await confirm(`Supprimer l'achat ${a.reference} ?`))) return;
+    const inventaire = a.kind === "inventaire";
+    if (
+      !(await confirm(
+        inventaire
+          ? `Supprimer l'achat ${a.reference} ? La marchandise retourne dans l'inventaire interne.`
+          : `Supprimer l'achat ${a.reference} ?`
+      ))
+    )
+      return;
     setDeleting(true);
     try {
       const res = await authedFetch(`/api/v1/achats/${id}`, {
         method: "DELETE"
       });
-      if (!res.ok && res.status !== 204) throw new Error();
+      if (!res.ok && res.status !== 204) {
+        // Refus expliqué par le serveur (ex. sortie d'inventaire déjà
+        // refacturée sur une facture).
+        let detail = "";
+        try {
+          const j = (await res.json()) as { detail?: unknown };
+          if (typeof j.detail === "string") detail = j.detail;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail);
+      }
       router.replace("/app/achats");
-    } catch {
+    } catch (e) {
       setDeleting(false);
-      setError("Suppression échouée.");
+      setError((e as Error).message || "Suppression échouée.");
     }
   }
 
@@ -521,20 +582,32 @@ export default function AchatDetailPage() {
             <header className="mt-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <h1 className="text-2xl font-bold text-white">{a.reference}</h1>
               <div className="flex flex-wrap items-start gap-2">
-                <AchatQboPushButton
-                  achat={a}
-                  onSynced={(billId, docNumber) =>
-                    setA((prev) =>
-                      prev
-                        ? {
-                            ...prev,
-                            qbo_bill_id: billId,
-                            qbo_doc_number: docNumber
-                          }
-                        : prev
-                    )
-                  }
-                />
+                {a.kind === "inventaire" ? (
+                  // Sortie de l'inventaire interne : coût du projet dans
+                  // Kratos seulement (le stock est entré dans QB à son
+                  // achat) — aucun bouton d'envoi.
+                  <div
+                    className="inline-flex items-center gap-2 self-start rounded-lg border border-brand-700 bg-brand-950 px-3 py-2.5 text-sm font-medium text-white/80"
+                    title="Le stock est déjà dans QuickBooks depuis son achat ; cette sortie n'y est pas renvoyée."
+                  >
+                    Inventaire interne · hors QuickBooks
+                  </div>
+                ) : (
+                  <AchatQboPushButton
+                    achat={a}
+                    onSynced={(billId, docNumber) =>
+                      setA((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              qbo_bill_id: billId,
+                              qbo_doc_number: docNumber
+                            }
+                          : prev
+                      )
+                    }
+                  />
+                )}
                 <button
                   type="button"
                   onClick={onDelete}
@@ -743,6 +816,67 @@ export default function AchatDetailPage() {
                   </div>
                 </div>
               </section>
+
+              {parts && (parts.parts.length > 1 || parts.reste_qb != null) ? (
+                <section className="rounded-xl border border-sky-500/30 bg-brand-900 p-5">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Facture QuickBooks divisée
+                  </h2>
+                  <p className="mt-2 text-sm text-white/70">
+                    {parts.qbo_doc_number
+                      ? `Facture ${parts.qbo_doc_number} · `
+                      : ""}
+                    {parts.qbo_total != null
+                      ? `total dans QuickBooks ${fmtMoney(parts.qbo_total)} · `
+                      : ""}
+                    {parts.parts.length > 1
+                      ? `${parts.parts.length} parts dans Kratos, une par projet (${fmtMoney(parts.total_kratos)})`
+                      : `part du projet dans Kratos : ${fmtMoney(parts.total_kratos)}`}
+                    {parts.reste_qb != null
+                      ? ` · ${fmtMoney(parts.reste_qb)} hors projet, resté dans QuickBooks`
+                      : ""}
+                  </p>
+                  {parts.parts.length > 1 ? (
+                    <ul className="mt-3 divide-y divide-brand-800 text-sm">
+                      {parts.parts.map((p) => {
+                        const proj = p.project_id
+                          ? projects.find((x) => x.id === p.project_id)
+                          : undefined;
+                        return (
+                          <li
+                            key={p.id}
+                            className="flex items-center justify-between gap-3 py-2"
+                          >
+                            <span className="min-w-0">
+                              {p.id === a.id ? (
+                                <strong className="text-white">Cet achat</strong>
+                              ) : (
+                                <Link
+                                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                  href={`/app/achats/${p.id}` as any}
+                                  className="text-accent-500 underline decoration-dotted hover:text-accent-400"
+                                >
+                                  Achat #{p.id}
+                                </Link>
+                              )}
+                              <span className="ml-2 text-white/70">
+                                {proj
+                                  ? projectLabel(proj)
+                                  : p.project_id
+                                    ? `Projet #${p.project_id}`
+                                    : "Sans projet"}
+                              </span>
+                            </span>
+                            <span className="shrink-0 font-semibold text-white">
+                              {fmtMoney(p.total)}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : null}
+                </section>
+              ) : null}
 
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
