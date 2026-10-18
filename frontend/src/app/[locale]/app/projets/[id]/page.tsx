@@ -31,6 +31,7 @@ import { useConfirm } from "@/components/confirm-dialog";
 import { MultiSelectDropdown } from "@/components/multi-select-dropdown";
 import { ProjectHoursSection } from "@/components/project-hours-section";
 import { ProjectMateriauxTab } from "@/components/project-materiaux-tab";
+import { SortieInventaireModal } from "@/components/inventaire-interne";
 import {
   QboConnexionExpiree,
   estConnexionQboExpiree
@@ -6021,6 +6022,8 @@ type ProjectAchat = {
   status: string;
   payment_method: string | null;
   qbo_bill_id: string | null;
+  // « inventaire » : sortie de l'inventaire interne (jamais dans QB).
+  kind?: string | null;
 };
 
 type ProjectFournisseur = { id: number; name: string };
@@ -6072,6 +6075,10 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
   const [error, setError] = useState<string | null>(null);
   // Achat ciblé par le modal « marquer payé » (clic sur le badge « À payer »).
   const [payTarget, setPayTarget] = useState<MarkPaidAchat | null>(null);
+  // Sortie de l'inventaire interne vers ce projet (Steven 2026-10-18).
+  const [sortieInventaire, setSortieInventaire] = useState(false);
+  const [inventaireMsg, setInventaireMsg] = useState<string | null>(null);
+  const [rechargement, setRechargement] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -6105,7 +6112,7 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, rechargement]);
 
   const fournisseurById = useMemo(() => {
     const m = new Map<number, ProjectFournisseur>();
@@ -6272,14 +6279,29 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
                 💸 Achats / dépenses ({achats.length} · {fmt(achatHT)} +{" "}
                 {fmt(achatTaxes)} taxes = {fmt(achatTotal)})
               </h3>
-              <Link
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                href={`/app/achats/new?project_id=${projectId}` as any}
-                className="btn-secondary text-xs"
-              >
-                + Nouvel achat
-              </Link>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSortieInventaire(true)}
+                  className="btn-secondary text-xs"
+                  title="Sortir du matériel de l'inventaire interne et le charger à ce projet"
+                >
+                  + Depuis l&apos;inventaire
+                </button>
+                <Link
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  href={`/app/achats/new?project_id=${projectId}` as any}
+                  className="btn-secondary text-xs"
+                >
+                  + Nouvel achat
+                </Link>
+              </div>
             </header>
+            {inventaireMsg ? (
+              <p className="mb-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+                {inventaireMsg}
+              </p>
+            ) : null}
             {achats.length === 0 ? (
               <div className="empty-state">
                 Aucun achat enregistré pour ce projet.
@@ -6337,7 +6359,10 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
                             )}
                           </td>
                           <td className="px-3 py-2 text-white/80">
-                            {fr?.name || "—"}
+                            {fr?.name ||
+                              (a.kind === "inventaire"
+                                ? "Inventaire interne"
+                                : "—")}
                           </td>
                           <td className="px-3 py-2 text-white/70">
                             <span className="line-clamp-1">
@@ -6346,7 +6371,11 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
                           </td>
                           <td className="px-3 py-2 text-[11px] text-white/60">
                             {ACHAT_PAYMENT_LABEL[a.payment_method || ""] ||
-                              (a.payment_method ? a.payment_method : "—")}
+                              (a.payment_method
+                                ? a.payment_method
+                                : a.kind === "inventaire"
+                                  ? "Stock"
+                                  : "—")}
                           </td>
                           <td className="px-3 py-2 text-right font-semibold text-white">
                             {fmt(amt)}
@@ -6388,6 +6417,13 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
                               <span className="text-xs text-emerald-400">
                                 ✓
                               </span>
+                            ) : a.kind === "inventaire" ? (
+                              <span
+                                className="text-[11px] text-white/60"
+                                title="Sortie de l'inventaire interne : le stock est déjà dans QuickBooks depuis son achat"
+                              >
+                                hors QB
+                              </span>
                             ) : (
                               <span className="text-xs text-white/30">
                                 —
@@ -6404,6 +6440,21 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
           </section>
         </>
       )}
+      {sortieInventaire ? (
+        <SortieInventaireModal
+          projectId={projectId}
+          onClose={() => setSortieInventaire(false)}
+          onDone={(r) => {
+            setSortieInventaire(false);
+            setInventaireMsg(
+              `${r.article.name} : ${fmt(r.montant)} chargés au projet${
+                r.is_billable ? " (à refacturer)" : ""
+              }.`
+            );
+            setRechargement((n) => n + 1);
+          }}
+        />
+      ) : null}
       {payTarget ? (
         <AchatMarkPaidModal
           achat={payTarget}

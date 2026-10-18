@@ -8,6 +8,7 @@ import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { MateriauxCatalogue } from "@/components/materiaux-catalogue";
+import { InventaireInterne } from "@/components/inventaire-interne";
 
 type Template = {
   id: number;
@@ -32,11 +33,16 @@ type TemplateItem = {
 
 export default function ServicesCataloguePage() {
   // Onglets : Services (modèles de soumission) | Matériaux (prix par
-  // magasin, retour 2026-09-25). Onglet mémorisé dans l'URL (#materiaux).
-  const [tab, setTab] = useState<"services" | "materiaux">(() =>
-    typeof window !== "undefined" && window.location.hash === "#materiaux"
-      ? "materiaux"
-      : "services"
+  // magasin, retour 2026-09-25) | Inventaire (stock interne chargé aux
+  // projets, 2026-10-18). Onglet mémorisé dans l'URL (#materiaux,
+  // #inventaire).
+  const [tab, setTab] = useState<"services" | "materiaux" | "inventaire">(
+    () => {
+      if (typeof window === "undefined") return "services";
+      if (window.location.hash === "#materiaux") return "materiaux";
+      if (window.location.hash === "#inventaire") return "inventaire";
+      return "services";
+    }
   );
   const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
@@ -209,7 +215,8 @@ export default function ServicesCataloguePage() {
           {(
             [
               ["services", "Services"],
-              ["materiaux", "Matériaux"]
+              ["materiaux", "Matériaux"],
+              ["inventaire", "Inventaire"]
             ] as const
           ).map(([key, label]) => (
             <button
@@ -221,7 +228,7 @@ export default function ServicesCataloguePage() {
                   window.history.replaceState(
                     null,
                     "",
-                    key === "materiaux" ? "#materiaux" : " "
+                    key === "services" ? " " : `#${key}`
                   );
                 }
               }}
@@ -237,7 +244,8 @@ export default function ServicesCataloguePage() {
         </div>
 
         {tab === "materiaux" ? <MateriauxCatalogue /> : null}
-        <div className={tab === "materiaux" ? "hidden" : ""}>
+        {tab === "inventaire" ? <InventaireInterne /> : null}
+        <div className={tab !== "services" ? "hidden" : ""}>
         {error ? (
           <p className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
             {error}
