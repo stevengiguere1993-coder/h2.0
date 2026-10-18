@@ -633,7 +633,8 @@ class VoiceRoutingRule(Base):
       personnelles (``VoiceUserCallHours``). À décocher pour une urgence.
     - ``targets_json`` : liste JSON ordonnée de cibles
       ``{"kind": "user", "user_id": 5}``,
-      ``{"kind": "project_responsible"}``, ``{"kind": "project_members"}``,
+      ``{"kind": "project_responsible"}`` (responsable du chantier, sinon
+      du dossier CRM de l'appelant), ``{"kind": "project_members"}``,
       ``{"kind": "immeuble_urgence"}``, ``{"kind": "line_default"}``,
       ``{"kind": "e164", "e164": "+1438…", "label": "Bureau"}``.
       Les cibles « dynamiques » sont résolues à l'appel (responsable du
@@ -653,8 +654,10 @@ class VoiceRoutingRule(Base):
         index=True,
     )
     subject: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    # CASCADE (pas SET NULL) : une règle de chantier dont le projet est
+    # supprimé ne doit pas devenir la règle générale du sujet.
     project_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("projects.id", ondelete="SET NULL"),
+        ForeignKey("projects.id", ondelete="CASCADE"),
         nullable=True,
         index=True,
     )

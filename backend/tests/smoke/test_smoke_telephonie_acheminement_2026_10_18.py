@@ -17,6 +17,9 @@ Couvre, sans réseau (SQLite, Twilio remplacé par un double) :
    de suite, l'étape suivante part quand toutes les jambes de l'étape
    courante ont échoué (webhook ``/twilio/queue-agent-status``), et la
    boîte vocale ne vient qu'après la dernière étape.
+5. Appelant SANS chantier (lead web assigné) : la cible « responsable »
+   devient le responsable de son dossier CRM, et un téléphone de fiche
+   Employe saisi « 514-555-0188 » part en E.164 vers Twilio.
 """
 
 from __future__ import annotations
@@ -34,6 +37,8 @@ from app.integrations.voice.routing import (
     filter_users_available_now,
     is_user_available_now,
 )
+from app.models.contact_request import ContactRequest
+from app.models.employe import Employe
 from app.models.project import Project
 from app.models.user import User
 from app.models.voice import Call, PhoneNumber, VoiceRoutingRule, VoiceUserCallHours
@@ -302,7 +307,7 @@ def test_regles_acheminement_admin(
     assert rule["mode"] == "cascade" and rule["step_timeout_sec"] == 15
     assert rule["respect_hours"] is True and rule["active"] is True
     assert [t["kind"] for t in rule["targets"]] == ["project_responsible", "user", "e164"]
-    assert rule["targets"][0]["display"] == "Responsable du chantier"
+    assert rule["targets"][0]["display"] == "Responsable du chantier / du dossier"
     assert rule["targets"][1]["user_id"] == admin_id
     assert rule["targets"][2]["e164"] == OFFICE_E164
     assert rule["targets"][2]["display"] == f"Bureau ({OFFICE_E164})"
@@ -329,7 +334,7 @@ def test_regles_acheminement_admin(
     plan = apercu["plan"]
     assert plan["mode"] == "cascade" and plan["step_timeout_sec"] == 15
     cibles = plan["targets"]
-    assert cibles[0]["skipped"] == "aucun chantier reconnu pour cet appel"
+    assert cibles[0]["skipped"] == "dépend de l'appelant (chantier ou dossier)"
     assert cibles[1]["skipped"] == "aucun téléphone dans son profil"
     assert cibles[2]["skipped"] is None and cibles[2]["destinations"] == [OFFICE_E164]
     assert plan["steps"] == [[OFFICE_E164]]
@@ -638,3 +643,79 @@ def test_cascade_file_attente(client, run, monkeypatch, acheminement_seed):
     # Un statut tardif n'origine plus rien et ne redirige pas deux fois.
     _statut("CA-jambe-4", "completed")
     assert len(faux.jambes) == 4 and len(faux.redirections) == 1
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 4) Responsable du DOSSIER (appelant sans chantier) + numéro normalisé
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_responsable_du_dossier_sans_chantier(run, monkeypatch, admin_id, acheminement_seed):
+    faux = _FauxTwilio()
+    monkeypatch.setattr(voice_ep, "_twilio_provider", lambda: faux)
+
+    async def _scenario() -> dict:
+        async with TestSessionLocal() as db:
+            admin = await db.get(User, admin_id)
+            # Téléphone de l'admin seulement sur sa fiche Employe, saisi
+            # avec des tirets.
+            db.add(Employe(full_name="Admin smoke 19", email=admin.email, phone="514-555-0188"))
+            lead = ContactRequest(
+                name="Lead smoke 19",
+                email="lead-smoke-19@example.com",
+                message="Soumission cuisine",
+                assigned_to_user_id=admin_id,
+            )
+            db.add(lead)
+            await db.flush()
+            call = Call(
+                phone_number_id=acheminement_seed["phone_number_id"],
+                provider_sid="CA-parent-smoke-19-lead",
+                direction="inbound",
+                status="in-progress",
+                from_e164="+15145550001",
+                to_e164=LINE_E164,
+                lang="fr-CA",
+                entity_type="contact_request",
+                entity_id=lead.id,
+            )
+            rule = VoiceRoutingRule(
+                subject="nouveau_client",
+                mode="cascade",
+                step_timeout_sec=20,
+                respect_hours=True,
+                priority=0,
+                active=True,
+                targets_json=json.dumps(
+                    [{"kind": "project_responsible"}, {"kind": "e164", "e164": OFFICE_E164}]
+                ),
+            )
+            db.add_all([call, rule])
+            await db.flush()
+
+            plan = await voice_ep._resolve_rule_plan(db, rule=rule, project=None, call=call)
+            twiml = await voice_ep._rule_transfer_twiml(
+                db, faux, call=call, subject="nouveau_client", project=None,
+                say="Je vous transfère.", lang="fr-CA",
+            )
+            out = {
+                "plan": plan.as_dict(),
+                "twiml": twiml or "",
+                "forwarded": call.forwarded_to_e164,
+            }
+            await db.rollback()
+            return out
+
+    out = run(_scenario())
+    cible = out["plan"]["targets"][0]
+    assert cible["skipped"] is None, cible
+    assert cible["user_id"] == admin_id
+    assert cible["label"].startswith("Responsable du dossier : ")
+    assert cible["destinations"] == ["+15145550188"]
+    assert out["plan"]["steps"] == [["+15145550188"], [OFFICE_E164]]
+    # La règle est appliquée : file d'attente + 1re étape vers le
+    # responsable du dossier, en E.164.
+    assert "<Enqueue" in out["twiml"]
+    assert "enregistré" in out["twiml"]  # consentement Loi 25
+    assert faux.jambes[-1]["to"] == "+15145550188"
+    assert out["forwarded"] and len(out["forwarded"]) <= 20

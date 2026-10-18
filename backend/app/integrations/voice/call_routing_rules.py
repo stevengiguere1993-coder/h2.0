@@ -76,8 +76,10 @@ SUBJECT_LABELS: Dict[str, str] = {s[0]: s[1] for s in SUBJECTS}
 TARGET_KINDS: tuple[tuple[str, str, str], ...] = (
     (
         "project_responsible",
-        "Responsable du chantier",
-        "Le responsable désigné du projet de l'appelant, au moment de l'appel.",
+        "Responsable du chantier / du dossier",
+        "Le responsable désigné du chantier de l'appelant au moment de "
+        "l'appel ; sans chantier, la personne assignée à son dossier dans le "
+        "CRM (lead, client).",
     ),
     (
         "project_members",

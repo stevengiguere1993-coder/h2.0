@@ -774,52 +774,66 @@ async def _available_online_user_ids(db) -> List[int]:
     return await _available_user_ids(db, await list_online_user_ids(db))
 
 
-async def _find_responsible_for_call(
-    db, call: "Call"
-) -> tuple[Optional[int], Optional[str]]:
-    """Renvoie (user_id, téléphone) du **responsable du dossier** de
-    l'appelant identifié — la personne à qui l'appel doit être référé :
+async def _dossier_responsible_uid(
+    db, call: "Call", *, project=None
+) -> Optional[int]:
+    """user_id du **responsable du dossier** de l'appelant identifié, sans
+    regarder ses heures d'appel :
 
       1. le responsable désigné du projet actif (`responsible_user_id`) ;
       2. à défaut, l'utilisateur assigné à la demande CRM
          (`contact_request.assigned_to_user_id`) — directement pour un
          lead web, via `client.contact_request_id` pour un client.
 
+    ``project`` : projet déjà trouvé pour l'appel (évite une 2e lecture).
+    None si l'appelant n'a pas de dossier ou pas de responsable."""
+    if project is None:
+        project = await _find_project_for_call(db, call)
+    uid: Optional[int] = None
+    if project is not None:
+        uid = getattr(project, "responsible_user_id", None)
+    if not uid and call.entity_id:
+        from app.models.contact_request import ContactRequest
+
+        cr_id: Optional[int] = None
+        if call.entity_type == "contact_request":
+            cr_id = int(call.entity_id)
+        elif call.entity_type == "client":
+            from app.models.client import Client
+
+            cli = (
+                await db.execute(
+                    select(Client.contact_request_id).where(
+                        Client.id == call.entity_id
+                    )
+                )
+            ).first()
+            if cli and cli[0]:
+                cr_id = int(cli[0])
+        if cr_id:
+            row = (
+                await db.execute(
+                    select(ContactRequest.assigned_to_user_id).where(
+                        ContactRequest.id == cr_id
+                    )
+                )
+            ).first()
+            if row and row[0]:
+                uid = int(row[0])
+    return int(uid) if uid else None
+
+
+async def _find_responsible_for_call(
+    db, call: "Call"
+) -> tuple[Optional[int], Optional[str]]:
+    """Renvoie (user_id, téléphone) du **responsable du dossier** de
+    l'appelant identifié (cf. ``_dossier_responsible_uid``) — la personne
+    à qui l'appel doit être référé.
+
     (None, None) si l'appelant n'a pas de dossier ou pas de responsable.
     """
-    uid: Optional[int] = None
     try:
-        project = await _find_project_for_call(db, call)
-        if project is not None:
-            uid = getattr(project, "responsible_user_id", None)
-        if not uid and call.entity_id:
-            from app.models.contact_request import ContactRequest
-
-            cr_id: Optional[int] = None
-            if call.entity_type == "contact_request":
-                cr_id = int(call.entity_id)
-            elif call.entity_type == "client":
-                from app.models.client import Client
-
-                cli = (
-                    await db.execute(
-                        select(Client.contact_request_id).where(
-                            Client.id == call.entity_id
-                        )
-                    )
-                ).first()
-                if cli and cli[0]:
-                    cr_id = int(cli[0])
-            if cr_id:
-                row = (
-                    await db.execute(
-                        select(ContactRequest.assigned_to_user_id).where(
-                            ContactRequest.id == cr_id
-                        )
-                    )
-                ).first()
-                if row and row[0]:
-                    uid = int(row[0])
+        uid = await _dossier_responsible_uid(db, call)
     except Exception:  # noqa: BLE001
         log.warning("_find_responsible_for_call failed", exc_info=True)
         return None, None
@@ -1533,11 +1547,18 @@ async def _resolve_rule_plan(
             return t
         if uid in online:
             t.destinations.append(f"client:{client_identity_for_user(uid)}")
-        phone = await _phone_for_user_id(db, uid)
+        # La fiche Employe peut porter « 514-555-0123 » : l'API REST de
+        # Twilio veut du E.164.
+        raw_phone = await _phone_for_user_id(db, uid)
+        phone = _normalize_e164(raw_phone or "")
         if phone:
             t.destinations.append(phone)
         if not t.destinations:
-            t.skipped = "aucun téléphone dans son profil"
+            t.skipped = (
+                "téléphone invalide dans son profil"
+                if raw_phone
+                else "aucun téléphone dans son profil"
+            )
         return t
 
     for raw in loads_targets(rule.targets_json):
@@ -1551,22 +1572,36 @@ async def _resolve_rule_plan(
                 await _user_target(uid, kind="user", label=raw.get("label"))
             )
         elif kind == "project_responsible":
+            # Responsable du chantier de l'appelant ; sans chantier (ou
+            # chantier sans responsable), la personne assignée à son
+            # dossier dans le CRM (lead web, client).
             resp_uid = getattr(project, "responsible_user_id", None) if project else None
+            prefix = "Responsable du chantier"
+            if not resp_uid and call is not None:
+                try:
+                    resp_uid = await _dossier_responsible_uid(
+                        db, call, project=project
+                    )
+                except Exception:  # noqa: BLE001
+                    resp_uid = None
+                prefix = "Responsable du dossier"
             if not resp_uid:
+                if project is not None:
+                    reason = "aucun responsable désigné sur ce chantier"
+                elif call is None:
+                    reason = "dépend de l'appelant (chantier ou dossier)"
+                else:
+                    reason = "aucun chantier ni dossier avec un responsable pour cet appelant"
                 plan.targets.append(
                     PlannedTarget(
                         kind=kind,
-                        label="Responsable du chantier",
-                        skipped=(
-                            "aucun chantier reconnu pour cet appel"
-                            if project is None
-                            else "aucun responsable désigné sur ce chantier"
-                        ),
+                        label="Responsable du chantier / du dossier",
+                        skipped=reason,
                     )
                 )
             else:
                 t = await _user_target(int(resp_uid), kind=kind)
-                t.label = f"Responsable du chantier : {t.label}"
+                t.label = f"{prefix} : {t.label}"
                 plan.targets.append(t)
         elif kind == "project_members":
             t = PlannedTarget(kind=kind, label="Membres du projet")
@@ -2062,14 +2097,20 @@ async def _twilio_incoming_call_impl(request: Request, db: DBSession) -> Respons
     ):
         # Règle d'acheminement « suivi de chantier » (règle du chantier du
         # client, sinon règle générale) : liste ordonnée, heures d'appel
-        # personnelles respectées. Sans règle → responsable du dossier.
+        # personnelles respectées. Seulement si un chantier est reconnu :
+        # un client sans chantier garde son responsable CRM, sinon Léa.
+        # Sans règle → responsable du dossier.
         try:
             _project = await _find_project_for_call(db, existing)
         except Exception:  # noqa: BLE001
             _project = None
-        rule_twiml = await _rule_transfer_twiml(
-            db, provider, call=existing, subject="suivi_projet",
-            project=_project, say=_DIRECT_TRANSFER_SAY, lang="fr-CA",
+        rule_twiml = (
+            await _rule_transfer_twiml(
+                db, provider, call=existing, subject="suivi_projet",
+                project=_project, say=_DIRECT_TRANSFER_SAY, lang="fr-CA",
+            )
+            if _project is not None
+            else None
         )
         if rule_twiml:
             existing.intent = "suivi_projet"
@@ -2641,7 +2682,9 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
         project = await _find_project_for_call(db, call)
         if project is not None:
             rule_subject = "suivi_projet"
-        elif identified.kind in (CallerKind.CLIENT, CallerKind.LOCATAIRE):
+        elif identified.kind in (
+            CallerKind.CLIENT, CallerKind.LOCATAIRE, CallerKind.CONTACT
+        ):
             rule_subject = "general"
         else:
             rule_subject = "nouveau_client"
