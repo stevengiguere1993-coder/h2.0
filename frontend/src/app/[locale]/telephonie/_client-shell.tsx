@@ -21,7 +21,6 @@ export type TelephonieSection =
   | "numeros"
   | "filtres"
   | "heures"
-  | "acheminement"
   | "acquisition"
   | "automatisations";
 
@@ -108,7 +107,6 @@ export function TelephonieClientShell({
           onSignOut={signOut}
           section={section}
           showAcquisition={user.role === "owner" || user.role === "admin"}
-          showRouting={user.role === "owner" || user.role === "admin"}
           onSectionChange={(s) => {
             setSection(s);
             setSidebarOpen(false);

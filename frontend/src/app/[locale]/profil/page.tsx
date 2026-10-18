@@ -18,7 +18,6 @@ import { useCurrentUser } from "@/hooks/use-current-user";
 import { Link } from "@/i18n/navigation";
 import { KratosLogo } from "@/components/kratos-logo";
 import { PushNotificationsToggle } from "@/components/push-notifications-toggle";
-import { MyCallHoursCard } from "@/components/telephonie/call-hours-editor";
 import {
   PROFILE_COLORS,
   PROFILE_COLOR_SWATCH as PROFILE_SWATCH_CLS,
@@ -30,7 +29,6 @@ import {
  * volets. Permet à l'utilisateur de :
  *   - mettre à jour son prénom + nom,
  *   - uploader / changer / retirer sa photo de profil,
- *   - choisir ses heures d'appel (quand un appel transféré peut sonner),
  *   - changer son mot de passe (formulaire intégré).
  */
 export default function ProfilePage() {
@@ -432,9 +430,6 @@ export default function ProfilePage() {
           </button>
         </form>
       </section>
-
-      {/* Heures d'appel personnelles (téléphonie, bug 19). */}
-      <MyCallHoursCard />
 
       {/* Couleur de profil */}
       <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">

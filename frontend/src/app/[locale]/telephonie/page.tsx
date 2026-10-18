@@ -36,7 +36,6 @@ import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { useTelephonieLayout } from "./_client-shell";
 import { AcquisitionPanel } from "@/components/communications/acquisition-panel";
 import { AutomationsPanel } from "@/components/communications/automations-panel";
-import { RoutingPanel } from "@/components/telephonie/routing-panel";
 
 // Volet « Téléphonie / Secrétaire d'appels » — interface premium.
 //
@@ -46,8 +45,6 @@ import { RoutingPanel } from "@/components/telephonie/routing-panel";
 //   3. Numéros — toggles secrétaire / rappel auto / forward / état
 //   4. Filtres — blocklist + VIP whitelist
 //   5. Heures — plages d'ouverture hebdomadaires
-//   6. Acheminement (admins) — qui sonne selon le sujet de l'appel,
-//      règles par chantier, heures d'appel personnelles de l'équipe
 //
 // Accès géré par capacité (Paramètres → Permissions) : rôle owner/admin
 // ou capacité `telephonie.access` — plus de liste d'emails en dur (P-05d).
@@ -526,8 +523,6 @@ export default function TelephonieHome() {
             onSave={saveHours}
           />
         ) : null}
-
-        {section === "acheminement" ? <RoutingPanel /> : null}
 
         {section === "acquisition" ? <AcquisitionPanel /> : null}
         {section === "automatisations" ? <AutomationsPanel /> : null}
