@@ -537,6 +537,13 @@ class BailBase(BaseModel):
     parallele_locateur_courriel: Optional[str] = Field(default=None, max_length=320)
     parallele_locateur_telephone: Optional[str] = Field(default=None, max_length=32)
     parallele_note: Optional[str] = None
+    #: Rabais sur les premiers mois (bug 10, 2026-10-18) : montant retiré
+    #: chaque mois pendant N mois à partir de ``rabais_debut`` (défaut :
+    #: mois du début du bail). Le loyer mensuel reste le loyer PLEIN.
+    rabais_mensuel: Optional[float] = Field(default=None, ge=0)
+    rabais_nb_mois: Optional[int] = Field(default=None, ge=1, le=36)
+    rabais_debut: Optional[date] = None
+    rabais_motif: Optional[str] = Field(default=None, max_length=255)
 
     @field_validator("jour_echeance")
     @classmethod
@@ -589,6 +596,12 @@ class BailUpdate(BaseModel):
     parallele_locateur_courriel: Optional[str] = Field(default=None, max_length=320)
     parallele_locateur_telephone: Optional[str] = Field(default=None, max_length=32)
     parallele_note: Optional[str] = None
+    #: Rabais sur les premiers mois : null explicite sur ``rabais_mensuel``
+    #: (ou ``rabais_nb_mois``) retire le rabais et ses crédits.
+    rabais_mensuel: Optional[float] = Field(default=None, ge=0)
+    rabais_nb_mois: Optional[int] = Field(default=None, ge=1, le=36)
+    rabais_debut: Optional[date] = None
+    rabais_motif: Optional[str] = Field(default=None, max_length=255)
 
     @field_validator("jour_echeance")
     @classmethod
@@ -797,11 +810,29 @@ class PaiementLoyerCreate(PaiementLoyerBase):
     pass
 
 
+class PaiementLoyerUpdate(BaseModel):
+    """Correction EN PLACE d'un versement (bugs 4 à 6, 2026-10-18) :
+    montant, date, méthode, référence, note, mois visé, et le marqueur
+    « en retard » (mvilliard : « je ne peux dire qu'ils ne sont pas en
+    retard »). Les champs absents ne bougent pas."""
+
+    montant: Optional[float] = Field(default=None, gt=0)
+    paye_le: Optional[date] = None
+    methode: Optional[str] = Field(default=None, max_length=32)
+    reference: Optional[str] = Field(default=None, max_length=128)
+    notes: Optional[str] = None
+    mois_couvert: Optional[date] = None
+    en_retard: Optional[bool] = None
+
+
 class PaiementLoyerRead(PaiementLoyerBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     en_retard: bool
     created_at: datetime
+    cree_par: Optional[str] = None
+    modifie_par: Optional[str] = None
+    modifie_le: Optional[datetime] = None
 
 
 # ─── Maintenance ────────────────────────────────────────────────────────
@@ -914,6 +945,11 @@ class DossierBail(BaseModel):
     au_mois: Optional[bool] = None
     #: Jour d'échéance du loyer (affiché « payable le X » si ≠ 1).
     jour_echeance: Optional[int] = None
+    #: Rabais sur les premiers mois (bug 10).
+    rabais_mensuel: Optional[float] = None
+    rabais_nb_mois: Optional[int] = None
+    rabais_debut: Optional[date] = None
+    rabais_motif: Optional[str] = None
     #: Départ acté (« Mettre fin au bail », remplacement…).
     depart_declare_le: Optional[date] = None
     #: SOLDE DÛ sur ce bail (loyers échus bornés à sa fin + frais −
@@ -930,6 +966,13 @@ class DossierPaiement(BaseModel):
     paye_le: Optional[date] = None
     methode: Optional[str] = None
     en_retard: bool = False
+    reference: Optional[str] = None
+    notes: Optional[str] = None
+    #: Trace : saisi par / corrigé par (fiche locataire, bugs 4 à 6).
+    cree_par: Optional[str] = None
+    modifie_par: Optional[str] = None
+    modifie_le: Optional[datetime] = None
+    created_at: Optional[datetime] = None
 
 
 class LocataireCommunicationCreate(BaseModel):
@@ -968,12 +1011,29 @@ class DossierRenouvellement(BaseModel):
     document_id: Optional[int] = None
 
 
+class DossierFrais(BaseModel):
+    """Ligne du mois d'un bail (frais, crédit, rabais du bail, loyer dû
+    fixé à la main) — visible dans l'historique du locataire à côté des
+    versements (bug 10 : le rabais doit se voir dans l'historique)."""
+
+    id: int
+    bail_id: int
+    mois_couvert: date
+    montant: float
+    libelle: str
+    #: NULL = saisi à la main ; « rabais_bail » ; « ajustement_mois ».
+    origine: Optional[str] = None
+
+
 class LocataireDossier(BaseModel):
     """Vue 360 d'un locataire : baux, historique de paiements, agrégats."""
 
     locataire: LocataireRead
     baux: List[DossierBail] = Field(default_factory=list)
     paiements: List[DossierPaiement] = Field(default_factory=list)
+    #: Frais, crédits, rabais et ajustements des mois (même borne que les
+    #: paiements : démarrage du pôle).
+    frais: List[DossierFrais] = Field(default_factory=list)
     renouvellements: List[DossierRenouvellement] = Field(default_factory=list)
     communications: List[LocataireCommunicationRead] = Field(
         default_factory=list
@@ -1018,6 +1078,11 @@ class LogementDossierBail(BaseModel):
     au_mois: Optional[bool] = None
     #: Jour d'échéance du loyer (affiché « payable le X » si ≠ 1).
     jour_echeance: Optional[int] = None
+    #: Rabais sur les premiers mois (bug 10) — modifiable depuis la fiche.
+    rabais_mensuel: Optional[float] = None
+    rabais_nb_mois: Optional[int] = None
+    rabais_debut: Optional[date] = None
+    rabais_motif: Optional[str] = None
     #: Départ acté (« Mettre fin au bail », remplacement…).
     depart_declare_le: Optional[date] = None
     #: SOLDE DÛ sur ce bail (≥ 0) : la trace d'un ANCIEN locataire dans
