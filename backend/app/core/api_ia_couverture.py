@@ -327,6 +327,10 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "timesheet_task_lines",
     #: Compagnies assignées à un employé — GET /timesheets/user-companies.
     "timesheet_user_companies",
+    #: Punch de la feuille de temps (bug 16, 2026-10-18) — punch en cours
+    #: par GET /timesheets/punch (et dans GET /entreprises/employes) ; une
+    #: fois arrêté, ses heures sont une ligne de la feuille (« taches »).
+    "timesheet_punches",
     "timesheet_user_rates",
     "timesheets",
     "user_ai_briefs",

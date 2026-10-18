@@ -1279,6 +1279,7 @@ async def ensure_timesheet_tables() -> None:
             Timesheet,
             TimesheetCompany,
             TimesheetEntry,
+            TimesheetPunch,
             TimesheetReglement,
             TimesheetTaskLine,
             TimesheetUserCompany,
@@ -1293,6 +1294,7 @@ async def ensure_timesheet_tables() -> None:
             TimesheetReglement.__table__,
             TimesheetTaskLine.__table__,
             TimesheetUserCompany.__table__,
+            TimesheetPunch.__table__,
         ]
         async with engine.begin() as conn:
             await conn.run_sync(
