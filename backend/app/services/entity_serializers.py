@@ -943,6 +943,62 @@ def serialize_projet_materiau(obj: Any, level: str = "summary") -> dict:
     return data
 
 
+def serialize_inventaire_article(obj: Any, level: str = "summary") -> dict:
+    """Article de l'INVENTAIRE INTERNE (pôle Construction, 2026-10-18) :
+    stock en main, coût unitaire moyen HT (ce qu'une sortie charge au
+    projet) et valeur du stock."""
+    qte = _num(_get(obj, "quantite")) or 0.0
+    cout = _num(_get(obj, "cout_unitaire"))
+    unite = _str(_get(obj, "unit"))
+    data: dict[str, Any] = {
+        "entity_type": "inventaire_article",
+        "id": _get(obj, "id"),
+        "label": _str(_get(obj, "name")),
+        "name": _str(_get(obj, "name")),
+        "pole": "construction",
+        "categorie": _str(_get(obj, "categorie")),
+        "unit": unite,
+        "quantite": qte,
+        "cout_unitaire": cout,
+        "valeur": (round(qte * cout, 2) if cout is not None else None),
+        "is_active": bool(getattr(obj, "is_active", True)),
+        "updated_at": _iso(_get(obj, "updated_at")),
+    }
+    if level in ("detail", "full"):
+        data["notes"] = _str(_get(obj, "notes"))
+        data["created_at"] = _iso(_get(obj, "created_at"))
+    return _drop_none(data)
+
+
+def serialize_inventaire_mouvement(obj: Any, level: str = "summary") -> dict:
+    """Mouvement de l'inventaire interne : entrée, ajustement de compte ou
+    SORTIE vers un projet (quantité signée, coût unitaire HT). Une sortie
+    porte l'achat « Inventaire interne » créé sur le projet (achat_id)."""
+    art = getattr(obj, "article", None)
+    nom = _str(getattr(art, "name", None)) or f"Article {_get(obj, 'article_id')}"
+    qte = _num(_get(obj, "quantite")) or 0.0
+    cout = _num(_get(obj, "cout_unitaire"))
+    data: dict[str, Any] = {
+        "entity_type": "inventaire_mouvement",
+        "id": _get(obj, "id"),
+        "label": f"{_str(_get(obj, 'type')) or 'mouvement'} — {nom} {qte:+g}",
+        "pole": "construction",
+        "type": _str(_get(obj, "type")),
+        "article_id": _get(obj, "article_id"),
+        "article_name": nom,
+        "quantite": qte,
+        "cout_unitaire": cout,
+        "montant": (round(abs(qte) * cout, 2) if cout is not None else None),
+        "project_id": _get(obj, "project_id"),
+        "achat_id": _get(obj, "achat_id"),
+        "created_at": _iso(_get(obj, "created_at")),
+    }
+    if level in ("detail", "full"):
+        data["note"] = _str(_get(obj, "note"))
+        data["created_by_user_id"] = _get(obj, "created_by_user_id")
+    return _drop_none(data)
+
+
 def serialize_lot_paiement(obj: Any, level: str = "summary") -> dict:
     """Lot de paiements fournisseurs (Comptabilité → Paiements), par dépôt
     direct ou virements Interac (``mode``). Jamais de coordonnées de
@@ -1133,6 +1189,8 @@ SERIALIZERS: dict[str, Callable[..., dict]] = {
     "project": serialize_project,
     "materiau": serialize_materiau,
     "projet_materiau": serialize_projet_materiau,
+    "inventaire_article": serialize_inventaire_article,
+    "inventaire_mouvement": serialize_inventaire_mouvement,
     "entreprise": serialize_entreprise,
     "imm_tal_dossier": serialize_imm_tal_dossier,
     "imm_locataire_contact": serialize_imm_locataire_contact,

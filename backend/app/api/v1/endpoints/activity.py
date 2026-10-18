@@ -52,6 +52,7 @@ from app.models.immobilier import ImmLocataireContact, ImmTalDossier, ImmeubleCo
 from app.models.tal_bail import TalTransmission
 from app.models.financement import Financement
 from app.models.project import Project
+from app.models.inventaire import InventaireArticle, InventaireMouvement
 from app.models.materiau import Materiau
 from app.models.projet_materiau import ProjetMateriau
 from app.models.project_task import ProjectTask
@@ -1557,6 +1558,16 @@ _DETAIL_ENTITIES: dict[str, tuple] = {
         ProjetMateriau, "construction", "projet_materiau",
         "construction:materiaux:list",
     ),
+    # Inventaire interne (2026-10-18) : articles en stock et mouvements
+    # (entrées, comptes, sorties vers un projet).
+    "inventaire_article": (
+        InventaireArticle, "construction", "inventaire_article",
+        "construction:inventaire:list",
+    ),
+    "inventaire_mouvement": (
+        InventaireMouvement, "construction", "inventaire_mouvement",
+        "construction:inventaire:list",
+    ),
     "soumission": (
         DevlogSoumission, "devlog", "devlog_soumission",
         "devlog:soumissions:read",
@@ -1932,6 +1943,19 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         entity_type="projet_materiau", list_cap="construction:materiaux:list",
         order_attr="updated_at", stage_attr="statut", supports_active=False,
     ),
+    # Inventaire interne (2026-10-18) — `stage` filtre la catégorie des
+    # articles, le type des mouvements (entree | ajustement | sortie).
+    "inventaire": _ListSpec(
+        model=InventaireArticle, pole="construction",
+        entity_type="inventaire_article", list_cap="construction:inventaire:list",
+        order_attr="updated_at", stage_attr="categorie", supports_active=False,
+    ),
+    "inventaire_mouvements": _ListSpec(
+        model=InventaireMouvement, pole="construction",
+        entity_type="inventaire_mouvement",
+        list_cap="construction:inventaire:list",
+        order_attr="created_at", stage_attr="type", supports_active=False,
+    ),
     # Immobilier (2026-09-09) — `stage` filtre le statut du dossier TAL
     # (a_ouvrir | ouvert | audience | decision | ferme) ou le rôle du
     # contact (garant | colocataire | occupant | urgence).
@@ -2014,6 +2038,10 @@ _LIST_ALIASES: dict[str, str] = {
     "materiaux_catalogue": "materiaux",
     "projet_materiau": "projet_materiaux",
     "liste_achats_materiaux": "projet_materiaux",
+    "inventaire_article": "inventaire",
+    "inventaire_articles": "inventaire",
+    "inventaire_interne": "inventaire",
+    "inventaire_mouvement": "inventaire_mouvements",
     "tal_dossier": "tal_dossiers",
     "imm_tal_dossier": "tal_dossiers",
     "locataire_contact": "locataire_contacts",
