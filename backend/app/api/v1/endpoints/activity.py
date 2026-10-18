@@ -48,12 +48,7 @@ from app.models.employe import Employe
 from app.models.entreprise import Entreprise, EntreprisePartner
 from app.models.paiement_fournisseur import LotPaiement
 from app.models.entreprise_tache import EntrepriseTache
-from app.models.immobilier import (
-    Hypotheque,
-    ImmLocataireContact,
-    ImmTalDossier,
-    ImmeubleCode,
-)
+from app.models.immobilier import ImmLocataireContact, ImmTalDossier, ImmeubleCode
 from app.models.tal_bail import TalTransmission
 from app.models.financement import Financement
 from app.models.project import Project
@@ -1641,12 +1636,6 @@ _DETAIL_ENTITIES: dict[str, tuple] = {
         ImmeubleCode, "immobilier", "imm_immeuble_code",
         "immobilier:immeubles:read",
     ),
-    # Hypothèques (2026-10-18) — une conjointe porte ses immeubles
-    # couverts et leurs parts dans le détail REST ; ici le résumé.
-    "hypotheque": (
-        Hypotheque, "immobilier", "imm_hypotheque",
-        "immobilier:immeubles:read",
-    ),
 }
 
 
@@ -2007,14 +1996,6 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         list_cap="immobilier:immeubles:list",
         order_attr="updated_at", stage_attr="libelle", supports_active=False,
     ),
-    # Immobilier (2026-10-18) : hypothèques des immeubles ; `stage` filtre
-    # le statut (active | remboursee | refinancee).
-    "hypotheques": _ListSpec(
-        model=Hypotheque, pole="immobilier",
-        entity_type="imm_hypotheque",
-        list_cap="immobilier:immeubles:list",
-        order_attr="updated_at", stage_attr="status", supports_active=False,
-    ),
 }
 
 #: Alias supplémentaires (noms « complets ») vers les mêmes specs, pour que
@@ -2053,8 +2034,6 @@ _LIST_ALIASES: dict[str, str] = {
     "imm_immeuble_code": "immeuble_codes",
     "codes_immeuble": "immeuble_codes",
     "codes_acces": "immeuble_codes",
-    "hypotheque": "hypotheques",
-    "imm_hypotheque": "hypotheques",
     "baux_tal": "tal_transmissions",
     "bail_tal": "tal_transmissions",
 }

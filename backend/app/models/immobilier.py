@@ -1117,44 +1117,6 @@ class HypothequeTranche(Base):
     )
 
 
-class HypothequeImmeuble(Base):
-    """Répartition d'une hypothèque CONJOINTE entre plusieurs immeubles
-    (Steven 2026-10-06 : « le 710 Legendre et le 9085 Millen ont une
-    hypothèque conjointe, mais ici le calcul est en 2 shots »).
-
-    Une seule hypothèque (``Hypotheque.immeuble_id`` = immeuble
-    principal, celui où elle a été saisie) peut couvrir plusieurs
-    immeubles : une ligne par immeuble couvert avec sa PART en %. Les
-    parts d'une hypothèque totalisent 100 et incluent l'immeuble
-    principal. Sans ligne = hypothèque simple, 100 % sur son immeuble.
-    Partout où l'on agrège (fiche, P&L, prévisionnel, équité, portail
-    investisseur), chaque immeuble ne porte que sa part : la dette n'est
-    plus comptée deux fois. Nouvelle table → ensure_immobilier_aux_tables.
-    """
-
-    __tablename__ = "imm_hypotheque_immeubles"
-    __table_args__ = (
-        UniqueConstraint(
-            "hypotheque_id", "immeuble_id", name="uq_hypotheque_immeuble"
-        ),
-    )
-
-    id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    hypotheque_id: Mapped[int] = mapped_column(
-        ForeignKey("imm_hypotheques.id", ondelete="CASCADE"),
-        nullable=False, index=True,
-    )
-    immeuble_id: Mapped[int] = mapped_column(
-        ForeignKey("imm_immeubles.id", ondelete="CASCADE"),
-        nullable=False, index=True,
-    )
-    #: Part de l'hypothèque portée par cet immeuble, en % (0 < part ≤ 100).
-    part_pct: Mapped[float] = mapped_column(Numeric(7, 4), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-
-
 # ─── ÉVALUATION ─────────────────────────────────────────────────────────
 
 

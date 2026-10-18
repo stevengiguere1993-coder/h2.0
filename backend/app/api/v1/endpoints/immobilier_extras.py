@@ -2372,18 +2372,23 @@ async def _compute_part_metrics(
 
     # Hypothèque active. Balance EFFECTIVE : saisie > calculée au jour J
     # (tableau d'amortissement) > montant initial — même logique que la
-    # fiche immeuble. Hypothèque conjointe : seulement la part de cet
-    # immeuble.
+    # fiche immeuble.
     from app.services.hypotheque_calc import balance_effective
-    from app.services.hypotheque_partage import (
-        hypotheques_de_l_immeuble,
-        part_de,
-    )
 
     balance_hyp = round(
         sum(
-            balance_effective(h) * part_de(h)
-            for h in await hypotheques_de_l_immeuble(db, immeuble.id)
+            balance_effective(h)
+            for h in (
+                await db.execute(
+                    select(Hypotheque).where(
+                        and_(
+                            Hypotheque.immeuble_id == immeuble.id,
+                            Hypotheque.status
+                            == HypothequeStatus.ACTIVE.value,
+                        )
+                    )
+                )
+            ).scalars().all()
         ),
         2,
     )
