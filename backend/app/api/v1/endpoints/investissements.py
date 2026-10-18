@@ -322,23 +322,18 @@ async def _compute_valeur_part(
         return None
 
     # Balance EFFECTIVE : saisie > calculée au jour J (amortissement) >
-    # montant initial — même logique que la fiche immeuble.
+    # montant initial — même logique que la fiche immeuble. Hypothèque
+    # conjointe : seulement la part de cet immeuble.
     from app.services.hypotheque_calc import balance_effective
+    from app.services.hypotheque_partage import (
+        hypotheques_de_l_immeuble,
+        part_de,
+    )
 
     balance_hyp = round(
         sum(
-            balance_effective(h)
-            for h in (
-                await db.execute(
-                    select(Hypotheque).where(
-                        and_(
-                            Hypotheque.immeuble_id == imm.id,
-                            Hypotheque.status
-                            == HypothequeStatus.ACTIVE.value,
-                        )
-                    )
-                )
-            ).scalars().all()
+            balance_effective(h) * part_de(h)
+            for h in await hypotheques_de_l_immeuble(db, imm.id)
         ),
         2,
     )

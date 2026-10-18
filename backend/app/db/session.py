@@ -196,6 +196,9 @@ async def ensure_critical_columns() -> None:
         ("imm_baux", "depot_transfere_vers_bail_id", "INTEGER"),
         ("imm_baux", "transfere_depuis_bail_id", "INTEGER"),
         ("imm_baux", "transfert_ancienne_fin", "DATE"),
+        # Départ déclaré (2026-10-18) : fin opposable d'un bail au mois,
+        # arrêt de la dette après le départ, remplacement du locataire.
+        ("imm_baux", "depart_declare_le", "DATE"),
         ("imm_baux", "sans_document_motif", "VARCHAR(255)"),
         ("imm_baux", "sans_document_par", "VARCHAR(255)"),
         ("imm_baux", "sans_document_le", "TIMESTAMP WITH TIME ZONE"),
@@ -368,6 +371,9 @@ async def ensure_critical_columns() -> None:
         # Montant refacturé par achat (ligne « Matériaux » unique,
         # 2026-10-17).
         ("achats", "montant_refacture", "NUMERIC(12, 2)"),
+        # Total TTC de la transaction QB d'origine d'un achat importé
+        # (facture fractionnée : part du projet vs facture entière).
+        ("achats", "qbo_txn_total", "NUMERIC(12, 2)"),
         # Gestion externe d'un immeuble (compagnie tierce) : sans ces
         # colonnes, tout SELECT sur imm_immeubles plante → 500 sur tout
         # le volet immobilier. Table préexistante → create_all ne les
@@ -963,12 +969,14 @@ async def ensure_immobilier_aux_tables() -> None:
             FactureGestion,
             FraisLocatif,
             FraisManuelGestion,
+            HypothequeImmeuble,
             ImmCommunication,
             ImmDocPersoModele,
             ImmDocTemplate,
             ImmDocument,
             ImmLocataireContact,
             ImmTalDossier,
+            ImmeubleCode,
             PaiementExterne,
             LocataireCommunication,
             LocationAnnonce,
@@ -1002,6 +1010,11 @@ async def ensure_immobilier_aux_tables() -> None:
                         FactureExterne.__table__,
                         FactureGestion.__table__,
                         FraisManuelGestion.__table__,
+                        # Codes d'accès de l'immeuble (2026-10-18).
+                        ImmeubleCode.__table__,
+                        # Hypothèque conjointe : répartition entre
+                        # immeubles (2026-10-18).
+                        HypothequeImmeuble.__table__,
                     ],
                 )
             )

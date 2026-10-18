@@ -108,6 +108,28 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning("schema_check failed during startup: %s", exc)
 
+    # Réponses aux courriels de Kyle (Steven, 2026-10-18) : l'adresse
+    # « Répondre à » de son profil d'expéditeur (Communications → Profils)
+    # devient kyle@gestionmagnifica.com. Une seule fois (applied_backfills),
+    # dès que son profil existe ; un changement manuel ensuite est respecté.
+    try:
+        from app.db.session import AsyncSessionLocal as _KyleSession
+        from app.services.locatif_expediteurs import (
+            corriger_reply_to_kyle_une_fois,
+        )
+
+        async with _KyleSession() as session:
+            modifs = await corriger_reply_to_kyle_une_fois(session)
+            if modifs:
+                logger.info(
+                    "Startup : adresse de réponse de Kyle posée — %s",
+                    " ; ".join(modifs),
+                )
+    except Exception as exc:
+        logger.warning(
+            "correction de l'adresse de réponse de Kyle failed: %s", exc
+        )
+
     # Prime CNESST (2026-10-14) : à la première mise en ligne du taux
     # global, il est créé à partir des taux déjà saisis sur les fiches (le
     # plus fréquent) et les fiches sont converties sans changer le coût de

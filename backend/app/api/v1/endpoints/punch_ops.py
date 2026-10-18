@@ -87,14 +87,24 @@ class ClockOutRequest(BaseModel):
 
 class WeeklyEntry(BaseModel):
     day: date
+    #: Heures payées du jour (dîner déjà retiré).
     hours: float
+    #: Minutes de dîner non payé retirées ce jour-là (déjà soustraites de
+    #: ``hours``). 0 = aucun retrait.
+    diner_minutes: int = 0
 
 
 class WeeklyReport(BaseModel):
     employe_id: int
     week_start: date
     week_end: date
+    #: Heures payées de la semaine, dîners déjà retirés.
     total_hours: float
+    #: Heures punchées de la semaine AVANT le retrait des dîners.
+    total_hours_brutes: float = 0.0
+    #: Dîners non payés retirés sur la semaine : total en heures et nombre.
+    total_diner_hours: float = 0.0
+    diners: int = 0
     days: list[WeeklyEntry]
 
 
@@ -412,7 +422,10 @@ async def weekly_report(
     by_day: dict[date, float] = {
         week_start + timedelta(days=i): 0.0 for i in range(7)
     }
+    diner_by_day: dict[date, int] = {d: 0 for d in by_day}
     total = 0.0
+    diner_minutes_total = 0
+    diners = 0
     for p in rows:
         if p.hours is None:
             continue
@@ -420,13 +433,25 @@ async def weekly_report(
         if key in by_day:
             by_day[key] += float(p.hours)
             total += float(p.hours)
+            # Dîner non payé déjà retiré de ``hours`` : remonté pour que
+            # l'écart entre heures punchées et heures payées se voie.
+            if p.diner_minutes:
+                diner_by_day[key] += int(p.diner_minutes)
+                diner_minutes_total += int(p.diner_minutes)
+                diners += 1
 
     return WeeklyReport(
         employe_id=target_emp.id,
         week_start=week_start,
         week_end=week_end,
         total_hours=round(total, 2),
-        days=[WeeklyEntry(day=d, hours=round(h, 2)) for d, h in sorted(by_day.items())],
+        total_hours_brutes=round(total + diner_minutes_total / 60.0, 2),
+        total_diner_hours=round(diner_minutes_total / 60.0, 2),
+        diners=diners,
+        days=[
+            WeeklyEntry(day=d, hours=round(h, 2), diner_minutes=diner_by_day[d])
+            for d, h in sorted(by_day.items())
+        ],
     )
 
 
@@ -791,6 +816,8 @@ class PayrollRow(BaseModel):
     #: de la fiche) : total en heures et nombre de dîners.
     hours_diner: float = 0.0
     diners: int = 0
+    #: Heures punchées AVANT le retrait des dîners (= total_hours + hours_diner).
+    hours_brutes: float = 0.0
 
 
 class PayrollReport(BaseModel):
@@ -884,9 +911,19 @@ class BiWeeklyPayrollRow(BaseModel):
     montant_hors_decret: float = 0.0
     montant_total: float = 0.0
     #: Dîners non payés déjà retirés des heures ci-dessus (case « dîner »
-    #: de la fiche) : total en heures et nombre de dîners.
+    #: de la fiche) : total en heures et nombre de dîners, puis la même
+    #: chose semaine par semaine (Steven, 2026-10-14 : le retrait doit se
+    #: voir dans le total de CHAQUE semaine de chaque employé).
     hours_diner: float = 0.0
     diners: int = 0
+    hours_diner_week_1: float = 0.0
+    hours_diner_week_2: float = 0.0
+    diners_week_1: int = 0
+    diners_week_2: int = 0
+    #: Heures PUNCHÉES, avant le retrait des dîners (= payées + dîners).
+    hours_brutes_week_1: float = 0.0
+    hours_brutes_week_2: float = 0.0
+    hours_brutes: float = 0.0
 
 
 class BiWeeklyPayrollReport(BaseModel):
@@ -907,6 +944,8 @@ class BiWeeklyPayrollReport(BaseModel):
     total_montant_hors_decret: float = 0.0
     total_montant: float = 0.0
     total_hours_diner: float = 0.0
+    total_diners: int = 0
+    total_hours_brutes: float = 0.0
 
 
 @router.get(
@@ -1022,9 +1061,22 @@ async def payroll_bi_weekly(
                 agg[emp_id].hours_hd_week_2 += h
         if approved:
             agg[emp_id].montant_total += montant
+        diner_h = (p.diner_minutes or 0) / 60.0
         if p.diner_minutes:
-            agg[emp_id].hours_diner += p.diner_minutes / 60.0
+            agg[emp_id].hours_diner += diner_h
             agg[emp_id].diners += 1
+            if sem1:
+                agg[emp_id].hours_diner_week_1 += diner_h
+                agg[emp_id].diners_week_1 += 1
+            else:
+                agg[emp_id].hours_diner_week_2 += diner_h
+                agg[emp_id].diners_week_2 += 1
+        # Heures punchées = heures payées + dîner retiré.
+        agg[emp_id].hours_brutes += h + diner_h
+        if sem1:
+            agg[emp_id].hours_brutes_week_1 += h + diner_h
+        else:
+            agg[emp_id].hours_brutes_week_2 += h + diner_h
 
     for row in agg.values():
         for champ in (
@@ -1032,6 +1084,8 @@ async def payroll_bi_weekly(
             "hours_ccq", "hours_hors_decret", "hours_ccq_week_1", "hours_ccq_week_2",
             "hours_hd_week_1", "hours_hd_week_2",
             "montant_ccq", "montant_hors_decret", "montant_total", "hours_diner",
+            "hours_diner_week_1", "hours_diner_week_2",
+            "hours_brutes_week_1", "hours_brutes_week_2", "hours_brutes",
         ):
             setattr(row, champ, round(getattr(row, champ), 2))
 
@@ -1057,6 +1111,8 @@ async def payroll_bi_weekly(
         total_montant_hors_decret=round(sum(r.montant_hors_decret for r in sorted_rows), 2),
         total_montant=round(sum(r.montant_total for r in sorted_rows), 2),
         total_hours_diner=round(sum(r.hours_diner for r in sorted_rows), 2),
+        total_diners=sum(r.diners for r in sorted_rows),
+        total_hours_brutes=round(sum(r.hours_brutes for r in sorted_rows), 2),
     )
 
 
@@ -1071,16 +1127,25 @@ async def payroll_bi_weekly_csv(
         default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"
     ),
 ):
-    """CSV simple pour EmployeurD : nom · semaine 1 · semaine 2 (format
-    INCHANGÉ — la ventilation CCQ / hors décret a son propre export,
-    /payroll/bi-weekly-regimes.csv)."""
+    """CSV simple pour EmployeurD : nom · semaine 1 · semaine 2 — les
+    heures à payer, dîners déjà retirés. Les trois premières colonnes ne
+    changent pas (la ventilation CCQ / hors décret a son propre export,
+    /payroll/bi-weekly-regimes.csv) ; les colonnes suivantes montrent, par
+    semaine, les heures punchées et le dîner retiré pour que la déduction
+    se voie dans la fiche d'heures (Steven, 2026-10-14)."""
     from fastapi.responses import Response
     report = await payroll_bi_weekly(db, _, period_end)  # type: ignore[arg-type]
-    lines = ["nom_employe,heures_semaine_1,heures_semaine_2"]
+    lines = [
+        "nom_employe,heures_semaine_1,heures_semaine_2,"
+        "heures_punchees_semaine_1,diner_semaine_1,"
+        "heures_punchees_semaine_2,diner_semaine_2,nb_diners"
+    ]
     for r in report.rows:
         name = (r.employe_name or "").replace('"', "'")
         lines.append(
-            f'"{name}",{r.hours_week_1},{r.hours_week_2}'
+            f'"{name}",{r.hours_week_1},{r.hours_week_2},'
+            f"{r.hours_brutes_week_1},{r.hours_diner_week_1},"
+            f"{r.hours_brutes_week_2},{r.hours_diner_week_2},{r.diners}"
         )
     body = "\n".join(lines)
     filename = (
@@ -1114,14 +1179,16 @@ async def payroll_bi_weekly_regimes_csv(
     lines = [
         "nom_employe,heures_ccq_semaine_1,heures_ccq_semaine_2,"
         "heures_hd_semaine_1,heures_hd_semaine_2,heures_ccq,heures_hors_decret,"
-        "heures_en_attente,montant_ccq,montant_hors_decret,montant_total"
+        "heures_en_attente,montant_ccq,montant_hors_decret,montant_total,"
+        "diner_semaine_1,diner_semaine_2,heures_diner,nb_diners"
     ]
     for r in report.rows:
         name = (r.employe_name or "").replace('"', "'")
         lines.append(
             f'"{name}",{r.hours_ccq_week_1},{r.hours_ccq_week_2},'
             f"{r.hours_hd_week_1},{r.hours_hd_week_2},{r.hours_ccq},{r.hours_hors_decret},"
-            f"{r.pending_hours},{r.montant_ccq},{r.montant_hors_decret},{r.montant_total}"
+            f"{r.pending_hours},{r.montant_ccq},{r.montant_hors_decret},{r.montant_total},"
+            f"{r.hours_diner_week_1},{r.hours_diner_week_2},{r.hours_diner},{r.diners}"
         )
     body = "\n".join(lines)
     filename = (
@@ -1214,9 +1281,11 @@ async def payroll_report(
         if p.diner_minutes:
             agg[emp_id].hours_diner += p.diner_minutes / 60.0
             agg[emp_id].diners += 1
+        agg[emp_id].hours_brutes += h + (p.diner_minutes or 0) / 60.0
 
     for row in agg.values():
         row.hours_diner = round(row.hours_diner, 2)
+        row.hours_brutes = round(row.hours_brutes, 2)
         row.approved_revenue = round(row.approved_revenue, 2)
         row.total_revenue = round(row.total_revenue, 2)
         row.hours_ccq = round(row.hours_ccq, 2)
@@ -1260,7 +1329,8 @@ async def payroll_csv(
     lines = [
         "employe_id,employe_name,hourly_rate,approved_hours,pending_hours,"
         "total_hours,approved_revenue,total_revenue,"
-        "hours_ccq,hours_hors_decret,montant_ccq,montant_hors_decret"
+        "hours_ccq,hours_hors_decret,montant_ccq,montant_hors_decret,"
+        "hours_brutes,hours_diner,diners"
     ]
     for r in report.rows:
         name = (r.employe_name or "").replace('"', "'")
@@ -1268,7 +1338,8 @@ async def payroll_csv(
             f'{r.employe_id},"{name}",{r.hourly_rate or 0},'
             f"{r.approved_hours},{r.pending_hours},{r.total_hours},"
             f"{r.approved_revenue},{r.total_revenue},"
-            f"{r.hours_ccq},{r.hours_hors_decret},{r.montant_ccq},{r.montant_hors_decret}"
+            f"{r.hours_ccq},{r.hours_hors_decret},{r.montant_ccq},{r.montant_hors_decret},"
+            f"{r.hours_brutes},{r.hours_diner},{r.diners}"
         )
     lines.append("")
     lines.append(
@@ -1341,11 +1412,13 @@ async def employe_monthly_csv(
     ]
     total = 0.0
     approved_total = 0.0
+    diner_min_total = 0
     for p in rows:
         started = p.started_at.astimezone(timezone.utc)
         ended = p.ended_at.astimezone(timezone.utc) if p.ended_at else None
         h = float(p.hours or 0)
         total += h
+        diner_min_total += int(p.diner_minutes or 0)
         if p.approved:
             approved_total += h
         notes = (p.notes or "").replace('"', "'").replace("\n", " ")[:200]
@@ -1360,6 +1433,10 @@ async def employe_monthly_csv(
             f'"{loc}","{notes}"'
         )
     lines.append("")
+    # Heures punchées, dîners retirés (heures et minutes), puis les heures
+    # payées (TOTAL) : la déduction se lit sur la fiche d'heures.
+    lines.append(f",,PUNCHÉES,{round(total + diner_min_total / 60.0, 2)},,,,,,")
+    lines.append(f",,DÎNERS,-{round(diner_min_total / 60.0, 2)},{diner_min_total},,,,,")
     lines.append(f",,TOTAL,{round(total, 2)},,,,,,")
     lines.append(f",,APPROUVÉES,{round(approved_total, 2)},,,,,,")
 

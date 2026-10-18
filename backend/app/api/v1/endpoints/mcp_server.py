@@ -660,6 +660,8 @@ _LIST_GENERIC_CHOICES = (
     "tal_transmissions",
     # Immobilier (2026-10-16) : dossiers de financement.
     "financements",
+    # Zone employés (2026-10-18) : bloc-notes des employés.
+    "bloc_notes",
 )
 
 _LIMIT_PROP = {
