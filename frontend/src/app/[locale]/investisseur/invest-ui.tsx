@@ -57,6 +57,14 @@ export type HypothequeRow = {
   preteur: string | null;
   montant_initial: number | null;
   balance: number;
+  // Hypothèque CONJOINTE (plusieurs immeubles) : `balance`,
+  // `montant_initial` et `paiement_mensuel` sont la PART de cet immeuble ;
+  // les totaux du prêt suivent.
+  conjointe?: boolean;
+  part_pct?: number;
+  balance_totale?: number;
+  montant_initial_total?: number | null;
+  paiement_mensuel_total?: number | null;
   taux_pct: number | null;
   type_taux: string | null;
   paiement_mensuel: number | null;
@@ -591,6 +599,18 @@ export function HypothequesCard({
                   {h.rang && h.rang > 1 ? (
                     <span className="ml-1.5 text-xs font-normal text-white/40">
                       {h.rang}ᵉ rang
+                    </span>
+                  ) : null}
+                  {h.conjointe ? (
+                    <span
+                      className="badge badge-sky ml-1.5 font-sans normal-case"
+                      title={`Hypothèque conjointe : cet immeuble en porte ${
+                        h.part_pct ?? 0
+                      } % (solde total du prêt ${fmtMoney(
+                        h.balance_totale ?? h.balance
+                      )})`}
+                    >
+                      Conjointe · {h.part_pct ?? 0} %
                     </span>
                   ) : null}
                 </p>

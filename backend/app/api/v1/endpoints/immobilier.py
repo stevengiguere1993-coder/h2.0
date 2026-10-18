@@ -33,7 +33,7 @@ from fastapi import (
 )
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 
 from app.models.immobilier import bail_non_parallele, est_bail_parallele
 from sqlalchemy.exc import IntegrityError
@@ -78,6 +78,7 @@ from app.models.immobilier import (
     Evaluation,
     EvaluationKind,
     Hypotheque,
+    HypothequeImmeuble,
     HypothequeStatus,
     Immeuble,
     ImmeubleOwnership,
@@ -104,6 +105,7 @@ from app.schemas.immobilier import (
     EvaluationRead,
     EvaluationUpdate,
     HypothequeCreate,
+    HypothequeImmeubleRead,
     HypothequeRead,
     HypothequeTrancheCreate,
     HypothequeTrancheRead,
@@ -7194,14 +7196,12 @@ async def finances_pnl(
         ).scalars().all()
         # ⚠️ le statut est stocké en minuscules ("active") — l'ancien
         # filtre "ACTIVE" ne matchait rien → dette toujours à 0 $.
-        hypos = (
-            await db.execute(
-                select(Hypotheque).where(
-                    Hypotheque.immeuble_id.in_(imm_ids),
-                    Hypotheque.status == HypothequeStatus.ACTIVE.value,
-                )
-            )
-        ).scalars().all()
+        # Hypothèque CONJOINTE (2026-10-18) : chaque immeuble ne porte
+        # que SA part du paiement — plus de dette comptée deux fois
+        # (710 Legendre / 9085 Millen).
+        from app.services.hypotheque_partage import hypotheques_par_immeuble
+
+        hypos_par_imm = await hypotheques_par_immeuble(db, imm_ids)
 
         # Loyers mensuels LOUÉS par immeuble — hiérarchie du loyer
         # effectif (2026-08-14) : interne = bail actif d'abord ; externe
@@ -7260,9 +7260,8 @@ async def finances_pnl(
                     val *= 1.14975
                 dep += val
             dette = sum(
-                float(h.paiement_mensuel or 0) * 12
-                for h in hypos
-                if h.immeuble_id == imm.id
+                float(h.paiement_mensuel or 0) * 12 * part
+                for h, part in hypos_par_imm.get(imm.id, [])
             )
             rows.append(
                 PnlRow(
@@ -7431,17 +7430,20 @@ async def finances_previsionnel(
             key = d.date_depense.strftime("%Y-%m")
             pon_by_month[key] = pon_by_month.get(key, 0.0) + m
 
-    hypos = (
-        await db.execute(
-            select(Hypotheque).where(
-                Hypotheque.immeuble_id.in_(imm_ids),
-                Hypotheque.status.notin_(
-                    ["remboursee", "refinancee", "REMBOURSEE", "REFINANCEE"]
-                ),
-            )
-        )
-    ).scalars().all()
-    hyp_mensuelle = sum(float(h.paiement_mensuel or 0) for h in hypos)
+    # Hypothèque CONJOINTE : part de chaque immeuble de la sélection (les
+    # deux immeubles couverts dans la sélection = 100 %, un seul = sa part).
+    from app.services.hypotheque_partage import hypotheques_par_immeuble
+
+    hypos_par_imm = await hypotheques_par_immeuble(
+        db,
+        imm_ids,
+        statuts_exclus=["remboursee", "refinancee", "REMBOURSEE", "REFINANCEE"],
+    )
+    hyp_mensuelle = sum(
+        float(h.paiement_mensuel or 0) * part
+        for lst in hypos_par_imm.values()
+        for h, part in lst
+    )
 
     maints = (
         await db.execute(
@@ -7510,14 +7512,25 @@ async def finances_previsionnel(
 # ── Hypothèques ────────────────────────────────────────────────────────
 
 
-async def _hyp_read(db, obj: Hypotheque) -> HypothequeRead:
+async def _hyp_read(
+    db, obj: Hypotheque, immeuble_id: Optional[int] = None
+) -> HypothequeRead:
     """HypothequeRead + balance THÉORIQUE du jour (amortissement) +
-    tranches de déboursé (capital = déboursé à ce jour)."""
+    tranches de déboursé (capital = déboursé à ce jour) + répartition
+    d'une hypothèque CONJOINTE : ``immeuble_id`` est l'immeuble consulté
+    (sa part donne ``part_pct`` et les montants ``*_part``)."""
     from app.models.immobilier import HypothequeTranche
     from app.services.hypotheque_calc import (
         ATTR_DEBOURSE,
         balance_calculee_de,
+        balance_effective,
         charger_debourses,
+    )
+    from app.services.hypotheque_partage import (
+        ATTR_PART,
+        noms_immeubles,
+        part_de,
+        repartitions_de,
     )
 
     await charger_debourses(db, [obj])
@@ -7537,6 +7550,39 @@ async def _hyp_read(db, obj: Hypotheque) -> HypothequeRead:
             )
         ).scalars().all()
     ]
+    # Hypothèque conjointe : immeubles couverts + part de l'immeuble
+    # consulté (par défaut l'immeuble principal).
+    lignes = (await repartitions_de(db, [obj.id])).get(obj.id) or []
+    noms = await noms_immeubles(db, [l.immeuble_id for l in lignes])
+    r.immeubles = [
+        HypothequeImmeubleRead(
+            immeuble_id=l.immeuble_id,
+            part_pct=round(float(l.part_pct), 4),
+            immeuble_name=noms.get(l.immeuble_id),
+        )
+        for l in lignes
+    ]
+    r.conjointe = bool(lignes)
+    if getattr(obj, ATTR_PART, None) is not None:
+        part = part_de(obj)
+    elif lignes:
+        cible = immeuble_id if immeuble_id is not None else obj.immeuble_id
+        part = next(
+            (float(l.part_pct) / 100.0 for l in lignes if l.immeuble_id == cible),
+            0.0,
+        )
+    else:
+        part = 1.0
+    bal = balance_effective(obj)
+    r.part_pct = round(part * 100.0, 4)
+    r.balance_effective = round(bal, 2)
+    r.balance_part = round(bal * part, 2)
+    r.montant_initial_part = round(float(obj.montant_initial or 0) * part, 2)
+    r.paiement_mensuel_part = (
+        round(float(obj.paiement_mensuel) * part, 2)
+        if obj.paiement_mensuel is not None
+        else None
+    )
     return r
 
 
@@ -7548,14 +7594,13 @@ async def list_hypotheques(
     immeuble_id: int, db: DBSession, user: CurrentUser
 ) -> List[HypothequeRead]:
     _require_volet(user)
-    rows = (
-        await db.execute(
-            select(Hypotheque)
-            .where(Hypotheque.immeuble_id == immeuble_id)
-            .order_by(Hypotheque.rang.asc())
-        )
-    ).scalars().all()
-    return [await _hyp_read(db, r) for r in rows]
+    # Simples ET conjointes qui couvrent cet immeuble, tous statuts.
+    from app.services.hypotheque_partage import hypotheques_de_l_immeuble
+
+    rows = await hypotheques_de_l_immeuble(
+        db, immeuble_id, actives_seulement=False
+    )
+    return [await _hyp_read(db, r, immeuble_id) for r in rows]
 
 
 def _pmt_hypotheque(obj: Hypotheque) -> float | None:
@@ -7594,6 +7639,33 @@ def _maybe_recompute_pmt(obj: Hypotheque) -> None:
             obj.paiement_mensuel = pmt
 
 
+async def _appliquer_repartition(db, obj: Hypotheque, items) -> None:
+    """Répartition d'une hypothèque CONJOINTE entre immeubles :
+    ``None`` = inchangée ; ``[]`` = redevient simple (100 % sur son
+    immeuble) ; sinon validation (immeubles existants et distincts,
+    parts > 0, total 100) puis remplacement. Si l'immeuble principal ne
+    fait plus partie des immeubles couverts, l'hypothèque est
+    ré-attachée au premier de la liste."""
+    from app.services.hypotheque_partage import (
+        RepartitionInvalide,
+        enregistrer_repartition,
+        valider_repartition,
+    )
+
+    if items is None:
+        return
+    if not items:
+        await enregistrer_repartition(db, obj, None)
+        return
+    try:
+        paires = await valider_repartition(db, items)
+    except RepartitionInvalide as exc:
+        raise HTTPException(
+            status_code=422, detail=str(exc)
+        ) from exc
+    await enregistrer_repartition(db, obj, paires)
+
+
 @router.post(
     "/hypotheques",
     response_model=HypothequeRead,
@@ -7604,11 +7676,13 @@ async def create_hypotheque(
 ) -> HypothequeRead:
     _require_volet(user)
     await _get_immeuble_or_404(db, payload.immeuble_id)
-    obj = Hypotheque(**payload.model_dump())
+    obj = Hypotheque(**payload.model_dump(exclude={"immeubles"}))
     _maybe_recompute_pmt(obj)
     obj.created_at = _now()
     obj.updated_at = _now()
     db.add(obj)
+    await db.flush()
+    await _appliquer_repartition(db, obj, payload.immeubles)
     await db.commit()
     await db.refresh(obj)
     return await _hyp_read(db, obj)
@@ -7626,8 +7700,11 @@ async def update_hypotheque(
     if obj is None:
         raise HTTPException(status_code=404, detail="Hypothèque introuvable.")
     data = payload.model_dump(exclude_unset=True)
+    # Répartition entre immeubles (hypothèque conjointe) : traitée à part.
+    repartition = data.pop("immeubles", None)
     for k, v in data.items():
         setattr(obj, k, v)
+    await _appliquer_repartition(db, obj, repartition)
     # Capital = déboursé à ce jour si l'hypothèque est versée par tranches.
     from app.services.hypotheque_calc import charger_debourses as _cd
 
@@ -7775,6 +7852,13 @@ async def delete_hypotheque(
     obj = await db.get(Hypotheque, hyp_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Hypothèque introuvable.")
+    # Répartition conjointe retirée explicitement (le CASCADE de la FK
+    # fait le reste en prod ; SQLite de test ne l'applique pas).
+    await db.execute(
+        delete(HypothequeImmeuble).where(
+            HypothequeImmeuble.hypotheque_id == hyp_id
+        )
+    )
     await db.delete(obj)
     await db.commit()
 
@@ -8218,23 +8302,21 @@ async def get_financials(
     # saisie prime, sinon la balance CALCULÉE au jour J (tableau
     # d'amortissement — « s'update toute seule », retour Phil 2026-07-10),
     # sinon le montant initial.
+    # Hypothèque CONJOINTE (2026-10-18) : cet immeuble ne porte que SA
+    # part de la balance et du paiement.
     from app.services.hypotheque_calc import balance_effective
+    from app.services.hypotheque_partage import (
+        hypotheques_de_l_immeuble,
+        part_de,
+    )
 
-    hyps_actives = (
-        await db.execute(
-            select(Hypotheque).where(
-                and_(
-                    Hypotheque.immeuble_id == immeuble_id,
-                    Hypotheque.status == HypothequeStatus.ACTIVE.value,
-                )
-            )
-        )
-    ).scalars().all()
-    from app.services.hypotheque_calc import charger_debourses as _charger_deb
-
-    await _charger_deb(db, hyps_actives)
-    paiement_hyp = sum(float(h.paiement_mensuel or 0) for h in hyps_actives)
-    balance_hyp = round(sum(balance_effective(h) for h in hyps_actives), 2)
+    hyps_actives = await hypotheques_de_l_immeuble(db, immeuble_id)
+    paiement_hyp = sum(
+        float(h.paiement_mensuel or 0) * part_de(h) for h in hyps_actives
+    )
+    balance_hyp = round(
+        sum(balance_effective(h) * part_de(h) for h in hyps_actives), 2
+    )
 
     # Valeur actuelle : l'évaluation marquée « référence » prime ;
     # sinon fallback sur la plus récente (toutes catégories).
