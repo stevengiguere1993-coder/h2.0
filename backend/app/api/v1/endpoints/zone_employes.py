@@ -41,6 +41,7 @@ from app.models.timesheet import (
     Timesheet,
     TimesheetCompany,
     TimesheetEntry,
+    TimesheetPunch,
     TimesheetUserCompany,
 )
 from app.models.user import User
@@ -229,6 +230,14 @@ class EvenementOut(BaseModel):
     modifiable: bool = False
 
 
+class PunchEnCoursOut(BaseModel):
+    """Punch de feuille de temps en cours (employé « autre », bug 16)."""
+
+    started_at: datetime
+    title: str
+    company_label: str = ""
+
+
 class EmployeZoneOut(BaseModel):
     id: int
     display_name: str
@@ -247,6 +256,8 @@ class EmployeZoneOut(BaseModel):
     heures_periode: float = 0.0
     feuille_statut: Optional[str] = None
     prochain_evenement: Optional[EvenementOut] = None
+    #: Punch de feuille de temps en cours (None = aucun).
+    punch_en_cours: Optional[PunchEnCoursOut] = None
 
 
 class SuiviTempsLigne(BaseModel):
@@ -379,6 +390,26 @@ async def lister_equipe(
         if uid is not None and uid not in prochain:
             prochain[uid] = ev
 
+    # Punchs de feuille de temps en cours (le plus récent par employé).
+    punchs: Dict[int, PunchEnCoursOut] = {}
+    rows_punch = (
+        await db.execute(
+            select(TimesheetPunch, TimesheetCompany.label)
+            .outerjoin(
+                TimesheetCompany, TimesheetCompany.id == TimesheetPunch.company_id
+            )
+            .where(
+                TimesheetPunch.user_id.in_(ids),
+                TimesheetPunch.ended_at.is_(None),
+            )
+            .order_by(TimesheetPunch.started_at.asc())
+        )
+    ).all()
+    for p, label in rows_punch:
+        punchs[p.user_id] = PunchEnCoursOut(
+            started_at=_aware(p.started_at), title=p.title, company_label=label or ""
+        )
+
     out: List[EmployeZoneOut] = []
     for u in users:
         emp = employes.get((u.email or "").lower())
@@ -408,6 +439,7 @@ async def lister_equipe(
                 heures_periode=round(sum(heures.get(u.id, {}).values()), 2),
                 feuille_statut=statut_feuille.get(u.id),
                 prochain_evenement=_evenement_out(ev) if ev else None,
+                punch_en_cours=punchs.get(u.id),
             )
         )
     return out

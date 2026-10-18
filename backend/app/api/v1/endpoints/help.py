@@ -183,6 +183,12 @@ mobiles sous /m/*.
 - /app/punch/gestion (admin) : vue par semaine, mois ou période de paie ; \
 approbation des punchs ; saisie manuelle d'un temps.
 - /app/paie : rapport de paie, où les heures sont en décimal (pour la paie).
+- Employé « autre » (pôle Entreprises, sans chantier) : /m/feuille-de-temps \
+(aussi sur l'accueil de sa zone employés) a un punch. On choisit la compagnie \
+et la tâche, « Commencer », puis « Arrêter » : la durée s'ajoute à la ligne \
+du jour de sa feuille de temps. Un punch oublié s'arrête en indiquant l'heure \
+de fin réelle ; un gestionnaire voit les punchs en cours dans Entreprises → \
+Employés et peut les arrêter.
 
 Construction
 - Pipeline des contacts : new → contacted → rdv_prevu → qualified → quoted → \
