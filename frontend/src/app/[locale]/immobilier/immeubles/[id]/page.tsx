@@ -37,6 +37,7 @@ import { useSearchParams } from "next/navigation";
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch, getToken } from "@/lib/auth";
 import { parseNombre } from "@/lib/nombre";
+import { AddressInput } from "@/components/address-input";
 import { compareNumero } from "@/components/immobilier/numero-sort";
 import {
   ouvrirDossierTal,
@@ -187,7 +188,41 @@ type Hypotheque = {
   // Tranches de déboursé (projet en cours) : capital = déboursé à ce jour.
   tranches?: HypothequeTranche[];
   montant_debourse?: number | null;
+  // Hypothèque CONJOINTE (Steven 2026-10-06 : 710 Legendre + 9085 Millen,
+  // un seul prêt) : immeubles couverts et leur part ; `part_pct` et les
+  // montants `*_part` sont la part de l'IMMEUBLE CONSULTÉ — c'est elle
+  // que la fiche, le cashflow et l'équité portent (jamais le total).
+  conjointe?: boolean;
+  immeubles?: HypothequeImmeublePart[];
+  part_pct?: number | null;
+  balance_effective?: number | null;
+  montant_initial_part?: number | null;
+  balance_part?: number | null;
+  paiement_mensuel_part?: number | null;
 };
+
+type HypothequeImmeublePart = {
+  immeuble_id: number;
+  part_pct: number;
+  immeuble_name?: string | null;
+};
+
+/** Balance effective (saisie > calculée > montant initial) ramenée à la
+ *  part de l'immeuble consulté (= tout pour une hypothèque simple). */
+function balancePartDe(h: Hypotheque): number {
+  if (h.balance_part != null) return h.balance_part;
+  return h.balance_actuelle ?? h.balance_calculee ?? h.montant_initial ?? 0;
+}
+
+/** Paiement mensuel ramené à la part de l'immeuble consulté. */
+function paiementPartDe(h: Hypotheque): number {
+  return h.paiement_mensuel_part ?? h.paiement_mensuel ?? 0;
+}
+
+function fmtPart(p: number | null | undefined): string {
+  if (p == null) return "—";
+  return `${p.toLocaleString("fr-CA", { maximumFractionDigits: 2 })} %`;
+}
 
 type HypothequeTranche = {
   id: number;
@@ -535,15 +570,8 @@ export default function ImmeubleDetailPage({
     () =>
       (hypotheques || [])
         .filter((h) => h.status === "active")
-        .reduce(
-          (s, h) =>
-            s +
-            (h.balance_actuelle ??
-              h.balance_calculee ??
-              h.montant_initial ??
-              0),
-          0
-        ),
+        // Hypothèque conjointe : seulement la part de cet immeuble.
+        .reduce((s, h) => s + balancePartDe(h), 0),
     [hypotheques]
   );
 
@@ -1334,10 +1362,19 @@ export default function ImmeubleDetailPage({
                 />
               </EditField>
               <EditField label="Adresse *">
-                <input
+                {/* Champ d'adresse partagé (autocomplete + case Suffixe du
+                    numéro civique) : « n° rue » ici, Ville / Code postal
+                    remplis en dessous quand on choisit une suggestion. */}
+                <AddressInput
                   value={editForm.address}
-                  onChange={(e) =>
-                    setEditForm((f) => ({ ...f, address: e.target.value }))
+                  onChange={(v) => setEditForm((f) => ({ ...f, address: v }))}
+                  format="rue"
+                  onPick={(a) =>
+                    setEditForm((f) => ({
+                      ...f,
+                      city: a.ville || f.city,
+                      postal_code: a.codePostal || f.postal_code
+                    }))
                   }
                   className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500"
                 />
@@ -4555,11 +4592,13 @@ const HYPO_FORM_EMPTY: HypoFormState = {
 };
 
 function HypothequeForm({
+  immeubleId,
   initial,
   busy,
   onCancel,
   onSubmit
 }: {
+  immeubleId: number;
   initial: Hypotheque | null;
   busy: boolean;
   onCancel: () => void;
@@ -4632,6 +4671,89 @@ function HypothequeForm({
     if (calc == null) return true;
     return Math.abs(Number(initial.paiement_mensuel) - calc) > 0.05;
   });
+
+  // Hypothèque CONJOINTE (Steven 2026-10-06 : 710 Legendre + 9085 Millen,
+  // un seul prêt) : immeubles couverts et leur part en %. La liste
+  // commence toujours par l'immeuble consulté ; le total doit faire 100.
+  const [conjointe, setConjointe] = useState<boolean>(
+    () => !!initial?.conjointe && (initial?.immeubles?.length ?? 0) > 1
+  );
+  const [parts, setParts] = useState<
+    { immeuble_id: number; part_pct: string }[]
+  >(() => {
+    const init = (initial?.immeubles || []).map((p) => ({
+      immeuble_id: p.immeuble_id,
+      part_pct: String(p.part_pct)
+    }));
+    if (init.length > 1) {
+      // L'immeuble consulté en premier.
+      init.sort((a, b) =>
+        a.immeuble_id === immeubleId ? -1 : b.immeuble_id === immeubleId ? 1 : 0
+      );
+      return init;
+    }
+    return [{ immeuble_id: immeubleId, part_pct: "100" }];
+  });
+  const [immeublesDispo, setImmeublesDispo] = useState<
+    { id: number; name: string }[]
+  >([]);
+  useEffect(() => {
+    if (!conjointe) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authedFetch("/api/v1/immobilier/immeubles");
+        if (!r.ok) return;
+        const imms = (await r.json()) as { id: number; name: string }[];
+        if (!cancelled)
+          setImmeublesDispo(imms.map((im) => ({ id: im.id, name: im.name })));
+      } catch {
+        /* liste facultative */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [conjointe]);
+
+  const partsNum = parts.map((p) => ({
+    immeuble_id: p.immeuble_id,
+    pct: p.part_pct.trim() ? parseNombre(p.part_pct) : NaN
+  }));
+  const idsParts = partsNum.map((p) => p.immeuble_id);
+  const totalParts = partsNum.reduce(
+    (s, p) => s + (Number.isFinite(p.pct) ? p.pct : 0),
+    0
+  );
+  const totalOk = Math.abs(totalParts - 100) <= 0.01;
+  const partsValides =
+    !conjointe ||
+    (partsNum.length >= 2 &&
+      partsNum.every(
+        (p) =>
+          p.immeuble_id > 0 &&
+          Number.isFinite(p.pct) &&
+          p.pct > 0 &&
+          p.pct <= 100
+      ) &&
+      new Set(idsParts).size === idsParts.length &&
+      totalOk);
+  const nomImmeuble = (id: number) =>
+    immeublesDispo.find((im) => im.id === id)?.name ??
+    (id === immeubleId ? "Cet immeuble" : `Immeuble #${id}`);
+
+  function repartirEgalement() {
+    setParts((prev) => {
+      const n = prev.length;
+      if (n === 0) return prev;
+      const base = Math.floor((100 / n) * 100) / 100;
+      const dernier = Math.round((100 - base * (n - 1)) * 100) / 100;
+      return prev.map((p, i) => ({
+        ...p,
+        part_pct: String(i === n - 1 ? dernier : base)
+      }));
+    });
+  }
 
   // Champs qui alimentent le calcul du paiement : les modifier remet le
   // paiement en mode auto (la nouvelle valeur calculée sera enregistrée).
@@ -4728,7 +4850,8 @@ function HypothequeForm({
   const valid =
     f.preteur.trim() !== "" &&
     f.montant_initial.trim() !== "" &&
-    !Number.isNaN(parseNombre(f.montant_initial));
+    !Number.isNaN(parseNombre(f.montant_initial)) &&
+    partsValides;
 
   function submit() {
     if (!valid) return;
@@ -4757,7 +4880,15 @@ function HypothequeForm({
         finTermeCalculee ??
         (!f.date_debut ? (initial?.date_fin_terme ?? null) : null),
       status: f.status,
-      notes: f.notes.trim() || null
+      notes: f.notes.trim() || null,
+      // Hypothèque conjointe : répartition entre immeubles (total 100).
+      // Liste vide = hypothèque simple (retire une répartition existante).
+      immeubles: conjointe
+        ? partsNum.map((p) => ({
+            immeuble_id: p.immeuble_id,
+            part_pct: Math.round(p.pct * 100) / 100
+          }))
+        : []
     });
   }
 
@@ -5002,6 +5133,184 @@ function HypothequeForm({
             className={inputCls}
           />
         </label>
+      </div>
+
+      {/* Hypothèque CONJOINTE : un seul prêt, plusieurs immeubles, une
+          part chacun — chaque immeuble ne porte que sa part, rien n'est
+          compté deux fois dans le portefeuille. */}
+      <div className="mt-3 rounded-xl border border-brand-700 bg-brand-950 p-3">
+        <label className="flex cursor-pointer items-start gap-2 text-xs text-white">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={conjointe}
+            onChange={(e) => {
+              const on = e.target.checked;
+              setConjointe(on);
+              if (on && parts.length < 2)
+                setParts((prev) => [...prev, { immeuble_id: 0, part_pct: "" }]);
+            }}
+          />
+          <span>
+            <span className="font-semibold">
+              Hypothèque conjointe (couvre plusieurs immeubles)
+            </span>
+            <span className="block text-[11px] font-normal text-white/60">
+              Le même prêt est garanti par plusieurs immeubles. Indique la
+              part de chacun : chaque immeuble ne porte que sa part de la
+              balance et du paiement, et rien n&apos;est compté deux fois
+              dans les totaux.
+            </span>
+          </span>
+        </label>
+        {conjointe ? (
+          <div className="mt-3 space-y-2">
+            {parts.map((p, idx) => {
+              const estCourant = p.immeuble_id === immeubleId;
+              const pct = p.part_pct.trim() ? parseNombre(p.part_pct) : NaN;
+              return (
+                <div
+                  key={`${idx}-${p.immeuble_id}`}
+                  className="grid grid-cols-[minmax(0,1fr)_5.5rem_auto] items-center gap-2"
+                >
+                  {estCourant ? (
+                    <span className="truncate text-xs font-semibold text-white">
+                      {nomImmeuble(immeubleId)}
+                      <span className="badge badge-neutral ml-1.5 font-sans normal-case">
+                        cet immeuble
+                      </span>
+                    </span>
+                  ) : (
+                    <select
+                      value={p.immeuble_id || ""}
+                      onChange={(e) => {
+                        const v = Number(e.target.value) || 0;
+                        setParts((prev) =>
+                          prev.map((x, i) =>
+                            i === idx ? { ...x, immeuble_id: v } : x
+                          )
+                        );
+                      }}
+                      className={`${inputCls} mt-0`}
+                    >
+                      <option value="" className="bg-brand-950 text-white">
+                        Choisir un immeuble…
+                      </option>
+                      {immeublesDispo
+                        .filter(
+                          (im) =>
+                            im.id !== immeubleId &&
+                            (im.id === p.immeuble_id ||
+                              !idsParts.includes(im.id))
+                        )
+                        .map((im) => (
+                          <option
+                            key={im.id}
+                            value={im.id}
+                            className="bg-brand-950 text-white"
+                          >
+                            {im.name}
+                          </option>
+                        ))}
+                    </select>
+                  )}
+                  <span className="relative">
+                    <input
+                      inputMode="decimal"
+                      value={p.part_pct}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setParts((prev) =>
+                          prev.map((x, i) =>
+                            i === idx ? { ...x, part_pct: v } : x
+                          )
+                        );
+                      }}
+                      placeholder="0"
+                      className={`${inputCls} mt-0 pr-6 text-right`}
+                    />
+                    <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-[11px] text-white/50">
+                      %
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span
+                      className="w-24 text-right font-mono text-[11px] text-white/60"
+                      title="Part de la balance pour cet immeuble"
+                    >
+                      {Number.isFinite(pct) && balanceRef > 0
+                        ? fmtCurrency((balanceRef * pct) / 100)
+                        : "—"}
+                    </span>
+                    {!estCourant ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setParts((prev) => prev.filter((_, i) => i !== idx))
+                        }
+                        className="btn-outline-rose btn-xs"
+                        title="Retirer cet immeuble"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    ) : (
+                      <span className="inline-block w-[1.75rem]" />
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() =>
+                  setParts((prev) => [...prev, { immeuble_id: 0, part_pct: "" }])
+                }
+                disabled={
+                  immeublesDispo.filter(
+                    (im) => im.id !== immeubleId && !idsParts.includes(im.id)
+                  ).length === 0
+                }
+                className="btn-secondary btn-xs disabled:opacity-50"
+              >
+                <Plus className="mr-1 h-3 w-3" /> Ajouter un immeuble
+              </button>
+              <button
+                type="button"
+                onClick={repartirEgalement}
+                className="btn-secondary btn-xs"
+                title="Même part pour chaque immeuble"
+              >
+                Répartir également
+              </button>
+              <span
+                className={`ml-auto text-xs font-semibold ${
+                  totalOk ? "text-emerald-300" : "text-rose-300"
+                }`}
+              >
+                Total : {fmtPart(totalParts)}
+                {totalOk ? "" : " (doit faire 100 %)"}
+              </span>
+            </div>
+            {pmtEffective != null && totalOk ? (
+              <p className="text-[11px] text-white/60">
+                Paiement de cet immeuble :{" "}
+                {fmtCurrency(
+                  (pmtEffective *
+                    (partsNum.find((p) => p.immeuble_id === immeubleId)?.pct ??
+                      0)) /
+                    100
+                )}
+                /m sur {fmtCurrency(pmtEffective)}/m au total.
+              </p>
+            ) : null}
+            <p className="text-[10px] text-white/40">
+              Conseil : répartis au prorata de la valeur de chaque immeuble
+              (ou de son prix d&apos;achat) — c&apos;est ce que le prêteur
+              retient pour une hypothèque qui garantit plusieurs immeubles.
+            </p>
+          </div>
+        ) : null}
       </div>
 
       {pmtEffective != null || computedPmt != null ? (
@@ -5260,6 +5569,7 @@ function HypothequesTab({
 
       {adding ? (
         <HypothequeForm
+          immeubleId={immeubleId}
           initial={null}
           busy={busy}
           onCancel={() => setAdding(false)}
@@ -5275,6 +5585,7 @@ function HypothequesTab({
             editingId === h.id ? (
               <HypothequeForm
                 key={h.id}
+                immeubleId={immeubleId}
                 initial={h}
                 busy={busy}
                 onCancel={() => setEditingId(null)}
@@ -5317,6 +5628,14 @@ function HypothequesTab({
                           {MODE_REMB_LABEL[h.mode_remboursement]}
                         </span>
                       ) : null}
+                      {h.conjointe ? (
+                        <span
+                          className="badge badge-sky"
+                          title="Hypothèque conjointe : un seul prêt couvre plusieurs immeubles ; cet immeuble n'en porte que sa part."
+                        >
+                          Conjointe · {fmtPart(h.part_pct)} ici
+                        </span>
+                      ) : null}
                     </p>
                     <p className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-white/50">
                       <span>
@@ -5329,6 +5648,17 @@ function HypothequesTab({
                         dateDebut={h.date_debut}
                       />
                     </p>
+                    {h.conjointe && h.immeubles && h.immeubles.length ? (
+                      <p className="mt-1 text-[11px] text-white/60">
+                        Couvre :{" "}
+                        {h.immeubles
+                          .map(
+                            (p) =>
+                              `${p.immeuble_name || `Immeuble #${p.immeuble_id}`} (${fmtPart(p.part_pct)})`
+                          )
+                          .join(" · ")}
+                      </p>
+                    ) : null}
                     {h.notes ? (
                       <p className="mt-2 text-xs text-white/60">{h.notes}</p>
                     ) : null}
@@ -5336,11 +5666,7 @@ function HypothequesTab({
                   <div className="flex flex-shrink-0 items-center gap-3">
                     <div className="text-right">
                       <div className="font-mono text-sm font-bold text-white">
-                        {fmtCurrency(
-                          h.balance_actuelle ??
-                            h.balance_calculee ??
-                            h.montant_initial
-                        )}
+                        {fmtCurrency(balancePartDe(h))}
                         {h.balance_actuelle == null &&
                         h.balance_calculee != null ? (
                           <span
@@ -5351,8 +5677,28 @@ function HypothequesTab({
                           </span>
                         ) : null}
                       </div>
+                      {h.conjointe ? (
+                        <div
+                          className="text-[11px] text-white/60"
+                          title="Hypothèque conjointe : balance de cet immeuble = sa part du solde total du prêt."
+                        >
+                          Part de cet immeuble · total{" "}
+                          {fmtCurrency(
+                            h.balance_effective ??
+                              h.balance_actuelle ??
+                              h.balance_calculee ??
+                              h.montant_initial
+                          )}
+                        </div>
+                      ) : null}
                       <div className="text-[11px] text-white/50">
-                        Paiement {fmtCurrency(h.paiement_mensuel)}/m
+                        Paiement {fmtCurrency(paiementPartDe(h))}/m
+                        {h.conjointe && h.paiement_mensuel != null ? (
+                          <span className="text-white/40">
+                            {" "}
+                            · total {fmtCurrency(h.paiement_mensuel)}/m
+                          </span>
+                        ) : null}
                       </div>
                       {h.montant_debourse != null ? (
                         <div
@@ -6140,8 +6486,9 @@ function CashflowTab({
   const hyposActives = (hypotheques || []).filter(
     (h) => h.status === "active"
   );
+  // Hypothèque conjointe : seulement la part de cet immeuble.
   const hypoMensuel = hyposActives.reduce(
-    (s, h) => s + (h.paiement_mensuel ?? 0),
+    (s, h) => s + paiementPartDe(h),
     0
   );
 
