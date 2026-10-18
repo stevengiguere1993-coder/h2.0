@@ -180,3 +180,17 @@ bouton (visible et arrêtable depuis le catalogue). Règles : jamais deux
 tâches sur une même AsyncSession (une session par domaine / magasin, commit
 par offre) ; un VPS de scraping injoignable = site bloqué (le domaine est
 court-circuité, pas un délai réseau par offre).
+
+## Dépenses construction — coût à l'heure (2026-10-18)
+
+Steven (bug 14) : « vue d'ensemble des dépenses construction général et
+calculer coût à l'heure vs entrée de fonds ». Page Entreprises → Dépenses
+construction (`page:entreprises.depenses_construction`, admins), calculs
+dans `app/services/depenses_construction.py`. Tout est HORS TAXES. Heures
+= punchs fermés, au jour de Montréal ; main-d'œuvre = `resolve_real_cost`
+daté (comme la fiche projet) ; achats datés de `invoice_date`, sinon
+`received_at`, sinon `created_at`, annulés et sorties d'inventaire exclus,
+« shop et frais généraux » = achat sans projet ni client ; entrées de fonds
+= lignes `facture_payments` à leur `paid_at` (les paiements QB y sont
+reflétés). Le bloc QuickBooks (P&L, exercice) contient déjà les achats de
+Kratos : ne jamais l'additionner aux dépenses Kratos.

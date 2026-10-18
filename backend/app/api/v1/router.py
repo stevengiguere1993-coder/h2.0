@@ -89,6 +89,7 @@ from app.api.v1.endpoints import (
     raci,
     org_seed_canonical,
     optimisation,
+    depenses_construction,
     rencontres,
     rencontres_teams,
     timesheets,
@@ -514,6 +515,8 @@ api_router.include_router(qbo_recus_drive.router, dependencies=DEP_ENTREPRISES)
 api_router.include_router(recus_qbo.router, dependencies=DEP_ENTREPRISES)
 # Paiements fournisseurs par dépôt direct (Comptabilité → Paiements, 2026-10-04).
 api_router.include_router(paiements.router, dependencies=DEP_ENTREPRISES)
+# Dépenses construction et coût à l'heure vs entrées de fonds (bug 14, 2026-10-18).
+api_router.include_router(depenses_construction.router, dependencies=DEP_ENTREPRISES)
 # Sous-clients QB à convertir en projet (Comptabilité → Projets QB, 2026-10-14).
 api_router.include_router(qbo_conversions.router, dependencies=DEP_ENTREPRISES)
 api_router.include_router(rencontres_teams.router)
