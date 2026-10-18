@@ -15,6 +15,7 @@ import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { PushNotificationsToggle } from "@/components/push-notifications-toggle";
+import { MyCallHoursCard } from "@/components/telephonie/call-hours-editor";
 
 type Me = {
   user_email: string;
@@ -242,6 +243,9 @@ export default function MobileProfil() {
                 <PushNotificationsToggle />
               </div>
             </section>
+
+            {/* Heures d'appel personnelles (téléphonie, bug 19). */}
+            <MyCallHoursCard variant="mobile" />
 
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
               <p className="flex items-center gap-2 text-xs uppercase tracking-wider text-white/50">

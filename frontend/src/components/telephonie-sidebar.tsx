@@ -3,9 +3,11 @@
 // Sidebar dédiée au volet Téléphonie — navigation verticale.
 //
 // Les sections (Tableau de bord, Appels, Messages, Numéros, Filtres,
-// Heures, Roadmap) vivent dans cette sidebar. Le menu horizontal en
-// haut de la page a été retiré pour cohérence avec les autres volets
-// (Construction, Prospection).
+// Heures, Acheminement, Roadmap) vivent dans cette sidebar. Le menu
+// horizontal en haut de la page a été retiré pour cohérence avec les
+// autres volets (Construction, Prospection). « Acheminement » (qui sonne
+// selon le sujet de l'appel, heures d'appel de l'équipe) est réservé aux
+// admins : son API l'est aussi.
 
 import {
   Clock,
@@ -14,6 +16,7 @@ import {
   MessageSquare,
   Phone,
   PhoneCall,
+  Route,
   Sparkles,
   TrendingUp,
   X,
@@ -33,13 +36,15 @@ const SECTIONS: {
   key: TelephonieSection;
   label: string;
   icon: typeof Home;
+  adminOnly?: boolean;
 }[] = [
   { key: "dashboard", label: "Tableau de bord", icon: Home },
   { key: "appels", label: "Appels", icon: PhoneCall },
   { key: "messages", label: "Messages", icon: MessageSquare },
   { key: "numeros", label: "Numéros & routage", icon: Phone },
   { key: "filtres", label: "Filtres anti-spam", icon: Filter },
-  { key: "heures", label: "Heures d'ouverture", icon: Clock }
+  { key: "heures", label: "Heures d'ouverture", icon: Clock },
+  { key: "acheminement", label: "Acheminement", icon: Route, adminOnly: true }
 ];
 
 export function TelephonieSidebar({
@@ -47,7 +52,8 @@ export function TelephonieSidebar({
   onClose,
   section,
   onSectionChange,
-  showAcquisition = false
+  showAcquisition = false,
+  showRouting = false
 }: {
   open: boolean;
   onClose: () => void;
@@ -58,6 +64,7 @@ export function TelephonieSidebar({
   section: TelephonieSection;
   onSectionChange: (s: TelephonieSection) => void;
   showAcquisition?: boolean;
+  showRouting?: boolean;
 }) {
   // Badge « messages vocaux non lus » sur l'onglet Appels — basé sur les
   // notifications voicemail_received non lues (s'efface quand l'appel est
@@ -126,7 +133,7 @@ export function TelephonieSidebar({
           </div>
 
           <ul className="space-y-0.5">
-            {SECTIONS.map((s) => {
+            {SECTIONS.filter((s) => !s.adminOnly || showRouting).map((s) => {
               const Icon = s.icon;
               const active = section === s.key;
               const badge = s.key === "appels" ? vmUnread : 0;

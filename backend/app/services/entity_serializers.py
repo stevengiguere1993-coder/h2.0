@@ -1149,6 +1149,53 @@ def serialize_imm_financement(obj: Any, level: str = "summary") -> dict:
     return _drop_none(data)
 
 
+def serialize_voice_routing_rule(obj: Any, level: str = "summary") -> dict:
+    """Règle d'acheminement d'un appel (téléphonie, bug 19) : sujet,
+    chantier optionnel, mode de sonnerie et liste ordonnée des cibles."""
+    from app.integrations.voice.call_routing_rules import (
+        SUBJECT_LABELS,
+        TARGET_KIND_LABELS,
+        loads_targets,
+    )
+
+    subject = _str(_get(obj, "subject"))
+    targets = loads_targets(_get(obj, "targets_json"))
+    label = _str(_get(obj, "label")) or SUBJECT_LABELS.get(subject or "", subject)
+    data: dict[str, Any] = {
+        "entity_type": "voice_routing_rule",
+        "id": getattr(obj, "id", None),
+        "label": label,
+        "pole": "construction",
+        "subject": subject,
+        "subject_label": SUBJECT_LABELS.get(subject or "", subject),
+        "project_id": _get(obj, "project_id"),
+        "mode": _str(_get(obj, "mode")),
+        "respect_hours": _get(obj, "respect_hours"),
+        "active": _get(obj, "active"),
+        "targets": [
+            {
+                "kind": t.get("kind"),
+                "kind_label": TARGET_KIND_LABELS.get(str(t.get("kind")), t.get("kind")),
+                "user_id": t.get("user_id"),
+                "e164": t.get("e164"),
+                "label": t.get("label"),
+            }
+            for t in targets
+        ],
+    }
+    if level == "full":
+        data.update(
+            {
+                "phone_number_id": _get(obj, "phone_number_id"),
+                "step_timeout_sec": _get(obj, "step_timeout_sec"),
+                "priority": _get(obj, "priority"),
+                "created_at": _iso(_get(obj, "created_at")),
+                "updated_at": _iso(_get(obj, "updated_at")),
+            }
+        )
+    return _drop_none(data)
+
+
 def serialize_bloc_note(obj: Any, level: str = "summary") -> dict:
     """Note du bloc-notes de la zone employés (bug 13, 2026-10-18) :
     pense-bête ou petite tâche écrite par l'employé lui-même ou envoyée par
@@ -1180,6 +1227,28 @@ def serialize_bloc_note(obj: Any, level: str = "summary") -> dict:
                 "created_at": _iso(_get(obj, "created_at")),
             }
         )
+    return _drop_none(data)
+
+
+def serialize_voice_user_call_hours(obj: Any, level: str = "summary") -> dict:
+    """Une plage d'heures d'appel personnelle d'un utilisateur."""
+    jours = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+    dow = _get(obj, "day_of_week")
+    open_t = _get(obj, "open_time")
+    close_t = _get(obj, "close_time")
+    fmt = lambda t: t.strftime("%H:%M") if hasattr(t, "strftime") else _str(t)  # noqa: E731
+    jour = jours[int(dow)] if isinstance(dow, int) and 0 <= dow <= 6 else _str(dow)
+    data: dict[str, Any] = {
+        "entity_type": "voice_user_call_hours",
+        "id": getattr(obj, "id", None),
+        "label": f"{jour} {fmt(open_t)}–{fmt(close_t)}",
+        "pole": "construction",
+        "user_id": _get(obj, "user_id"),
+        "day_of_week": dow,
+        "open_time": fmt(open_t),
+        "close_time": fmt(close_t),
+        "timezone": _str(_get(obj, "timezone")),
+    }
     return _drop_none(data)
 
 
@@ -1252,6 +1321,8 @@ def serialize_imm_hypotheque(obj: Any, level: str = "summary") -> dict:
 
 
 SERIALIZERS: dict[str, Callable[..., dict]] = {
+    "voice_routing_rule": serialize_voice_routing_rule,
+    "voice_user_call_hours": serialize_voice_user_call_hours,
     "bloc_note": serialize_bloc_note,
     "devlog_soumission": serialize_devlog_soumission,
     "devlog_project_task": serialize_devlog_project_task,
