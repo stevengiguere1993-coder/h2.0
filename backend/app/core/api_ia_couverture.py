@@ -210,6 +210,11 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "ndas",
     "note_templates",
     "notifications",
+    #: Bloc-notes de la zone employés (Steven, bug 13, 2026-10-18) : notes /
+    #: petites tâches qu'un employé s'écrit ou qu'un admin / propriétaire
+    #: lui envoie. Lecture IA : kratos_list_entities(bloc_notes) + détail
+    #: bloc_note (activity.py) ; API complète sous /api/v1/bloc-notes.
+    "bloc_notes",
     "numbering_counters",
     "offers",
     "optimisation_budget_lignes",

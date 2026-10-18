@@ -1093,7 +1093,42 @@ def serialize_imm_financement(obj: Any, level: str = "summary") -> dict:
     return _drop_none(data)
 
 
+def serialize_bloc_note(obj: Any, level: str = "summary") -> dict:
+    """Note du bloc-notes de la zone employés (bug 13, 2026-10-18) :
+    pense-bête ou petite tâche écrite par l'employé lui-même ou envoyée par
+    un admin / propriétaire. Complétée = case « fait » cochée."""
+    fait = bool(_get(obj, "fait"))
+    titre = _str(_get(obj, "titre"))
+    contenu = _str(_get(obj, "contenu"))
+    apercu = contenu if contenu is None or len(contenu) <= 80 else contenu[:77].rstrip() + "…"
+    data: dict[str, Any] = {
+        "entity_type": "bloc_note",
+        "id": _get(obj, "id"),
+        "label": titre or apercu,
+        "title": titre,
+        "pole": "construction",
+        "status": "fait" if fait else "a_faire",
+        "is_completed": fait,
+        "destinataire_user_id": _get(obj, "destinataire_user_id"),
+        "auteur_user_id": _get(obj, "auteur_user_id"),
+        "due_date": _iso(_get(obj, "echeance")),
+        "updated_at": _iso(_get(obj, "updated_at")),
+    }
+    if level in ("detail", "full"):
+        data.update(
+            {
+                "contenu": contenu,
+                "description": contenu,
+                "fait_le": _iso(_get(obj, "fait_le")),
+                "lu_le": _iso(_get(obj, "lu_le")),
+                "created_at": _iso(_get(obj, "created_at")),
+            }
+        )
+    return _drop_none(data)
+
+
 SERIALIZERS: dict[str, Callable[..., dict]] = {
+    "bloc_note": serialize_bloc_note,
     "devlog_soumission": serialize_devlog_soumission,
     "devlog_project_task": serialize_devlog_project_task,
     "entreprise_tache": serialize_entreprise_tache,

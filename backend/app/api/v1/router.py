@@ -34,6 +34,7 @@ from app.api.v1.endpoints import (
     audit,
     auth,
     blog,
+    bloc_notes,
     calendar,
     clients,
     cnesst,
@@ -391,6 +392,9 @@ api_router.include_router(materiaux.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(projet_materiaux.rabais_router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(search.router)
 api_router.include_router(notifications.router)
+# Bloc-notes de la zone employés (bug 13, 2026-10-18) : transverse, tout
+# compte connecté a le sien ; l'envoi aux autres est vérifié dans le routeur.
+api_router.include_router(bloc_notes.router)
 api_router.include_router(audit.router)
 api_router.include_router(follow_ups.router, dependencies=DEP_PROSPECTION)
 

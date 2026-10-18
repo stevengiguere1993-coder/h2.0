@@ -42,6 +42,7 @@ from sqlalchemy import select
 from app.api.api_key_deps import ApiKeyContext
 from app.api.deps import DBSession
 from app.models.audit_log import AuditLog
+from app.models.bloc_note import BlocNote
 from app.models.devlog_project_task import DevlogProjectTask
 from app.models.devlog_project import DevlogProject
 from app.models.employe import Employe
@@ -1598,6 +1599,11 @@ _DETAIL_ENTITIES: dict[str, tuple] = {
         EntrepriseTache, "entreprise", "entreprise_tache",
         "entreprise:tasks:read",
     ),
+    # Bloc-notes de la zone employés (bug 13, 2026-10-18) : la zone /m est
+    # rattachée au pôle Construction, même capacité que ses tâches.
+    "bloc_note": (
+        BlocNote, "construction", "bloc_note", "construction:tasks:read",
+    ),
     "prospection_deal_task": (
         ProspectionDealTask, "prospection", "prospection_deal_task",
         "prospection:tasks:read",
@@ -1983,6 +1989,15 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         list_cap="immobilier:tal_dossiers:list",
         order_attr="updated_at", stage_attr="statut", supports_active=False,
     ),
+    # Zone employés (2026-10-18) : bloc-notes — notes / petites tâches par
+    # employé (destinataire_user_id), écrites par lui ou envoyées par un
+    # admin / propriétaire. Pas de filtre d'étape (une case « fait »).
+    "bloc_notes": _ListSpec(
+        model=BlocNote, pole="construction",
+        entity_type="bloc_note",
+        list_cap="construction:tasks:read",
+        order_attr="updated_at", stage_attr=None, supports_active=False,
+    ),
 }
 
 #: Alias supplémentaires (noms « complets ») vers les mêmes specs, pour que
@@ -2019,6 +2034,9 @@ _LIST_ALIASES: dict[str, str] = {
     "dossiers_financement": "financements",
     "baux_tal": "tal_transmissions",
     "bail_tal": "tal_transmissions",
+    "bloc_note": "bloc_notes",
+    "bloc-notes": "bloc_notes",
+    "notes_employes": "bloc_notes",
 }
 
 
