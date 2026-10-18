@@ -42,16 +42,23 @@ from sqlalchemy import select
 from app.api.api_key_deps import ApiKeyContext
 from app.api.deps import DBSession
 from app.models.audit_log import AuditLog
+from app.models.bloc_note import BlocNote
 from app.models.devlog_project_task import DevlogProjectTask
 from app.models.devlog_project import DevlogProject
 from app.models.employe import Employe
 from app.models.entreprise import Entreprise, EntreprisePartner
 from app.models.paiement_fournisseur import LotPaiement
 from app.models.entreprise_tache import EntrepriseTache
-from app.models.immobilier import ImmLocataireContact, ImmTalDossier
+from app.models.immobilier import (
+    Hypotheque,
+    ImmLocataireContact,
+    ImmTalDossier,
+    ImmeubleCode,
+)
 from app.models.tal_bail import TalTransmission
 from app.models.financement import Financement
 from app.models.project import Project
+from app.models.inventaire import InventaireArticle, InventaireMouvement
 from app.models.materiau import Materiau
 from app.models.projet_materiau import ProjetMateriau
 from app.models.project_task import ProjectTask
@@ -1558,6 +1565,16 @@ _DETAIL_ENTITIES: dict[str, tuple] = {
         ProjetMateriau, "construction", "projet_materiau",
         "construction:materiaux:list",
     ),
+    # Inventaire interne (2026-10-18) : articles en stock et mouvements
+    # (entrées, comptes, sorties vers un projet).
+    "inventaire_article": (
+        InventaireArticle, "construction", "inventaire_article",
+        "construction:inventaire:list",
+    ),
+    "inventaire_mouvement": (
+        InventaireMouvement, "construction", "inventaire_mouvement",
+        "construction:inventaire:list",
+    ),
     "soumission": (
         DevlogSoumission, "devlog", "devlog_soumission",
         "devlog:soumissions:read",
@@ -1599,6 +1616,11 @@ _DETAIL_ENTITIES: dict[str, tuple] = {
         EntrepriseTache, "entreprise", "entreprise_tache",
         "entreprise:tasks:read",
     ),
+    # Bloc-notes de la zone employés (bug 13, 2026-10-18) : la zone /m est
+    # rattachée au pôle Construction, même capacité que ses tâches.
+    "bloc_note": (
+        BlocNote, "construction", "bloc_note", "construction:tasks:read",
+    ),
     "prospection_deal_task": (
         ProspectionDealTask, "prospection", "prospection_deal_task",
         "prospection:tasks:read",
@@ -1631,6 +1653,17 @@ _DETAIL_ENTITIES: dict[str, tuple] = {
     "financement": (
         Financement, "immobilier", "imm_financement",
         "immobilier:tal_dossiers:read",
+    ),
+    # Codes d'accès d'un immeuble (porte, lock box, garage…, 2026-10-18).
+    "immeuble_code": (
+        ImmeubleCode, "immobilier", "imm_immeuble_code",
+        "immobilier:immeubles:read",
+    ),
+    # Hypothèques (2026-10-18) — une conjointe porte ses immeubles
+    # couverts et leurs parts dans le détail REST ; ici le résumé.
+    "hypotheque": (
+        Hypotheque, "immobilier", "imm_hypotheque",
+        "immobilier:immeubles:read",
     ),
 }
 
@@ -1928,6 +1961,19 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         entity_type="projet_materiau", list_cap="construction:materiaux:list",
         order_attr="updated_at", stage_attr="statut", supports_active=False,
     ),
+    # Inventaire interne (2026-10-18) — `stage` filtre la catégorie des
+    # articles, le type des mouvements (entree | ajustement | sortie).
+    "inventaire": _ListSpec(
+        model=InventaireArticle, pole="construction",
+        entity_type="inventaire_article", list_cap="construction:inventaire:list",
+        order_attr="updated_at", stage_attr="categorie", supports_active=False,
+    ),
+    "inventaire_mouvements": _ListSpec(
+        model=InventaireMouvement, pole="construction",
+        entity_type="inventaire_mouvement",
+        list_cap="construction:inventaire:list",
+        order_attr="created_at", stage_attr="type", supports_active=False,
+    ),
     # Immobilier (2026-09-09) — `stage` filtre le statut du dossier TAL
     # (a_ouvrir | ouvert | audience | decision | ferme) ou le rôle du
     # contact (garant | colocataire | occupant | urgence).
@@ -2002,6 +2048,31 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         list_cap="construction:projects:list",
         order_attr="id", stage_attr=None, supports_active=False,
     ),
+    # Zone employés (2026-10-18) : bloc-notes — notes / petites tâches par
+    # employé (destinataire_user_id), écrites par lui ou envoyées par un
+    # admin / propriétaire. Pas de filtre d'étape (une case « fait »).
+    "bloc_notes": _ListSpec(
+        model=BlocNote, pole="construction",
+        entity_type="bloc_note",
+        list_cap="construction:tasks:read",
+        order_attr="updated_at", stage_attr=None, supports_active=False,
+    ),
+    # Immobilier (2026-10-18) : codes d'accès des immeubles (porte, lock
+    # box, garage…) ; `stage` filtre par libellé.
+    "immeuble_codes": _ListSpec(
+        model=ImmeubleCode, pole="immobilier",
+        entity_type="imm_immeuble_code",
+        list_cap="immobilier:immeubles:list",
+        order_attr="updated_at", stage_attr="libelle", supports_active=False,
+    ),
+    # Immobilier (2026-10-18) : hypothèques des immeubles ; `stage` filtre
+    # le statut (active | remboursee | refinancee).
+    "hypotheques": _ListSpec(
+        model=Hypotheque, pole="immobilier",
+        entity_type="imm_hypotheque",
+        list_cap="immobilier:immeubles:list",
+        order_attr="updated_at", stage_attr="status", supports_active=False,
+    ),
 }
 
 #: Alias supplémentaires (noms « complets ») vers les mêmes specs, pour que
@@ -2020,6 +2091,10 @@ _LIST_ALIASES: dict[str, str] = {
     "materiaux_catalogue": "materiaux",
     "projet_materiau": "projet_materiaux",
     "liste_achats_materiaux": "projet_materiaux",
+    "inventaire_article": "inventaire",
+    "inventaire_articles": "inventaire",
+    "inventaire_interne": "inventaire",
+    "inventaire_mouvement": "inventaire_mouvements",
     "tal_dossier": "tal_dossiers",
     "imm_tal_dossier": "tal_dossiers",
     "locataire_contact": "locataire_contacts",
@@ -2036,6 +2111,12 @@ _LIST_ALIASES: dict[str, str] = {
     "financement": "financements",
     "imm_financement": "financements",
     "dossiers_financement": "financements",
+    "immeuble_code": "immeuble_codes",
+    "imm_immeuble_code": "immeuble_codes",
+    "codes_immeuble": "immeuble_codes",
+    "codes_acces": "immeuble_codes",
+    "hypotheque": "hypotheques",
+    "imm_hypotheque": "hypotheques",
     "baux_tal": "tal_transmissions",
     "bail_tal": "tal_transmissions",
     "voice_routing_rule": "regles_acheminement",
@@ -2043,6 +2124,9 @@ _LIST_ALIASES: dict[str, str] = {
     "acheminement": "regles_acheminement",
     "voice_user_call_hours": "heures_appel",
     "call_hours": "heures_appel",
+    "bloc_note": "bloc_notes",
+    "bloc-notes": "bloc_notes",
+    "notes_employes": "bloc_notes",
 }
 
 

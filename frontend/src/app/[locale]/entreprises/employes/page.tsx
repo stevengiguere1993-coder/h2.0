@@ -3,20 +3,26 @@
 /**
  * Onglet « Équipe » — une carte par employé : type (Construction / Autre),
  * rôle, pôles, tâches ouvertes, heures de la période de paie courante et
- * statut de feuille, prochain événement. Cliquer une carte sélectionne
+ * statut de feuille, prochain événement et punch en cours (qu'un
+ * gestionnaire peut arrêter, ex. un oubli). Cliquer une carte sélectionne
  * l'employé (?employe=<id>) ; les liens rapides ouvrent ses Tâches, sa
  * Feuille et son Agenda.
  */
 
+import { useState } from "react";
 import {
   CalendarDays,
   CheckCircle2,
   Clock,
+  Loader2,
   Target,
+  Timer,
   Users
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
+import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 import {
   CARD,
   Chargement,
@@ -39,7 +45,7 @@ const LIENS_RAPIDES: Array<{ href: string; label: string }> = [
 ];
 
 export default function EquipePage() {
-  const { equipe, loading, error, selected, setSelected } =
+  const { equipe, loading, error, selected, setSelected, reload } =
     useSectionEmployes();
 
   const nbConstruction = equipe.filter((e) => e.type === "construction").length;
@@ -77,6 +83,7 @@ export default function EquipePage() {
                 employe={e}
                 actif={selected?.id === e.id}
                 onSelect={() => setSelected(e.id)}
+                onChanged={reload}
               />
             ))}
           </div>
@@ -89,11 +96,13 @@ export default function EquipePage() {
 function CarteEmploye({
   employe,
   actif,
-  onSelect
+  onSelect,
+  onChanged
 }: {
   employe: EmployeZoneOut;
   actif: boolean;
   onSelect: () => void;
+  onChanged: () => Promise<void>;
 }) {
   const ev = employe.prochain_evenement;
   return (
@@ -180,6 +189,10 @@ function CarteEmploye({
         </div>
       </dl>
 
+      {employe.punch_en_cours ? (
+        <PunchEnCours employe={employe} onChanged={onChanged} />
+      ) : null}
+
       <div className="mt-4 flex items-center gap-2 border-t border-[var(--qg-border)] pt-3">
         {actif ? (
           <span className="mr-auto inline-flex items-center gap-1 text-xs font-semibold text-[var(--qg-text)]">
@@ -205,6 +218,101 @@ function CarteEmploye({
           </Link>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Punch de feuille de temps en cours : le gestionnaire le voit et peut
+ *  l'arrêter (oubli) — les heures vont à la feuille de l'employé. */
+function PunchEnCours({
+  employe,
+  onChanged
+}: {
+  employe: EmployeZoneOut;
+  onChanged: () => Promise<void>;
+}) {
+  const confirm = useConfirm();
+  const [busy, setBusy] = useState(false);
+  const [erreur, setErreur] = useState<string | null>(null);
+  const p = employe.punch_en_cours;
+  if (!p) return null;
+  const debut = new Date(p.started_at);
+  const heure = debut.toLocaleTimeString("fr-CA", {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+  const quand =
+    debut.toDateString() === new Date().toDateString()
+      ? heure
+      : `${debut.toLocaleDateString("fr-CA", {
+          weekday: "short",
+          day: "numeric",
+          month: "short"
+        })} ${heure}`;
+
+  async function arreter() {
+    const ok = await confirm({
+      title: `Arrêter le punch de ${employe.display_name} ?`,
+      description:
+        "Les heures jusqu'à maintenant s'ajoutent à sa feuille de temps (24 h au plus). Il pourra corriger la ligne tant que sa feuille est en brouillon.",
+      confirmLabel: "Arrêter le punch"
+    });
+    if (!ok) return;
+    setBusy(true);
+    setErreur(null);
+    try {
+      const r = await authedFetch("/api/v1/timesheets/punch/stop", {
+        method: "POST",
+        body: JSON.stringify({ user_id: employe.id })
+      });
+      if (!r.ok && r.status !== 404) {
+        const txt = await r.text();
+        let msg = txt;
+        try {
+          const body = JSON.parse(txt) as { detail?: unknown };
+          if (typeof body.detail === "string") msg = body.detail;
+        } catch {
+          /* texte brut */
+        }
+        throw new Error(msg || `Erreur ${r.status}`);
+      }
+      await onChanged();
+    } catch (e) {
+      setErreur((e as Error).message || "Arrêt impossible");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="flex items-center gap-1 text-xs font-semibold text-emerald-300">
+            <Timer className="h-3.5 w-3.5" /> Punch en cours depuis {quand}
+          </p>
+          <p className="mt-0.5 truncate text-xs text-[var(--qg-text-muted)]">
+            {p.title}
+            {p.company_label ? ` · ${p.company_label}` : ""}
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={(e) => {
+            e.stopPropagation();
+            void arreter();
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+          className="btn-secondary btn-sm shrink-0 disabled:opacity-50"
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+          Arrêter
+        </button>
+      </div>
+      {erreur ? (
+        <p className="mt-1 text-xs text-rose-300">{erreur}</p>
+      ) : null}
     </div>
   );
 }

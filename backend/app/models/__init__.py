@@ -183,10 +183,12 @@ from app.models.immobilier import (  # noqa: F401
     Evaluation,
     EvaluationKind,
     Hypotheque,
+    HypothequeImmeuble,
     HypothequeStatus,
     HypothequeTranche,
     ImmCommunication,
     Immeuble,
+    ImmeubleCode,
     ImmeubleOwnership,
     ImmeubleType,
     Logement,
@@ -221,6 +223,7 @@ from app.models.subscription_vault_access import (  # noqa: F401
     SubscriptionVaultAccess,
 )
 from app.models.notification import Notification
+from app.models.bloc_note import BlocNote  # noqa: F401
 from app.models.numbering_counter import NumberingCounter
 from app.models.payment import Payment
 from app.models.project import Project
@@ -294,6 +297,7 @@ from app.models.seo_article import SeoArticle
 from app.models.service_template import ServiceTemplate, ServiceTemplateItem
 from app.models.materiau import Magasin, Materiau, MateriauOffre, MateriauPrixHistorique
 from app.models.projet_materiau import ProjetMateriau
+from app.models.inventaire import InventaireArticle, InventaireMouvement
 from app.models.soumission_avenant import SoumissionAvenant
 from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
@@ -307,6 +311,7 @@ from app.models.timesheet import (  # noqa: F401
     Timesheet,
     TimesheetCompany,
     TimesheetEntry,
+    TimesheetPunch,
     TimesheetTaskLine,
     TimesheetUserCompany,
 )
@@ -392,9 +397,11 @@ __all__ = [
     "Evaluation",
     "Distribution",
     "Hypotheque",
+    "HypothequeImmeuble",
     "HypothequeTranche",
     "DepenseImmeuble",
     "Immeuble",
+    "ImmeubleCode",
     "ImmeubleOwnership",
     "Investissement",
     "InvestDocument",

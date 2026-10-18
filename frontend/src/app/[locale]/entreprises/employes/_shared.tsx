@@ -53,6 +53,14 @@ export type EmployeZoneOut = {
   heures_periode: number;
   feuille_statut: string | null;
   prochain_evenement: EvenementOut | null;
+  /** Punch de feuille de temps en cours (employé « autre », bug 16). */
+  punch_en_cours: PunchEnCoursOut | null;
+};
+
+export type PunchEnCoursOut = {
+  started_at: string;
+  title: string;
+  company_label: string;
 };
 
 // ── Contexte de section ────────────────────────────────────────────────

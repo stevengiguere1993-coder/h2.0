@@ -169,8 +169,17 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "imm_factures_gestion",
     "imm_frais_locatifs",
     "imm_frais_manuels_gestion",
+    #: Hypothèque conjointe (2026-10-18) : parts d'une hypothèque par
+    #: immeuble couvert — lues dans le détail de l'hypothèque
+    #: (GET /immobilier/immeubles/{id}/hypotheques → `immeubles`,
+    #: `part_pct`) et via kratos_list_entities(hypotheques).
+    "imm_hypotheque_immeubles",
     "imm_hypotheque_tranches",
     "imm_hypotheques",
+    #: Codes d'accès d'un immeuble (porte, lock box, garage…, 2026-10-18) —
+    #: kratos_list_entities(immeuble_codes) + détail immeuble_code ; routes
+    #: REST /immobilier/immeubles/{id}/codes.
+    "imm_immeuble_codes",
     "imm_immeuble_ownerships",
     "imm_immeubles",
     "imm_locataire_communications",
@@ -210,6 +219,11 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "ndas",
     "note_templates",
     "notifications",
+    #: Bloc-notes de la zone employés (Steven, bug 13, 2026-10-18) : notes /
+    #: petites tâches qu'un employé s'écrit ou qu'un admin / propriétaire
+    #: lui envoie. Lecture IA : kratos_list_entities(bloc_notes) + détail
+    #: bloc_note (activity.py) ; API complète sous /api/v1/bloc-notes.
+    "bloc_notes",
     "numbering_counters",
     "offers",
     "optimisation_budget_lignes",
@@ -293,6 +307,11 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     #: Liste d'achats de matériaux par projet (étape 3, 2026-09-25) —
     #: liste générique « projet_materiaux » + GET /projects/{id}/materiaux.
     "projet_materiaux",
+    #: Inventaire interne (2026-10-18) : articles en stock et mouvements
+    #: (entrées, comptes, sorties vers un projet) — listes génériques
+    #: « inventaire » / « inventaire_mouvements » + routes /inventaire.
+    "inventaire_articles",
+    "inventaire_mouvements",
     "soumission_items",
     "soumissions",
     "sous_traitant_timesheets",
@@ -308,6 +327,10 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "timesheet_task_lines",
     #: Compagnies assignées à un employé — GET /timesheets/user-companies.
     "timesheet_user_companies",
+    #: Punch de la feuille de temps (bug 16, 2026-10-18) — punch en cours
+    #: par GET /timesheets/punch (et dans GET /entreprises/employes) ; une
+    #: fois arrêté, ses heures sont une ligne de la feuille (« taches »).
+    "timesheet_punches",
     "timesheet_user_rates",
     "timesheets",
     "user_ai_briefs",

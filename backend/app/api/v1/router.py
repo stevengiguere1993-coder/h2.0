@@ -34,6 +34,7 @@ from app.api.v1.endpoints import (
     audit,
     auth,
     blog,
+    bloc_notes,
     calendar,
     clients,
     cnesst,
@@ -66,6 +67,7 @@ from app.api.v1.endpoints import (
     immobilier_tal_garants,
     immobilier_tal_bail,
     immobilier_financement,
+    immobilier_codes,
     immobilier_extras,
     immobilier_import_excel,
     immobilier_locations,
@@ -87,6 +89,7 @@ from app.api.v1.endpoints import (
     raci,
     org_seed_canonical,
     optimisation,
+    depenses_construction,
     rencontres,
     rencontres_teams,
     timesheets,
@@ -112,6 +115,7 @@ from app.api.v1.endpoints import (
     sales_tasks,
     service_templates,
     materiaux,
+    inventaire,
     projet_materiaux,
     user_roles,
     users,
@@ -388,9 +392,13 @@ api_router.include_router(mobile.router)
 api_router.include_router(leave_requests.router)
 api_router.include_router(service_templates.router)
 api_router.include_router(materiaux.router, dependencies=DEP_CONSTRUCTION)
+api_router.include_router(inventaire.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(projet_materiaux.rabais_router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(search.router)
 api_router.include_router(notifications.router)
+# Bloc-notes de la zone employés (bug 13, 2026-10-18) : transverse, tout
+# compte connecté a le sien ; l'envoi aux autres est vérifié dans le routeur.
+api_router.include_router(bloc_notes.router)
 api_router.include_router(audit.router)
 api_router.include_router(follow_ups.router, dependencies=DEP_PROSPECTION)
 
@@ -507,6 +515,8 @@ api_router.include_router(qbo_recus_drive.router, dependencies=DEP_ENTREPRISES)
 api_router.include_router(recus_qbo.router, dependencies=DEP_ENTREPRISES)
 # Paiements fournisseurs par dépôt direct (Comptabilité → Paiements, 2026-10-04).
 api_router.include_router(paiements.router, dependencies=DEP_ENTREPRISES)
+# Dépenses construction et coût à l'heure vs entrées de fonds (bug 14, 2026-10-18).
+api_router.include_router(depenses_construction.router, dependencies=DEP_ENTREPRISES)
 # Sous-clients QB à convertir en projet (Comptabilité → Projets QB, 2026-10-14).
 api_router.include_router(qbo_conversions.router, dependencies=DEP_ENTREPRISES)
 api_router.include_router(rencontres_teams.router)
@@ -560,6 +570,8 @@ api_router.include_router(
 api_router.include_router(
     immobilier_financement.router, dependencies=DEP_IMMOBILIER
 )
+# Codes d'accès d'un immeuble : porte, lock box, garage… (2026-10-18).
+api_router.include_router(immobilier_codes.router, dependencies=DEP_IMMOBILIER)
 # Page Communications — envois courriel sans signature + audit.
 api_router.include_router(
     immobilier_communications.router, dependencies=DEP_IMMOBILIER

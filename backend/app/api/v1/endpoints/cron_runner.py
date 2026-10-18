@@ -886,18 +886,15 @@ async def trigger_all_daily(
     # Catalogue de matériaux : relevé quotidien des prix chez les
     # détaillants (offres avec lien produit, non vérifiées depuis 20 h).
     async def _run_materiaux_prix():
-        from app.services.materiaux_prix_auto import (
-            alerter_rabais_sans_casser,
-            relever_tout,
-        )
+        from app.services.materiaux_prix_auto import lancer_releve_en_fond
 
-        async with AsyncSessionLocal() as db:
-            r = await relever_tout(db, max_age_hours=20)
-            await db.commit()
-            # Étape 3 : alertes de rabais sur les listes d'achats (cloche +
-            # push aux gestionnaires), une fois par rabais.
-            r["alertes"] = await alerter_rabais_sans_casser(db)
-            await db.commit()
+        # Même course que le bouton « Actualiser les prix » : état visible
+        # dans le catalogue, une session par domaine, durée maximale,
+        # arrêtable ; les alertes de rabais (cloche + push aux
+        # gestionnaires, une fois par rabais) en font partie. Un relevé
+        # déjà en cours (bouton, job de nuit) n'est pas doublé.
+        tache = lancer_releve_en_fond(max_age_hours=20)
+        r = (await tache) if tache is not None else {"skipped": "releve_deja_en_cours"}
         # Prix de base manquants : recherche sur les sites + repli IA web
         # (une session par magasin, un run à la fois). Quota quotidien
         # large pour que TOUT le catalogue finisse par avoir un prix sans
@@ -910,7 +907,7 @@ async def trigger_all_daily(
             r["recherche"] = {k: v for k, v in rc.items() if k != "details"}
         except Exception as exc:  # noqa: BLE001
             r["recherche"] = {"error": str(exc)[:200]}
-        return {k: v for k, v in r.items() if k != "erreurs"} | {
+        return {k: v for k, v in r.items() if k not in ("erreurs", "dernier")} | {
             "erreurs": len(r.get("erreurs") or [])
         }
 
@@ -1100,7 +1097,7 @@ async def trigger_all_hourly(
         if not await is_qbo_auto_sync_enabled():
             return {"skipped": "qbo_auto_sync_off"}
         from sqlalchemy import select
-        from app.models.achat import Achat
+        from app.models.achat import KIND_INVENTAIRE, Achat
         from app.services.achat_qbo import sync_achat_to_qbo
 
         from datetime import datetime, timedelta, timezone
@@ -1123,6 +1120,8 @@ async def trigger_all_hourly(
                             Achat.status.in_(("received", "paid")),
                             Achat.qbo_bill_id.is_(None),
                             Achat.qbo_purchase_id.is_(None),
+                            # Sortie d'inventaire interne : jamais dans QB.
+                            Achat.kind != KIND_INVENTAIRE,
                         )
                     )
                 ).all()

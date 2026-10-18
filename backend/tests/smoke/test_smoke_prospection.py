@@ -136,3 +136,66 @@ def test_lead_analysis_patch(client, auth_headers, seeded_analysis_id):
     body = patched.json()
     assert body["notes"] == "Note smoke"
     assert body["city"] == "Laval"
+
+
+def test_deal_compteurs_taches(client, auth_headers):
+    """Vue « Liste » du Pipeline (bug 18) : la liste des deals et la fiche
+    portent les compteurs de tâches — total, ouvertes (statut ≠ done), en
+    retard (ouvertes dont l'échéance est passée) et prochaine échéance
+    ouverte. Un deal sans tâche garde les défauts (0 / None)."""
+    from datetime import date, timedelta
+
+    deal = client.post(
+        "/api/v1/prospection/deals",
+        headers=auth_headers,
+        json={"address": "789 rue des Compteurs"},
+    ).json()
+    hier = (date.today() - timedelta(days=1)).isoformat()
+    demain = (date.today() + timedelta(days=1)).isoformat()
+    # ICE fournis → pas d'autoscore IA en arrière-plan.
+    ice = {"impact": 5, "confidence": 5, "effort": 5}
+    for payload in (
+        {"name": "Faite hier", "status": "done", "due_date": hier, **ice},
+        {"name": "En retard", "due_date": hier, **ice},
+        {"name": "Demain", "due_date": demain, **ice},
+        {"name": "Sans échéance", **ice},
+    ):
+        r = client.post(
+            f"/api/v1/prospection/deals/{deal['id']}/tasks",
+            headers=auth_headers,
+            json=payload,
+        )
+        assert r.status_code == 201, r.text
+
+    listed = client.get("/api/v1/prospection/deals", headers=auth_headers)
+    assert listed.status_code == 200, listed.text
+    row = next(d for d in listed.json() if d["id"] == deal["id"])
+    assert row["nb_taches"] == 4
+    assert row["nb_taches_ouvertes"] == 3
+    assert row["nb_taches_en_retard"] == 1
+    # La prochaine échéance est la plus proche parmi les tâches OUVERTES
+    # (la tâche faite n'entre pas en compte, la tâche en retard oui).
+    assert row["prochaine_echeance"] == hier
+
+    got = client.get(
+        f"/api/v1/prospection/deals/{deal['id']}", headers=auth_headers
+    )
+    assert got.status_code == 200, got.text
+    assert got.json()["nb_taches_ouvertes"] == 3
+    assert got.json()["prochaine_echeance"] == hier
+
+    vide = client.post(
+        "/api/v1/prospection/deals",
+        headers=auth_headers,
+        json={"address": "1 rue Vide"},
+    ).json()
+    assert vide["nb_taches"] == 0
+    assert vide["nb_taches_ouvertes"] == 0
+    assert vide["nb_taches_en_retard"] == 0
+    assert vide["prochaine_echeance"] is None
+    row_vide = next(
+        d
+        for d in client.get("/api/v1/prospection/deals", headers=auth_headers).json()
+        if d["id"] == vide["id"]
+    )
+    assert row_vide["nb_taches"] == 0

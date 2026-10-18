@@ -649,6 +649,10 @@ class AchatRead(_Base):
     #: Dépense importée de QB (pull des coûts) : Id QB de la Purchase.
     qbo_purchase_id: Optional[str] = None
     qbo_doc_number: Optional[str] = None
+    #: Total TTC de la transaction QB d'origine : quand il dépasse le
+    #: montant de l'achat, la facture est fractionnée dans QB et l'achat
+    #: n'en porte que la part de son projet.
+    qbo_txn_total: Optional[float] = None
     notes: Optional[str]
     is_billable: bool = True
     #: Choix MANUEL de la case « à refacturer » (verrou contre les

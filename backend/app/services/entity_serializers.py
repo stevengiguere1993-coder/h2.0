@@ -943,6 +943,62 @@ def serialize_projet_materiau(obj: Any, level: str = "summary") -> dict:
     return data
 
 
+def serialize_inventaire_article(obj: Any, level: str = "summary") -> dict:
+    """Article de l'INVENTAIRE INTERNE (pôle Construction, 2026-10-18) :
+    stock en main, coût unitaire moyen HT (ce qu'une sortie charge au
+    projet) et valeur du stock."""
+    qte = _num(_get(obj, "quantite")) or 0.0
+    cout = _num(_get(obj, "cout_unitaire"))
+    unite = _str(_get(obj, "unit"))
+    data: dict[str, Any] = {
+        "entity_type": "inventaire_article",
+        "id": _get(obj, "id"),
+        "label": _str(_get(obj, "name")),
+        "name": _str(_get(obj, "name")),
+        "pole": "construction",
+        "categorie": _str(_get(obj, "categorie")),
+        "unit": unite,
+        "quantite": qte,
+        "cout_unitaire": cout,
+        "valeur": (round(qte * cout, 2) if cout is not None else None),
+        "is_active": bool(getattr(obj, "is_active", True)),
+        "updated_at": _iso(_get(obj, "updated_at")),
+    }
+    if level in ("detail", "full"):
+        data["notes"] = _str(_get(obj, "notes"))
+        data["created_at"] = _iso(_get(obj, "created_at"))
+    return _drop_none(data)
+
+
+def serialize_inventaire_mouvement(obj: Any, level: str = "summary") -> dict:
+    """Mouvement de l'inventaire interne : entrée, ajustement de compte ou
+    SORTIE vers un projet (quantité signée, coût unitaire HT). Une sortie
+    porte l'achat « Inventaire interne » créé sur le projet (achat_id)."""
+    art = getattr(obj, "article", None)
+    nom = _str(getattr(art, "name", None)) or f"Article {_get(obj, 'article_id')}"
+    qte = _num(_get(obj, "quantite")) or 0.0
+    cout = _num(_get(obj, "cout_unitaire"))
+    data: dict[str, Any] = {
+        "entity_type": "inventaire_mouvement",
+        "id": _get(obj, "id"),
+        "label": f"{_str(_get(obj, 'type')) or 'mouvement'} — {nom} {qte:+g}",
+        "pole": "construction",
+        "type": _str(_get(obj, "type")),
+        "article_id": _get(obj, "article_id"),
+        "article_name": nom,
+        "quantite": qte,
+        "cout_unitaire": cout,
+        "montant": (round(abs(qte) * cout, 2) if cout is not None else None),
+        "project_id": _get(obj, "project_id"),
+        "achat_id": _get(obj, "achat_id"),
+        "created_at": _iso(_get(obj, "created_at")),
+    }
+    if level in ("detail", "full"):
+        data["note"] = _str(_get(obj, "note"))
+        data["created_by_user_id"] = _get(obj, "created_by_user_id")
+    return _drop_none(data)
+
+
 def serialize_lot_paiement(obj: Any, level: str = "summary") -> dict:
     """Lot de paiements fournisseurs (Comptabilité → Paiements), par dépôt
     direct ou virements Interac (``mode``). Jamais de coordonnées de
@@ -1140,6 +1196,40 @@ def serialize_voice_routing_rule(obj: Any, level: str = "summary") -> dict:
     return _drop_none(data)
 
 
+def serialize_bloc_note(obj: Any, level: str = "summary") -> dict:
+    """Note du bloc-notes de la zone employés (bug 13, 2026-10-18) :
+    pense-bête ou petite tâche écrite par l'employé lui-même ou envoyée par
+    un admin / propriétaire. Complétée = case « fait » cochée."""
+    fait = bool(_get(obj, "fait"))
+    titre = _str(_get(obj, "titre"))
+    contenu = _str(_get(obj, "contenu"))
+    apercu = contenu if contenu is None or len(contenu) <= 80 else contenu[:77].rstrip() + "…"
+    data: dict[str, Any] = {
+        "entity_type": "bloc_note",
+        "id": _get(obj, "id"),
+        "label": titre or apercu,
+        "title": titre,
+        "pole": "construction",
+        "status": "fait" if fait else "a_faire",
+        "is_completed": fait,
+        "destinataire_user_id": _get(obj, "destinataire_user_id"),
+        "auteur_user_id": _get(obj, "auteur_user_id"),
+        "due_date": _iso(_get(obj, "echeance")),
+        "updated_at": _iso(_get(obj, "updated_at")),
+    }
+    if level in ("detail", "full"):
+        data.update(
+            {
+                "contenu": contenu,
+                "description": contenu,
+                "fait_le": _iso(_get(obj, "fait_le")),
+                "lu_le": _iso(_get(obj, "lu_le")),
+                "created_at": _iso(_get(obj, "created_at")),
+            }
+        )
+    return _drop_none(data)
+
+
 def serialize_voice_user_call_hours(obj: Any, level: str = "summary") -> dict:
     """Une plage d'heures d'appel personnelle d'un utilisateur."""
     jours = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
@@ -1162,9 +1252,78 @@ def serialize_voice_user_call_hours(obj: Any, level: str = "summary") -> dict:
     return _drop_none(data)
 
 
+def serialize_imm_immeuble_code(obj: Any, level: str = "summary") -> dict:
+    """Code d'accès d'un immeuble (porte d'entrée, lock box, garage…,
+    pôle Immobilier, 2026-10-18). Le code lui-même est exposé : la clé
+    qui lit les immeubles doit pouvoir répondre « c'est quoi le code de
+    la lock box du 710 Legendre ? »."""
+    libelle = _str(_get(obj, "libelle"))
+    data: dict[str, Any] = {
+        "entity_type": "imm_immeuble_code",
+        "type": "imm_immeuble_code",
+        "id": _get(obj, "id"),
+        "label": libelle,
+        "pole": "immobilier",
+        "immeuble_id": _get(obj, "immeuble_id"),
+        "libelle": libelle,
+        "code": _str(_get(obj, "code")),
+        "note": _str(_get(obj, "note")),
+        "position": _get(obj, "position"),
+        "updated_at": _iso(_get(obj, "updated_at")),
+    }
+    if level in ("detail", "full"):
+        data.update({
+            "created_by_email": _str(_get(obj, "created_by_email")),
+            "created_at": _iso(_get(obj, "created_at")),
+        })
+    return _drop_none(data)
+
+
+def serialize_imm_hypotheque(obj: Any, level: str = "summary") -> dict:
+    """Hypothèque d'un immeuble (pôle Immobilier, 2026-10-18). Résumé :
+    prêteur, rang, montants, taux, paiement, statut, dates, immeuble
+    principal. Une hypothèque CONJOINTE porte ses immeubles couverts et
+    leurs parts dans la route REST (GET /immobilier/immeubles/{id}/
+    hypotheques → ``immeubles``, ``part_pct``)."""
+    statut = _str(_get(obj, "status"))
+    preteur = _str(_get(obj, "preteur"))
+    rang = _get(obj, "rang")
+    data: dict[str, Any] = {
+        "entity_type": "imm_hypotheque",
+        "type": "imm_hypotheque",
+        "id": _get(obj, "id"),
+        "label": f"Hypothèque {preteur or ''} (rang {rang or 1}, {statut or ''})".strip(),
+        "pole": "immobilier",
+        "immeuble_id": _get(obj, "immeuble_id"),
+        "rang": rang,
+        "preteur": preteur,
+        "status": statut,
+        "statut": statut,
+        "type_pret": _str(_get(obj, "type_pret")),
+        "mode_remboursement": _str(_get(obj, "mode_remboursement")),
+        "montant_initial": _num(_get(obj, "montant_initial")),
+        "balance_actuelle": _num(_get(obj, "balance_actuelle")),
+        "taux_pct": _num(_get(obj, "taux_pct")),
+        "type_taux": _str(_get(obj, "type_taux")),
+        "amortissement_mois": _get(obj, "amortissement_mois"),
+        "paiement_mensuel": _num(_get(obj, "paiement_mensuel")),
+        "date_debut": _iso(_get(obj, "date_debut")),
+        "date_fin_terme": _iso(_get(obj, "date_fin_terme")),
+        "updated_at": _iso(_get(obj, "updated_at")),
+    }
+    if level in ("detail", "full"):
+        data.update({
+            "composition_interets": _str(_get(obj, "composition_interets")),
+            "notes": _str(_get(obj, "notes")),
+            "created_at": _iso(_get(obj, "created_at")),
+        })
+    return _drop_none(data)
+
+
 SERIALIZERS: dict[str, Callable[..., dict]] = {
     "voice_routing_rule": serialize_voice_routing_rule,
     "voice_user_call_hours": serialize_voice_user_call_hours,
+    "bloc_note": serialize_bloc_note,
     "devlog_soumission": serialize_devlog_soumission,
     "devlog_project_task": serialize_devlog_project_task,
     "entreprise_tache": serialize_entreprise_tache,
@@ -1177,12 +1336,16 @@ SERIALIZERS: dict[str, Callable[..., dict]] = {
     "project": serialize_project,
     "materiau": serialize_materiau,
     "projet_materiau": serialize_projet_materiau,
+    "inventaire_article": serialize_inventaire_article,
+    "inventaire_mouvement": serialize_inventaire_mouvement,
     "entreprise": serialize_entreprise,
     "imm_tal_dossier": serialize_imm_tal_dossier,
     "imm_locataire_contact": serialize_imm_locataire_contact,
     "lot_paiement": serialize_lot_paiement,
     "tal_transmission": serialize_tal_transmission,
     "imm_financement": serialize_imm_financement,
+    "imm_immeuble_code": serialize_imm_immeuble_code,
+    "imm_hypotheque": serialize_imm_hypotheque,
     "prospection_courtier": serialize_prospection_courtier,
 }
 
