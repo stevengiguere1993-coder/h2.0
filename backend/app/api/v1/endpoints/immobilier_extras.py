@@ -1319,12 +1319,6 @@ async def annuler_depart(
         bail.status = BailStatus.ACTIF.value
         bail.updated_at = datetime.now(timezone.utc)
         reactive = True
-    # Le départ n'est plus ACTÉ (Steven 2026-10-18) : la date de fin
-    # redevient souple — un bail au mois court de nouveau, un bail
-    # annuel repasse par la reconduction lazy à l'échéance.
-    if getattr(bail, "depart_declare_le", None) is not None:
-        bail.depart_declare_le = None
-        bail.updated_at = datetime.now(timezone.utc)
     # Le cycle de renouvellement passé à « depart » reprend son statut
     # (sinon le bail était terminé à l'échéance alors que le locataire
     # reste — audit 2026-09-15).

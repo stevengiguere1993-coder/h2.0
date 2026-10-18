@@ -773,19 +773,6 @@ class Bail(Base, TimestampUpdateMixin):
     #: suivi d'assurance (réglable). Colonne additive → ensure_critical_columns.
     au_mois: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
 
-    #: DÉPART DÉCLARÉ (Steven 2026-10-18 : « lorsque nous mettons fin à
-    #: un locataire, il continue de s'accumuler une dette ») : date à
-    #: laquelle le départ a été acté (« Mettre fin au bail », entente
-    #: signée, remplacement par un nouveau locataire). Dès lors
-    #: ``date_fin`` est une VRAIE fin, même pour un bail au mois : plus
-    #: aucun loyer après, plus de reconduction tacite, et le bail se
-    #: termine à l'échéance même si le dossier de relocation est déjà
-    #: refermé (unité relouée). NULL = aucun départ annoncé. Colonne
-    #: additive nullable → ajoutée au démarrage par schema_check.
-    depart_declare_le: Mapped[Optional[date]] = mapped_column(
-        Date, nullable=True
-    )
-
     #: Jour du mois où le loyer est payable (bail TAL : case « le 1er jour
     #: du mois » OU champ « Ou le ___ »). 1 = le 1er, cas de l'immense
     #: majorité des baux ; ex. le garage du 8900 St-Hubert est payable le

@@ -44,11 +44,6 @@ import {
   importDocument,
   uploadBailDocument
 } from "@/components/immobilier/tal-avis";
-import {
-  champsRemplacement,
-  RemplacerLocataireChoix,
-  type RemplacementChoix
-} from "@/components/immobilier/remplacer-locataire";
 
 type LocataireItem = {
   id: number;
@@ -179,9 +174,6 @@ function AssignerBailModal({
   // Statut de création UNIFIÉ (même défaut que la page Baux) : proposé
   // → suivi via le kanban Locations ; actif → bail déjà signé/en vigueur.
   const [statut, setStatut] = useState<"propose" | "actif">("propose");
-  // Remplacement d'un locataire parti (Steven 2026-10-18) : son bail se
-  // ferme dans le même geste, sa dette reste visible.
-  const [remplacement, setRemplacement] = useState<RemplacementChoix>(null);
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -375,8 +367,7 @@ function AssignerBailModal({
           depot_detenteur: depotDetenteur.trim() || null,
           jour_echeance: jourEcheance,
           status: statut,
-          au_mois: indefini ? true : null,
-          ...champsRemplacement(remplacement)
+          au_mois: indefini ? true : null
         })
       });
       if (!rb.ok) {
@@ -671,16 +662,6 @@ function AssignerBailModal({
           </div>
         </div>
 
-        <RemplacerLocataireChoix
-          className="mt-3"
-          logementId={logementId ?? (logId ? parseInt(logId, 10) : null)}
-          locataireId={locataireId ?? locChoisi?.id ?? null}
-          debut={debut}
-          enChambres={indefini}
-          value={remplacement}
-          onChange={setRemplacement}
-        />
-
         <div className="mt-3 grid gap-1.5">
           <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2">
             <input
@@ -706,14 +687,12 @@ function AssignerBailModal({
             />
             <span className="text-xs text-white/70">
               <span className="font-semibold text-white">
-                Bail physique (papier signé) ou entente verbale — déjà en
-                vigueur
+                Ce bail est déjà en vigueur (signé ou entente verbale)
               </span>{" "}
-              — créé directement ACTIF, sans signature en ligne ni passage
-              par le kanban Locations (le logement passe « occupé »).
-              Dépose le bail papier numérisé dans « Documents » ci-dessus :
-              il devient LE bail signé. Sans bail papier, déclare ensuite
-              le motif dans le bandeau « bail sans document ».
+              — créé directement ACTIF, sans passer par le kanban
+              Locations (le logement passe « occupé »). Sans bail papier,
+              déclare ensuite le motif dans le bandeau « bail sans
+              document ».
             </span>
           </label>
         </div>

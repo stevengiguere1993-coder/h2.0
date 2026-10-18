@@ -76,12 +76,6 @@ type DossierBail = {
   relocation_statut?: string | null;
   /** Dossier de relocation lié — lien ciblé vers le kanban. */
   relocation_dossier_id?: number | null;
-  /** Départ ACTÉ (Steven 2026-10-18) : plus un loyer après `date_fin`,
-   *  même au mois. */
-  depart_declare_le?: string | null;
-  /** Solde dû du bail (loyers échus + frais − paiements, ≥ 0) — même
-   *  formule que la page Paiements. */
-  solde_du?: number;
 };
 
 type DossierBon = {
@@ -540,13 +534,6 @@ export default function LogementDetailPage({
       dossier.baux.find((b) => b.status === "propose") ||
       null
     : null;
-  // Anciens locataires : baux terminés / résiliés, le plus récent en
-  // tête — la trace qui reste dans l'unité (Steven 2026-10-18).
-  const anciensBaux = dossier
-    ? dossier.baux
-        .filter((b) => b.status === "termine" || b.status === "resilie")
-        .sort((a, b) => (a.date_fin < b.date_fin ? 1 : -1))
-    : [];
   // TOUS les baux, y compris l'ACTUEL (retour Phil 2026-07-31 :
   // « il faudrait qu'il y ait celui présent aussi dedans »).
     const maxLoyer = dossier
@@ -1163,89 +1150,13 @@ export default function LogementDetailPage({
               )}
             </section>
 
-            {/* (c2) Anciens locataires — la TRACE dans l'unité (Steven
-                2026-10-18 : « la dette doit rester et nous devons la
-                voir … laisser quelque part dans l'unité une trace de
-                l'ancien locataire, documents »). Les baux terminés ou
-                résiliés, avec le solde encore dû par chacun. */}
-            {anciensBaux.length > 0 ? (
-              <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-accent-500">
-                  Anciens locataires
-                </h2>
-                <p className="mb-3 text-xs text-white/50">
-                  Baux terminés ou résiliés sur ce logement. Une dette qui
-                  reste se règle depuis la fiche du locataire (paiement ou
-                  crédit) ; ses documents restent au dossier ci-dessous.
-                </p>
-                <ul className="divide-y divide-brand-800">
-                  {anciensBaux.map((b) => {
-                    const dette = (b.solde_du ?? 0) > 0.005;
-                    return (
-                      <li
-                        key={b.id}
-                        className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-2"
-                      >
-                        <div className="min-w-0">
-                          {b.locataire ? (
-                            <Link
-                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                              href={`/immobilier/locataires/${b.locataire.id}` as any}
-                              className="text-sm font-semibold text-white hover:underline"
-                            >
-                              {b.locataire.full_name}
-                            </Link>
-                          ) : (
-                            <span className="text-sm font-semibold text-white">
-                              Locataire inconnu
-                            </span>
-                          )}
-                          <p className="text-xs text-white/60">
-                            {fmtDate(b.date_debut)} → {fmtDate(b.date_fin)} ·{" "}
-                            {money(b.loyer_mensuel)}/mois
-                            {b.au_mois ? " · au mois" : ""}
-                            {b.depart_declare_le
-                              ? ` · départ déclaré le ${fmtDate(b.depart_declare_le)}`
-                              : ""}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="rounded-full border border-brand-700 px-2 py-0.5 text-[11px] font-medium text-white/70">
-                            {BAIL_STATUS_LABEL[b.status] ?? b.status}
-                          </span>
-                          {dette ? (
-                            <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-[11px] font-semibold text-rose-300">
-                              Solde dû : {money(b.solde_du)}
-                            </span>
-                          ) : (
-                            <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
-                              Rien de dû
-                            </span>
-                          )}
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-            ) : null}
-
             {/* Documents — tout ce qui a été généré pour les baux de ce
-                logement (avis TAL, lettres…), retour Phil 2026-07-20.
-                Les baux des ANCIENS locataires y restent (Steven
-                2026-10-18) : leur trace ne disparaît pas avec eux. */}
+                logement (avis TAL, lettres…), retour Phil 2026-07-20. */}
             <DocumentsSection
               logementId={logementId}
-              bails={[
-                ...(bailActif ? [bailActif] : []),
-                ...anciensBaux
-              ].map((b) => ({
+              bails={(bailActif ? [bailActif] : []).map((b) => ({
                 id: b.id,
-                label:
-                  (b.locataire?.full_name || "Bail") +
-                  (b.status === "actif"
-                    ? ""
-                    : ` (${BAIL_STATUS_LABEL[b.status] ?? b.status})`)
+                label: b.locataire?.full_name || "Bail actif"
               }))}
             />
 

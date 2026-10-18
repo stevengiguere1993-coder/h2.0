@@ -465,12 +465,6 @@ async def declarer_depart(
             bail.date_fin = date_depart
         if date_depart <= today:
             bail.status = BailStatus.RESILIE.value
-        # Départ ACTÉ (Steven 2026-10-18) : la fin devient opposable —
-        # même pour un bail au mois, plus un loyer après cette date, et
-        # le bail se terminera à l'échéance quoi qu'il arrive au dossier
-        # de relocation (unité relouée entre-temps, par exemple).
-        if getattr(bail, "depart_declare_le", None) is None:
-            bail.depart_declare_le = today
         bail.updated_at = _now()
 
     # 2) Cycle de renouvellement courant → « depart ».
@@ -653,43 +647,6 @@ async def reconduire_tacitement_baux_echus(
         ):
             last_ren_by_bail[r.bail_id] = r
 
-    # Départ DÉCLARÉ sur le bail lui-même (Steven 2026-10-18) : un dossier
-    # de relocation, même déjà REFERMÉ (« reloué » — le nouveau locataire
-    # est entré), qui porte ce bail comme bail SORTANT prouve que le
-    # départ a été acté. Avant : une fois l'unité relouée, le dossier
-    # n'était plus « actif », le bail de l'ancien locataire n'était plus
-    # reconnu comme un départ → reconduit tacitement d'un an (annuel) ou
-    # laissé courir (au mois) : la dette s'accumulait après le départ.
-    depart_par_bail: set[int] = set()
-    if bail_ids:
-        for (bid,) in (
-            await db.execute(
-                select(LocationDossier.bail_id).where(
-                    LocationDossier.bail_id.in_(bail_ids),
-                    LocationDossier.statut != LocationDossierStatut.ANNULE.value,
-                )
-            )
-        ).all():
-            if bid is not None:
-                depart_par_bail.add(int(bid))
-    # Bail SUIVANT déjà en place sur l'unité (un autre locataire, bail
-    # actif ou proposé qui commence après la fin de celui-ci) : le bail
-    # échu ne peut pas être reconduit par-dessus — il se termine.
-    suivant_par_log: set[int] = set()
-    if log_ids:
-        for (lid,) in (
-            await db.execute(
-                select(Bail.logement_id).where(
-                    Bail.logement_id.in_(list(log_ids)),
-                    Bail.status.in_(
-                        [BailStatus.ACTIF.value, BailStatus.PROPOSE.value]
-                    ),
-                    Bail.id.notin_(bail_ids),
-                )
-            )
-        ).all():
-            suivant_par_log.add(int(lid))
-
     dirty = False
     for b in candidats:
         lg = log_by_id.get(b.logement_id)
@@ -698,62 +655,30 @@ async def reconduire_tacitement_baux_echus(
         im = imm_by_id.get(lg.immeuble_id)
         if im is not None and getattr(im, "gestion_externe", None):
             continue  # gestion externe — le tiers décide
-        en_chambres = bool(getattr(lg, "location_en_chambres", False))
-        sans_cycle = bool(b.au_mois) or en_chambres
+        sans_cycle = bool(b.au_mois) or bool(
+            getattr(lg, "location_en_chambres", False)
+        )
 
         dossier = dossier_by_log.get(b.logement_id)
-        depart_declare = (
-            getattr(b, "depart_declare_le", None) is not None
-            or b.id in depart_par_bail
-        )
-        if (
-            dossier is not None and (not sans_cycle or dossier.bail_id == b.id)
-        ) or depart_declare:
+        if dossier is not None and (
+            not sans_cycle or dossier.bail_id == b.id
+        ):
             # Le départ était annoncé : le bail se termine à sa fin.
             b.status = BailStatus.TERMINE.value
             b.notes = _append_note(b.notes, NOTE_TERMINE_DEPART_ANNONCE)
             b.updated_at = _now()
             await recaler_statut_logement(db, b.logement_id)
             if (
-                dossier is not None
-                and dossier.loyer_demande is not None
+                dossier.loyer_demande is not None
                 and lg.status == LogementStatus.VACANT.value
             ):
                 lg.loyer_demande = dossier.loyer_demande
             dirty = True
             log.info(
                 "Bail %s terminé à l'échéance (départ annoncé, "
-                "dossier %s)", b.id, dossier.id if dossier else None,
+                "dossier %s)", b.id, dossier.id,
             )
             continue
-
-        if not en_chambres and b.logement_id in suivant_par_log:
-            # Un autre locataire a déjà son bail sur l'unité : le bail
-            # échu se termine au lieu d'être reconduit par-dessus.
-            suivant = (
-                await db.execute(
-                    select(Bail).where(
-                        Bail.logement_id == b.logement_id,
-                        Bail.id != b.id,
-                        Bail.locataire_id != b.locataire_id,
-                        Bail.status.in_(
-                            [BailStatus.ACTIF.value, BailStatus.PROPOSE.value]
-                        ),
-                        Bail.date_debut >= b.date_fin,
-                    )
-                )
-            ).scalars().first()
-            if suivant is not None:
-                b.status = BailStatus.TERMINE.value
-                b.notes = _append_note(b.notes, NOTE_TERMINE_BAIL_SUIVANT)
-                b.updated_at = _now()
-                await recaler_statut_logement(db, b.logement_id)
-                dirty = True
-                log.info(
-                    "Bail %s terminé à l'échéance (bail suivant %s en place)",
-                    b.id, suivant.id,
-                )
-                continue
 
         if sans_cycle:
             # « Louer indéfiniment » / au mois : jamais de reconduction
@@ -846,8 +771,6 @@ async def reactiver_baux_termines_a_tort(db: AsyncSession) -> int:
                 Bail.date_fin.is_not(None),
                 Bail.date_fin > today,
                 Bail.notes.like("%PlexFlow%"),
-                # Un départ DÉCLARÉ n'est jamais une erreur d'import.
-                Bail.depart_declare_le.is_(None),
             )
         )
     ).scalars().all()
@@ -1100,13 +1023,13 @@ async def terminer_baux_echus_avant(
     Un bail actif NON échu qui chevauche reste bloqué par le 409
     existant (ce n'est pas le rôle de ce helper). Baux AU MOIS et
     logements « louer indéfiniment » exclus (ils courent sans égard à
-    leur date de fin) — SAUF si leur départ est DÉCLARÉ (Steven
-    2026-10-18) : la date de fin est alors une vraie fin.
+    leur date de fin).
     """
     if date_debut is None:
         return 0
     lg = await db.get(Logement, logement_id)
-    en_chambres = bool(lg is not None and getattr(lg, "location_en_chambres", False))
+    if lg is not None and getattr(lg, "location_en_chambres", False):
+        return 0
     # Audit 2026-09-15 : importer en mars le bail signé du locataire qui
     # arrive le 1er juillet terminait SUR-LE-CHAMP le bail du locataire
     # encore en place (fin le 30 juin). « Échu » veut dire échu PAR
@@ -1118,16 +1041,11 @@ async def terminer_baux_echus_avant(
         Bail.status == BailStatus.ACTIF.value,
         Bail.date_fin < borne,
     )
-    if en_chambres:
-        # Chambres : les baux cohabitent et courent sans égard à leur
-        # fin — seul un départ DÉCLARÉ (Steven 2026-10-18) fait de la
-        # date de fin une vraie fin.
-        q = q.where(Bail.depart_declare_le.is_not(None))
     if exclure_bail_id is not None:
         q = q.where(Bail.id != exclure_bail_id)
     n = 0
     for b in (await db.execute(q)).scalars().all():
-        if b.au_mois and getattr(b, "depart_declare_le", None) is None:
+        if b.au_mois:
             continue
         b.status = BailStatus.TERMINE.value
         b.notes = _append_note(b.notes, NOTE_TERMINE_BAIL_SUIVANT)
@@ -1265,20 +1183,17 @@ async def activer_bail_propose(
     await terminer_baux_echus_avant(
         db, bail.logement_id, bail.date_debut, exclure_bail_id=bail.id
     )
-    q_chev = select(Bail).where(
-        Bail.logement_id == bail.logement_id,
-        Bail.id != bail.id,
-        Bail.status == BailStatus.ACTIF.value,
-        Bail.date_debut <= bail.date_fin,
-        Bail.date_fin >= bail.date_debut,
-    )
-    lg_chev = await db.get(Logement, bail.logement_id)
-    if lg_chev is not None and getattr(lg_chev, "location_en_chambres", False):
-        # Chambres : les baux cohabitent (une chambre par locataire) —
-        # seul le MÊME locataire ne peut pas se chevaucher (Steven
-        # 2026-10-18, « nouveau locataire 8900 chambre E »).
-        q_chev = q_chev.where(Bail.locataire_id == bail.locataire_id)
-    chevauche = (await db.execute(q_chev)).scalars().first()
+    chevauche = (
+        await db.execute(
+            select(Bail).where(
+                Bail.logement_id == bail.logement_id,
+                Bail.id != bail.id,
+                Bail.status == BailStatus.ACTIF.value,
+                Bail.date_debut <= bail.date_fin,
+                Bail.date_fin >= bail.date_debut,
+            )
+        )
+    ).scalars().first()
     if chevauche is not None:
         raise ActivationImpossible(
             "Un bail ACTIF chevauche ces dates sur ce logement "
