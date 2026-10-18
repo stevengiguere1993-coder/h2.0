@@ -173,6 +173,7 @@ from app.api.v1.endpoints import (
     qbo_account_map,
     qbo_bulk,
     qbo_conversions,
+    qbo_doublons,
     qbo_oauth,
     qbo_recus_drive,
     qbo_token,
@@ -519,6 +520,8 @@ api_router.include_router(paiements.router, dependencies=DEP_ENTREPRISES)
 api_router.include_router(depenses_construction.router, dependencies=DEP_ENTREPRISES)
 # Sous-clients QB à convertir en projet (Comptabilité → Projets QB, 2026-10-14).
 api_router.include_router(qbo_conversions.router, dependencies=DEP_ENTREPRISES)
+# Clients en double dans QuickBooks (Comptabilité → Clients en double, 2026-10-18).
+api_router.include_router(qbo_doublons.router, dependencies=DEP_ENTREPRISES)
 api_router.include_router(rencontres_teams.router)
 api_router.include_router(rencontres.router)
 api_router.include_router(timesheets.router)

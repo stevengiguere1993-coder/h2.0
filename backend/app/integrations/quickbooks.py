@@ -86,6 +86,22 @@ def ou_reconnecter(scope: str) -> str:
     return "Paramètres → Comptabilité, bouton « Reconnecter »"
 
 
+#: Code d'un Fault QuickBooks (« "code": "610" ») — pas n'importe quel
+#: nombre du message : l'intuit_tid et l'heure en contiennent au hasard.
+_RE_CODE_FAULT = re.compile(r"""['"]code['"]\s*:\s*['"](\d+)['"]""")
+
+
+def _objet_introuvable(message: str) -> bool:
+    """« Object Not Found » (code 610) ou 404 : QuickBooks ne connaît pas
+    (ou plus) l'objet demandé."""
+    m = (message or "").lower()
+    return (
+        "610" in _RE_CODE_FAULT.findall(message or "")
+        or "object not found" in m
+        or "failed: 404" in m
+    )
+
+
 async def _rollback_silencieux(db: Any) -> None:
     try:
         await db.rollback()
@@ -584,6 +600,16 @@ class QuickBooksClient:
             start += page
         return out
 
+    async def count(self, sql: str) -> int:
+        """``SELECT COUNT(*) FROM …`` : le nombre d'objets
+        (``QueryResponse.totalCount``, absent quand il n'y en a aucun)."""
+        data = await self._request(
+            "GET",
+            "/query",
+            params={"query": sql, "minorversion": "70"},
+        )
+        return int((data.get("QueryResponse") or {}).get("totalCount") or 0)
+
     async def graphql(
         self,
         query: str,
@@ -718,6 +744,42 @@ class QuickBooksClient:
             f"SELECT * FROM Customer WHERE Id = '{safe}' MAXRESULTS 1"
         )
         return rows[0] if rows else None
+
+    async def read_customer(self, customer_id: str) -> Optional[Dict[str, Any]]:
+        """Lit un client PAR SON ID, même inactif (désactivé ou fusionné
+        dans un autre) : la requête de ``get_customer`` ne rend que les
+        clients actifs. None si QuickBooks ne le connaît pas."""
+        try:
+            data = await self._request(
+                "GET", f"/customer/{customer_id}", params={"minorversion": "70"}
+            )
+        except QuickBooksError as exc:
+            if _objet_introuvable(str(exc)):
+                return None
+            raise
+        return data.get("Customer") or None
+
+    async def deactivate_customer(self, customer_id: str) -> Dict[str, Any]:
+        """Rend un client INACTIF, la « suppression » de QuickBooks : la
+        fiche garde son historique, QuickBooks refuse s'il reste un
+        solde. Mise à jour sparse sur le SyncToken relu."""
+        cust = await self.read_customer(customer_id)
+        if not cust:
+            raise QuickBooksError(
+                f"Client QuickBooks {customer_id} introuvable."
+            )
+        data = await self._request(
+            "POST",
+            "/customer",
+            json_body={
+                "Id": str(cust.get("Id")),
+                "SyncToken": str(cust.get("SyncToken") or "0"),
+                "sparse": True,
+                "Active": False,
+            },
+            params={"minorversion": "70"},
+        )
+        return data.get("Customer") or data
 
     async def update_customer(
         self,
