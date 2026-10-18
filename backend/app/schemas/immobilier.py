@@ -134,6 +134,56 @@ class ImmeubleOwnershipRead(ImmeubleOwnershipBase):
     immeuble_id: int
 
 
+# ─── Codes d'accès d'un immeuble ───────────────────────────────────────
+
+
+class ImmeubleCodeBase(BaseModel):
+    """Code d'accès (porte d'entrée, lock box, garage, alarme…)."""
+
+    libelle: str = Field(..., min_length=1, max_length=120)
+    code: str = Field(..., min_length=1, max_length=255)
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+    @field_validator("libelle", "code")
+    @classmethod
+    def _strip_non_vide(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("ne peut pas être vide")
+        return v
+
+
+class ImmeubleCodeCreate(ImmeubleCodeBase):
+    pass
+
+
+class ImmeubleCodeUpdate(BaseModel):
+    libelle: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    code: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    note: Optional[str] = Field(default=None, max_length=2000)
+    position: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("libelle", "code")
+    @classmethod
+    def _strip_non_vide(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            raise ValueError("ne peut pas être vide")
+        return v
+
+
+class ImmeubleCodeRead(ImmeubleCodeBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    immeuble_id: int
+    position: int = 0
+    created_by_email: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
 # ─── Logement ───────────────────────────────────────────────────────────
 
 
