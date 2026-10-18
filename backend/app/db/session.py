@@ -355,9 +355,6 @@ async def ensure_critical_columns() -> None:
         # Montant refacturé par achat (ligne « Matériaux » unique,
         # 2026-10-17).
         ("achats", "montant_refacture", "NUMERIC(12, 2)"),
-        # Total TTC de la transaction QB d'origine d'un achat importé
-        # (facture fractionnée : part du projet vs facture entière).
-        ("achats", "qbo_txn_total", "NUMERIC(12, 2)"),
         # Gestion externe d'un immeuble (compagnie tierce) : sans ces
         # colonnes, tout SELECT sur imm_immeubles plante → 500 sur tout
         # le volet immobilier. Table préexistante → create_all ne les

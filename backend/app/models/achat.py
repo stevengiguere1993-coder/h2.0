@@ -236,16 +236,6 @@ class Achat(Base, TimestampUpdateMixin):
     qbo_bill_payment_id: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, index=True
     )
-    # Montant TOTAL (TTC) de la transaction QuickBooks d'origine, noté à
-    # l'import. Quand la facture est FRACTIONNÉE dans QB (plusieurs
-    # projets, ou projet + part hors projet), l'achat ne porte que la part
-    # de son projet : ce total permet d'afficher la facture entière et ce
-    # qui est resté dans QB (retour Steven 2026-10-06, « importer la
-    # séparation de factures »). NULL pour les achats nés dans Kratos ou
-    # importés avant 2026-10-18. Colonne → ensure_critical_columns.
-    qbo_txn_total: Mapped[Optional[float]] = mapped_column(
-        Numeric(12, 2), nullable=True
-    )
 
     # ---- Refacturation client ----
     # `is_billable` = cet achat sera-t-il refacturé au client final ? Par

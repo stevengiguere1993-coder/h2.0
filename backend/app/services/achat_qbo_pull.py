@@ -8,14 +8,9 @@ deja present comme `qbo_bill_id` sur un Achat Kratos.
 Matching :
 - Fournisseur : par nom exact (case-insensitive). Si absent, on
   cree un Fournisseur Kratos avec le nom QB.
-- Projet : ligne par ligne, par le CustomerRef (sous-client QB d'un
-  projet Kratos) ou par la `Class` de ligne (= adresse du chantier).
-  Une facture sans aucune ligne reliee a un projet Kratos reste dans QB.
-  Une facture FRACTIONNEE dans QB (plusieurs projets, ou projet + part
-  hors projet : client mere, autre client, aucun client) donne un achat
-  PAR projet, chacun pour SA part (HT des lignes du projet, taxes au
-  prorata) ; la part hors projet reste dans QB (retour Steven
-  2026-10-06 : « importer la separation de factures »).
+- Projet : par adresse correspondant a la `Class` du Bill QB. Si
+  pas de match (ou pas de Class), on cree l'Achat sans project_id
+  (l'utilisateur l'assignera manuellement).
 - Statut paiement : si une BillPayment QB pointe sur ce Bill,
   l'Achat est cree directement en `paid` (avec paid_at et methode
   inferee depuis le compte de paiement de la BillPayment).
@@ -127,149 +122,92 @@ async def _find_or_create_fournisseur(
 async def _find_project_by_class(
     db: AsyncSession, class_name: Optional[str]
 ) -> Optional[Project]:
-    """Le push Kratos -> QB mettait l'adresse du chantier comme nom de
-    Class (voir achat_qbo._build_line). On fait le chemin inverse.
-
-    Une classe de VOLET (« Construction », « Kratos »…, posee par Kratos
-    depuis 2026-10-17) ne designe aucun chantier ; une classe qui
-    correspond a PLUSIEURS projets non plus (on ne devine pas — avant,
-    `scalar_one_or_none` levait MultipleResultsFound et faisait echouer
-    tout l'import)."""
+    """Le push Kratos -> QB met l'adresse du chantier comme nom de
+    Class (voir achat_qbo._build_line). On fait le chemin inverse."""
     if not class_name:
         return None
     cname = class_name.strip()
-    if not cname or len(cname) < 5:
-        return None
-    from app.services.qbo_cost_pull import _classe_generique
-
-    if _classe_generique(cname):
+    if not cname:
         return None
     # Match exact d'abord, puis sous-chaine (Class QB peut etre
     # tronquee ou inclure un prefixe genre "Projet · 123 Rue Foo").
-    rows = (
+    row = (
         await db.execute(
             select(Project).where(Project.address.ilike(cname))
         )
-    ).scalars().all()
-    if len(rows) == 1:
-        return rows[0]
-    if len(rows) > 1:
-        return None
-    # Fallback : LIKE %adresse% — seulement si UN SEUL projet correspond.
-    rows = (
+    ).scalar_one_or_none()
+    if row is not None:
+        return row
+    # Fallback : LIKE %adresse%
+    row = (
         await db.execute(
             select(Project).where(
                 Project.address.ilike(f"%{cname}%")
             )
         )
-    ).scalars().all()
-    return rows[0] if len(rows) == 1 else None
-
-
-_LINE_DETAILS = ("AccountBasedExpenseLineDetail", "ItemBasedExpenseLineDetail")
-
-
-def _ligne_depense(line: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Detail d'une ligne de depense QB (par compte ou par article),
-    None pour les autres lignes (sous-totaux, etc.)."""
-    for key in _LINE_DETAILS:
-        d = line.get(key)
-        if d:
-            return d
-    return None
+    ).scalar_one_or_none()
+    return row
 
 
 async def _bill_project_allocations(
-    db: AsyncSession,
-    bill: Dict[str, Any],
-    proj_by_job: Optional[Dict[str, Project]] = None,
-) -> Tuple[List[Tuple[Project, float, Optional[str]]], float]:
-    """Ventile les lignes de depense du Bill PAR PROJET Kratos.
+    db: AsyncSession, bill: Dict[str, Any]
+) -> List[Tuple[Optional[Project], float, Optional[str]]]:
+    """Ventile les lignes de depense du Bill PAR PROJET via la Class de
+    chaque ligne (= adresse du chantier, cf. _find_project_by_class).
 
-    Resolution par ligne : CustomerRef → sous-client QB d'un projet
-    (``proj_by_job``), sinon la Class de la ligne (= adresse du chantier,
-    cf. _find_project_by_class). Une facture fournisseur peut etre
-    FRACTIONNEE dans QB entre plusieurs projets, ou entre un projet et
-    autre chose (client mere, autre client, aucun client) : seules les
-    lignes reliees a un projet Kratos sont retenues, le reste de la
-    facture reste dans QuickBooks.
-
-    Retourne ``(allocations, ht_total)`` : les allocations dans l'ordre
-    des lignes, un triplet ``(project, ht, description)`` par projet
-    DISTINCT ; ``ht_total`` = HT de TOUTES les lignes de depense
-    (denominateur des parts).
+    Une facture fournisseur peut etre DIVISEE sur plusieurs projets dans
+    QB ; dans ce cas Kratos doit creer un achat PAR projet plutot qu'un
+    seul bloc. Retourne, dans l'ordre des lignes, des triplets
+    ``(project | None, ht, description)`` — le slot ``None`` regroupe les
+    lignes sans Class / sans projet correspondant.
     """
-    out: List[Tuple[Project, float, Optional[str]]] = []
-    slots: Dict[int, int] = {}  # project_id -> index dans out
+    out: List[Tuple[Optional[Project], float, Optional[str]]] = []
+    slots: Dict[Optional[int], int] = {}  # project_id -> index dans out
     cache: Dict[str, Optional[Project]] = {}
-    ht_total = Decimal("0")
     for line in bill.get("Line") or []:
-        detail = _ligne_depense(line)
-        if detail is None:
+        if line.get("DetailType") != "AccountBasedExpenseLineDetail":
             continue
         amt = line.get("Amount")
         if amt is None:
             continue
-        montant = Decimal(str(amt))
-        ht_total += montant
+        detail = line.get("AccountBasedExpenseLineDetail") or {}
+        cname = ((detail.get("ClassRef") or {}).get("name") or "").strip()
         proj: Optional[Project] = None
-        cref = str((detail.get("CustomerRef") or {}).get("value") or "")
-        if cref and proj_by_job and cref in proj_by_job:
-            proj = proj_by_job[cref]
-        if proj is None:
-            cname = (
-                (detail.get("ClassRef") or {}).get("name") or ""
-            ).strip()
-            if cname:
-                if cname not in cache:
-                    cache[cname] = await _find_project_by_class(db, cname)
-                proj = cache[cname]
-        if proj is None:
-            continue  # part hors projet : reste dans QB
+        if cname:
+            if cname not in cache:
+                cache[cname] = await _find_project_by_class(db, cname)
+            proj = cache[cname]
+        key = proj.id if proj is not None else None
         desc = (
             str(line.get("Description"))[:1000]
             if line.get("Description")
             else None
         )
-        if proj.id in slots:
-            idx = slots[proj.id]
+        if key in slots:
+            idx = slots[key]
             prev_proj, prev_ht, prev_desc = out[idx]
-            out[idx] = (prev_proj, prev_ht + float(montant), prev_desc or desc)
+            out[idx] = (
+                prev_proj,
+                prev_ht + float(Decimal(str(amt))),
+                prev_desc or desc,
+            )
         else:
-            slots[proj.id] = len(out)
-            out.append((proj, float(montant), desc))
-    return out, float(ht_total)
+            slots[key] = len(out)
+            out.append((proj, float(Decimal(str(amt))), desc))
+    return out
 
 
 def _split_tax_shares(
-    taxes: float, hts: List[float], ht_total: Optional[float] = None
+    taxes: float, hts: List[float]
 ) -> List[float]:
-    """Repartit les taxes au prorata des HT. ``ht_total`` = HT de TOUTES
-    les lignes de la facture : quand il depasse la somme des ``hts``
-    (part hors projet), chaque part est calculee sur ce total et la
-    somme des parts reste inferieure aux taxes (le reste est dans QB).
-    Sinon le dernier slot recoit le reliquat d'arrondi pour retomber
-    exactement sur le total."""
-    connu = sum(hts)
-    if connu <= 0 or not hts:
+    """Repartit les taxes au prorata des HT ; le dernier slot recoit le
+    reliquat d'arrondi pour retomber exactement sur le total."""
+    total_ht = sum(hts)
+    if total_ht <= 0 or not hts:
         return [0.0 for _ in hts]
-    if ht_total is not None and ht_total > connu + 0.005:
-        return [round(taxes * h / ht_total, 2) for h in hts]
-    shares = [round(taxes * h / connu, 2) for h in hts[:-1]]
+    shares = [round(taxes * h / total_ht, 2) for h in hts[:-1]]
     shares.append(round(taxes - sum(shares), 2))
     return shares
-
-
-def _bill_total(
-    bill: Dict[str, Any], amount_ht: float, amount_taxes: float
-) -> float:
-    """Total TTC de la facture QB (TotalAmt), sinon HT + taxes."""
-    try:
-        if bill.get("TotalAmt") is not None:
-            return round(float(bill["TotalAmt"]), 2)
-    except (TypeError, ValueError):
-        pass
-    return round(amount_ht + amount_taxes, 2)
 
 
 def _sum_bill_amounts(bill: Dict[str, Any]) -> Tuple[float, float]:
@@ -282,7 +220,7 @@ def _sum_bill_amounts(bill: Dict[str, Any]) -> Tuple[float, float]:
     lines = bill.get("Line") or []
     ht = Decimal("0")
     for line in lines:
-        if _ligne_depense(line) is not None:
+        if line.get("DetailType") == "AccountBasedExpenseLineDetail":
             amt = line.get("Amount")
             if amt is not None:
                 ht += Decimal(str(amt))
@@ -305,6 +243,34 @@ def _bill_description(bill: Dict[str, Any]) -> Optional[str]:
             desc = line.get("Description")
             if desc:
                 return str(desc)[:1000]
+    return None
+
+
+def _bill_customer_refs(bill: Dict[str, Any]) -> List[str]:
+    """CustomerRef des lignes de depense du Bill, dans l'ordre."""
+    out: List[str] = []
+    for line in bill.get("Line") or []:
+        detail = line.get("AccountBasedExpenseLineDetail") or {}
+        cref = (detail.get("CustomerRef") or {}).get("value")
+        if cref and str(cref) not in out:
+            out.append(str(cref))
+    return out
+
+
+def _bill_class_name(bill: Dict[str, Any]) -> Optional[str]:
+    """Retourne le nom de Class du Bill — au niveau Bill (rare) ou
+    de la premiere ligne (cas usuel pour les Bills pousses par
+    Kratos qui mettent Class par ligne)."""
+    cls = bill.get("ClassRef") or {}
+    if cls.get("name"):
+        return cls["name"]
+    for line in bill.get("Line") or []:
+        detail = (
+            line.get("AccountBasedExpenseLineDetail") or {}
+        )
+        c = detail.get("ClassRef") or {}
+        if c.get("name"):
+            return c["name"]
     return None
 
 
@@ -430,10 +396,6 @@ async def pull_new_bills_from_qbo(
         # Factures QB sans PROJET/BT Kratos identifiable : laissees dans
         # QB, jamais importees (un client seul ne suffit pas).
         "skipped_unlinked": 0,
-        # Factures FRACTIONNEES dans QB : divisees entre plusieurs projets
-        # (un achat par projet) / importees pour la seule part des projets.
-        "split_multi_projets": 0,
-        "parts_partielles": 0,
         "total_qbo_bills": len(bills),
     }
 
@@ -471,21 +433,22 @@ async def pull_new_bills_from_qbo(
 
         # CLASSEMENT Kratos OBLIGATOIRE avant tout import : la facture
         # doit se relier a un PROJET ou un BON DE TRAVAIL Kratos (donc
-        # client + chantier) — ligne par ligne, via le CustomerRef
-        # pointant le sous-client d'un projet/BT ou la Class de ligne
-        # (= adresse du chantier). Un client seul NE suffit PAS (sinon
-        # toute facture QB posee sur un client mere serait aspiree). Les
-        # autres factures QB (depenses generales) RESTENT dans QB — Kratos
-        # n'est pas un miroir comptable complet. Une facture FRACTIONNEE
-        # (plusieurs projets, ou projet + part hors projet) n'entre que
-        # pour la part de ses projets.
-        allocations, ht_total = await _bill_project_allocations(
-            db, bill, proj_by_job
-        )
-        if not allocations:
+        # client + chantier) — via la Class de ligne (= adresse du
+        # chantier) ou un CustomerRef pointant le sous-client d'un
+        # projet/BT. Un client seul NE suffit PAS (sinon toute facture
+        # QB posee sur un client mere serait aspiree). Les autres
+        # factures QB (depenses generales) RESTENT dans QB — Kratos
+        # n'est pas un miroir comptable complet.
+        class_name = _bill_class_name(bill)
+        project = await _find_project_by_class(db, class_name)
+        if project is None:
+            for cr in _bill_customer_refs(bill):
+                if cr in proj_by_job:
+                    project = proj_by_job[cr]
+                    break
+        if project is None:
             stats["skipped_unlinked"] += 1
             continue
-        project = allocations[0][0]
 
         vendor_ref = bill.get("VendorRef") or {}
         vendor_id = vendor_ref.get("value")
@@ -539,17 +502,16 @@ async def pull_new_bills_from_qbo(
                 base = invoice_date or datetime.now(timezone.utc)
                 due_at = base + timedelta(days=terms)
 
-        # Facture FRACTIONNEE dans QB : plusieurs projets → un achat PAR
-        # projet ; projet + part hors projet → seule la part du projet
-        # entre dans Kratos, le reste reste dans QB. HT = somme des lignes
-        # du projet, taxes au prorata du HT de TOUTES les lignes. Sinon,
-        # un seul achat au montant complet (comportement historique).
-        hts = [ht for _p, ht, _d in allocations]
-        partiel = ht_total > round(sum(hts), 2) + 0.005
-        qbo_total = _bill_total(bill, amount_ht, amount_taxes)
-        if len(allocations) >= 2 or partiel:
+        # Facture DIVISEE sur plusieurs projets (une Class differente par
+        # ligne) → un achat PAR projet : HT = somme des lignes du projet,
+        # taxes au prorata. Sinon, un seul achat (comportement historique).
+        allocations = await _bill_project_allocations(db, bill)
+        distinct_projects = {
+            p.id for p, _ht, _d in allocations if p is not None
+        }
+        if len(distinct_projects) >= 2:
             tax_shares = _split_tax_shares(
-                amount_taxes, hts, ht_total if partiel else None
+                amount_taxes, [ht for _p, ht, _d in allocations]
             )
             for (proj_i, ht_i, desc_i), tax_i in zip(
                 allocations, tax_shares
@@ -560,7 +522,7 @@ async def pull_new_bills_from_qbo(
                         qbo_doc_number=doc_number,
                         qbo_sync_token=str(bill.get("SyncToken") or ""),
                         fournisseur_id=fournisseur.id,
-                        project_id=proj_i.id,
+                        project_id=proj_i.id if proj_i else None,
                         kind="material",
                         description=desc_i or description,
                         amount=round(ht_i, 2),
@@ -577,15 +539,15 @@ async def pull_new_bills_from_qbo(
                         paid_at=paid_at,
                         due_at=due_at,
                         qbo_bill_payment_id=bp_id,
-                        qbo_txn_total=qbo_total,
                         is_billable=False,
                     )
                 )
+                if proj_i is None:
+                    stats["unmatched_project"] += 1
             stats["imported"] += 1
-            if len(allocations) >= 2:
-                stats["split_multi_projets"] += 1
-            if partiel:
-                stats["parts_partielles"] += 1
+            stats["split_multi_projets"] = (
+                stats.get("split_multi_projets", 0) + 1
+            )
             if is_paid:
                 stats["imported_paid"] += 1
             continue
@@ -611,7 +573,6 @@ async def pull_new_bills_from_qbo(
             paid_at=paid_at,
             due_at=due_at,
             qbo_bill_payment_id=bp_id,
-            qbo_txn_total=qbo_total,
             # Refacturation client pilotee depuis Kratos, pas
             # depuis la coche "Billable" de QB — defaut False a
             # l'import. L'utilisateur toggle dans Kratos s'il veut
