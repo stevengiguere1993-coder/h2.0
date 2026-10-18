@@ -47,7 +47,15 @@ import {
   fmtPieces,
   type LogementFicheData
 } from "@/components/immobilier/logement-fiche";
-import { CelluleLoyer } from "@/components/immobilier/paiements-actions";
+import {
+  CelluleLoyer,
+  type FraisMois
+} from "@/components/immobilier/paiements-actions";
+import {
+  RabaisBailInline,
+  rabaisActif,
+  rabaisLibelle
+} from "@/components/immobilier/rabais-bail";
 
 /**
  * Fiche logement — VRAIE page 360 d'un logement : infos (ÉDITABLES
@@ -73,9 +81,20 @@ type DossierBail = {
   au_mois?: boolean | null;
   /** Jour du mois où le loyer est payable (bail TAL « Ou le ___ »). */
   jour_echeance?: number | null;
+  /** Rabais sur les premiers mois (bug 10) — null = loyer plein. */
+  rabais_mensuel?: number | null;
+  rabais_nb_mois?: number | null;
+  rabais_debut?: string | null;
+  rabais_motif?: string | null;
   relocation_statut?: string | null;
   /** Dossier de relocation lié — lien ciblé vers le kanban. */
   relocation_dossier_id?: number | null;
+  /** Départ ACTÉ (Steven 2026-10-18) : plus un loyer après `date_fin`,
+   *  même au mois. */
+  depart_declare_le?: string | null;
+  /** Solde dû du bail (loyers échus + frais − paiements, ≥ 0) — même
+   *  formule que la page Paiements. */
+  solde_du?: number;
 };
 
 type DossierBon = {
@@ -161,6 +180,8 @@ type LoyerMoisLigne = {
   loyer_mensuel: number;
   montant_paye: number | null;
   solde_total?: number;
+  //: Lignes du mois (rabais, frais, crédit, ajustement) — lecture seule.
+  frais_mois?: FraisMois[];
   //: Versements du mois (paiements partiels distincts).
   paiements?: {
     id: number;
@@ -310,6 +331,8 @@ export default function LogementDetailPage({
   // Paiements — interne via /loyers/overview, gestion externe via
   // /loyers/externes. La saisie reste sur les surfaces dédiées.
   const [loyerMois, setLoyerMois] = useState<LoyerMoisLigne | null>(null);
+  //: Incrémenté pour recharger la carte « Loyer du mois » (rabais changé).
+  const [loyerMoisTick, setLoyerMoisTick] = useState(0);
 
   // Édition INLINE des infos (plus de modale) + notes.
   const [editing, setEditing] = useState(false);
@@ -392,7 +415,7 @@ export default function LogementDetailPage({
     return () => {
       annule = true;
     };
-  }, [logementId]);
+  }, [logementId, loyerMoisTick]);
 
   function startEdit() {
     const l = dossier?.logement;
@@ -534,6 +557,13 @@ export default function LogementDetailPage({
       dossier.baux.find((b) => b.status === "propose") ||
       null
     : null;
+  // Anciens locataires : baux terminés / résiliés, le plus récent en
+  // tête — la trace qui reste dans l'unité (Steven 2026-10-18).
+  const anciensBaux = dossier
+    ? dossier.baux
+        .filter((b) => b.status === "termine" || b.status === "resilie")
+        .sort((a, b) => (a.date_fin < b.date_fin ? 1 : -1))
+    : [];
   // TOUS les baux, y compris l'ACTUEL (retour Phil 2026-07-31 :
   // « il faudrait qu'il y ait celui présent aussi dedans »).
     const maxLoyer = dossier
@@ -1049,6 +1079,20 @@ export default function LogementDetailPage({
                             : `${fmtDate(bailActif.date_debut)} → ${fmtDate(bailActif.date_fin)}`
                         }
                       />
+                      {rabaisActif(bailActif) ? (
+                        // Bug 10 : « rabais de 500 $ pour les 3 premiers
+                        // mois, ensuite 1 500 $ / mois » — le loyer du
+                        // bail reste le loyer plein, le rabais s'affiche
+                        // à côté et se change par la pastille ci-dessous.
+                        <Row
+                          label="Rabais"
+                          value={rabaisLibelle(
+                            bailActif,
+                            bailActif.date_debut,
+                            money
+                          )}
+                        />
+                      ) : null}
                     </dl>
                     {/* Même empilement Loyer / Reçu / Solde que la page
                         Paiements et les fiches immeuble/locataire —
@@ -1065,6 +1109,7 @@ export default function LogementDetailPage({
                           recu={loyerMois.montant_paye}
                           solde={loyerMois.solde_total}
                           fmt={money}
+                          frais={loyerMois.frais_mois}
                           paiements={loyerMois.paiements}
                         />
                       </div>
@@ -1097,6 +1142,21 @@ export default function LogementDetailPage({
                         bailId={bailActif.id}
                         jour={bailActif.jour_echeance}
                         onChanged={() => void loadDossier()}
+                      />
+                      {/* Rabais sur les premiers mois (bug 10) — même
+                          fenêtre que dans le tableau des baux. */}
+                      <RabaisBailInline
+                        compact
+                        bailId={bailActif.id}
+                        bail={bailActif}
+                        dateDebut={bailActif.date_debut}
+                        loyer={bailActif.loyer_mensuel}
+                        fmt={money}
+                        onChanged={() => {
+                          void loadDossier();
+                          void loadSuiviBaux();
+                          setLoyerMoisTick((t) => t + 1);
+                        }}
                       />
                       <ResilierBailButton
                         bailId={bailActif.id}
@@ -1145,18 +1205,95 @@ export default function LogementDetailPage({
                   onChanged={() => {
                     void loadSuiviBaux();
                     void loadDossier();
+                    setLoyerMoisTick((t) => t + 1);
                   }}
                 />
               )}
             </section>
 
+            {/* (c2) Anciens locataires — la TRACE dans l'unité (Steven
+                2026-10-18 : « la dette doit rester et nous devons la
+                voir … laisser quelque part dans l'unité une trace de
+                l'ancien locataire, documents »). Les baux terminés ou
+                résiliés, avec le solde encore dû par chacun. */}
+            {anciensBaux.length > 0 ? (
+              <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-accent-500">
+                  Anciens locataires
+                </h2>
+                <p className="mb-3 text-xs text-white/50">
+                  Baux terminés ou résiliés sur ce logement. Une dette qui
+                  reste se règle depuis la fiche du locataire (paiement ou
+                  crédit) ; ses documents restent au dossier ci-dessous.
+                </p>
+                <ul className="divide-y divide-brand-800">
+                  {anciensBaux.map((b) => {
+                    const dette = (b.solde_du ?? 0) > 0.005;
+                    return (
+                      <li
+                        key={b.id}
+                        className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-2"
+                      >
+                        <div className="min-w-0">
+                          {b.locataire ? (
+                            <Link
+                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                              href={`/immobilier/locataires/${b.locataire.id}` as any}
+                              className="text-sm font-semibold text-white hover:underline"
+                            >
+                              {b.locataire.full_name}
+                            </Link>
+                          ) : (
+                            <span className="text-sm font-semibold text-white">
+                              Locataire inconnu
+                            </span>
+                          )}
+                          <p className="text-xs text-white/60">
+                            {fmtDate(b.date_debut)} → {fmtDate(b.date_fin)} ·{" "}
+                            {money(b.loyer_mensuel)}/mois
+                            {b.au_mois ? " · au mois" : ""}
+                            {b.depart_declare_le
+                              ? ` · départ déclaré le ${fmtDate(b.depart_declare_le)}`
+                              : ""}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="rounded-full border border-brand-700 px-2 py-0.5 text-[11px] font-medium text-white/70">
+                            {BAIL_STATUS_LABEL[b.status] ?? b.status}
+                          </span>
+                          {dette ? (
+                            <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-[11px] font-semibold text-rose-300">
+                              Solde dû : {money(b.solde_du)}
+                            </span>
+                          ) : (
+                            <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
+                              Rien de dû
+                            </span>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ) : null}
+
             {/* Documents — tout ce qui a été généré pour les baux de ce
-                logement (avis TAL, lettres…), retour Phil 2026-07-20. */}
+                logement (avis TAL, lettres…), retour Phil 2026-07-20.
+                Les baux des ANCIENS locataires y restent (Steven
+                2026-10-18) : leur trace ne disparaît pas avec eux. */}
             <DocumentsSection
               logementId={logementId}
-              bails={(bailActif ? [bailActif] : []).map((b) => ({
+              bails={[
+                ...(bailActif ? [bailActif] : []),
+                ...anciensBaux
+              ].map((b) => ({
                 id: b.id,
-                label: b.locataire?.full_name || "Bail actif"
+                label:
+                  (b.locataire?.full_name || "Bail") +
+                  (b.status === "actif"
+                    ? ""
+                    : ` (${BAIL_STATUS_LABEL[b.status] ?? b.status})`)
               }))}
             />
 

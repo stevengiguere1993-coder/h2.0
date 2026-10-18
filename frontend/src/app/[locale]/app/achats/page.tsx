@@ -23,6 +23,8 @@ type Achat = {
   supplier_invoice_number: string | null;
   qbo_doc_number?: string | null;
   qbo_bill_id?: string | null;
+  // Dépense IMPORTÉE de QB (pull des coûts) : l'Id QB vit ici.
+  qbo_purchase_id?: string | null;
   fournisseur_id: number | null;
   sous_traitant_id?: number | null;
   kind?: string | null;
@@ -150,6 +152,16 @@ export default function AchatsPage() {
   const [payTarget, setPayTarget] = useState<Achat | null>(null);
   const [pulling, setPulling] = useState(false);
   const [pullResult, setPullResult] = useState<string | null>(null);
+  // Facture QuickBooks DIVISÉE : plusieurs achats partagent la même
+  // transaction QB (un par projet) → badge « divisée » sur chacun.
+  const qbPartsCount = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const a of items) {
+      const k = a.qbo_bill_id || a.qbo_purchase_id;
+      if (k) m.set(k, (m.get(k) || 0) + 1);
+    }
+    return m;
+  }, [items]);
 
   async function pullFromQbo() {
     if (pulling) return;
@@ -177,6 +189,8 @@ export default function AchatsPage() {
         skipped_existing: number;
         paid_synced: number;
         total_qbo_bills: number;
+        split_multi_projets?: number;
+        parts_partielles?: number;
       };
       const parts: string[] = [];
       parts.push(`${r.imported} nouveau(x) achat(s) importé(s)`);
@@ -187,6 +201,13 @@ export default function AchatsPage() {
       if (r.paid_synced > 0)
         parts.push(`${r.paid_synced} basculé(s) en payé via QB`);
       parts.push(`${r.skipped_existing} déjà présent(s)`);
+      // Factures FRACTIONNÉES dans QuickBooks (retour Steven 2026-10-06,
+      // « importer la séparation de factures ») : un achat par projet ;
+      // la part hors projet (client mère, autre client, aucun client)
+      // reste dans QB.
+      let nDivisees = r.split_multi_projets || 0;
+      let nPartielles = r.parts_partielles || 0;
+      let nReduits = 0;
       // Pull COMPLET en plus (coûts par projet) : crée les fournisseurs
       // manquants, importe les reçus QB, reflète les rapprochements
       // (date/mode) sur les achats liés. Best-effort : réservé
@@ -202,7 +223,13 @@ export default function AchatsPage() {
             purchases_imported?: number;
             reconciled_synced?: number;
             receipts_imported?: number;
+            split_multi_projets?: number;
+            parts_partielles?: number;
+            reduits_part_projet?: number;
           };
+          nDivisees += c.split_multi_projets || 0;
+          nPartielles += c.parts_partielles || 0;
+          nReduits += c.reduits_part_projet || 0;
           const extra: string[] = [];
           const nb =
             (c.bills_imported || 0) + (c.purchases_imported || 0);
@@ -212,10 +239,28 @@ export default function AchatsPage() {
           if ((c.receipts_imported || 0) > 0)
             extra.push(`${c.receipts_imported} reçu(s) importé(s)`);
           if (extra.length) parts.push(...extra);
+        } else if (cRes.status !== 403) {
+          // Visible plutôt que silencieux : c'est cette passe qui divise
+          // les factures fractionnées et reprend les dépenses QB.
+          parts.push(
+            `import des coûts de projet en échec (HTTP ${cRes.status})`
+          );
         }
       } catch {
-        /* best-effort */
+        parts.push("import des coûts de projet injoignable");
       }
+      if (nDivisees > 0)
+        parts.push(
+          `${nDivisees} facture(s) divisée(s) entre projets (un achat par projet)`
+        );
+      if (nReduits > 0)
+        parts.push(
+          `${nReduits} achat(s) ramené(s) à la part de son projet`
+        );
+      if (nPartielles > 0)
+        parts.push(
+          `${nPartielles} facture(s) fractionnée(s) : seule la part des projets est importée, le reste reste dans QuickBooks`
+        );
       setPullResult(parts.join(" · "));
       // Recharge la liste
       const aRes = await authedFetch("/api/v1/achats?limit=500");
@@ -601,6 +646,8 @@ export default function AchatsPage() {
                 {filtered.map((a) => {
                   const fr = a.fournisseur_id ? frById.get(a.fournisseur_id) : null;
                   const pr = a.project_id ? projById.get(a.project_id) : null;
+                  const qbKey = a.qbo_bill_id || a.qbo_purchase_id || "";
+                  const nParts = qbKey ? qbPartsCount.get(qbKey) || 0 : 0;
                   return (
                     <tr
                       key={a.id}
@@ -609,12 +656,20 @@ export default function AchatsPage() {
                     >
                       <td className="px-4 py-3 font-semibold text-white">
                         {refLabel(a)}
-                        {a.qbo_bill_id && !a.reference ? (
+                        {(a.qbo_bill_id || a.qbo_purchase_id) && !a.reference ? (
                           <span
                             className="ml-1 text-[10px] font-normal text-sky-300"
                             title="Importé depuis QuickBooks"
                           >
                             QB
+                          </span>
+                        ) : null}
+                        {nParts > 1 ? (
+                          <span
+                            className="ml-1 rounded bg-sky-500/15 px-1 text-[10px] font-normal text-sky-300"
+                            title={`Facture QuickBooks divisée entre ${nParts} achats (un par projet)`}
+                          >
+                            divisée ·{nParts}
                           </span>
                         ) : null}
                       </td>

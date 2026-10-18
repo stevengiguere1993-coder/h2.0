@@ -470,6 +470,13 @@ async def chercher_tout(
 
 
 DERNIERE_RECHERCHE: dict = {"en_cours": False, "lance_a": None, "termine_a": None, "stats": None}
+#: Durée maximale d'une course (500 couples × jusqu'à 7 requêtes, souvent
+#: via le VPS) : au-delà, elle s'arrête d'elle-même et l'état est libéré —
+#: avant, « Une recherche est déjà en cours » pouvait bloquer le bouton
+#: « Trouver les prix » toute une journée (2026-10-18).
+DUREE_MAX_RECHERCHE_S = 3 * 3600
+_TACHES: set = set()
+_TACHE_EN_COURS: Optional[asyncio.Task] = None
 
 _SCRAPER_ETAT: dict = {"verifie_a": None, "en_ligne": None, "detail": None}
 
@@ -503,30 +510,82 @@ async def etat_scraper_vps(max_age_s: float = 60.0) -> dict:
     return dict(_SCRAPER_ETAT)
 
 
-async def chercher_tout_en_arriere_plan(**kwargs) -> None:
+async def chercher_tout_en_arriere_plan(**kwargs) -> dict:
     """Course complète avec une session par magasin (voir chercher_tout).
-    Un seul run à la fois par processus (bouton, route, cron)."""
+    Un seul run à la fois par processus (bouton, route, cron), borné à
+    ``DUREE_MAX_RECHERCHE_S``, arrêtable par ``annuler_recherche`` (les
+    prix déjà posés restent : un commit par couple). Renvoie les stats."""
+    global _TACHE_EN_COURS
     from app.db.session import AsyncSessionLocal
+    from app.services.materiaux_prix_auto import duree_lisible
 
     if DERNIERE_RECHERCHE.get("en_cours"):
-        return
+        return dict(DERNIERE_RECHERCHE.get("stats") or {})
     live: dict = {}
-    DERNIERE_RECHERCHE.update(en_cours=True, lance_a=datetime.now(timezone.utc).isoformat(), termine_a=None, stats=live)
-    try:
+    _TACHE_EN_COURS = asyncio.current_task()
+    DERNIERE_RECHERCHE.update(
+        en_cours=True, lance_a=datetime.now(timezone.utc).isoformat(), termine_a=None,
+        stats=live, duree_max_s=DUREE_MAX_RECHERCHE_S,
+    )
+
+    async def _course() -> None:
         async with AsyncSessionLocal() as db:
-            stats = await chercher_tout(db, session_factory=AsyncSessionLocal, stats_live=live, **kwargs)
-        DERNIERE_RECHERCHE["stats"] = stats
+            await chercher_tout(db, session_factory=AsyncSessionLocal, stats_live=live, **kwargs)
+
+    try:
+        await asyncio.wait_for(_course(), timeout=DUREE_MAX_RECHERCHE_S)
+    except asyncio.TimeoutError:
+        log.warning("Recherche prix matériaux : arrêtée après %s (durée maximale)", duree_lisible(DUREE_MAX_RECHERCHE_S))
+        live["error"] = (
+            f"Arrêtée après {duree_lisible(DUREE_MAX_RECHERCHE_S)} (durée maximale) : "
+            "les prix trouvés jusque-là sont posés, relance « Trouver les prix » pour continuer."
+        )
+    except asyncio.CancelledError:
+        log.info("Recherche prix matériaux : arrêtée à la demande")
+        live["annule"] = True
+        live["error"] = "Arrêtée à la demande : les prix trouvés jusque-là sont posés."
     except Exception as exc:  # noqa: BLE001
         log.exception("Recherche prix matériaux en arrière-plan échouée")
-        DERNIERE_RECHERCHE["stats"] = {"error": str(exc)[:300]}
+        live["error"] = str(exc)[:300]
     finally:
+        _TACHE_EN_COURS = None
         DERNIERE_RECHERCHE.update(en_cours=False, termine_a=datetime.now(timezone.utc).isoformat())
+    return dict(live)
+
+
+def lancer_recherche_en_fond(**kwargs) -> Optional[asyncio.Task]:
+    """Démarre la recherche en tâche de fond (référence gardée ; ``await``
+    sur la tâche renvoie les stats). ``None`` si une recherche est déjà en
+    cours."""
+    if DERNIERE_RECHERCHE.get("en_cours"):
+        return None
+    task = asyncio.create_task(chercher_tout_en_arriere_plan(**kwargs))
+    _TACHES.add(task)
+    task.add_done_callback(_TACHES.discard)
+    return task
+
+
+def annuler_recherche() -> bool:
+    """Arrête la recherche en cours (bouton « Arrêter ») ; les prix déjà
+    posés restent. True si une recherche tournait."""
+    t = _TACHE_EN_COURS
+    if t is not None and not t.done():
+        t.cancel()
+        return True
+    if DERNIERE_RECHERCHE.get("en_cours"):
+        stats = DERNIERE_RECHERCHE.get("stats")
+        if isinstance(stats, dict):
+            stats.setdefault("error", "État réinitialisé : la tâche de la recherche avait disparu.")
+        DERNIERE_RECHERCHE.update(en_cours=False, termine_a=datetime.now(timezone.utc).isoformat())
+        return True
+    return False
 
 
 async def chercher_tout_pour_cron(*, limit: int = 40, max_age_days: float = 7) -> dict:
     """Entrée du cron quotidien : mêmes garde-fous que le bouton (un run
-    à la fois), quota borné, matériaux déjà cherchés récemment sautés."""
-    if DERNIERE_RECHERCHE.get("en_cours"):
+    à la fois, durée maximale, arrêtable depuis le catalogue), quota
+    borné, matériaux déjà cherchés récemment sautés."""
+    task = lancer_recherche_en_fond(limit=limit, max_age_days=max_age_days)
+    if task is None:
         return {"skipped": "recherche_deja_en_cours"}
-    await chercher_tout_en_arriere_plan(limit=limit, max_age_days=max_age_days)
-    return dict(DERNIERE_RECHERCHE.get("stats") or {})
+    return await task

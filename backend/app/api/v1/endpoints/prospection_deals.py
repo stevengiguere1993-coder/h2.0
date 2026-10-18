@@ -92,6 +92,76 @@ class DealRead(BaseModel):
     lead_analysis: Optional[LeadAnalysisLite] = None
     created_at: datetime
     updated_at: datetime
+    # Compteurs de tâches du deal (vue « Liste » du Pipeline) — calculés
+    # par UNE requête groupée dans les routes de lecture, 0 sinon.
+    #   - nb_taches           : toutes les tâches du deal
+    #   - nb_taches_ouvertes  : statut ≠ done
+    #   - nb_taches_en_retard : ouvertes dont l'échéance est passée
+    #   - prochaine_echeance  : plus proche échéance d'une tâche ouverte
+    nb_taches: int = 0
+    nb_taches_ouvertes: int = 0
+    nb_taches_en_retard: int = 0
+    prochaine_echeance: Optional[date] = None
+
+
+async def _compteurs_taches(db, deal_ids: List[int]) -> dict:
+    """Compteurs de tâches par deal, en une seule requête groupée.
+
+    Retourne ``{deal_id: {"nb_taches", "nb_taches_ouvertes",
+    "nb_taches_en_retard", "prochaine_echeance"}}``. Les deals sans tâche
+    n'apparaissent pas (le lecteur garde les défauts à 0 / None).
+    """
+    if not deal_ids:
+        return {}
+    aujourd_hui = date.today()
+    ouverte = ProspectionDealTask.status != "done"
+    en_retard = ouverte & (ProspectionDealTask.due_date < aujourd_hui)
+    rows = (
+        await db.execute(
+            select(
+                ProspectionDealTask.deal_id,
+                func.count(ProspectionDealTask.id),
+                func.sum(case((ouverte, 1), else_=0)),
+                func.sum(case((en_retard, 1), else_=0)),
+                func.min(case((ouverte, ProspectionDealTask.due_date))),
+            )
+            .where(ProspectionDealTask.deal_id.in_(deal_ids))
+            .group_by(ProspectionDealTask.deal_id)
+        )
+    ).all()
+    out: dict = {}
+    for deal_id, total, ouvertes, retard, prochaine in rows:
+        # SQLite renvoie la date sous forme de texte ISO ; PostgreSQL
+        # renvoie un objet date. On normalise.
+        if isinstance(prochaine, str):
+            try:
+                prochaine = date.fromisoformat(prochaine[:10])
+            except ValueError:
+                prochaine = None
+        out[deal_id] = {
+            "nb_taches": int(total or 0),
+            "nb_taches_ouvertes": int(ouvertes or 0),
+            "nb_taches_en_retard": int(retard or 0),
+            "prochaine_echeance": prochaine,
+        }
+    return out
+
+
+async def _lire_deals(db, rows) -> List[DealRead]:
+    """Sérialise des deals en DealRead avec leurs compteurs de tâches."""
+    rows = list(rows)
+    compteurs = await _compteurs_taches(db, [r.id for r in rows])
+    out: List[DealRead] = []
+    for r in rows:
+        d = DealRead.model_validate(r)
+        c = compteurs.get(r.id)
+        if c:
+            d.nb_taches = c["nb_taches"]
+            d.nb_taches_ouvertes = c["nb_taches_ouvertes"]
+            d.nb_taches_en_retard = c["nb_taches_en_retard"]
+            d.prochaine_echeance = c["prochaine_echeance"]
+        out.append(d)
+    return out
 
 
 def _priority_rank_expr():
@@ -118,7 +188,7 @@ async def list_deals(
             )
         )
     ).scalars().all()
-    return [DealRead.model_validate(r) for r in rows]
+    return await _lire_deals(db, rows)
 
 
 class ReorderDeals(BaseModel):
@@ -156,7 +226,7 @@ async def reorder_deals(
             )
         )
     ).scalars().all()
-    return [DealRead.model_validate(d) for d in rows2]
+    return await _lire_deals(db, rows2)
 
 
 @router.get("/{deal_id}", response_model=DealRead)
@@ -172,7 +242,7 @@ async def get_deal(
     ).scalar_one_or_none()
     if deal is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Deal introuvable.")
-    return DealRead.model_validate(deal)
+    return (await _lire_deals(db, [deal]))[0]
 
 
 @router.post("", response_model=DealRead, status_code=status.HTTP_201_CREATED)

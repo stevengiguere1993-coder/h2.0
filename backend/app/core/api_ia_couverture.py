@@ -169,6 +169,11 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "imm_factures_gestion",
     "imm_frais_locatifs",
     "imm_frais_manuels_gestion",
+    #: Hypothèque conjointe (2026-10-18) : parts d'une hypothèque par
+    #: immeuble couvert — lues dans le détail de l'hypothèque
+    #: (GET /immobilier/immeubles/{id}/hypotheques → `immeubles`,
+    #: `part_pct`) et via kratos_list_entities(hypotheques).
+    "imm_hypotheque_immeubles",
     "imm_hypotheque_tranches",
     "imm_hypotheques",
     #: Codes d'accès d'un immeuble (porte, lock box, garage…, 2026-10-18) —
@@ -214,6 +219,11 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "ndas",
     "note_templates",
     "notifications",
+    #: Bloc-notes de la zone employés (Steven, bug 13, 2026-10-18) : notes /
+    #: petites tâches qu'un employé s'écrit ou qu'un admin / propriétaire
+    #: lui envoie. Lecture IA : kratos_list_entities(bloc_notes) + détail
+    #: bloc_note (activity.py) ; API complète sous /api/v1/bloc-notes.
+    "bloc_notes",
     "numbering_counters",
     "offers",
     "optimisation_budget_lignes",

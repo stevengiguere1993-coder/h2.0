@@ -664,6 +664,8 @@ _LIST_GENERIC_CHOICES = (
     # et ses mouvements (entrées, comptes, sorties vers un projet).
     "inventaire",
     "inventaire_mouvements",
+    # Zone employés (2026-10-18) : bloc-notes des employés.
+    "bloc_notes",
 )
 
 _LIMIT_PROP = {
