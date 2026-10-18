@@ -11,7 +11,7 @@
  * pas : seul son auteur (ou un admin) peut la modifier ou la supprimer.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CheckSquare,
   ChevronDown,
@@ -104,7 +104,6 @@ export default function MobileBlocNotes() {
   // Notes encore « nouvelles » à l'ouverture : on garde la pastille le
   // temps de la visite même si le serveur les marque lues tout de suite.
   const [nouvelles, setNouvelles] = useState<Set<number>>(new Set());
-  const marqueLues = useRef(false);
 
   // Ouverture directe en mode « nouvelle note » (lien du menu Plus) et vue
   // demandée : lus dans l'URL une fois, sans useSearchParams (pas de
@@ -135,11 +134,9 @@ export default function MobileBlocNotes() {
           fraiches.forEach((id) => next.add(id));
           return next;
         });
-        if (!marqueLues.current) {
-          marqueLues.current = true;
-          // Le bloc-notes est ouvert : plus rien de « nouveau » côté badge.
-          void authedFetch("/api/v1/bloc-notes/tout-lu", { method: "POST" });
-        }
+        // Le bloc-notes est ouvert : plus rien de « nouveau » côté badge
+        // (idempotent : ne touche que les notes jamais ouvertes).
+        void authedFetch("/api/v1/bloc-notes/tout-lu", { method: "POST" });
       }
     } catch {
       setError("Chargement échoué.");
