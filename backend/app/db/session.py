@@ -950,6 +950,7 @@ async def ensure_immobilier_aux_tables() -> None:
             FactureGestion,
             FraisLocatif,
             FraisManuelGestion,
+            HypothequeImmeuble,
             ImmCommunication,
             ImmDocPersoModele,
             ImmDocTemplate,
@@ -992,6 +993,9 @@ async def ensure_immobilier_aux_tables() -> None:
                         FraisManuelGestion.__table__,
                         # Codes d'accès de l'immeuble (2026-10-18).
                         ImmeubleCode.__table__,
+                        # Hypothèque conjointe : répartition entre
+                        # immeubles (2026-10-18).
+                        HypothequeImmeuble.__table__,
                     ],
                 )
             )
