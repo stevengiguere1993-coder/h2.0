@@ -1238,12 +1238,6 @@ class SuiviBailRow(BaseModel):
     # « Avis » sur la page Baux).
     renouvellement_status: Optional[str] = None
     renouvellement_avis_document_id: Optional[int] = None
-    #: Rabais sur les premiers mois du bail actif (bug 10, 2026-10-18) —
-    #: pastille + modification depuis le tableau des baux.
-    rabais_mensuel: Optional[float] = None
-    rabais_nb_mois: Optional[int] = None
-    rabais_debut: Optional[date] = None
-    rabais_motif: Optional[str] = None
 
 
 @router.get("/suivi-baux", response_model=List[SuiviBailRow])
@@ -1427,14 +1421,6 @@ async def suivi_baux(
                 jour_echeance=(b.jour_echeance or 1) if b else None,
                 document_id=b.document_id if b else None,
                 signed_at=b.signed_at if b else None,
-                rabais_mensuel=(
-                    float(b.rabais_mensuel)
-                    if b and getattr(b, "rabais_mensuel", None) is not None
-                    else None
-                ),
-                rabais_nb_mois=getattr(b, "rabais_nb_mois", None) if b else None,
-                rabais_debut=getattr(b, "rabais_debut", None) if b else None,
-                rabais_motif=getattr(b, "rabais_motif", None) if b else None,
                 prochain_bail_id=p.id if p else None,
                 prochain_locataire_id=plo.id if plo else None,
                 prochain_locataire_nom=plo.full_name if plo else None,

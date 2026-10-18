@@ -54,12 +54,6 @@ export type SuiviBailRow = {
   au_mois: boolean | null;
   /** Jour du mois où le loyer est payable (bail TAL « Ou le ___ »). */
   jour_echeance: number | null;
-  /** Rabais sur les premiers mois (bug 10) : montant × nb de mois dès
-   *  `rabais_debut` (défaut : début du bail). Null = loyer plein. */
-  rabais_mensuel?: number | null;
-  rabais_nb_mois?: number | null;
-  rabais_debut?: string | null;
-  rabais_motif?: string | null;
   document_id: number | null;
   signed_at: string | null;
   prochain_bail_id: number | null;

@@ -8,39 +8,19 @@
  */
 
 import { useEffect, useState } from "react";
-import { Lock } from "lucide-react";
 
-/** Origine d'une ligne du mois (`FraisLocatif.origine`) : NULL = frais ou
- *  crédit saisi à la main ; « rabais_bail » = crédit généré par le rabais
- *  paramétré sur le bail (se change sur le bail, pas ici) ;
- *  « ajustement_mois » = loyer dû du mois fixé à la main (bug 4). */
-export const ORIGINE_RABAIS = "rabais_bail";
-export const ORIGINE_AJUSTEMENT = "ajustement_mois";
-
-export type FraisMois = {
-  id: number;
-  montant: number;
-  libelle: string;
-  origine?: string | null;
-};
+export type FraisMois = { id: number; montant: number; libelle: string };
 
 /** Un VERSEMENT du mois (Phil 2026-10-08 : « si 2 dépôts, voir les 2
- *  dépôts distincts avec leur date »). Corrigeable en place depuis le
- *  2026-10-18 (bugs 4 à 6) : référence, note, « en retard », trace. */
+ *  dépôts distincts avec leur date »). */
 export type PaiementMois = {
   id: number;
   montant: number;
   paye_le: string | null;
   methode: string | null;
-  reference?: string | null;
-  notes?: string | null;
-  en_retard?: boolean;
-  cree_par?: string | null;
-  modifie_par?: string | null;
-  modifie_le?: string | null;
 };
 
-export function dateCourte(iso: string | null | undefined): string {
+function dateCourte(iso: string | null | undefined): string {
   if (!iso) return "date ?";
   const [y, m, d] = iso.slice(0, 10).split("-");
   const mois = ["janv", "févr", "mars", "avr", "mai", "juin", "juil", "août", "sept", "oct", "nov", "déc"];
@@ -182,29 +162,11 @@ export function CelluleLoyer({
   paiements?: PaiementMois[];
 }) {
   const du = solde ?? 0;
-  const lignes = frais ?? [];
-  // Dû du mois = loyer du bail ± lignes du mois — affiché dès qu'une
-  // ligne existe (rabais sur les premiers mois, loyer dû fixé à la
-  // main, frais de retard…) pour que « Marquer payé » soit lisible.
-  const duCeMois =
-    Math.round((loyer + lignes.reduce((s, f) => s + f.montant, 0)) * 100) /
-    100;
   return (
     <div className="text-right">
       <div className="font-semibold tabular-nums text-white">{fmt(loyer)}</div>
       {echeance ? (
         <div className="text-[10px] font-normal text-white/60">{echeance}</div>
-      ) : null}
-      {lignes.length > 0 ? (
-        <div
-          className="text-[10px] font-normal text-white/60"
-          title="Loyer du bail ± les lignes de ce mois (rabais, frais, crédit, ajustement)"
-        >
-          Dû ce mois{" "}
-          <span className="tabular-nums font-semibold text-white/80">
-            {fmt(duCeMois)}
-          </span>
-        </div>
       ) : null}
       <div className="text-[10px] font-normal text-white/60">
         Reçu{" "}
@@ -238,7 +200,7 @@ export function CelluleLoyer({
           {fmt(du)}
         </span>
       </div>
-      {lignes.map((f) => (
+      {(frais ?? []).map((f) => (
         <div
           key={f.id}
           // Ambre = frais qui s'ajoute au dû ; émeraude = CRÉDIT
@@ -252,26 +214,11 @@ export function CelluleLoyer({
             {f.montant < 0 ? "− " : "+ "}
             {fmt(Math.abs(f.montant))} {f.libelle}
           </span>
-          {f.origine === ORIGINE_RABAIS ? (
-            // Crédit généré par le rabais du bail : pas de × ici, il se
-            // modifie (ou se retire) sur le bail lui-même.
-            <span
-              className="text-white/40"
-              title="Rabais paramétré sur le bail — se modifie sur la fiche du logement (bail actif) ou dans le tableau des baux"
-            >
-              <Lock className="h-2.5 w-2.5" />
-            </span>
-          ) : onSupprimerFrais ? (
+          {onSupprimerFrais ? (
             <button
               type="button"
               onClick={() => onSupprimerFrais(f.id)}
-              title={
-                f.origine === ORIGINE_AJUSTEMENT
-                  ? "Retirer l'ajustement — le mois revient au loyer du bail"
-                  : f.montant < 0
-                    ? "Retirer ce crédit"
-                    : "Retirer ce frais"
-              }
+              title={f.montant < 0 ? "Retirer ce crédit" : "Retirer ce frais"}
               className="text-white/50 transition hover:text-rose-300"
             >
               ×
@@ -282,6 +229,68 @@ export function CelluleLoyer({
     </div>
   );
 }
+
+/** Options de correction d'un paiement — mêmes choix que la saisie
+ *  (retour Phil 2026-07-31 : « Corriger » ne doit plus juste annuler
+ *  et faire perdre la ligne). */
+export function CorrectionOptions({
+  r,
+  busy,
+  onMontant,
+  onComplet,
+  onRetirer,
+  onClose
+}: {
+  r: { etat: string };
+  busy: boolean;
+  onMontant: () => void;
+  onComplet: () => void;
+  onRetirer: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      <button
+        type="button"
+        disabled={busy}
+        onClick={onMontant}
+        title="Ressaisir le montant réellement reçu (remplace les paiements du mois)"
+        className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[11px] font-semibold text-sky-300 hover:bg-sky-500/20 disabled:opacity-50"
+      >
+        Corriger le montant
+      </button>
+      {r.etat !== "paye" ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onComplet}
+          title="Remplacer par un paiement complet du mois"
+          className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+        >
+          Payé au complet
+        </button>
+      ) : null}
+      <button
+        type="button"
+        disabled={busy}
+        onClick={onRetirer}
+        title="Retirer les paiements du mois — la ligne redevient impayée"
+        className="rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[11px] font-semibold text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
+      >
+        Retirer
+      </button>
+      <button
+        type="button"
+        onClick={onClose}
+        title="Fermer"
+        className="px-1 text-[11px] text-white/40 hover:text-white/70"
+      >
+        ×
+      </button>
+    </span>
+  );
+}
+
 
 // ─── Frais ou crédit (Phil 2026-10-08 : « pouvoir sélectionner l'un ou
 // l'autre, en ce moment faut mettre un moins et c'est pas top ») ─────────

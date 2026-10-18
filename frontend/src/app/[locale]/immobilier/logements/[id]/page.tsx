@@ -47,15 +47,7 @@ import {
   fmtPieces,
   type LogementFicheData
 } from "@/components/immobilier/logement-fiche";
-import {
-  CelluleLoyer,
-  type FraisMois
-} from "@/components/immobilier/paiements-actions";
-import {
-  RabaisBailInline,
-  rabaisActif,
-  rabaisLibelle
-} from "@/components/immobilier/rabais-bail";
+import { CelluleLoyer } from "@/components/immobilier/paiements-actions";
 
 /**
  * Fiche logement — VRAIE page 360 d'un logement : infos (ÉDITABLES
@@ -81,11 +73,6 @@ type DossierBail = {
   au_mois?: boolean | null;
   /** Jour du mois où le loyer est payable (bail TAL « Ou le ___ »). */
   jour_echeance?: number | null;
-  /** Rabais sur les premiers mois (bug 10) — null = loyer plein. */
-  rabais_mensuel?: number | null;
-  rabais_nb_mois?: number | null;
-  rabais_debut?: string | null;
-  rabais_motif?: string | null;
   relocation_statut?: string | null;
   /** Dossier de relocation lié — lien ciblé vers le kanban. */
   relocation_dossier_id?: number | null;
@@ -180,8 +167,6 @@ type LoyerMoisLigne = {
   loyer_mensuel: number;
   montant_paye: number | null;
   solde_total?: number;
-  //: Lignes du mois (rabais, frais, crédit, ajustement) — lecture seule.
-  frais_mois?: FraisMois[];
   //: Versements du mois (paiements partiels distincts).
   paiements?: {
     id: number;
@@ -331,8 +316,6 @@ export default function LogementDetailPage({
   // Paiements — interne via /loyers/overview, gestion externe via
   // /loyers/externes. La saisie reste sur les surfaces dédiées.
   const [loyerMois, setLoyerMois] = useState<LoyerMoisLigne | null>(null);
-  //: Incrémenté pour recharger la carte « Loyer du mois » (rabais changé).
-  const [loyerMoisTick, setLoyerMoisTick] = useState(0);
 
   // Édition INLINE des infos (plus de modale) + notes.
   const [editing, setEditing] = useState(false);
@@ -415,7 +398,7 @@ export default function LogementDetailPage({
     return () => {
       annule = true;
     };
-  }, [logementId, loyerMoisTick]);
+  }, [logementId]);
 
   function startEdit() {
     const l = dossier?.logement;
@@ -1079,20 +1062,6 @@ export default function LogementDetailPage({
                             : `${fmtDate(bailActif.date_debut)} → ${fmtDate(bailActif.date_fin)}`
                         }
                       />
-                      {rabaisActif(bailActif) ? (
-                        // Bug 10 : « rabais de 500 $ pour les 3 premiers
-                        // mois, ensuite 1 500 $ / mois » — le loyer du
-                        // bail reste le loyer plein, le rabais s'affiche
-                        // à côté et se change par la pastille ci-dessous.
-                        <Row
-                          label="Rabais"
-                          value={rabaisLibelle(
-                            bailActif,
-                            bailActif.date_debut,
-                            money
-                          )}
-                        />
-                      ) : null}
                     </dl>
                     {/* Même empilement Loyer / Reçu / Solde que la page
                         Paiements et les fiches immeuble/locataire —
@@ -1109,7 +1078,6 @@ export default function LogementDetailPage({
                           recu={loyerMois.montant_paye}
                           solde={loyerMois.solde_total}
                           fmt={money}
-                          frais={loyerMois.frais_mois}
                           paiements={loyerMois.paiements}
                         />
                       </div>
@@ -1142,21 +1110,6 @@ export default function LogementDetailPage({
                         bailId={bailActif.id}
                         jour={bailActif.jour_echeance}
                         onChanged={() => void loadDossier()}
-                      />
-                      {/* Rabais sur les premiers mois (bug 10) — même
-                          fenêtre que dans le tableau des baux. */}
-                      <RabaisBailInline
-                        compact
-                        bailId={bailActif.id}
-                        bail={bailActif}
-                        dateDebut={bailActif.date_debut}
-                        loyer={bailActif.loyer_mensuel}
-                        fmt={money}
-                        onChanged={() => {
-                          void loadDossier();
-                          void loadSuiviBaux();
-                          setLoyerMoisTick((t) => t + 1);
-                        }}
                       />
                       <ResilierBailButton
                         bailId={bailActif.id}
@@ -1205,7 +1158,6 @@ export default function LogementDetailPage({
                   onChanged={() => {
                     void loadSuiviBaux();
                     void loadDossier();
-                    setLoyerMoisTick((t) => t + 1);
                   }}
                 />
               )}

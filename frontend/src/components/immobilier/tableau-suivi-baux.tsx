@@ -36,7 +36,6 @@ import {
 } from "@/components/immobilier/fin-bail";
 import { BailDocActions } from "@/components/immobilier/tal-avis";
 import { RENOUVELLEMENT_BADGES } from "@/components/immobilier/paiements-actions";
-import { RabaisBailInline } from "@/components/immobilier/rabais-bail";
 
 type Row = SuiviBailRow;
 
@@ -201,17 +200,6 @@ export function TableauSuiviBaux({
                       bailId={r.bail_id}
                       jour={r.jour_echeance}
                       onChanged={load}
-                    />
-                    {/* Rabais sur les premiers mois (bug 10) : même
-                        fenêtre que sur la fiche du logement. */}
-                    <RabaisBailInline
-                      bailId={r.bail_id}
-                      bail={r}
-                      dateDebut={r.date_debut}
-                      loyer={r.loyer_mensuel}
-                      fmt={money}
-                      onChanged={load}
-                      onFlash={setFlash}
                     />
                   </td>
                   <td className="px-4 py-2.5">

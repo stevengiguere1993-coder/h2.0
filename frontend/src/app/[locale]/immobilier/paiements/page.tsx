@@ -34,16 +34,13 @@ import { BoutonExport } from "@/components/immobilier/bouton-export";
 import {
   BadgeGestionExterne,
   CelluleLoyer,
+  CorrectionOptions,
+  duMois,
   FraisCreditModal,
   moisCouvertPourPaiement,
   montantMarquerPaye,
   type PaiementMois
 } from "@/components/immobilier/paiements-actions";
-import {
-  lireErreur,
-  lireMontant,
-  usePaiementActions
-} from "@/components/immobilier/paiement-modals";
 import {
   CrochetFilBancaire,
   EncartValidationBancaire,
@@ -257,6 +254,7 @@ export default function PaiementsPage() {
   const [relancingId, setRelancingId] = useState<number | null>(null);
   //: Ligne dont la relance attend confirmation (aperçu ouvert).
   const [relanceApercu, setRelanceApercu] = useState<Row | null>(null);
+  const [correctingId, setCorrectingId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [etatFilter, setEtatFilter] = useState<
@@ -309,19 +307,6 @@ export default function PaiementsPage() {
     window.setTimeout(() => setToast(null), 2500);
   }
 
-  // Fenêtres TACTILES partagées (bugs 4 à 6, 2026-10-18) : versement
-  // daté, correction en place de chaque versement, loyer dû du mois,
-  // confirmations — plus de window.prompt / confirm (muets dans Kratos
-  // installé sur un téléphone).
-  const actions = usePaiementActions<Row>({
-    mois,
-    rows: data?.rows ?? [],
-    fmt: fmtMoney,
-    onChanged: load,
-    onInfo: flash,
-    onError: setError
-  });
-
   async function enregistrerPaiement(row: Row, montant: number) {
     setPayingId(row.bail_id);
     try {
@@ -364,10 +349,21 @@ export default function PaiementsPage() {
     await enregistrerPaiement(row, montantMarquerPaye(row));
   }
 
-  // Paiement PARTIEL : versement daté (montant, date reçue, méthode,
-  // référence) — fenêtre partagée, un versement par dépôt (bugs 5 et 6).
-  function marquerPartiel(row: Row) {
-    actions.ouvrirVersement(row);
+  // Paiement PARTIEL : montant saisi (ex. 500 $ sur un loyer de 800 $).
+  async function marquerPartiel(row: Row) {
+    const restant =
+      Math.round((duMois(row) - (row.montant_paye ?? 0)) * 100) / 100;
+    const saisie = window.prompt(
+      `Montant reçu de ${row.locataire_name || "ce locataire"} pour ${mois} ?\n(Restant du mois : ${fmtMoney(restant)})`,
+      ""
+    );
+    if (saisie == null) return;
+    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
+    if (!Number.isFinite(montant) || montant <= 0) {
+      setError("Montant invalide.");
+      return;
+    }
+    await enregistrerPaiement(row, Math.round(montant * 100) / 100);
   }
 
   // Frais OU crédit — fenêtre partagée (Phil 2026-10-08).
@@ -407,24 +403,110 @@ export default function PaiementsPage() {
   // « Ouvrir un dossier TAL » (point 5, 2026-09-09) : crée le dossier
   // (non-paiement) — le suivi (statut, pièces, fermeture) se fait dans
   // la fiche du locataire, où le bouton « TAL ouvert » mène.
-  function ouvrirTal(row: Row) {
-    actions.confirmer({
-      titre: "Ouvrir un dossier TAL ?",
-      message:
-        "Dossier TAL pour non-paiement sur ce bail. Il sera visible par toute l'équipe et se gère depuis la fiche du locataire.",
-      libelleOk: "Ouvrir le dossier",
-      action: async () => {
-        await ouvrirDossierTal(row.bail_id);
-        flash("Dossier TAL ouvert — suivi dans la fiche du locataire.");
-      }
-    });
+  async function ouvrirTal(row: Row) {
+    if (
+      !window.confirm(
+        "Ouvrir un dossier TAL (non-paiement) pour ce bail ? Il sera visible par toute l'équipe et se gère depuis la fiche du locataire."
+      )
+    )
+      return;
+    try {
+      await ouvrirDossierTal(row.bail_id);
+      flash("Dossier TAL ouvert — suivi dans la fiche du locataire.");
+      await load();
+    } catch (e) {
+      setError(`Ouverture du dossier TAL échouée : ${(e as Error).message}`);
+    }
   }
 
-  // « Corriger » ouvre la fenêtre du mois (bugs 4 à 6) : chaque
-  // versement se modifie ou se retire EN PLACE, le loyer dû du mois se
-  // fixe, les lignes du mois se retirent — sans perdre la ligne.
-  function corriger(row: Row) {
-    actions.ouvrirCorrection(row);
+  async function supprimerFrais(fraisId: number) {
+    if (!window.confirm("Retirer ce frais du solde ?")) return;
+    try {
+      const r = await authedFetch(`/api/v1/immobilier/frais/${fraisId}`, {
+        method: "DELETE"
+      });
+      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      await load();
+    } catch (e) {
+      setError(`Suppression du frais échouée : ${(e as Error).message}`);
+    }
+  }
+
+  // « Corriger » ouvre les OPTIONS (retour Phil 2026-07-31) : corriger
+  // le montant, marquer payé au complet, ou retirer — sans perdre la
+  // ligne ni devoir la retrouver.
+  async function supprimerPaiementsMois(row: Row): Promise<void> {
+    const r = await authedFetch(
+      `/api/v1/immobilier/baux/${row.bail_id}/paiements-mois?mois=${mois}`,
+      { method: "DELETE" }
+    );
+    if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+  }
+
+  async function retirerPaiement(row: Row) {
+    if (
+      !window.confirm(
+        `Retirer le paiement de ${row.locataire_name || "ce locataire"} pour ${mois} (${fmtMoney(row.montant_paye ?? 0)} reçu) ?\nLe mois redeviendra impayé.`
+      )
+    )
+      return;
+    setPayingId(row.bail_id);
+    try {
+      await supprimerPaiementsMois(row);
+      flash("Paiement retiré — le mois est de retour impayé.");
+      setCorrectingId(null);
+      await load();
+    } catch (e) {
+      setError(`Annulation échouée : ${(e as Error).message}`);
+    } finally {
+      setPayingId(null);
+    }
+  }
+
+  async function corrigerMontant(row: Row) {
+    const saisie = window.prompt(
+      `Montant RÉELLEMENT reçu de ${row.locataire_name || "ce locataire"} pour ${mois} ?\n(Enregistré : ${fmtMoney(row.montant_paye ?? 0)} — dû du mois : ${fmtMoney(duMois(row))})`,
+      ""
+    );
+    if (saisie == null) return;
+    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
+    if (!Number.isFinite(montant) || montant < 0) {
+      setError("Montant invalide.");
+      return;
+    }
+    setPayingId(row.bail_id);
+    try {
+      await supprimerPaiementsMois(row);
+      setCorrectingId(null);
+      if (montant > 0) {
+        await enregistrerPaiement(row, Math.round(montant * 100) / 100);
+      } else {
+        flash("Paiements du mois retirés.");
+        await load();
+        setPayingId(null);
+      }
+    } catch (e) {
+      setError(`Correction échouée : ${(e as Error).message}`);
+      setPayingId(null);
+    }
+  }
+
+  async function payeAuComplet(row: Row) {
+    if (
+      !window.confirm(
+        `Remplacer par un paiement COMPLET (${fmtMoney(duMois(row))}) pour ${mois} ?`
+      )
+    )
+      return;
+    setPayingId(row.bail_id);
+    try {
+      await supprimerPaiementsMois(row);
+      setCorrectingId(null);
+      await enregistrerPaiement(row, duMois(row));
+    } catch (e) {
+      setError(`Correction échouée : ${(e as Error).message}`);
+      setPayingId(null);
+    }
   }
 
   //: Le bouton ouvre un aperçu — ce rappel n'avait AUCUNE
@@ -506,66 +588,64 @@ export default function PaiementsPage() {
     );
   }
 
-  function renommerExterne(row: Row) {
+  async function renommerExterne(row: Row) {
     if (row.logement_id == null) return;
-    const logementId = row.logement_id;
-    actions.saisir({
-      titre: "Nom du locataire",
-      sousTitre: `${row.immeuble_name} · ${row.logement_numero}`,
-      label: "Nom (vide = aucun)",
-      aide: "Repère pour le rapport mensuel du gestionnaire — aucun courriel n'est envoyé.",
-      initial: row.locataire_name ?? "",
-      action: async (v) => {
-        const r = await authedFetch(
-          `/api/v1/immobilier/logements/${logementId}`,
-          {
-            method: "PATCH",
-            body: JSON.stringify({ locataire_externe_nom: v.trim() || null })
-          }
-        );
-        if (!r.ok) throw new Error(await lireErreur(r));
+    const v = window.prompt(
+      `Nom du locataire pour ${row.immeuble_name} · ${row.logement_numero} (vide = aucun)`,
+      row.locataire_name ?? ""
+    );
+    if (v === null) return;
+    const r = await authedFetch(
+      `/api/v1/immobilier/logements/${row.logement_id}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ locataire_externe_nom: v.trim() || null })
       }
-    });
+    );
+    if (!r.ok) setError("Nom non enregistré.");
+    await load();
   }
 
-  function marquerPartielExterne(row: Row) {
+  async function marquerPartielExterne(row: Row) {
     const restant =
       Math.round((row.loyer_mensuel - (row.montant_paye ?? 0)) * 100) / 100;
-    actions.saisir({
-      titre: `Montant reçu — ${mois}`,
-      sousTitre: `${row.immeuble_name} · ${row.logement_numero}`,
-      label: "Montant ($)",
-      aide: `Restant du mois : ${fmtMoney(Math.max(restant, 0))} — ajouté au cumul du mois.`,
-      placeholder: String(restant > 0 ? restant : row.loyer_mensuel),
-      inputMode: "decimal",
-      libelleOk: "Enregistrer le paiement",
-      action: async (v) => {
-        const montant = lireMontant(v);
-        if (montant == null || montant <= 0) {
-          throw new Error("Entre un montant positif.");
-        }
-        await enregistrerExterne(row, montant);
-      }
-    });
+    const saisie = window.prompt(
+      `Montant reçu pour le logement ${row.logement_numero} (${mois}) ?\n(Restant du mois : ${fmtMoney(restant)})`,
+      ""
+    );
+    if (saisie == null) return;
+    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
+    if (!Number.isFinite(montant) || montant <= 0) {
+      setError("Montant invalide.");
+      return;
+    }
+    await enregistrerExterne(row, Math.round(montant * 100) / 100);
   }
 
-  function corrigerExterne(row: Row) {
+  async function corrigerExterne(row: Row) {
     if (row.logement_id == null) return;
-    const logementId = row.logement_id;
-    actions.confirmer({
-      titre: "Retirer les paiements du mois ?",
-      message: `Les paiements saisis du logement ${row.logement_numero} pour ${mois} seront supprimés — le mois redevient impayé.`,
-      libelleOk: "Retirer",
-      danger: true,
-      action: async () => {
-        const r = await authedFetch(
-          `/api/v1/immobilier/paiements-externes/${logementId}?mois=${mois}`,
-          { method: "DELETE" }
-        );
-        if (!r.ok && r.status !== 204) throw new Error(await lireErreur(r));
-        flash("Paiement retiré — le mois est de retour impayé.");
-      }
-    });
+    if (
+      !window.confirm(
+        `SUPPRIMER les paiements saisis du logement ${row.logement_numero} pour ${mois} ?
+
+Le mois redeviendra impayé — cette action ne se défait pas.`
+      )
+    )
+      return;
+    setPayingId(busyKey(row));
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/paiements-externes/${row.logement_id}?mois=${mois}`,
+        { method: "DELETE" }
+      );
+      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      flash("Paiement retiré — le mois est de retour impayé.");
+      await load();
+    } catch (e) {
+      setError(`Annulation échouée : ${(e as Error).message}`);
+    } finally {
+      setPayingId(null);
+    }
   }
 
   // Toutes les lignes du mois : interne + gestion externe.
@@ -1028,7 +1108,7 @@ export default function PaiementsPage() {
                         ) : r.gestion_externe ? (
                           <BadgeGestionExterne
                             nom={r.locataire_name}
-                            onRename={() => renommerExterne(r)}
+                            onRename={() => void renommerExterne(r)}
                           />
                         ) : r.locataire_id != null ? (
                           <Link
@@ -1234,7 +1314,7 @@ export default function PaiementsPage() {
                             echeance={echeanceLabel(r.jour_echeance)}
                             frais={r.frais_mois}
                             paiements={r.paiements}
-                            onSupprimerFrais={actions.supprimerFrais}
+                            onSupprimerFrais={(id) => void supprimerFrais(id)}
                           />
                         )}
                       </td>
@@ -1283,7 +1363,7 @@ export default function PaiementsPage() {
                                       <button
                                         type="button"
                                         onClick={() =>
-                                          marquerPartielExterne(r)
+                                          void marquerPartielExterne(r)
                                         }
                                         disabled={payingId === busyKey(r)}
                                         title="Enregistrer un paiement partiel (montant saisi, ajouté au cumul)"
@@ -1297,7 +1377,7 @@ export default function PaiementsPage() {
                                   r.etat === "paye" ? (
                                     <button
                                       type="button"
-                                      onClick={() => corrigerExterne(r)}
+                                      onClick={() => void corrigerExterne(r)}
                                       disabled={payingId === busyKey(r)}
                                       title="Erreur de saisie ? Annule les paiements du mois"
                                       className="px-1 text-[11px] text-white/50 transition hover:text-rose-300 disabled:opacity-50"
@@ -1323,7 +1403,7 @@ export default function PaiementsPage() {
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => marquerPartiel(r)}
+                                    onClick={() => void marquerPartiel(r)}
                                     disabled={payingId === r.bail_id}
                                     title="Enregistrer un paiement partiel (montant saisi)"
                                     className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
@@ -1352,25 +1432,46 @@ export default function PaiementsPage() {
                                     )}
                                     Relancer
                                   </button>
-                                  {/* Toujours offert, même sans
-                                      versement : c'est aussi là que le
-                                      loyer DÛ du mois se fixe (bug 4). */}
-                                  <button
-                                    type="button"
-                                    onClick={() => corriger(r)}
-                                    disabled={payingId === r.bail_id}
-                                    title="Corriger : versements du mois (montant, date, retrait) et loyer dû du mois"
-                                    className="px-1 text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
-                                  >
-                                    Corriger
-                                  </button>
+                                  {(r.montant_paye ?? 0) > 0 ? (
+                                    correctingId === r.bail_id ? (
+                                      <CorrectionOptions
+                                        r={r}
+                                        busy={payingId === r.bail_id}
+                                        onMontant={() => void corrigerMontant(r)}
+                                        onComplet={() => void payeAuComplet(r)}
+                                        onRetirer={() => void retirerPaiement(r)}
+                                        onClose={() => setCorrectingId(null)}
+                                      />
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setCorrectingId(r.bail_id)
+                                        }
+                                        disabled={payingId === r.bail_id}
+                                        title="Corriger le paiement : montant, complet, ou retrait"
+                                        className="px-1 text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                                      >
+                                        Corriger
+                                      </button>
+                                    )
+                                  ) : null}
                                 </>
+                              ) : correctingId === r.bail_id ? (
+                                <CorrectionOptions
+                                  r={r}
+                                  busy={payingId === r.bail_id}
+                                  onMontant={() => void corrigerMontant(r)}
+                                  onComplet={() => void payeAuComplet(r)}
+                                  onRetirer={() => void retirerPaiement(r)}
+                                  onClose={() => setCorrectingId(null)}
+                                />
                               ) : (
                                 <button
                                   type="button"
-                                  onClick={() => corriger(r)}
+                                  onClick={() => setCorrectingId(r.bail_id)}
                                   disabled={payingId === r.bail_id}
-                                  title="Corriger : versements du mois (montant, date, retrait) et loyer dû du mois"
+                                  title="Corriger le paiement : montant, complet, ou retrait"
                                   className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/60 transition hover:text-rose-300 disabled:opacity-50"
                                 >
                                   Corriger
@@ -1400,7 +1501,7 @@ export default function PaiementsPage() {
                             ) : (
                               <button
                                 type="button"
-                                onClick={() => ouvrirTal(r)}
+                                onClick={() => void ouvrirTal(r)}
                                 title="Ouvrir un dossier TAL (non-paiement) pour ce bail — visible par toute l'équipe"
                                 className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/50 transition hover:bg-white/10 hover:text-white/80"
                               >
@@ -1461,7 +1562,6 @@ export default function PaiementsPage() {
         onClose={() => setFraisPour(null)}
         onConfirm={confirmerFrais}
       />
-      {actions.elements}
       {toast ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[1100] flex justify-center px-3">
           <div className="pointer-events-auto flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm text-emerald-100 shadow-lg">

@@ -796,24 +796,6 @@ class Bail(Base, TimestampUpdateMixin):
         Integer, nullable=False, default=1, server_default="1"
     )
 
-    #: RABAIS sur les premiers mois (bug 10, mvilliard 2026-10-06 :
-    #: « rabais de 500 $ pour les 3 premiers mois, ensuite 1 500 $ /
-    #: mois ») : montant retranché chaque mois pendant ``rabais_nb_mois``
-    #: mois à partir de ``rabais_debut`` (défaut : le mois du début du
-    #: bail). Le loyer du bail reste le loyer PLEIN ; le rabais se
-    #: matérialise en CRÉDITS mensuels (``FraisLocatif`` d'origine
-    #: « rabais_bail », voir services/loyer_rabais.py) pour que le dû,
-    #: le solde, les exports et la validation bancaire le voient tous.
-    #: Colonnes additives → ensure_critical_columns.
-    rabais_mensuel: Mapped[Optional[float]] = mapped_column(
-        Numeric(10, 2), nullable=True
-    )
-    rabais_nb_mois: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    rabais_debut: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    rabais_motif: Mapped[Optional[str]] = mapped_column(
-        String(255), nullable=True
-    )
-
     # Inclusions (chauffage, eau chaude, électricité, internet…)
     chauffage_inclus: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
@@ -1018,18 +1000,6 @@ class PaiementLoyer(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-    #: TRACE de la saisie et de la dernière correction EN PLACE (bugs 4
-    #: à 6, 2026-10-18 : « je ne peux changer les montants perçus »).
-    #: Un versement se corrige désormais sans être supprimé/recréé ;
-    #: qui l'a touché et quand reste lisible sur la ligne. Colonnes
-    #: additives → ensure_critical_columns.
-    cree_par: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
-    modifie_par: Mapped[Optional[str]] = mapped_column(
-        String(256), nullable=True
-    )
-    modifie_le: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
 
 
 class FraisLocatif(Base):
@@ -1053,13 +1023,6 @@ class FraisLocatif(Base):
         String(128), nullable=False, default="Frais de retard",
         server_default="Frais de retard",
     )
-    #: ORIGINE de la ligne (2026-10-18) : NULL = saisie manuelle (frais
-    #: ou crédit) ; « rabais_bail » = crédit généré par le rabais du bail
-    #: (régénéré à chaque changement du rabais, non supprimable à
-    #: l'unité) ; « ajustement_mois » = le loyer DÛ du mois a été fixé à
-    #: la main (une seule ligne par bail et par mois, remplacée à chaque
-    #: correction). Colonne additive → ensure_critical_columns.
-    origine: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     created_by_email: Mapped[Optional[str]] = mapped_column(
         String(256), nullable=True
     )
