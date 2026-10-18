@@ -83,9 +83,11 @@ const ARCHIVED_COL = "archived";
 // Colonnes repliées par défaut : « Refusées », « Expirées » et
 // « Terminées » (du bruit la plupart du temps). Toutes les colonnes
 // restent repliables/dépliables au clic ; le choix est mémorisé par
-// navigateur.
+// navigateur, sauf pour « Expirées » qui se replie à chaque ouverture
+// de la page même si on l'avait dépliée (Steven, 2026-10-18).
 const COLLAPSED_COLS_KEY = "hsi_soumissions_collapsed_columns_v1";
 const DEFAULT_COLLAPSED = ["rejected", "expired", "archived"];
+const ALWAYS_COLLAPSED_ON_LOAD = ["expired"];
 
 function loadCollapsedColumns(): Set<string> {
   if (typeof window === "undefined") return new Set(DEFAULT_COLLAPSED);
@@ -93,7 +95,10 @@ function loadCollapsedColumns(): Set<string> {
     const raw = window.localStorage.getItem(COLLAPSED_COLS_KEY);
     if (raw === null) return new Set(DEFAULT_COLLAPSED);
     const parsed = JSON.parse(raw) as string[];
-    return new Set(Array.isArray(parsed) ? parsed : []);
+    return new Set([
+      ...(Array.isArray(parsed) ? parsed : []),
+      ...ALWAYS_COLLAPSED_ON_LOAD
+    ]);
   } catch {
     return new Set(DEFAULT_COLLAPSED);
   }
