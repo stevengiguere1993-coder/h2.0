@@ -171,6 +171,10 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "imm_frais_manuels_gestion",
     "imm_hypotheque_tranches",
     "imm_hypotheques",
+    #: Codes d'accès d'un immeuble (porte, lock box, garage…, 2026-10-18) —
+    #: kratos_list_entities(immeuble_codes) + détail immeuble_code ; routes
+    #: REST /immobilier/immeubles/{id}/codes.
+    "imm_immeuble_codes",
     "imm_immeuble_ownerships",
     "imm_immeubles",
     "imm_locataire_communications",

@@ -1127,6 +1127,33 @@ def serialize_bloc_note(obj: Any, level: str = "summary") -> dict:
     return _drop_none(data)
 
 
+def serialize_imm_immeuble_code(obj: Any, level: str = "summary") -> dict:
+    """Code d'accès d'un immeuble (porte d'entrée, lock box, garage…,
+    pôle Immobilier, 2026-10-18). Le code lui-même est exposé : la clé
+    qui lit les immeubles doit pouvoir répondre « c'est quoi le code de
+    la lock box du 710 Legendre ? »."""
+    libelle = _str(_get(obj, "libelle"))
+    data: dict[str, Any] = {
+        "entity_type": "imm_immeuble_code",
+        "type": "imm_immeuble_code",
+        "id": _get(obj, "id"),
+        "label": libelle,
+        "pole": "immobilier",
+        "immeuble_id": _get(obj, "immeuble_id"),
+        "libelle": libelle,
+        "code": _str(_get(obj, "code")),
+        "note": _str(_get(obj, "note")),
+        "position": _get(obj, "position"),
+        "updated_at": _iso(_get(obj, "updated_at")),
+    }
+    if level in ("detail", "full"):
+        data.update({
+            "created_by_email": _str(_get(obj, "created_by_email")),
+            "created_at": _iso(_get(obj, "created_at")),
+        })
+    return _drop_none(data)
+
+
 SERIALIZERS: dict[str, Callable[..., dict]] = {
     "bloc_note": serialize_bloc_note,
     "devlog_soumission": serialize_devlog_soumission,
@@ -1147,6 +1174,7 @@ SERIALIZERS: dict[str, Callable[..., dict]] = {
     "lot_paiement": serialize_lot_paiement,
     "tal_transmission": serialize_tal_transmission,
     "imm_financement": serialize_imm_financement,
+    "imm_immeuble_code": serialize_imm_immeuble_code,
     "prospection_courtier": serialize_prospection_courtier,
 }
 

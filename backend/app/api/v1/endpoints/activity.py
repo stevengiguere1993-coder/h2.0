@@ -49,7 +49,7 @@ from app.models.employe import Employe
 from app.models.entreprise import Entreprise, EntreprisePartner
 from app.models.paiement_fournisseur import LotPaiement
 from app.models.entreprise_tache import EntrepriseTache
-from app.models.immobilier import ImmLocataireContact, ImmTalDossier
+from app.models.immobilier import ImmLocataireContact, ImmTalDossier, ImmeubleCode
 from app.models.tal_bail import TalTransmission
 from app.models.financement import Financement
 from app.models.project import Project
@@ -1637,6 +1637,11 @@ _DETAIL_ENTITIES: dict[str, tuple] = {
         Financement, "immobilier", "imm_financement",
         "immobilier:tal_dossiers:read",
     ),
+    # Codes d'accès d'un immeuble (porte, lock box, garage…, 2026-10-18).
+    "immeuble_code": (
+        ImmeubleCode, "immobilier", "imm_immeuble_code",
+        "immobilier:immeubles:read",
+    ),
 }
 
 
@@ -1998,6 +2003,14 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         list_cap="construction:tasks:read",
         order_attr="updated_at", stage_attr=None, supports_active=False,
     ),
+    # Immobilier (2026-10-18) : codes d'accès des immeubles (porte, lock
+    # box, garage…) ; `stage` filtre par libellé.
+    "immeuble_codes": _ListSpec(
+        model=ImmeubleCode, pole="immobilier",
+        entity_type="imm_immeuble_code",
+        list_cap="immobilier:immeubles:list",
+        order_attr="updated_at", stage_attr="libelle", supports_active=False,
+    ),
 }
 
 #: Alias supplémentaires (noms « complets ») vers les mêmes specs, pour que
@@ -2032,6 +2045,10 @@ _LIST_ALIASES: dict[str, str] = {
     "financement": "financements",
     "imm_financement": "financements",
     "dossiers_financement": "financements",
+    "immeuble_code": "immeuble_codes",
+    "imm_immeuble_code": "immeuble_codes",
+    "codes_immeuble": "immeuble_codes",
+    "codes_acces": "immeuble_codes",
     "baux_tal": "tal_transmissions",
     "bail_tal": "tal_transmissions",
     "bloc_note": "bloc_notes",
