@@ -597,6 +597,8 @@ function EtapesFusion({
   onFait: (s: Suivi) => void;
 }) {
   const [apercu, setApercu] = useState<Apercu | null>(null);
+  // Aperçu en échec (QuickBooks lent ou à reconnecter) : les étapes restent.
+  const [apercuLu, setApercuLu] = useState(false);
   const [occupe, setOccupe] = useState<"fusion" | "desactiver" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -611,6 +613,8 @@ function EtapesFusion({
         if (r.ok && actif) setApercu((await r.json()) as Apercu);
       } catch {
         /* l'aperçu est un plus : les étapes restent */
+      } finally {
+        if (actif) setApercuLu(true);
       }
     })();
     return () => {
@@ -676,11 +680,11 @@ function EtapesFusion({
               ? `Elle porte ${porte.join(", ")} : tout passera sous « ${cible.nom} ».`
               : "Elle porte des transactions que Kratos n'a pas pu toutes compter."}
         </p>
-      ) : (
+      ) : !apercuLu ? (
         <p className="mt-0.5 flex items-center gap-1.5 text-xs text-[var(--qg-text-muted)]">
           <Loader2 className="h-3 w-3 animate-spin" /> Ce qu&apos;elle porte…
         </p>
-      )}
+      ) : null}
 
       {source.sous_clients.length > 0 ? (
         <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-300">
