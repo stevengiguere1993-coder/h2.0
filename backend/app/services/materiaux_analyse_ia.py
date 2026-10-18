@@ -182,6 +182,10 @@ async def analyser_lot(db, materiaux: list[Materiau], magasins: dict[int, Magasi
 
 
 DERNIERE_ANALYSE: dict = {"en_cours": False, "lance_a": None, "termine_a": None, "stats": None}
+#: Durée maximale d'une analyse : au-delà, l'état est libéré.
+DUREE_MAX_ANALYSE_S = 1 * 3600
+_TACHES: set = set()
+_TACHE_EN_COURS: Optional[asyncio.Task] = None
 
 
 async def analyser_tout(
@@ -243,18 +247,64 @@ async def analyser_tout(
     return stats
 
 
-async def analyser_tout_en_arriere_plan(**kwargs) -> None:
+async def analyser_tout_en_arriere_plan(**kwargs) -> dict:
+    """Analyse de fond : un seul run à la fois par processus, borné à
+    ``DUREE_MAX_ANALYSE_S``, arrêtable par ``annuler_analyse`` (les
+    analyses déjà écrites restent : un commit par lot). Renvoie les stats."""
+    global _TACHE_EN_COURS
     from app.db.session import AsyncSessionLocal
+    from app.services.materiaux_prix_auto import duree_lisible
 
     if DERNIERE_ANALYSE.get("en_cours"):
-        return
+        return dict(DERNIERE_ANALYSE.get("stats") or {})
     live: dict = {}
-    DERNIERE_ANALYSE.update(en_cours=True, lance_a=datetime.now(timezone.utc).isoformat(), termine_a=None, stats=live)
-    try:
+    _TACHE_EN_COURS = asyncio.current_task()
+    DERNIERE_ANALYSE.update(
+        en_cours=True, lance_a=datetime.now(timezone.utc).isoformat(), termine_a=None,
+        stats=live, duree_max_s=DUREE_MAX_ANALYSE_S,
+    )
+
+    async def _course() -> None:
         async with AsyncSessionLocal() as db:
             await analyser_tout(db, stats_live=live, **kwargs)
+
+    try:
+        await asyncio.wait_for(_course(), timeout=DUREE_MAX_ANALYSE_S)
+    except asyncio.TimeoutError:
+        live["error"] = f"Arrêtée après {duree_lisible(DUREE_MAX_ANALYSE_S)} (durée maximale) : les analyses écrites jusque-là restent."
+    except asyncio.CancelledError:
+        live["annule"] = True
+        live["error"] = "Arrêtée à la demande : les analyses écrites jusque-là restent."
     except Exception as exc:  # noqa: BLE001
         log.exception("Analyse IA des prix en arrière-plan échouée")
         live["error"] = str(exc)[:300]
     finally:
+        _TACHE_EN_COURS = None
         DERNIERE_ANALYSE.update(en_cours=False, termine_a=datetime.now(timezone.utc).isoformat())
+    return dict(live)
+
+
+def lancer_analyse_en_fond(**kwargs) -> Optional[asyncio.Task]:
+    """Démarre l'analyse en tâche de fond (référence gardée). ``None`` si
+    une analyse est déjà en cours."""
+    if DERNIERE_ANALYSE.get("en_cours"):
+        return None
+    task = asyncio.create_task(analyser_tout_en_arriere_plan(**kwargs))
+    _TACHES.add(task)
+    task.add_done_callback(_TACHES.discard)
+    return task
+
+
+def annuler_analyse() -> bool:
+    """Arrête l'analyse en cours ; True si une analyse tournait."""
+    t = _TACHE_EN_COURS
+    if t is not None and not t.done():
+        t.cancel()
+        return True
+    if DERNIERE_ANALYSE.get("en_cours"):
+        stats = DERNIERE_ANALYSE.get("stats")
+        if isinstance(stats, dict):
+            stats.setdefault("error", "État réinitialisé : la tâche de l'analyse avait disparu.")
+        DERNIERE_ANALYSE.update(en_cours=False, termine_a=datetime.now(timezone.utc).isoformat())
+        return True
+    return False

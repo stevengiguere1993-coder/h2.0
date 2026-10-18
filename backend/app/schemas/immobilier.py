@@ -134,6 +134,56 @@ class ImmeubleOwnershipRead(ImmeubleOwnershipBase):
     immeuble_id: int
 
 
+# ─── Codes d'accès d'un immeuble ───────────────────────────────────────
+
+
+class ImmeubleCodeBase(BaseModel):
+    """Code d'accès (porte d'entrée, lock box, garage, alarme…)."""
+
+    libelle: str = Field(..., min_length=1, max_length=120)
+    code: str = Field(..., min_length=1, max_length=255)
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+    @field_validator("libelle", "code")
+    @classmethod
+    def _strip_non_vide(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("ne peut pas être vide")
+        return v
+
+
+class ImmeubleCodeCreate(ImmeubleCodeBase):
+    pass
+
+
+class ImmeubleCodeUpdate(BaseModel):
+    libelle: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    code: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    note: Optional[str] = Field(default=None, max_length=2000)
+    position: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("libelle", "code")
+    @classmethod
+    def _strip_non_vide(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            raise ValueError("ne peut pas être vide")
+        return v
+
+
+class ImmeubleCodeRead(ImmeubleCodeBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    immeuble_id: int
+    position: int = 0
+    created_by_email: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
 # ─── Logement ───────────────────────────────────────────────────────────
 
 
@@ -578,6 +628,19 @@ class BailRead(BailBase):
 # ─── Hypothèque ─────────────────────────────────────────────────────────
 
 
+class HypothequeImmeublePart(BaseModel):
+    """Part (%) d'une hypothèque CONJOINTE portée par un immeuble couvert
+    (Steven 2026-10-06 : 710 Legendre + 9085 Millen, une seule
+    hypothèque). Les parts d'une hypothèque totalisent 100."""
+
+    immeuble_id: int
+    part_pct: float = Field(..., gt=0, le=100)
+
+
+class HypothequeImmeubleRead(HypothequeImmeublePart):
+    immeuble_name: Optional[str] = None
+
+
 class HypothequeBase(BaseModel):
     immeuble_id: int
     rang: int = Field(default=1, ge=1, le=9)
@@ -606,7 +669,10 @@ class HypothequeBase(BaseModel):
 
 
 class HypothequeCreate(HypothequeBase):
-    pass
+    #: Hypothèque conjointe : immeubles couverts et leur part (total 100,
+    #: l'immeuble principal ``immeuble_id`` inclus). Vide/absent =
+    #: hypothèque simple sur ``immeuble_id``.
+    immeubles: Optional[List[HypothequeImmeublePart]] = None
 
 
 class HypothequeUpdate(BaseModel):
@@ -630,6 +696,9 @@ class HypothequeUpdate(BaseModel):
     date_fin_terme: Optional[date] = None
     status: Optional[str] = Field(default=None, max_length=16)
     notes: Optional[str] = None
+    #: Répartition entre immeubles : ``None`` = inchangée, ``[]`` = redevient
+    #: une hypothèque simple, sinon remplace la répartition (total 100).
+    immeubles: Optional[List[HypothequeImmeublePart]] = None
 
 
 class HypothequeTrancheCreate(BaseModel):
@@ -658,6 +727,19 @@ class HypothequeRead(HypothequeBase):
     tranches: list[HypothequeTrancheRead] = []
     #: Somme des tranches déboursées À CE JOUR (None sans tranche).
     montant_debourse: Optional[float] = None
+    #: Hypothèque CONJOINTE : immeubles couverts et leur part (vide =
+    #: hypothèque simple, 100 % sur ``immeuble_id``).
+    immeubles: List[HypothequeImmeubleRead] = []
+    conjointe: bool = False
+    #: Part (%) de l'IMMEUBLE CONSULTÉ (100 pour une hypothèque simple).
+    part_pct: float = 100.0
+    #: Balance effective TOTALE de l'hypothèque (saisie > calculée >
+    #: capital) et montants ramenés à la part de l'immeuble consulté —
+    #: ce que la fiche, le cashflow et l'équité de CET immeuble portent.
+    balance_effective: Optional[float] = None
+    montant_initial_part: Optional[float] = None
+    balance_part: Optional[float] = None
+    paiement_mensuel_part: Optional[float] = None
     created_at: datetime
     updated_at: datetime
 

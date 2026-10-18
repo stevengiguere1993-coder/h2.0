@@ -165,3 +165,18 @@ ne part, la facture garde son statut et son numéro, le motif va dans
 une notification `facture_envoi_bloque` va aux admins (une par motif).
 Plus aucun push QB en arrière-plan après l'envoi. Sans clés Intuit
 (staging), la facture part comme avant (`quickbooks_branche()`).
+
+## Catalogue de matériaux — courses de fond (2026-10-18)
+
+Steven : « Catalogue à travailler, extraction bloque ». Les courses du
+catalogue (relevé des prix, recherche des prix de base, analyse IA, job de
+nuit) passent par `lancer_*_en_fond()` / `annuler_*()` de leur service
+(`materiaux_prix_auto`, `materiaux_recherche`, `materiaux_analyse_ia`,
+`materiaux_hebdo`) : une seule à la fois par processus, référence de tâche
+gardée, durée maximale (`DUREE_MAX_*_S`) après laquelle l'état « en cours »
+est libéré, bouton « Arrêter » (`POST /materiaux/prix/arreter`), ce qui est
+committé reste. Le cron et le job de nuit lancent LA MÊME course que le
+bouton (visible et arrêtable depuis le catalogue). Règles : jamais deux
+tâches sur une même AsyncSession (une session par domaine / magasin, commit
+par offre) ; un VPS de scraping injoignable = site bloqué (le domaine est
+court-circuité, pas un délai réseau par offre).

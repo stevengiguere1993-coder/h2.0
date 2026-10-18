@@ -45,6 +45,7 @@ from app.models.invest_portal import (
 )
 from app.models.optimisation import OptimisationProjet
 from app.services.hypotheque_calc import balance_calculee_de, balance_effective
+from app.services.hypotheque_partage import part_de
 from app.services.invest_tri import xirr
 
 log = logging.getLogger(__name__)
@@ -230,21 +231,12 @@ async def valeur_immeuble(
 async def hypotheques_actives(
     db: AsyncSession, immeuble_id: int
 ) -> list[Hypotheque]:
-    hyps = list(
-        (
-            await db.execute(
-                select(Hypotheque).where(
-                    Hypotheque.immeuble_id == immeuble_id,
-                    Hypotheque.status == HypothequeStatus.ACTIVE.value,
-                )
-            )
-        ).scalars()
-    )
-    # Capital = déboursé à ce jour pour les prêts versés par tranches.
-    from app.services.hypotheque_calc import charger_debourses
+    """Hypothèques ACTIVES de l'immeuble — simples et CONJOINTES qui le
+    couvrent, chacune avec sa part pour cet immeuble (``part_de``) et le
+    capital déboursé à ce jour (tranches)."""
+    from app.services.hypotheque_partage import hypotheques_de_l_immeuble
 
-    await charger_debourses(db, hyps)
-    return hyps
+    return await hypotheques_de_l_immeuble(db, immeuble_id)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -270,8 +262,13 @@ async def entreprise_snapshot(db: AsyncSession, entreprise_id: int) -> dict:
         pct = own_pct / 100.0
         val, val_source, val_date = await valeur_immeuble(db, imm)
         hyps = await hypotheques_actives(db, imm.id)
-        balance = round(sum(balance_effective(h) for h in hyps), 2)
-        pay_mensuel = sum(float(h.paiement_mensuel or 0) for h in hyps)
+        # Hypothèque conjointe : seulement la part de cet immeuble.
+        balance = round(
+            sum(balance_effective(h) * part_de(h) for h in hyps), 2
+        )
+        pay_mensuel = sum(
+            float(h.paiement_mensuel or 0) * part_de(h) for h in hyps
+        )
         # Hypothèque de 1er rang pour l'affichage (prêteur, taux, terme).
         hyp1 = min(hyps, key=lambda h: h.rang or 99) if hyps else None
 
@@ -366,17 +363,27 @@ async def entreprise_snapshot(db: AsyncSession, entreprise_id: int) -> dict:
                 "logements": logements_rows,
                 # Détail COMPLET des hypothèques actives — section
                 # « Hypothèques » de la fiche projet.
+                # Hypothèque CONJOINTE : les montants affichés sont la
+                # PART de cet immeuble ; les totaux du prêt suivent.
                 "hypotheques": [
                     {
                         "id": h.id,
                         "rang": h.rang,
                         "preteur": h.preteur,
                         "montant_initial": (
+                            round(float(h.montant_initial) * part_de(h), 2)
+                            if h.montant_initial is not None
+                            else None
+                        ),
+                        "montant_initial_total": (
                             float(h.montant_initial)
                             if h.montant_initial is not None
                             else None
                         ),
-                        "balance": round(balance_effective(h), 2),
+                        "balance": round(balance_effective(h) * part_de(h), 2),
+                        "balance_totale": round(balance_effective(h), 2),
+                        "conjointe": part_de(h) < 0.99999,
+                        "part_pct": round(part_de(h) * 100.0, 2),
                         "taux_pct": (
                             float(h.taux_pct)
                             if h.taux_pct is not None
@@ -384,6 +391,11 @@ async def entreprise_snapshot(db: AsyncSession, entreprise_id: int) -> dict:
                         ),
                         "type_taux": h.type_taux,
                         "paiement_mensuel": (
+                            round(float(h.paiement_mensuel) * part_de(h), 2)
+                            if h.paiement_mensuel is not None
+                            else None
+                        ),
+                        "paiement_mensuel_total": (
                             float(h.paiement_mensuel)
                             if h.paiement_mensuel is not None
                             else None
@@ -619,7 +631,7 @@ async def serie_mensuelle(
 
         hyps = await hypotheques_actives(db, imm.id)
         hypo_mensuel += sum(
-            float(h.paiement_mensuel or 0) for h in hyps
+            float(h.paiement_mensuel or 0) * part_de(h) for h in hyps
         ) * pct
 
     # Mode : « recus » si au moins un paiement est enregistré sur la
@@ -809,7 +821,7 @@ async def _equite_at(
             calc = balance_calculee_de(h, aujourd_hui=at)
             balance += (
                 calc if calc is not None else float(h.montant_initial or 0)
-            )
+            ) * part_de(h)
         total += (val - balance) * pct
     return total
 
@@ -907,6 +919,10 @@ async def timeline_projet(
         # démarre le jour de l'achat (déjà couverte par l'acquisition).
         for h in await hypotheques_actives(db, imm.id):
             if h.date_debut is None:
+                continue
+            # Hypothèque conjointe : un seul événement, sous l'immeuble
+            # principal (pas une fois par immeuble couvert).
+            if part_de(h) < 0.99999 and h.immeuble_id != imm.id:
                 continue
             if imm.purchase_date and abs(
                 (h.date_debut - imm.purchase_date).days

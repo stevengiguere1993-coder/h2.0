@@ -1093,6 +1093,74 @@ def serialize_imm_financement(obj: Any, level: str = "summary") -> dict:
     return _drop_none(data)
 
 
+def serialize_imm_immeuble_code(obj: Any, level: str = "summary") -> dict:
+    """Code d'accès d'un immeuble (porte d'entrée, lock box, garage…,
+    pôle Immobilier, 2026-10-18). Le code lui-même est exposé : la clé
+    qui lit les immeubles doit pouvoir répondre « c'est quoi le code de
+    la lock box du 710 Legendre ? »."""
+    libelle = _str(_get(obj, "libelle"))
+    data: dict[str, Any] = {
+        "entity_type": "imm_immeuble_code",
+        "type": "imm_immeuble_code",
+        "id": _get(obj, "id"),
+        "label": libelle,
+        "pole": "immobilier",
+        "immeuble_id": _get(obj, "immeuble_id"),
+        "libelle": libelle,
+        "code": _str(_get(obj, "code")),
+        "note": _str(_get(obj, "note")),
+        "position": _get(obj, "position"),
+        "updated_at": _iso(_get(obj, "updated_at")),
+    }
+    if level in ("detail", "full"):
+        data.update({
+            "created_by_email": _str(_get(obj, "created_by_email")),
+            "created_at": _iso(_get(obj, "created_at")),
+        })
+    return _drop_none(data)
+
+
+def serialize_imm_hypotheque(obj: Any, level: str = "summary") -> dict:
+    """Hypothèque d'un immeuble (pôle Immobilier, 2026-10-18). Résumé :
+    prêteur, rang, montants, taux, paiement, statut, dates, immeuble
+    principal. Une hypothèque CONJOINTE porte ses immeubles couverts et
+    leurs parts dans la route REST (GET /immobilier/immeubles/{id}/
+    hypotheques → ``immeubles``, ``part_pct``)."""
+    statut = _str(_get(obj, "status"))
+    preteur = _str(_get(obj, "preteur"))
+    rang = _get(obj, "rang")
+    data: dict[str, Any] = {
+        "entity_type": "imm_hypotheque",
+        "type": "imm_hypotheque",
+        "id": _get(obj, "id"),
+        "label": f"Hypothèque {preteur or ''} (rang {rang or 1}, {statut or ''})".strip(),
+        "pole": "immobilier",
+        "immeuble_id": _get(obj, "immeuble_id"),
+        "rang": rang,
+        "preteur": preteur,
+        "status": statut,
+        "statut": statut,
+        "type_pret": _str(_get(obj, "type_pret")),
+        "mode_remboursement": _str(_get(obj, "mode_remboursement")),
+        "montant_initial": _num(_get(obj, "montant_initial")),
+        "balance_actuelle": _num(_get(obj, "balance_actuelle")),
+        "taux_pct": _num(_get(obj, "taux_pct")),
+        "type_taux": _str(_get(obj, "type_taux")),
+        "amortissement_mois": _get(obj, "amortissement_mois"),
+        "paiement_mensuel": _num(_get(obj, "paiement_mensuel")),
+        "date_debut": _iso(_get(obj, "date_debut")),
+        "date_fin_terme": _iso(_get(obj, "date_fin_terme")),
+        "updated_at": _iso(_get(obj, "updated_at")),
+    }
+    if level in ("detail", "full"):
+        data.update({
+            "composition_interets": _str(_get(obj, "composition_interets")),
+            "notes": _str(_get(obj, "notes")),
+            "created_at": _iso(_get(obj, "created_at")),
+        })
+    return _drop_none(data)
+
+
 SERIALIZERS: dict[str, Callable[..., dict]] = {
     "devlog_soumission": serialize_devlog_soumission,
     "devlog_project_task": serialize_devlog_project_task,
@@ -1112,6 +1180,8 @@ SERIALIZERS: dict[str, Callable[..., dict]] = {
     "lot_paiement": serialize_lot_paiement,
     "tal_transmission": serialize_tal_transmission,
     "imm_financement": serialize_imm_financement,
+    "imm_immeuble_code": serialize_imm_immeuble_code,
+    "imm_hypotheque": serialize_imm_hypotheque,
     "prospection_courtier": serialize_prospection_courtier,
 }
 
