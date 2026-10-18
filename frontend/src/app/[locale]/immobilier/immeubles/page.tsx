@@ -12,7 +12,6 @@ import {
 
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch, getToken } from "@/lib/auth";
-import { AddressInput } from "@/components/address-input";
 import { BoutonExport } from "@/components/immobilier/bouton-export";
 import {
   EntrepriseSelector,
@@ -458,31 +457,16 @@ function CreateImmeubleModal({
           </p>
         </div>
         <div>
-          <label className="label" htmlFor="imm_address">
-            Adresse
-          </label>
-          {/* Même champ d'adresse que Kratos (autocomplete + case Suffixe
-              du numéro civique) : la suggestion choisie met « n° rue »
-              ici et remplit Ville / Code postal en dessous. */}
-          <AddressInput
-            id="imm_address"
-            value={form.address}
-            onChange={(v) => set("address", v)}
-            format="rue"
-            onPick={(a) =>
-              setForm((f) => ({
-                ...f,
-                city: a.ville || f.city,
-                postal_code: a.codePostal || f.postal_code
-              }))
-            }
+          <label className="label">Adresse</label>
+          <input
             required
+            value={form.address}
+            onChange={(e) => set("address", e.target.value)}
+            className="input"
             placeholder="1234 rue Notre-Dame Ouest"
           />
           <p className="mt-1 text-[10px] text-white/40">
             L&apos;immeuble est identifié par son adresse — pas besoin de nom.
-            Tape pour l&apos;autocomplete ; la case Suffixe sert aux numéros
-            comme 1234A ou 1234½.
           </p>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
