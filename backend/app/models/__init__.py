@@ -311,7 +311,6 @@ from app.models.timesheet import (  # noqa: F401
     Timesheet,
     TimesheetCompany,
     TimesheetEntry,
-    TimesheetPunch,
     TimesheetTaskLine,
     TimesheetUserCompany,
 )

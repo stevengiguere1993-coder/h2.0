@@ -2,9 +2,9 @@
 
 /**
  * Accueil de la zone employés — variante « autre » (employé sans pôle
- * Construction). Pas de punch de chantier ni de /mobile/me : le punch de
- * la feuille de temps (bug 16), le prochain événement planifié, les tâches
- * personnelles ouvertes et la feuille de la période de paie courante.
+ * Construction). Pas de punch ni de /mobile/me : prochain événement
+ * planifié, tâches personnelles ouvertes et feuille de temps de la
+ * période de paie courante.
  */
 
 import { useEffect, useState } from "react";
@@ -22,7 +22,6 @@ import { authedFetch } from "@/lib/auth";
 import { TASK_STATUS_OPTIONS } from "@/lib/task-config";
 import { useZoneEmploye } from "../zone-employe-context";
 import { BlocNotesBanner } from "../bloc-notes-banner";
-import { PunchFeuille } from "./punch-feuille";
 import {
   EVENT_TYPE_LABELS,
   firstName,
@@ -150,27 +149,6 @@ export function AccueilAutre() {
           </div>
         ) : (
           <>
-            {/* Punch de la feuille de temps (bug 16) */}
-            {feuille ? (
-              <PunchFeuille
-                feuilleId={feuille.id}
-                companies={feuille.lignes.map((l) => ({
-                  company_id: l.company_id,
-                  label: l.label
-                }))}
-                bloque={
-                  feuille.can_edit
-                    ? null
-                    : "Ta feuille de la période est soumise : un gestionnaire doit la rouvrir avant que tu puisses puncher."
-                }
-                onStopped={(res) => {
-                  if (res.feuille && res.feuille.id === feuille.id) {
-                    setFeuille(res.feuille);
-                  }
-                }}
-              />
-            ) : null}
-
             {/* Prochain événement */}
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
               <p className="flex items-center gap-2 text-xs uppercase tracking-wider text-white/50">

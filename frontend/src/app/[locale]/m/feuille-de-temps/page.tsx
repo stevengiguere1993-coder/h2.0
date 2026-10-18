@@ -9,9 +9,6 @@
  * tâche (importée de ses tâches Gestion d'entreprises ou saisie à la
  * main) et heures. La grille compagnie × jour est dérivée côté serveur ;
  * paie et refacturation ne changent pas (même API que le QG).
- *
- * L'employé « autre » a en plus un punch (bug 16, 2026-10-18) : à
- * l'arrêt, la durée s'ajoute à la ligne du jour de sa feuille.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -47,8 +44,6 @@ import {
   toISODate,
   type TimesheetDetail
 } from "../_autre/shared";
-import { PunchFeuille } from "../_autre/punch-feuille";
-import { useZoneEmploye } from "../zone-employe-context";
 
 /** GET /timesheets/{id}/taches-importables */
 type Importable = {
@@ -69,7 +64,6 @@ const HOURS_RE = /^[0-9]*[.,]?[0-9]*$/;
 
 export default function MobileFeuilleDeTemps() {
   const confirm = useConfirm();
-  const { variant } = useZoneEmploye();
   const [detail, setDetail] = useState<TimesheetDetail | null>(null);
   const [lignes, setLignes] = useState<TacheLigne[]>([]);
   const [dirty, setDirty] = useState(false);
@@ -260,10 +254,6 @@ export default function MobileFeuilleDeTemps() {
   }
 
   const statut = detail ? timesheetStatus(detail.status) : null;
-  // Un punch se fait toujours sur la période d'aujourd'hui : on ne le
-  // bloque d'ici que si c'est elle qu'on regarde (le serveur vérifie).
-  const periodeCourante =
-    !!detail && detail.jours_dates.includes(toISODate(new Date()));
 
   return (
     <>
@@ -282,26 +272,6 @@ export default function MobileFeuilleDeTemps() {
           <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
             {error}
           </p>
-        ) : null}
-
-        {variant === "autre" && detail ? (
-          <PunchFeuille
-            feuilleId={detail.id}
-            companies={companies}
-            bloque={
-              periodeCourante && !canEdit
-                ? "Ta feuille de la période est soumise : un gestionnaire doit la rouvrir avant que tu puisses puncher."
-                : null
-            }
-            // Lignes modifiées à l'écran : enregistrées avant l'arrêt, sinon
-            // la feuille rechargée les effacerait.
-            beforeStop={async () => (dirty ? await save() : true)}
-            onStopped={(res) => {
-              if (res.feuille && res.feuille.id === detail.id) {
-                applyDetail(res.feuille);
-              }
-            }}
-          />
         ) : null}
 
         {/* Navigation entre périodes */}

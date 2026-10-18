@@ -12,7 +12,6 @@ import logging
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -28,7 +27,6 @@ from app.models.timesheet import (
     Timesheet,
     TimesheetCompany,
     TimesheetEntry,
-    TimesheetPunch,
     TimesheetReglement,
     TimesheetTaskLine,
     TimesheetUserCompany,
@@ -1807,367 +1805,6 @@ async def facturer_solde_qbo(
     )
 
 
-# ── Punch de la feuille de temps (bug 16, Steven 2026-10-18) ───────────
-#
-# L'employé « autre » (pôle Entreprises, sans fiche Employé Construction)
-# n'a pas le punch des chantiers : il démarre un chronomètre sur une
-# compagnie et une tâche de SA feuille, et l'arrêt ajoute la durée à la
-# ligne du jour (même compagnie, même tâche), sinon à une nouvelle ligne.
-# Routes déclarées AVANT ``/{timesheet_id}`` : sinon « punch » serait lu
-# comme un identifiant de feuille.
-
-#: Journées de travail à l'heure de Montréal (comme la zone employés) : un
-#: punch commencé à 21 h compte pour ce jour-là, pas pour le lendemain UTC.
-TZ_PUNCH = ZoneInfo("America/Toronto")
-
-#: Plafond d'heures d'un punch, celui d'une ligne de la feuille
-#: (``TacheLigneIn.hours`` ≤ 24) : au-delà, l'écran ne pourrait plus
-#: enregistrer la feuille.
-PUNCH_MAX_HEURES = 24.0
-
-#: Titre des lignes reprises de la grille quand le premier punch arrive
-#: sur une feuille saisie par compagnie.
-TITRE_LIGNE_GRILLE = "Heures saisies par compagnie"
-
-
-class PunchOut(BaseModel):
-    id: int
-    user_id: int
-    company_id: int
-    company_label: str = ""
-    entreprise_tache_id: Optional[int] = None
-    title: str
-    started_at: datetime
-    ended_at: Optional[datetime] = None
-    hours: Optional[float] = None
-
-
-class PunchEtatOut(BaseModel):
-    #: Punch en cours ; None = aucun.
-    en_cours: Optional[PunchOut] = None
-
-
-class PunchStartIn(BaseModel):
-    company_id: int
-    entreprise_tache_id: Optional[int] = None
-    #: Tâche saisie à la main ; par défaut, le titre de la tâche importée.
-    title: Optional[str] = Field(default=None, max_length=255)
-
-
-class PunchStopIn(BaseModel):
-    #: Heure de fin réelle d'un punch oublié (par défaut : maintenant).
-    fin: Optional[datetime] = None
-    #: Gestionnaire : arrêter le punch d'un employé (oubli).
-    user_id: Optional[int] = None
-
-
-class PunchStopOut(BaseModel):
-    punch: PunchOut
-    #: Heures réellement ajoutées à la feuille.
-    heures_ajoutees: float = 0.0
-    message: Optional[str] = None
-    #: Feuille qui a reçu les heures (détail complet, pour l'écran).
-    feuille: Optional[TimesheetDetail] = None
-
-
-def _utc(dt: datetime) -> datetime:
-    """SQLite (tests) rend des datetimes naïfs ; Postgres des aware."""
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
-
-
-def _jour_local(dt: datetime) -> date:
-    return _utc(dt).astimezone(TZ_PUNCH).date()
-
-
-def _fmt_heures(h: float) -> str:
-    """3.5 → « 3 h 30 » (même format que les écrans)."""
-    minutes = int(round(h * 60))
-    return f"{minutes // 60} h {minutes % 60:02d}"
-
-
-def _quand_local(dt: datetime) -> str:
-    """« 9 h 02 » aujourd'hui, sinon « le 2026-10-06 à 9 h 02 »."""
-    loc = _utc(dt).astimezone(TZ_PUNCH)
-    heure = f"{loc.hour} h {loc.minute:02d}"
-    if loc.date() == datetime.now(TZ_PUNCH).date():
-        return heure
-    return f"le {loc.date().isoformat()} à {heure}"
-
-
-async def _punch_ouvert(db, user_id: int) -> Optional[TimesheetPunch]:
-    return (
-        await db.execute(
-            select(TimesheetPunch)
-            .where(
-                TimesheetPunch.user_id == user_id,
-                TimesheetPunch.ended_at.is_(None),
-            )
-            .order_by(TimesheetPunch.started_at.desc())
-            .limit(1)
-        )
-    ).scalars().first()
-
-
-async def _punch_out(db, p: TimesheetPunch) -> PunchOut:
-    cie = await db.get(TimesheetCompany, p.company_id)
-    return PunchOut(
-        id=p.id,
-        user_id=p.user_id,
-        company_id=p.company_id,
-        company_label=cie.label if cie else "",
-        entreprise_tache_id=p.entreprise_tache_id,
-        title=p.title,
-        started_at=_utc(p.started_at),
-        ended_at=_utc(p.ended_at) if p.ended_at else None,
-        hours=p.hours,
-    )
-
-
-def _cible_punch(user: User, user_id: Optional[int]) -> int:
-    """Son propre punch ; celui d'un autre compte : gestionnaire seulement."""
-    if user_id is None or user_id == user.id:
-        return user.id
-    if not _is_manager(user):
-        raise HTTPException(status_code=403, detail="Accès refusé")
-    return user_id
-
-
-async def _verifier_aucun_punch(db, ts: Timesheet, action: str) -> None:
-    """Ni soumission ni approbation tant qu'un punch de l'employé court
-    sur la période : ses heures ne sont pas encore dans la feuille."""
-    p = await _punch_ouvert(db, ts.user_id)
-    if p is None:
-        return
-    if not ts.period_start <= _jour_local(p.started_at) <= ts.period_end:
-        return
-    raise HTTPException(
-        status_code=409,
-        detail=(
-            f"Un punch est en cours depuis {_quand_local(p.started_at)} "
-            f"({p.title}) : arrête-le {action}."
-        ),
-    )
-
-
-async def _lignes_depuis_grille(db, ts: Timesheet) -> None:
-    """Feuille saisie par compagnie (grille, aucune ligne) : ses heures
-    deviennent des lignes, sinon la grille DÉRIVÉE des lignes les
-    effacerait au premier punch. Même jour, même compagnie, mêmes heures ;
-    le bloc refacturable ou non suit la compagnie, comme dans la grille."""
-    entries = (
-        await db.execute(
-            select(TimesheetEntry).where(TimesheetEntry.timesheet_id == ts.id)
-        )
-    ).scalars().all()
-    pos = 0
-    for e in sorted(entries, key=lambda x: (x.day_index, x.company_id)):
-        reste = round(float(e.hours or 0.0), 2)
-        while reste > 0:
-            part = min(reste, PUNCH_MAX_HEURES)
-            db.add(
-                TimesheetTaskLine(
-                    timesheet_id=ts.id,
-                    day_index=e.day_index,
-                    company_id=e.company_id,
-                    title=TITRE_LIGNE_GRILLE,
-                    hours=part,
-                    position=pos,
-                )
-            )
-            pos += 1
-            reste = round(reste - part, 2)
-    await db.flush()
-
-
-async def _verser_punch(
-    db, ts: Timesheet, p: TimesheetPunch, heures: float
-) -> float:
-    """Ajoute les heures du punch à la feuille : à la ligne du même jour
-    (même compagnie, même tâche) si elle existe, sinon à une nouvelle
-    ligne ; puis recalcule la grille. Retourne les heures réellement
-    ajoutées (une ligne reste plafonnée à 24 h)."""
-    lignes = await _load_task_lines(db, ts.id)
-    if not lignes:
-        await _lignes_depuis_grille(db, ts)
-        lignes = await _load_task_lines(db, ts.id)
-    titre = p.title.strip().lower()
-    meme = next(
-        (
-            ln
-            for ln in lignes
-            if ln.day_index == p.day_index
-            and ln.company_id == p.company_id
-            and ln.entreprise_tache_id == p.entreprise_tache_id
-            and (ln.title or "").strip().lower() == titre
-        ),
-        None,
-    )
-    if meme is not None:
-        avant = float(meme.hours or 0.0)
-        meme.hours = round(min(avant + heures, PUNCH_MAX_HEURES), 2)
-        ajoutees = round(meme.hours - avant, 2)
-    else:
-        db.add(
-            TimesheetTaskLine(
-                timesheet_id=ts.id,
-                day_index=p.day_index,
-                company_id=p.company_id,
-                entreprise_tache_id=p.entreprise_tache_id,
-                title=p.title[:255],
-                hours=heures,
-                position=max((ln.position or 0 for ln in lignes), default=-1) + 1,
-            )
-        )
-        ajoutees = heures
-    await db.flush()
-    await _rebuild_entries_from_lines(db, ts)
-    return ajoutees
-
-
-@router.get("/punch", response_model=PunchEtatOut)
-async def punch_etat(
-    db: DBSession,
-    user: CurrentUser,
-    user_id: Optional[int] = Query(default=None),
-) -> PunchEtatOut:
-    """Punch en cours de l'employé connecté (ou d'un employé, pour un
-    gestionnaire)."""
-    cible = _cible_punch(user, user_id)
-    p = await _punch_ouvert(db, cible)
-    return PunchEtatOut(en_cours=await _punch_out(db, p) if p else None)
-
-
-@router.post(
-    "/punch/start",
-    response_model=PunchOut,
-    status_code=status.HTTP_201_CREATED,
-)
-async def punch_start(
-    payload: PunchStartIn, db: DBSession, user: CurrentUser
-) -> PunchOut:
-    """Démarre le punch sur une compagnie de SA feuille et une tâche
-    (l'une de ses tâches assignées, ou saisie à la main). La feuille de la
-    période doit être modifiable (brouillon)."""
-    await _ensure_seed(db)
-    if await _punch_ouvert(db, user.id) is not None:
-        raise HTTPException(
-            status_code=409,
-            detail="Un punch est déjà en cours : arrête-le avant d'en commencer un autre.",
-        )
-    now = datetime.now(timezone.utc)
-    ts = await _get_or_create(db, user.id, _jour_local(now))
-    _assert_editable(ts, user)
-    await _verifier_compagnies(db, ts, user, {payload.company_id})
-    titre = (payload.title or "").strip()
-    tache_id: Optional[int] = None
-    if payload.entreprise_tache_id:
-        ok = await _taches_referencables_ids(
-            db, ts, user, {payload.entreprise_tache_id}
-        )
-        if payload.entreprise_tache_id in ok:
-            tache_id = payload.entreprise_tache_id
-            if not titre:
-                from app.models.entreprise_tache import EntrepriseTache
-
-                t = await db.get(EntrepriseTache, tache_id)
-                titre = (t.title or "").strip() if t else ""
-    if not titre:
-        raise HTTPException(status_code=422, detail="Décris la tâche du punch.")
-    p = TimesheetPunch(
-        user_id=user.id,
-        company_id=payload.company_id,
-        entreprise_tache_id=tache_id,
-        title=titre[:255],
-        started_at=now,
-    )
-    db.add(p)
-    await db.commit()
-    await db.refresh(p)
-    return await _punch_out(db, p)
-
-
-@router.post("/punch/stop", response_model=PunchStopOut)
-async def punch_stop(
-    db: DBSession,
-    user: CurrentUser,
-    payload: Optional[PunchStopIn] = None,
-) -> PunchStopOut:
-    """Arrête le punch : sa durée (plafonnée à 24 h) s'ajoute à la feuille
-    de la période, au jour du début. ``fin`` corrige un punch oublié ; un
-    gestionnaire peut arrêter celui d'un employé (``user_id``)."""
-    payload = payload or PunchStopIn()
-    cible = _cible_punch(user, payload.user_id)
-    p = await _punch_ouvert(db, cible)
-    if p is None:
-        raise HTTPException(status_code=404, detail="Aucun punch en cours.")
-    now = datetime.now(timezone.utc)
-    debut = _utc(p.started_at)
-    fin = _utc(payload.fin) if payload.fin is not None else now
-    if fin > now + timedelta(minutes=5):
-        raise HTTPException(
-            status_code=400,
-            detail="L'heure de fin ne peut pas être dans le futur.",
-        )
-    fin = min(fin, now)
-    if fin <= debut:
-        raise HTTPException(
-            status_code=400,
-            detail="L'heure de fin doit suivre le début du punch.",
-        )
-    heures = round(
-        min((fin - debut).total_seconds() / 3600.0, PUNCH_MAX_HEURES), 2
-    )
-    jour = _jour_local(debut)
-    ts = await _get_or_create(db, cible, jour)
-    p.ended_at = fin
-    p.hours = heures
-    p.timesheet_id = ts.id
-    p.day_index = (jour - ts.period_start).days
-    p.stopped_by_user_id = user.id
-    ajoutees = 0.0
-    message: Optional[str] = None
-    if ts.status == "approuve":
-        message = (
-            f"La feuille du {ts.period_start.isoformat()} au "
-            f"{ts.period_end.isoformat()} est déjà approuvée : "
-            f"{_fmt_heures(heures)} n'y ont pas été ajoutées. Un gestionnaire "
-            "doit la rouvrir pour qu'on les inscrive."
-        )
-    elif heures <= 0:
-        message = "Punch de moins d'une minute : aucune heure ajoutée."
-    else:
-        ajoutees = await _verser_punch(db, ts, p, heures)
-        if ajoutees < heures:
-            message = (
-                "La ligne de cette journée atteint 24 h : le surplus n'a pas "
-                "été ajouté."
-            )
-    await db.commit()
-    return PunchStopOut(
-        punch=await _punch_out(db, p),
-        heures_ajoutees=ajoutees,
-        message=message,
-        feuille=await _build_detail(db, ts, user),
-    )
-
-
-@router.delete("/punch")
-async def punch_annuler(
-    db: DBSession,
-    user: CurrentUser,
-    user_id: Optional[int] = Query(default=None),
-) -> dict:
-    """Annule le punch en cours (démarré par erreur) : aucune heure n'est
-    ajoutée à la feuille."""
-    cible = _cible_punch(user, user_id)
-    p = await _punch_ouvert(db, cible)
-    if p is None:
-        raise HTTPException(status_code=404, detail="Aucun punch en cours.")
-    await db.delete(p)
-    await db.commit()
-    return {"ok": True}
-
-
 @router.get("/{timesheet_id}", response_model=TimesheetDetail)
 async def get_timesheet(
     timesheet_id: int, db: DBSession, user: CurrentUser
@@ -2305,7 +1942,6 @@ async def submit_timesheet(
         raise HTTPException(status_code=404, detail="Feuille introuvable")
     if not (_is_manager(user) or ts.user_id == user.id):
         raise HTTPException(status_code=403, detail="Accès refusé")
-    await _verifier_aucun_punch(db, ts, "avant de soumettre la feuille")
     deja_soumise = ts.status in ("soumis", "approuve")
     ts.status = "soumis"
     ts.submitted_at = datetime.now(timezone.utc)
@@ -2358,7 +1994,6 @@ async def approve_timesheet(
     ts = await db.get(Timesheet, timesheet_id)
     if not ts:
         raise HTTPException(status_code=404, detail="Feuille introuvable")
-    await _verifier_aucun_punch(db, ts, "avant d'approuver la feuille")
     ts.status = "approuve"
     ts.approved_at = datetime.now(timezone.utc)
     ts.approved_by_user_id = user.id
@@ -2423,19 +2058,10 @@ async def _taches_referencables(
     employé, lui être assignée — la même règle que l'import. Une ligne
     dont la tâche a disparu ou n'est pas la sienne est gardée comme tâche
     saisie à la main (même esprit que le ``ondelete=SET NULL``)."""
-    ids = {ln.entreprise_tache_id for ln in lignes if ln.entreprise_tache_id}
-    return await _taches_referencables_ids(db, ts, user, ids)
-
-
-async def _taches_referencables_ids(
-    db, ts: Timesheet, user: User, ids: set
-) -> set:
-    """Sous-ensemble de ``ids`` que la feuille ``ts`` peut référencer
-    (voir ``_taches_referencables``)."""
     from app.models.entreprise_tache import EntrepriseTache
     from app.models.entreprise_tache_assignee import EntrepriseTacheAssignee
 
-    ids = {i for i in ids if i}
+    ids = {ln.entreprise_tache_id for ln in lignes if ln.entreprise_tache_id}
     if not ids:
         return set()
     q = select(EntrepriseTache.id).where(EntrepriseTache.id.in_(list(ids)))
