@@ -78,6 +78,8 @@ type Achat = {
   markup_percent: number | null;
   invoiced_at: string | null;
   facture_item_id: number | null;
+  // « inventaire » : sortie de l'inventaire interne, jamais dans QB.
+  kind?: string | null;
 };
 
 type Project = {
@@ -518,17 +520,36 @@ export default function AchatDetailPage() {
 
   async function onDelete() {
     if (!a) return;
-    if (!(await confirm(`Supprimer l'achat ${a.reference} ?`))) return;
+    const inventaire = a.kind === "inventaire";
+    if (
+      !(await confirm(
+        inventaire
+          ? `Supprimer l'achat ${a.reference} ? La marchandise retourne dans l'inventaire interne.`
+          : `Supprimer l'achat ${a.reference} ?`
+      ))
+    )
+      return;
     setDeleting(true);
     try {
       const res = await authedFetch(`/api/v1/achats/${id}`, {
         method: "DELETE"
       });
-      if (!res.ok && res.status !== 204) throw new Error();
+      if (!res.ok && res.status !== 204) {
+        // Refus expliqué par le serveur (ex. sortie d'inventaire déjà
+        // refacturée sur une facture).
+        let detail = "";
+        try {
+          const j = (await res.json()) as { detail?: unknown };
+          if (typeof j.detail === "string") detail = j.detail;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail);
+      }
       router.replace("/app/achats");
-    } catch {
+    } catch (e) {
       setDeleting(false);
-      setError("Suppression échouée.");
+      setError((e as Error).message || "Suppression échouée.");
     }
   }
 
@@ -561,20 +582,32 @@ export default function AchatDetailPage() {
             <header className="mt-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <h1 className="text-2xl font-bold text-white">{a.reference}</h1>
               <div className="flex flex-wrap items-start gap-2">
-                <AchatQboPushButton
-                  achat={a}
-                  onSynced={(billId, docNumber) =>
-                    setA((prev) =>
-                      prev
-                        ? {
-                            ...prev,
-                            qbo_bill_id: billId,
-                            qbo_doc_number: docNumber
-                          }
-                        : prev
-                    )
-                  }
-                />
+                {a.kind === "inventaire" ? (
+                  // Sortie de l'inventaire interne : coût du projet dans
+                  // Kratos seulement (le stock est entré dans QB à son
+                  // achat) — aucun bouton d'envoi.
+                  <div
+                    className="inline-flex items-center gap-2 self-start rounded-lg border border-brand-700 bg-brand-950 px-3 py-2.5 text-sm font-medium text-white/80"
+                    title="Le stock est déjà dans QuickBooks depuis son achat ; cette sortie n'y est pas renvoyée."
+                  >
+                    Inventaire interne · hors QuickBooks
+                  </div>
+                ) : (
+                  <AchatQboPushButton
+                    achat={a}
+                    onSynced={(billId, docNumber) =>
+                      setA((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              qbo_bill_id: billId,
+                              qbo_doc_number: docNumber
+                            }
+                          : prev
+                      )
+                    }
+                  />
+                )}
                 <button
                   type="button"
                   onClick={onDelete}
