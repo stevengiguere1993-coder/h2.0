@@ -685,7 +685,6 @@ async def reconduire_tacitement_baux_echus(
                         [BailStatus.ACTIF.value, BailStatus.PROPOSE.value]
                     ),
                     Bail.id.notin_(bail_ids),
-                    Bail.date_debut > today - timedelta(days=366),
                 )
             )
         ).all():
@@ -740,7 +739,7 @@ async def reconduire_tacitement_baux_echus(
                         Bail.status.in_(
                             [BailStatus.ACTIF.value, BailStatus.PROPOSE.value]
                         ),
-                        Bail.date_debut > b.date_fin,
+                        Bail.date_debut >= b.date_fin,
                     )
                 )
             ).scalars().first()
@@ -847,6 +846,8 @@ async def reactiver_baux_termines_a_tort(db: AsyncSession) -> int:
                 Bail.date_fin.is_not(None),
                 Bail.date_fin > today,
                 Bail.notes.like("%PlexFlow%"),
+                # Un départ DÉCLARÉ n'est jamais une erreur d'import.
+                Bail.depart_declare_le.is_(None),
             )
         )
     ).scalars().all()
@@ -1099,7 +1100,8 @@ async def terminer_baux_echus_avant(
     Un bail actif NON échu qui chevauche reste bloqué par le 409
     existant (ce n'est pas le rôle de ce helper). Baux AU MOIS et
     logements « louer indéfiniment » exclus (ils courent sans égard à
-    leur date de fin).
+    leur date de fin) — SAUF si leur départ est DÉCLARÉ (Steven
+    2026-10-18) : la date de fin est alors une vraie fin.
     """
     if date_debut is None:
         return 0
@@ -1263,17 +1265,20 @@ async def activer_bail_propose(
     await terminer_baux_echus_avant(
         db, bail.logement_id, bail.date_debut, exclure_bail_id=bail.id
     )
-    chevauche = (
-        await db.execute(
-            select(Bail).where(
-                Bail.logement_id == bail.logement_id,
-                Bail.id != bail.id,
-                Bail.status == BailStatus.ACTIF.value,
-                Bail.date_debut <= bail.date_fin,
-                Bail.date_fin >= bail.date_debut,
-            )
-        )
-    ).scalars().first()
+    q_chev = select(Bail).where(
+        Bail.logement_id == bail.logement_id,
+        Bail.id != bail.id,
+        Bail.status == BailStatus.ACTIF.value,
+        Bail.date_debut <= bail.date_fin,
+        Bail.date_fin >= bail.date_debut,
+    )
+    lg_chev = await db.get(Logement, bail.logement_id)
+    if lg_chev is not None and getattr(lg_chev, "location_en_chambres", False):
+        # Chambres : les baux cohabitent (une chambre par locataire) —
+        # seul le MÊME locataire ne peut pas se chevaucher (Steven
+        # 2026-10-18, « nouveau locataire 8900 chambre E »).
+        q_chev = q_chev.where(Bail.locataire_id == bail.locataire_id)
+    chevauche = (await db.execute(q_chev)).scalars().first()
     if chevauche is not None:
         raise ActivationImpossible(
             "Un bail ACTIF chevauche ces dates sur ce logement "
