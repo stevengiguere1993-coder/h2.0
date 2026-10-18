@@ -73,6 +73,25 @@ def test_plage_qui_passe_minuit():
     assert _within_windows(rows, datetime(2026, 10, 19, 12, 0, tzinfo=MTL)) is False
 
 
+def test_heures_perso_la_nuit_appartient_au_lendemain():
+    # Vendredi 22 h → 2 h : joignable vendredi soir et samedi jusqu'à 2 h,
+    # pas vendredi 1 h du matin (c'était la nuit de jeudi).
+    rows = [_row(4, "22:00", "02:00")]
+    vendredi_23h = datetime(2026, 10, 23, 23, 0, tzinfo=MTL)
+    samedi_1h = datetime(2026, 10, 24, 1, 0, tzinfo=MTL)
+    samedi_3h = datetime(2026, 10, 24, 3, 0, tzinfo=MTL)
+    vendredi_1h = datetime(2026, 10, 23, 1, 0, tzinfo=MTL)
+    assert _within_windows(rows, vendredi_23h, overnight_next_day=True) is True
+    assert _within_windows(rows, samedi_1h, overnight_next_day=True) is True
+    assert _within_windows(rows, samedi_3h, overnight_next_day=True) is False
+    assert _within_windows(rows, vendredi_1h, overnight_next_day=True) is False
+    # Dimanche 22 h → 6 h déborde sur LUNDI matin.
+    dim = [_row(6, "22:00", "06:00")]
+    assert _within_windows(dim, datetime(2026, 10, 19, 5, 0, tzinfo=MTL), overnight_next_day=True) is True
+    # Heures d'ouverture (sans le drapeau) : comportement historique conservé.
+    assert _within_windows(rows, vendredi_1h) is True
+
+
 def test_le_fuseau_de_la_plage_est_respecte():
     # 14 h UTC un lundi = 10 h à Montréal → dans une plage 9 h-12 h locale.
     lundi_14h_utc = datetime(2026, 10, 19, 14, 0, tzinfo=ZoneInfo("UTC"))

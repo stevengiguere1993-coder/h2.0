@@ -75,7 +75,9 @@ async def is_within_business_hours(
     return _within_windows(rows, now)
 
 
-def _within_windows(rows, now: Optional[datetime] = None) -> bool:
+def _within_windows(
+    rows, now: Optional[datetime] = None, *, overnight_next_day: bool = False
+) -> bool:
     """« Sommes-nous dans une plage ? » — commun aux heures d'ouverture
     d'un numéro et aux heures d'appel personnelles d'un utilisateur.
 
@@ -84,6 +86,11 @@ def _within_windows(rows, now: Optional[datetime] = None) -> bool:
     en tout temps). Sinon True ssi l'heure courante (fuseau de la 1re plage,
     défaut America/Montreal) tombe dans au moins une plage du jour ; une
     plage dont la fin précède le début passe minuit.
+
+    ``overnight_next_day`` (heures d'appel personnelles) : la partie après
+    minuit d'une telle plage appartient au LENDEMAIN (« vendredi 22 h → 2 h »
+    = vendredi soir jusqu'à samedi 2 h). Sans ce drapeau (heures
+    d'ouverture, comportement historique), elle est comptée le jour même.
     """
     rows = list(rows or [])
     if not rows:
@@ -100,6 +107,13 @@ def _within_windows(rows, now: Optional[datetime] = None) -> bool:
     current_time = current.time()
 
     for row in rows:
+        if overnight_next_day and row.close_time <= row.open_time:
+            # Soirée du jour de la plage, puis nuit jusqu'au lendemain.
+            if row.day_of_week == current_dow and current_time >= row.open_time:
+                return True
+            if (row.day_of_week + 1) % 7 == current_dow and current_time <= row.close_time:
+                return True
+            continue
         if row.day_of_week != current_dow:
             continue
         if _between(current_time, row.open_time, row.close_time):
@@ -156,7 +170,11 @@ async def filter_users_available_now(
     if not ordered:
         return []
     hours = await load_user_call_hours(db, ordered)
-    return [u for u in ordered if _within_windows(hours.get(u) or [], now)]
+    return [
+        u
+        for u in ordered
+        if _within_windows(hours.get(u) or [], now, overnight_next_day=True)
+    ]
 
 
 async def is_user_available_now(
