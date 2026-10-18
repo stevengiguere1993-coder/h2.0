@@ -248,7 +248,68 @@ def test_paie_soustrait_le_diner(client, auth_headers, run):
     assert ligne["total_hours"] == 8.0
     assert ligne["hours_diner"] == 0.5
     assert ligne["diners"] == 1
+    assert ligne["hours_brutes"] == 8.5
     assert rapport["total_hours_diner"] >= 0.5
+    assert rapport["total_diners"] >= 1
+    assert rapport["total_hours_brutes"] >= 8.5
+
+    # Le retrait se voit dans la semaine concernée de la période (Steven,
+    # 2026-10-14) : heures punchées, dîner retiré, heures payées.
+    fin_semaine_1 = date.fromisoformat(rapport["week_1_end"])
+    semaine_1 = AUJOURD_HUI <= fin_semaine_1
+    cle, autre = ("1", "2") if semaine_1 else ("2", "1")
+    assert ligne[f"hours_week_{cle}"] == 8.0
+    assert ligne[f"hours_brutes_week_{cle}"] == 8.5
+    assert ligne[f"hours_diner_week_{cle}"] == 0.5
+    assert ligne[f"diners_week_{cle}"] == 1
+    assert ligne[f"hours_week_{autre}"] == 0.0
+    assert ligne[f"hours_diner_week_{autre}"] == 0.0
+    assert ligne[f"diners_week_{autre}"] == 0
+
+    # Export EmployeurD : les trois premières colonnes ne changent pas ;
+    # ensuite heures punchées et dîner retiré par semaine, nombre de dîners.
+    r = client.get(
+        f"/api/v1/punch/payroll/bi-weekly.csv?period_end={_periode_de_paie(AUJOURD_HUI)}",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    lignes = r.text.splitlines()
+    assert lignes[0] == (
+        "nom_employe,heures_semaine_1,heures_semaine_2,"
+        "heures_punchees_semaine_1,diner_semaine_1,"
+        "heures_punchees_semaine_2,diner_semaine_2,nb_diners"
+    )
+    colonnes = next(l for l in lignes if l.startswith('"Zz Paie Dîner"')).split(",")
+    if semaine_1:
+        assert colonnes[1:] == ["8.0", "0.0", "8.5", "0.5", "0.0", "0.0", "1"]
+    else:
+        assert colonnes[1:] == ["0.0", "8.0", "0.0", "0.0", "8.5", "0.5", "1"]
+
+    r = client.get(
+        "/api/v1/punch/payroll/bi-weekly-regimes.csv"
+        f"?period_end={_periode_de_paie(AUJOURD_HUI)}",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    lignes = r.text.splitlines()
+    assert lignes[0].endswith(",diner_semaine_1,diner_semaine_2,heures_diner,nb_diners")
+    colonnes = next(l for l in lignes if l.startswith('"Zz Paie Dîner"')).split(",")
+    assert colonnes[-4:] == (["0.5", "0.0", "0.5", "1"] if semaine_1 else ["0.0", "0.5", "0.5", "1"])
+
+    # Vue hebdomadaire de l'employé : heures payées, punchées et dîner du jour.
+    lundi = AUJOURD_HUI - timedelta(days=AUJOURD_HUI.weekday())
+    r = client.get(
+        f"/api/v1/punch/weekly?employe_id={emp_id}&week_start={lundi.isoformat()}",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    semaine = r.json()
+    assert semaine["total_hours"] == 8.0
+    assert semaine["total_hours_brutes"] == 8.5
+    assert semaine["total_diner_hours"] == 0.5
+    assert semaine["diners"] == 1
+    assert sum(j["diner_minutes"] for j in semaine["days"]) == 30
+    assert sum(j["hours"] for j in semaine["days"]) == 8.0
 
     mois = f"{AUJOURD_HUI.year:04d}-{AUJOURD_HUI.month:02d}"
     r = client.get(f"/api/v1/punch/payroll?month={mois}", headers=auth_headers)
@@ -256,6 +317,13 @@ def test_paie_soustrait_le_diner(client, auth_headers, run):
     ligne = next(x for x in r.json()["rows"] if x["employe_id"] == emp_id)
     assert ligne["total_hours"] == 8.0
     assert ligne["hours_diner"] == 0.5
+    assert ligne["hours_brutes"] == 8.5
+
+    r = client.get(f"/api/v1/punch/payroll.csv?month={mois}", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    lignes = r.text.splitlines()
+    assert lignes[0].endswith(",hours_brutes,hours_diner,diners")
+    assert next(l for l in lignes if "Zz Paie Dîner" in l).endswith(",8.5,0.5,1")
 
     r = client.get(
         f"/api/v1/punch/employe/{emp_id}/punches.csv?month={mois}", headers=auth_headers
@@ -264,6 +332,10 @@ def test_paie_soustrait_le_diner(client, auth_headers, run):
     lignes = r.text.splitlines()
     assert lignes[0].split(",")[3:5] == ["hours", "diner_min"]
     assert lignes[1].split(",")[3:5] == ["8.0", "30"]
+    # Pied de la fiche d'heures : punchées, dîners retirés, payées.
+    assert any(l.startswith(",,PUNCHÉES,8.5,") for l in lignes)
+    assert any(l.startswith(",,DÎNERS,-0.5,30,") for l in lignes)
+    assert any(l.startswith(",,TOTAL,8.0,") for l in lignes)
 
 
 # ── Clock-out de l'employé (web, mobile) et fermeture de 22 h ───────────

@@ -21,6 +21,7 @@ import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { TASK_STATUS_OPTIONS } from "@/lib/task-config";
 import { useZoneEmploye } from "../zone-employe-context";
+import { BlocNotesBanner } from "../bloc-notes-banner";
 import {
   EVENT_TYPE_LABELS,
   firstName,
@@ -123,6 +124,9 @@ export function AccueilAutre() {
             {error}
           </p>
         ) : null}
+
+        {/* Notes jamais ouvertes dans le bloc-notes (bug 13, 2026-10-18) */}
+        <BlocNotesBanner />
 
         {/* Salutation */}
         <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">

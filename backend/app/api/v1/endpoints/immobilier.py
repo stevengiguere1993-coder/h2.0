@@ -1186,16 +1186,33 @@ async def update_immeuble(
 
 
 async def _bail_actif_chevauchant(
-    db, logement_id: int, date_debut, date_fin, exclure_bail_id=None
+    db,
+    logement_id: int,
+    date_debut,
+    date_fin,
+    exclure_bail_id=None,
+    *,
+    locataire_id: Optional[int] = None,
+    en_chambres: bool = False,
 ):
     """Bail ACTIF du même logement dont les dates chevauchent —
-    JAMAIS deux baux actifs simultanés (audit 2026-07-31)."""
+    JAMAIS deux baux actifs simultanés (audit 2026-07-31).
+
+    Logement loué EN CHAMBRES : plusieurs baux y cohabitent (une chambre
+    par locataire) — seul le MÊME locataire ne peut pas avoir deux baux
+    actifs qui se chevauchent (Steven 2026-10-18 : « il n'arrive pas à
+    mettre un nouveau locataire 8900 chambre E, l'ancien a quitté » —
+    le bail au mois de l'ancien, encore actif, bloquait le nouveau)."""
     q = select(Bail).where(
         Bail.logement_id == logement_id,
         Bail.status == BailStatus.ACTIF.value,
         Bail.date_debut <= date_fin,
         Bail.date_fin >= date_debut,
     )
+    if en_chambres:
+        if locataire_id is None:
+            return None
+        q = q.where(Bail.locataire_id == locataire_id)
     if exclure_bail_id is not None:
         q = q.where(Bail.id != exclure_bail_id)
     return (await db.execute(q)).scalars().first()
@@ -1245,7 +1262,11 @@ async def _refuser_si_unite_deja_en_signature(
             Bail.status == BailStatus.ACTIF.value,
             Bail.locataire_id != locataire_id,
             or_(
-                Bail.au_mois.is_(True),
+                # Bail au mois : il court sans fin… tant que le départ
+                # n'est pas DÉCLARÉ (Steven 2026-10-18) — déclaré, sa
+                # date de fin est une vraie fin et le suivant peut
+                # commencer après.
+                and_(Bail.au_mois.is_(True), Bail.depart_declare_le.is_(None)),
                 Bail.date_fin.is_(None),
                 Bail.date_fin >= date_debut,
             ),
@@ -3247,6 +3268,13 @@ async def logement_dossier(
             loc_by_id[loc.id] = loc
 
     reloc_par_bail = await _relocation_par_bail(db, [b.id for b in baux])
+    # Trace des ANCIENS locataires dans l'unité (Steven 2026-10-18 :
+    # « la dette doit rester et nous devons la voir ») : chaque bail,
+    # passé ou courant, porte son solde dû — même formule que la page
+    # Paiements.
+    from app.services.loyer_solde import soldes_par_bail
+
+    soldes = await soldes_par_bail(db, baux)
     dossier_baux = []
     for b in baux:
         loc = loc_by_id.get(b.locataire_id)
@@ -3264,6 +3292,20 @@ async def logement_dossier(
                 loyer_mensuel=float(b.loyer_mensuel or 0),
                 date_debut=b.date_debut,
                 date_fin=b.date_fin,
+                depart_declare_le=getattr(b, "depart_declare_le", None),
+                solde_du=soldes.get(b.id, 0.0),
+                depot_garantie=(
+                    float(b.depot_garantie)
+                    if b.depot_garantie is not None
+                    else None
+                ),
+                depot_rendu_le=b.depot_rendu_le,
+                depot_saisi_le=getattr(b, "depot_saisi_le", None),
+                depot_saisi_montant=(
+                    float(b.depot_saisi_montant)
+                    if getattr(b, "depot_saisi_montant", None) is not None
+                    else None
+                ),
                 status=b.status,
                 relocation_statut=reloc["statut"] if reloc else None,
                 relocation_dossier_id=(
@@ -3834,6 +3876,9 @@ async def locataire_dossier(
             imm_by_id[im.id] = im
 
     reloc_par_bail = await _relocation_par_bail(db, [b.id for b in baux])
+    from app.services.loyer_solde import soldes_par_bail
+
+    soldes_360 = await soldes_par_bail(db, baux)
     dossier_baux = []
     for b in baux:
         lg = log_by_id.get(b.logement_id)
@@ -3848,6 +3893,8 @@ async def locataire_dossier(
                 logement_numero=(lg.numero if lg else None),
                 date_debut=b.date_debut,
                 date_fin=b.date_fin,
+                depart_declare_le=getattr(b, "depart_declare_le", None),
+                solde_du=soldes_360.get(b.id, 0.0),
                 loyer_mensuel=float(b.loyer_mensuel or 0),
                 depot_garantie=(
                     float(b.depot_garantie)
@@ -4708,7 +4755,12 @@ async def _creer_bail(
             db, payload.logement_id, payload.date_debut
         )
         chev = await _bail_actif_chevauchant(
-            db, payload.logement_id, payload.date_debut, payload.date_fin
+            db,
+            payload.logement_id,
+            payload.date_debut,
+            payload.date_fin,
+            locataire_id=payload.locataire_id,
+            en_chambres=bool(getattr(log_obj, "location_en_chambres", False)),
         )
         if chev is not None:
             raise HTTPException(
@@ -4720,7 +4772,11 @@ async def _creer_bail(
                 ),
             )
 
-    obj = Bail(**payload.model_dump())
+    obj = Bail(
+        **payload.model_dump(
+            exclude={"remplacer_bail_id", "remplacer_date_depart"}
+        )
+    )
     # « Louer indéfiniment (chambre) » : le logement impose le bail AU
     # MOIS — même loyer à l'infini, aucun avis d'augmentation, hors des
     # renouvellements (retour Phil 2026-08-13).
@@ -4862,6 +4918,78 @@ async def _creer_bail(
     return obj
 
 
+async def _acter_depart_du_locataire_remplace(
+    db, payload: BailCreate, log_obj: Logement, nouveau: Locataire
+) -> Optional[Bail]:
+    """Ferme le bail du locataire SORTANT avant de créer celui du
+    remplaçant (``remplacer_bail_id`` de ``POST /baux``).
+
+    Date de départ = ``remplacer_date_depart`` ou la veille du début du
+    nouveau bail. Passée ou aujourd'hui → bail résilié sur-le-champ ;
+    future → il reste actif jusqu'à cette date, le recalage lazy le
+    terminera. Dans les deux cas le départ est DÉCLARÉ sur le bail
+    (``depart_declare_le``) : plus un loyer n'est dû après cette date,
+    même au mois, et le solde déjà dû reste sur le bail de l'ancien.
+    Un bail déjà terminé/résilié n'est pas retouché."""
+    from app.services.locatif_depart import declarer_depart
+
+    ancien = await db.get(Bail, payload.remplacer_bail_id)
+    if ancien is None or ancien.logement_id != log_obj.id:
+        raise HTTPException(
+            status_code=404,
+            detail="Bail de l'ancien locataire introuvable sur ce logement.",
+        )
+    if ancien.locataire_id == payload.locataire_id:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Le locataire remplaçant est le même que le locataire "
+                "sortant — modifie plutôt son bail (ou renouvelle-le)."
+            ),
+        )
+    if payload.date_debut is None:
+        raise HTTPException(
+            status_code=422,
+            detail="La date de début du nouveau bail est obligatoire.",
+        )
+    if ancien.status != BailStatus.ACTIF.value:
+        return ancien  # déjà fermé : rien à acter
+    date_depart = payload.remplacer_date_depart or (
+        payload.date_debut - timedelta(days=1)
+    )
+    if date_depart >= payload.date_debut:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "La date de départ de l'ancien locataire doit précéder le "
+                "début du nouveau bail."
+            ),
+        )
+    if ancien.date_debut is not None and date_depart < ancien.date_debut:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "La date de départ précède le début du bail de l'ancien "
+                f"locataire ({ancien.date_debut})."
+            ),
+        )
+    en_chambres = bool(getattr(log_obj, "location_en_chambres", False))
+    await declarer_depart(
+        db,
+        ancien.id,
+        date_depart=date_depart,
+        source=(
+            f"Remplacé par {nouveau.full_name} — nouveau bail au "
+            f"{payload.date_debut.isoformat()}"
+        ),
+        # Chambres : les dossiers de relocation sont par logement, pas
+        # par chambre — on n'en ouvre pas pour un simple remplacement.
+        ouvrir_dossier=not en_chambres,
+    )
+    await db.flush()
+    return ancien
+
+
 @router.post(
     "/baux", response_model=BailRead, status_code=status.HTTP_201_CREATED
 )
@@ -4882,6 +5010,13 @@ async def create_bail(
 
     if await immeuble_est_externe(db, log_obj.immeuble_id):
         raise erreur_externe("pas de bail dans Kratos.")
+    # Remplacement d'un locataire (Steven 2026-10-18 : « nous devons
+    # pouvoir remplacer par le nouveau locataire ») : le départ de
+    # l'ancien est ACTÉ ici même — son bail se ferme la veille du début
+    # du nouveau (ou à la date donnée), sa dette reste sur sa fiche et
+    # visible dans l'unité ; puis le nouveau bail se crée normalement.
+    if payload.remplacer_bail_id is not None:
+        await _acter_depart_du_locataire_remplace(db, payload, log_obj, loc_obj)
     obj = await _creer_bail(db, payload, log_obj, user)
     await db.commit()
     await db.refresh(obj)
@@ -4956,12 +5091,17 @@ async def update_bail(
                 data.get("date_debut", obj.date_debut),
                 exclure_bail_id=obj.id,
             )
+            log_u = await db.get(Logement, obj.logement_id)
             chev = await _bail_actif_chevauchant(
                 db,
                 obj.logement_id,
                 data.get("date_debut", obj.date_debut),
                 data.get("date_fin", obj.date_fin),
                 exclure_bail_id=obj.id,
+                locataire_id=obj.locataire_id,
+                en_chambres=bool(
+                    getattr(log_u, "location_en_chambres", False)
+                ),
             )
             if chev is not None:
                 raise HTTPException(
@@ -5936,24 +6076,22 @@ async def loyers_overview(
                 "statut": reloc_f["statut"] if reloc_f else "a_venir",
             }
 
+    from app.services.loyer_solde import apres_la_fin, nb_mois_echus
+
     def _mois_echus(b: Bail) -> int:
         """Nombre de 1ers de mois couverts par le bail jusqu'au mois
         affiché inclus (borné à aujourd'hui) — pour le solde cumulatif.
-        Ne remonte jamais avant la date de démarrage du pôle."""
-        debut = max(
-            b.date_debut.replace(day=1), depuis_bail.get(b.id, solde_depuis)
+        Ne remonte jamais avant la date de démarrage du pôle. La fin
+        OPPOSABLE du bail (service ``loyer_solde``) borne le cumul :
+        bail terminé/résilié, ou départ DÉCLARÉ même au mois (Steven
+        2026-10-18 : « il continue de s'accumuler une dette dans les
+        mois qui suivent ») ; un bail au mois sans départ court."""
+        return nb_mois_echus(
+            b,
+            depuis=depuis_bail.get(b.id, solde_depuis),
+            jusqua=month_start,
+            today=today,
         )
-        fin = min(month_start, today.replace(day=1))
-        # Bail AU MOIS : reconduction auto — les loyers courent sans
-        # egard a la date de fin (retour Phil 2026-07-28)… sauf s'il
-        # est terminé/résilié (M7) : la fin borne alors le cumul.
-        if b.date_fin and (
-            not b.au_mois or b.status != BailStatus.ACTIF.value
-        ):
-            fin = min(fin, b.date_fin.replace(day=1))
-        if fin < debut:
-            return 0
-        return (fin.year - debut.year) * 12 + (fin.month - debut.month) + 1
 
     # Départs ACTÉS : savoir qu'un locataire s'en va le 31 change la
     # façon de lire son retard de loyer, et évite de le relancer pour un
@@ -5997,19 +6135,9 @@ async def loyers_overview(
         # Vaut aussi pour un bail encore ACTIF dont la fin est posée
         # avant le mois affiché (départ / transfert à venir — audit
         # 2026-09-15 : octobre réclamait le loyer de l'ancienne unité).
-        apres_fin = (
-            b.date_fin is not None
-            and b.date_fin < month_start
-            and not b.au_mois
-            and (
-                b.status
-                in (
-                    BailStatus.RESILIE.value,
-                    BailStatus.TERMINE.value,
-                    BailStatus.ACTIF.value,
-                )
-            )
-        )
+        # Même règle pour un bail AU MOIS dont le départ est déclaré
+        # (chambres) : après la date de départ, plus rien n'est attendu.
+        apres_fin = apres_la_fin(b, month_start)
         loyer = 0.0 if apres_fin else loyer_bail_ref
         # Transfert d'unité en cours de mois (Phil 2026-09-15) : le mois
         # de bascule est dû UNE fois — sur l'ancien bail (qui garde son
@@ -6303,18 +6431,25 @@ async def create_frais(
             detail="Un frais ne s'ajoute pas sur un bail proposé (pas encore en vigueur).",
         )
     if bail.status in (BailStatus.RESILIE.value, BailStatus.TERMINE.value):
+        # Steven 2026-10-18 (bug « crédit de 600 $ → erreur ») : la fiche
+        # propose le mois COURANT, souvent après la fin du bail — un
+        # crédit qui règle la dette d'un locataire parti vise donc
+        # n'importe quel mois du début du bail jusqu'à aujourd'hui (le
+        # solde du bail le compte, quel que soit le mois). Jamais un
+        # mois à venir : une dette se règle au présent.
         m_frais = payload.mois_couvert.replace(day=1)
+        mois_courant = _now().date().replace(day=1)
         couvre = (
             bail.date_debut is not None
-            and bail.date_fin is not None
-            and bail.date_debut.replace(day=1) <= m_frais <= bail.date_fin.replace(day=1)
+            and bail.date_debut.replace(day=1) <= m_frais <= mois_courant
         )
         if not couvre:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Ce bail est terminé — un frais ou un crédit ne peut viser "
-                    f"qu'un mois couvert par le bail ({bail.date_debut} → {bail.date_fin})."
+                    "qu'un mois couvert par le bail ou déjà écoulé (du "
+                    f"{bail.date_debut} au mois courant), jamais un mois à venir."
                 ),
             )
     obj = FraisLocatif(

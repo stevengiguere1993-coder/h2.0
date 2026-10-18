@@ -28,6 +28,11 @@ import {
   uploadBailDocument
 } from "@/components/immobilier/documents-api";
 import { authedFetch } from "@/lib/auth";
+import {
+  champsRemplacement,
+  RemplacerLocataireChoix,
+  type RemplacementChoix
+} from "@/components/immobilier/remplacer-locataire";
 
 /** Ligne renvoyée par l'API `GET /api/v1/immobilier/suivi-baux` — une
  *  ligne PAR LOGEMENT (bail actif + prochain). Utilisée par la page Baux
@@ -655,6 +660,9 @@ export function CreerBailModal({
   // Statut de création UNIFIÉ (même défaut que la page Baux) : proposé
   // → passe par le kanban Locations ; actif → bail déjà signé/en vigueur.
   const [statut, setStatut] = useState<CreerBailStatut>("propose");
+  // Remplacement d'un locataire parti (Steven 2026-10-18) : son bail se
+  // ferme dans le même geste, sa dette reste visible.
+  const [remplacement, setRemplacement] = useState<RemplacementChoix>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -695,7 +703,8 @@ export function CreerBailModal({
           status: statut,
           // Le flag du logement fait foi (le serveur le réimpose de
           // toute façon) — pas de bascule manuelle à la création.
-          au_mois: indefini ? true : null
+          au_mois: indefini ? true : null,
+          ...champsRemplacement(remplacement)
         })
       });
       if (!rb.ok) {
@@ -938,15 +947,26 @@ export function CreerBailModal({
               />
               <span>
                 <span className="font-semibold text-white">
-                  Ce bail est déjà en vigueur (signé ou entente verbale)
+                  Bail physique (papier signé) ou entente verbale — déjà
+                  en vigueur
                 </span>{" "}
-                — créé directement ACTIF, sans passer par le kanban
-                Locations (le logement passe « occupé »). Sans bail
+                — créé directement ACTIF, sans signature en ligne ni
+                passage par le kanban Locations (le logement passe
+                « occupé »). Dépose le bail papier numérisé dans
+                « Documents » : il devient LE bail signé. Sans bail
                 papier, déclare ensuite le motif dans le bandeau « bail
                 sans document » pour que rien ne le réclame.
               </span>
             </label>
           </div>
+          <RemplacerLocataireChoix
+            logementId={logementId}
+            locataireId={locId}
+            debut={debut}
+            enChambres={indefini}
+            value={remplacement}
+            onChange={setRemplacement}
+          />
           {err ? (
             <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
               {err}

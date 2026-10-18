@@ -55,12 +55,16 @@ type PunchRead = {
 
 type Me = { employe: Employe | null; active: PunchRead | null };
 
-type WeeklyDay = { day: string; hours: number };
+// `hours` est net : le dîner non payé (`diner_minutes`) en est déjà retiré.
+type WeeklyDay = { day: string; hours: number; diner_minutes?: number };
 type Weekly = {
   employe_id: number;
   week_start: string;
   week_end: string;
   total_hours: number;
+  total_hours_brutes?: number;
+  total_diner_hours?: number;
+  diners?: number;
   days: WeeklyDay[];
 };
 
@@ -726,6 +730,20 @@ function WeeklyCard({ weekly }: { weekly: Weekly }) {
       <p className="mt-1 text-xs text-white/50">
         Du {weekly.week_start} au {weekly.week_end}
       </p>
+      {weekly.total_diner_hours ? (
+        <p
+          className="mt-1 text-xs text-amber-300"
+          title="Dîner non payé retiré de tes heures, une fois par jour (case « dîner » de ta fiche)"
+        >
+          {fmtHm(
+            weekly.total_hours_brutes ??
+              weekly.total_hours + weekly.total_diner_hours
+          )}{" "}
+          punchées · dîners −{fmtHm(weekly.total_diner_hours)}
+          {weekly.diners ? ` (${weekly.diners})` : ""} = {fmtHm(weekly.total_hours)}{" "}
+          payées
+        </p>
+      ) : null}
       <ul className="mt-4 divide-y divide-brand-800 text-sm">
         {weekly.days.map((d) => (
           <li
@@ -733,8 +751,13 @@ function WeeklyCard({ weekly }: { weekly: Weekly }) {
             className="flex items-center justify-between py-2 text-white/80"
           >
             <span>{dayLabel(d.day)}</span>
-            <span className="font-semibold text-white">
+            <span className="text-right font-semibold text-white">
               {d.hours > 0 ? fmtHm(d.hours) : "—"}
+              {d.diner_minutes ? (
+                <span className="block text-[10px] font-medium text-amber-300">
+                  dîner −{d.diner_minutes} min
+                </span>
+              ) : null}
             </span>
           </li>
         ))}
