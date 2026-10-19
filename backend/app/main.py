@@ -108,6 +108,28 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning("schema_check failed during startup: %s", exc)
 
+    # Réponses aux courriels de Kyle (Steven, 2026-10-18) : l'adresse
+    # « Répondre à » de son profil d'expéditeur (Communications → Profils)
+    # devient kyle@gestionmagnifica.com. Une seule fois (applied_backfills),
+    # dès que son profil existe ; un changement manuel ensuite est respecté.
+    try:
+        from app.db.session import AsyncSessionLocal as _KyleSession
+        from app.services.locatif_expediteurs import (
+            corriger_reply_to_kyle_une_fois,
+        )
+
+        async with _KyleSession() as session:
+            modifs = await corriger_reply_to_kyle_une_fois(session)
+            if modifs:
+                logger.info(
+                    "Startup : adresse de réponse de Kyle posée — %s",
+                    " ; ".join(modifs),
+                )
+    except Exception as exc:
+        logger.warning(
+            "correction de l'adresse de réponse de Kyle failed: %s", exc
+        )
+
     # Prime CNESST (2026-10-14) : à la première mise en ligne du taux
     # global, il est créé à partir des taux déjà saisis sur les fiches (le
     # plus fréquent) et les fiches sont converties sans changer le coût de
@@ -147,6 +169,132 @@ async def _run_startup_tasks() -> None:
                 )
     except Exception as exc:
         logger.warning("reclassement des lignes importées failed: %s", exc)
+
+    # Factures refusées par QB parce qu'une ligne pointait une CATÉGORIE
+    # de Produits et services (facture 160, 2026-10-17) : renvoi en
+    # arrière-plan, maintenant que ensure_item écarte les catégories.
+    try:
+        from app.services.qbo_auto_sync import relancer_factures_refus_categorie
+
+        n = await relancer_factures_refus_categorie()
+        if n:
+            logger.info(
+                "Startup : %d facture(s) refusée(s) par QB (catégorie) "
+                "renvoyée(s)",
+                n,
+            )
+    except Exception as exc:
+        logger.warning("relance des refus QB « catégorie » failed: %s", exc)
+
+    # Compteur de factures : prochain numéro = plus haut numéro existant
+    # (Kratos ou QuickBooks) + 1, dès le démarrage (Steven 2026-10-17). Le
+    # filet horaire refait le même recalage.
+    try:
+        from app.services.numbering import aligner_compteur_factures_une_session
+
+        res = await aligner_compteur_factures_une_session()
+        if res["apres"] != res["avant"]:
+            logger.info(
+                "Startup : compteur de factures recalé de %s à %s "
+                "(Kratos %s, QuickBooks %s)",
+                res["avant"], res["apres"], res["kratos_max"], res["qb_max"],
+            )
+    except Exception as exc:
+        logger.warning("recalage du compteur de factures failed: %s", exc)
+
+    # Matériaux sur une seule ligne (2026-10-17) : dans les BROUILLONS, les
+    # lignes « Matériel — <achat> » importées fusionnent en une ligne
+    # « Matériaux » par facture. Une seule fois (applied_backfills), après
+    # la colonne achats.montant_refacture.
+    try:
+        from app.db.session import AsyncSessionLocal as _MatSession
+        from app.services.facture_lignes import regrouper_materiaux_une_fois
+
+        async with _MatSession() as session:
+            n = await regrouper_materiaux_une_fois(session)
+            if n:
+                logger.info(
+                    "Startup : %d ligne(s) de matériel de brouillons "
+                    "fusionnée(s) dans la ligne « Matériaux »",
+                    n,
+                )
+    except Exception as exc:
+        logger.warning("regroupement des lignes de matériaux failed: %s", exc)
+
+    # Échéance au plus tôt le jour de l'envoi (2026-10-17, facture 160) :
+    # les factures déjà envoyées dont l'échéance précède l'envoi y sont
+    # ramenées (les rappels suivent), les admins en reçoivent la liste dans
+    # la cloche Kratos et QuickBooks suit. Une seule fois
+    # (applied_backfills), après la colonne factures.due_in_days.
+    try:
+        from app.db.session import AsyncSessionLocal as _EchSession
+        from app.services.facture_echeance import (
+            corriger_echeances_envoyees_une_fois,
+        )
+
+        async with _EchSession() as session:
+            corrigees = await corriger_echeances_envoyees_une_fois(session)
+            if corrigees:
+                lignes = [
+                    f"Facture {c['reference']} : {c['avant']} → {c['apres']}"
+                    for c in corrigees
+                ]
+                logger.info(
+                    "Startup : %d échéance(s) ramenée(s) au jour de l'envoi : %s",
+                    len(corrigees),
+                    " ; ".join(lignes),
+                )
+                try:
+                    from app.services.notifications import notify_role
+
+                    await notify_role(
+                        session,
+                        min_role="admin",
+                        kind="facture_echeance",
+                        title=(
+                            f"{len(corrigees)} échéance(s) ramenée(s) au "
+                            "jour de l'envoi"
+                        ),
+                        body="\n".join(lignes),
+                        href="/app/facturation",
+                        push=False,
+                    )
+                    await session.commit()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("notification des échéances failed: %s", exc)
+        liees = [c["id"] for c in corrigees if c["qbo"]]
+        if liees:
+            from app.integrations.quickbooks import get_qbo
+            from app.services.qbo_auto_sync import push_facture_now
+
+            qbo = get_qbo()
+            await qbo._load_refresh_from_db()
+            if qbo.ready:
+                for facture_id in liees:
+                    await push_facture_now(facture_id)
+    except Exception as exc:
+        logger.warning("correction des échéances avant l'envoi failed: %s", exc)
+
+    # Soumissions terminées (Steven 2026-10-17) : les soumissions dont le
+    # projet était déjà livré passent dans la colonne « Terminées ». Une
+    # seule fois (applied_backfills) : une soumission ressortie ensuite à
+    # la main n'y est jamais remise.
+    try:
+        from app.db.session import AsyncSessionLocal as _TermSession
+        from app.services.project_auto_status import (
+            archive_soumissions_of_delivered_projects_once,
+        )
+
+        async with _TermSession() as session:
+            n = await archive_soumissions_of_delivered_projects_once(session)
+            if n:
+                logger.info(
+                    "Startup : %d soumission(s) au projet livré passée(s) "
+                    "dans « Terminées »",
+                    n,
+                )
+    except Exception as exc:
+        logger.warning("rattrapage des soumissions terminées failed: %s", exc)
 
     # STAGING : premier compte owner sur base vide (no-op partout ailleurs).
     try:

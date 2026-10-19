@@ -15,7 +15,11 @@ import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 import { splitFromTotal, TPS_RATE, TVQ_RATE } from "@/lib/tax";
-import { projectLabel } from "@/lib/project";
+import {
+  projectLabel,
+  fournisseursPourAchat,
+  trierProjetsParAdresse
+} from "@/lib/project";
 
 type Project = {
   id: number;
@@ -23,7 +27,12 @@ type Project = {
   address?: string | null;
   billing_kind?: string;
 };
-type Fournisseur = { id: number; name: string };
+type Fournisseur = {
+  id: number;
+  name: string;
+  active?: boolean;
+  in_directory?: boolean;
+};
 type BonMini = {
   id: number;
   reference: string;
@@ -435,7 +444,7 @@ export default function NewAchatPage() {
                   id="project"
                   value={projectId}
                   onChange={setProjectId}
-                  options={projects.map((p) => ({
+                  options={trierProjetsParAdresse(projects).map((p) => ({
                     value: String(p.id),
                     label: projectLabel(p)
                   }))}
@@ -495,7 +504,11 @@ export default function NewAchatPage() {
                 emptyLabel="— Aucun —"
                 placeholder="Choisis ou tape le nom du fournisseur…"
                 options={[
-                  ...fournisseurs.map((fr) => ({
+                  ...fournisseursPourAchat(
+                    fournisseurs,
+                    clients.map((c) => c.name),
+                    fournisseurId
+                  ).map((fr) => ({
                     value: String(fr.id),
                     label: fr.name
                   })),

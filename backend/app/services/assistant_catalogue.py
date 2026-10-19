@@ -478,8 +478,9 @@ async def _h_solde_bail(
     """Solde cumulatif dû sur un bail — MÊME formule que la colonne
     « solde » de /loyers/overview : loyers échus depuis le démarrage du
     pôle + frais − paiements, borné à 0 (un bail au mois court sans
-    égard à sa date de fin)."""
+    égard à sa date de fin, tant que son départ n'est pas déclaré)."""
     from app.services.locatif_demarrage import get_demarrage
+    from app.services.loyer_solde import fin_reelle
 
     bail: Optional[Bail] = None
     if params.get("bail_id") is not None:
@@ -506,13 +507,13 @@ async def _h_solde_bail(
     today = _aujourdhui()
     mois_courant = today.replace(day=1)
 
-    # Mois échus — même règle que _mois_echus de /loyers/overview.
+    # Mois échus — même règle que _mois_echus de /loyers/overview : la
+    # fin OPPOSABLE du bail borne le cumul (service loyer_solde).
     debut = max(bail.date_debut.replace(day=1), depuis)
     fin = mois_courant
-    if bail.date_fin and (
-        not bail.au_mois or bail.status != BailStatus.ACTIF.value
-    ):
-        fin = min(fin, bail.date_fin.replace(day=1))
+    fin_opposable = fin_reelle(bail)
+    if fin_opposable is not None:
+        fin = min(fin, fin_opposable.replace(day=1))
     if fin < debut:
         nb_mois = 0
     else:

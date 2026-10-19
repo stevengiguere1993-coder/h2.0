@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Integer,
     LargeBinary,
     Numeric,
     String,
@@ -50,6 +51,11 @@ class Facture(Base, TimestampUpdateMixin):
     )
     issued_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     due_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Conditions de paiement choisies, en jours APRÈS L'ENVOI : 0 =
+    # « Payable sur réception », 30 = « Net 30 »… L'échéance en est
+    # recalculée à chaque envoi (services/facture_echeance.py). NULL =
+    # date d'échéance personnalisée, jamais avant le jour de l'envoi.
+    due_in_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # QuickBooks Online linkage

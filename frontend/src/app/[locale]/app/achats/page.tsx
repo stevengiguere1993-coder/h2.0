@@ -15,7 +15,7 @@ import { useAppLayout } from "../layout";
 import { authedFetch, hasMinRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { Link } from "@/i18n/navigation";
-import { projectLabel } from "@/lib/project";
+import { projectLabel, trierParNom } from "@/lib/project";
 
 type Achat = {
   id: number;
@@ -23,6 +23,8 @@ type Achat = {
   supplier_invoice_number: string | null;
   qbo_doc_number?: string | null;
   qbo_bill_id?: string | null;
+  // Dépense IMPORTÉE de QB (pull des coûts) : l'Id QB vit ici.
+  qbo_purchase_id?: string | null;
   fournisseur_id: number | null;
   sous_traitant_id?: number | null;
   kind?: string | null;
@@ -61,6 +63,15 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
   cc_olivier: "CC Olivier Therrien",
   cc_christian: "CC Christian Villiard"
 };
+
+// Libellé court du mode de paiement, affiché dans la colonne Échéance
+// d'un achat payé (« CC Steven », « Chèque »).
+function paidMethodShort(pm: string | null): string {
+  if (!pm || pm === "bill_to_pay") return "";
+  if (pm === "cheque_horizon") return "Chèque";
+  const label = PAYMENT_METHOD_LABELS[pm];
+  return label ? label.split(" ").slice(0, 2).join(" ") : "";
+}
 
 // Options reelles de paiement (exclut bill_to_pay qui signifie
 // « pas encore paye »).
@@ -141,6 +152,16 @@ export default function AchatsPage() {
   const [payTarget, setPayTarget] = useState<Achat | null>(null);
   const [pulling, setPulling] = useState(false);
   const [pullResult, setPullResult] = useState<string | null>(null);
+  // Facture QuickBooks DIVISÉE : plusieurs achats partagent la même
+  // transaction QB (un par projet) → badge « divisée » sur chacun.
+  const qbPartsCount = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const a of items) {
+      const k = a.qbo_bill_id || a.qbo_purchase_id;
+      if (k) m.set(k, (m.get(k) || 0) + 1);
+    }
+    return m;
+  }, [items]);
 
   async function pullFromQbo() {
     if (pulling) return;
@@ -168,6 +189,8 @@ export default function AchatsPage() {
         skipped_existing: number;
         paid_synced: number;
         total_qbo_bills: number;
+        split_multi_projets?: number;
+        parts_partielles?: number;
       };
       const parts: string[] = [];
       parts.push(`${r.imported} nouveau(x) achat(s) importé(s)`);
@@ -178,6 +201,13 @@ export default function AchatsPage() {
       if (r.paid_synced > 0)
         parts.push(`${r.paid_synced} basculé(s) en payé via QB`);
       parts.push(`${r.skipped_existing} déjà présent(s)`);
+      // Factures FRACTIONNÉES dans QuickBooks (retour Steven 2026-10-06,
+      // « importer la séparation de factures ») : un achat par projet ;
+      // la part hors projet (client mère, autre client, aucun client)
+      // reste dans QB.
+      let nDivisees = r.split_multi_projets || 0;
+      let nPartielles = r.parts_partielles || 0;
+      let nReduits = 0;
       // Pull COMPLET en plus (coûts par projet) : crée les fournisseurs
       // manquants, importe les reçus QB, reflète les rapprochements
       // (date/mode) sur les achats liés. Best-effort : réservé
@@ -193,7 +223,13 @@ export default function AchatsPage() {
             purchases_imported?: number;
             reconciled_synced?: number;
             receipts_imported?: number;
+            split_multi_projets?: number;
+            parts_partielles?: number;
+            reduits_part_projet?: number;
           };
+          nDivisees += c.split_multi_projets || 0;
+          nPartielles += c.parts_partielles || 0;
+          nReduits += c.reduits_part_projet || 0;
           const extra: string[] = [];
           const nb =
             (c.bills_imported || 0) + (c.purchases_imported || 0);
@@ -203,10 +239,28 @@ export default function AchatsPage() {
           if ((c.receipts_imported || 0) > 0)
             extra.push(`${c.receipts_imported} reçu(s) importé(s)`);
           if (extra.length) parts.push(...extra);
+        } else if (cRes.status !== 403) {
+          // Visible plutôt que silencieux : c'est cette passe qui divise
+          // les factures fractionnées et reprend les dépenses QB.
+          parts.push(
+            `import des coûts de projet en échec (HTTP ${cRes.status})`
+          );
         }
       } catch {
-        /* best-effort */
+        parts.push("import des coûts de projet injoignable");
       }
+      if (nDivisees > 0)
+        parts.push(
+          `${nDivisees} facture(s) divisée(s) entre projets (un achat par projet)`
+        );
+      if (nReduits > 0)
+        parts.push(
+          `${nReduits} achat(s) ramené(s) à la part de son projet`
+        );
+      if (nPartielles > 0)
+        parts.push(
+          `${nPartielles} facture(s) fractionnée(s) : seule la part des projets est importée, le reste reste dans QuickBooks`
+        );
       setPullResult(parts.join(" · "));
       // Recharge la liste
       const aRes = await authedFetch("/api/v1/achats?limit=500");
@@ -283,6 +337,20 @@ export default function AchatsPage() {
     () => new Set(bonProjects.map((p) => p.id)),
     [bonProjects]
   );
+  // Filtre « Fournisseur » : seulement les fiches qu'au moins un achat
+  // utilise (une fiche orpheline, ex. un client mis par erreur comme
+  // bénéficiaire dans QB puis corrigé, n'y apparaît plus), en ordre
+  // alphabétique.
+  const fournisseursFiltre = useMemo(() => {
+    const utilises = new Set(
+      items.map((a) => a.fournisseur_id).filter((x): x is number => !!x)
+    );
+    return trierParNom(
+      fournisseurs.filter(
+        (f) => utilises.has(f.id) || String(f.id) === fFournisseur
+      )
+    );
+  }, [items, fournisseurs, fFournisseur]);
   const frById = useMemo(() => {
     const m = new Map<number, Fournisseur>();
     fournisseurs.forEach((f) => m.set(f.id, f));
@@ -303,6 +371,8 @@ export default function AchatsPage() {
       if (a.fournisseur_id) return frById.get(a.fournisseur_id)?.name || "";
       if (a.sous_traitant_id)
         return stById.get(a.sous_traitant_id)?.full_name || "";
+      // Sortie de l'inventaire interne (pas de fournisseur : le stock).
+      if (a.kind === "inventaire") return "Inventaire interne";
       return "";
     },
     [frById, stById]
@@ -536,7 +606,7 @@ export default function AchatsPage() {
             className="w-48"
             emptyLabel="Tous les fournisseurs"
             placeholder="Fournisseur — tape pour chercher…"
-            options={fournisseurs.map((fr) => ({
+            options={fournisseursFiltre.map((fr) => ({
               value: String(fr.id),
               label: fr.name
             }))}
@@ -576,6 +646,8 @@ export default function AchatsPage() {
                 {filtered.map((a) => {
                   const fr = a.fournisseur_id ? frById.get(a.fournisseur_id) : null;
                   const pr = a.project_id ? projById.get(a.project_id) : null;
+                  const qbKey = a.qbo_bill_id || a.qbo_purchase_id || "";
+                  const nParts = qbKey ? qbPartsCount.get(qbKey) || 0 : 0;
                   return (
                     <tr
                       key={a.id}
@@ -584,12 +656,20 @@ export default function AchatsPage() {
                     >
                       <td className="px-4 py-3 font-semibold text-white">
                         {refLabel(a)}
-                        {a.qbo_bill_id && !a.reference ? (
+                        {(a.qbo_bill_id || a.qbo_purchase_id) && !a.reference ? (
                           <span
                             className="ml-1 text-[10px] font-normal text-sky-300"
                             title="Importé depuis QuickBooks"
                           >
                             QB
+                          </span>
+                        ) : null}
+                        {nParts > 1 ? (
+                          <span
+                            className="ml-1 rounded bg-sky-500/15 px-1 text-[10px] font-normal text-sky-300"
+                            title={`Facture QuickBooks divisée entre ${nParts} achats (un par projet)`}
+                          >
+                            divisée ·{nParts}
                           </span>
                         ) : null}
                       </td>
@@ -624,8 +704,23 @@ export default function AchatsPage() {
                       </td>
                       <td className="px-4 py-3 text-white/70">
                         {a.status === "paid" ? (
-                          <span className="text-[10px] uppercase tracking-wider text-emerald-300">
-                            Payé · {fmtDate(a.paid_at)}
+                          // Payé : plus d'échéance. On montre le mode de
+                          // paiement plutôt qu'une date — sur un achat payé
+                          // comptant (CC, chèque), paid_at reprend la date de
+                          // saisie et se lisait comme une échéance (retour
+                          // Steven 2026-10-16). Date du paiement en infobulle.
+                          <span
+                            className="text-[10px] uppercase tracking-wider text-emerald-300"
+                            title={
+                              a.paid_at
+                                ? `Payé le ${fmtDate(a.paid_at)}`
+                                : undefined
+                            }
+                          >
+                            Payé
+                            {paidMethodShort(a.payment_method)
+                              ? ` · ${paidMethodShort(a.payment_method)}`
+                              : ""}
                           </span>
                         ) : a.due_at ? (
                           (() => {

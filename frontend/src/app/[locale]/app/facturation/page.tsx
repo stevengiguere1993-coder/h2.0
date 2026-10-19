@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   ChevronDown,
   ChevronRight,
   DollarSign,
@@ -10,7 +11,9 @@ import {
   Plus
 } from "lucide-react";
 
+import { ARefacturerListe } from "@/components/a-refacturer-liste";
 import { AppTopbar } from "@/components/app-topbar";
+import { motifRefusQbo } from "@/components/qbo-connexion-expiree";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { fetchAllPages } from "@/lib/fetch-all";
@@ -32,6 +35,9 @@ type Facture = {
   paid_at: string | null;
   qbo_invoice_id: string | null;
   qbo_doc_number: string | null;
+  // Dernier refus QuickBooks ; sur un brouillon, la facture a été retenue
+  // à l'envoi (rien n'est parti au client).
+  qbo_sync_error?: string | null;
   created_at: string;
 };
 
@@ -78,11 +84,12 @@ function amountFor(fa: Facture): number | null {
   return null;
 }
 
-function fmtDate(iso: string | null): string {
+function fmtDate(iso: string | null, timeZone?: string): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("fr-CA", {
     day: "2-digit",
-    month: "short"
+    month: "short",
+    timeZone
   });
 }
 
@@ -111,8 +118,30 @@ export default function FacturationPage() {
   // « Brouillons », « Envoyées » et « En retard » restent dépliées.
   // Cliquer l'en-tête d'une colonne bascule son état.
   const [collapsed, setCollapsed] = useState<Set<string>>(
-    () => new Set(["paid", "void"])
+    () => new Set(["paid", "void", "a_refacturer"])
   );
+  // Colonne « À refacturer » (après « Annulées », repliée par défaut) :
+  // achats reçus après la facture finale ou restés sur un BT fermé. Son
+  // compteur est lu à l'ouverture ; null = pas d'accès (non-admin) →
+  // colonne masquée. Retour Steven 2026-10-16 : ici plutôt qu'au menu.
+  const [aRefacturerCompte, setARefacturerCompte] = useState<number | null>(
+    null
+  );
+  useEffect(() => {
+    let cancelled = false;
+    authedFetch("/api/v1/achats-a-refacturer/compte")
+      .then(async (res) => {
+        if (!res.ok) return;
+        const body = (await res.json()) as { compte?: number };
+        if (!cancelled) setARefacturerCompte(Number(body.compte) || 0);
+      })
+      .catch(() => {
+        /* colonne masquée */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const toggleCollapsed = (id: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -401,6 +430,46 @@ export default function FacturationPage() {
                 </div>
               );
             })}
+            {aRefacturerCompte !== null ? (
+              <div
+                className="flex w-96 min-w-[384px] flex-shrink-0 flex-col rounded-xl border border-brand-800 bg-brand-900/60"
+              >
+                <button
+                  type="button"
+                  onClick={() => toggleCollapsed("a_refacturer")}
+                  title={
+                    collapsed.has("a_refacturer")
+                      ? "Cliquer pour déplier"
+                      : "Cliquer pour replier"
+                  }
+                  className="flex w-full items-center justify-between border-b border-brand-800 px-4 py-3 text-left transition hover:bg-brand-900"
+                >
+                  <div className="flex items-center gap-2">
+                    {collapsed.has("a_refacturer") ? (
+                      <ChevronRight className="h-3.5 w-3.5 text-white/50" />
+                    ) : (
+                      <ChevronDown className="h-3.5 w-3.5 text-white/50" />
+                    )}
+                    <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />
+                    <h2 className="text-sm font-semibold text-white">
+                      À refacturer
+                    </h2>
+                  </div>
+                  <span
+                    className={`badge ${
+                      aRefacturerCompte > 0 ? "badge-rose" : "badge-neutral"
+                    }`}
+                  >
+                    {aRefacturerCompte}
+                  </span>
+                </button>
+                {collapsed.has("a_refacturer") ? null : (
+                  <div className="flex-1 p-3">
+                    <ARefacturerListe onCompte={setARefacturerCompte} />
+                  </div>
+                )}
+              </div>
+            ) : null}
           </div>
         )}
       </div>
@@ -552,11 +621,21 @@ function Card({
         </span>
       </div>
       <p className="mt-1 text-[10px] text-white/40">
-        {fa.due_at ? `Échéance ${fmtDate(fa.due_at)}` : fmtDate(fa.created_at)}
+        {/* Une échéance est un jour (stocké à minuit UTC) : lue en UTC,
+            sinon elle s'affiche la veille à Montréal. */}
+        {fa.due_at ? `Échéance ${fmtDate(fa.due_at, "UTC")}` : fmtDate(fa.created_at)}
       </p>
       {fa.qbo_invoice_id ? (
         <p className="mt-2 text-[10px] text-emerald-400">
           QBO Invoice #{fa.qbo_doc_number || fa.qbo_invoice_id}
+        </p>
+      ) : null}
+      {fa.status === "draft" && fa.qbo_sync_error ? (
+        <p
+          className="mt-2 text-[11px] font-semibold text-rose-300"
+          title={motifRefusQbo(fa.qbo_sync_error) || fa.qbo_sync_error}
+        >
+          ⛔ Non envoyée : refusée par QuickBooks
         </p>
       ) : null}
     </div>

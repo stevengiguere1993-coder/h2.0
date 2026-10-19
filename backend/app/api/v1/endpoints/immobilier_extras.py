@@ -1319,6 +1319,12 @@ async def annuler_depart(
         bail.status = BailStatus.ACTIF.value
         bail.updated_at = datetime.now(timezone.utc)
         reactive = True
+    # Le départ n'est plus ACTÉ (Steven 2026-10-18) : la date de fin
+    # redevient souple — un bail au mois court de nouveau, un bail
+    # annuel repasse par la reconduction lazy à l'échéance.
+    if getattr(bail, "depart_declare_le", None) is not None:
+        bail.depart_declare_le = None
+        bail.updated_at = datetime.now(timezone.utc)
     # Le cycle de renouvellement passé à « depart » reprend son statut
     # (sinon le bail était terminé à l'échéance alors que le locataire
     # reste — audit 2026-09-15).
@@ -2372,23 +2378,18 @@ async def _compute_part_metrics(
 
     # Hypothèque active. Balance EFFECTIVE : saisie > calculée au jour J
     # (tableau d'amortissement) > montant initial — même logique que la
-    # fiche immeuble.
+    # fiche immeuble. Hypothèque conjointe : seulement la part de cet
+    # immeuble.
     from app.services.hypotheque_calc import balance_effective
+    from app.services.hypotheque_partage import (
+        hypotheques_de_l_immeuble,
+        part_de,
+    )
 
     balance_hyp = round(
         sum(
-            balance_effective(h)
-            for h in (
-                await db.execute(
-                    select(Hypotheque).where(
-                        and_(
-                            Hypotheque.immeuble_id == immeuble.id,
-                            Hypotheque.status
-                            == HypothequeStatus.ACTIVE.value,
-                        )
-                    )
-                )
-            ).scalars().all()
+            balance_effective(h) * part_de(h)
+            for h in await hypotheques_de_l_immeuble(db, immeuble.id)
         ),
         2,
     )

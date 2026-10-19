@@ -13,6 +13,11 @@ import {
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import {
+  exempleNumeros,
+  numerosDuLot as calculerNumerosDuLot,
+  type LotNumerosParams
+} from "@/lib/logements-numeros";
+import {
   echeanceLabel,
   LOUER_INDEFINIMENT_INFO,
   LOUER_INDEFINIMENT_LABEL,
@@ -130,39 +135,27 @@ export function LogementFiche({
   onSavedMany?: (ls: LogementFicheData[], ignores: string[]) => void;
 }) {
   const isCreate = logement === null;
-  //: « Créer plusieurs d'un coup » : plage de numéros (de … à …, avec
-  //: préfixe/suffixe) OU liste collée ; les autres champs du formulaire
-  //: sont appliqués à tous.
+  //: « Plusieurs d'un coup » (retour partenaire 2026-09-28) : suite de
+  //: numéros (du n° X au n° Y, texte facultatif avant/après) OU liste
+  //: collée ; les autres champs du formulaire sont appliqués à tous.
+  //: Écran refait le 2026-10-18 (Marie-Ève, bug 17 : « préfixe / suffixe …
+  //: pas très user friendly ») : un choix net entre les deux façons de
+  //: donner les numéros, des mots simples au lieu de préfixe/suffixe, et
+  //: la liste des numéros sous les yeux avant de créer.
   const [plusieurs, setPlusieurs] = useState(false);
-  const [lot, setLot] = useState({
+  const [lot, setLot] = useState<LotNumerosParams>({
+    mode: "plage",
     de: "1",
     a: "",
     prefixe: "",
     suffixe: "",
     liste: ""
   });
-  const numerosDuLot = (() => {
-    const vus = new Set<string>();
-    const out: string[] = [];
-    const ajouter = (n: string) => {
-      const t = n.trim();
-      const k = t.toLowerCase().replace(/[^a-z0-9]/g, "");
-      if (!t || !k || vus.has(k)) return;
-      vus.add(k);
-      out.push(t);
-    };
-    if (lot.liste.trim()) {
-      lot.liste.split(/[\n,;]+/).forEach(ajouter);
-      return out.slice(0, 300);
-    }
-    const de = parseInt(lot.de, 10);
-    const a = parseInt(lot.a, 10);
-    if (Number.isNaN(de) || Number.isNaN(a) || a < de) return out;
-    for (let n = de; n <= a && out.length < 300; n++) {
-      ajouter(`${lot.prefixe}${n}${lot.suffixe}`);
-    }
-    return out;
-  })();
+  const [avecAvantApres, setAvecAvantApres] = useState(false);
+  const numerosDuLot = calculerNumerosDuLot(lot);
+  const premierNumero = Number.isNaN(parseInt(lot.de, 10))
+    ? 1
+    : parseInt(lot.de, 10);
   const [form, setForm] = useState({
     numero: logement?.numero ?? "",
     type: logement?.type ?? "residentiel",
@@ -255,7 +248,9 @@ export function LogementFiche({
       if (isCreate && plusieurs) {
         if (immeubleId == null) throw new Error("immeubleId manquant.");
         if (numerosDuLot.length === 0) {
-          throw new Error("Indique une plage (de … à …) ou une liste de numéros.");
+          throw new Error(
+            "Indique le premier et le dernier numéro, ou tape la liste des numéros."
+          );
         }
         const { numero: _n, ...modele } = body;
         void _n;
@@ -354,7 +349,9 @@ export function LogementFiche({
           <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-accent-500">
             <DoorOpen className="h-4 w-4" />
             {isCreate
-              ? "Nouveau logement"
+              ? plusieurs
+                ? "Nouveaux logements"
+                : "Nouveau logement"
               : `Logement ${logement.numero}`}
           </h2>
           <button type="button" onClick={onClose} className="btn-ghost btn-xs">
@@ -409,84 +406,189 @@ export function LogementFiche({
 
         <form onSubmit={submit} className="grid gap-4 p-5">
           {isCreate ? (
-            <label className="flex cursor-pointer items-center gap-2 text-xs text-white/80">
-              <input
-                type="checkbox"
-                checked={plusieurs}
-                onChange={(e) => setPlusieurs(e.target.checked)}
-                className="h-3.5 w-3.5 accent-accent-500"
-              />
-              Créer plusieurs logements d&apos;un coup
-            </label>
+            <div className="flex gap-1 rounded-lg border border-brand-800 bg-brand-900 p-1">
+              <button
+                type="button"
+                aria-pressed={!plusieurs}
+                onClick={() => setPlusieurs(false)}
+                className={`flex-1 ${plusieurs ? "btn-ghost btn-xs" : "btn-accent btn-xs"}`}
+              >
+                Un logement
+              </button>
+              <button
+                type="button"
+                aria-pressed={plusieurs}
+                onClick={() => setPlusieurs(true)}
+                className={`flex-1 ${plusieurs ? "btn-accent btn-xs" : "btn-ghost btn-xs"}`}
+              >
+                Plusieurs d&apos;un coup
+              </button>
+            </div>
           ) : null}
           {isCreate && plusieurs ? (
             <div className="rounded-lg border border-accent-500/30 bg-accent-500/5 p-3">
-              <div className="grid gap-3 sm:grid-cols-4">
-                <div>
-                  <label className="label">De</label>
-                  <input
-                    type="number"
-                    value={lot.de}
-                    onChange={(e) => setLot((l) => ({ ...l, de: e.target.value }))}
-                    className="input font-mono"
-                    placeholder="1"
-                  />
-                </div>
-                <div>
-                  <label className="label">À</label>
-                  <input
-                    type="number"
-                    value={lot.a}
-                    onChange={(e) => setLot((l) => ({ ...l, a: e.target.value }))}
-                    className="input font-mono"
-                    placeholder="24"
-                  />
-                </div>
-                <div>
-                  <label className="label">Préfixe</label>
-                  <input
-                    value={lot.prefixe}
-                    onChange={(e) =>
-                      setLot((l) => ({ ...l, prefixe: e.target.value }))
+              <p className="text-xs text-white/70">Comment donner les numéros ?</p>
+              <div className="mt-1.5 flex flex-wrap gap-2">
+                {(
+                  [
+                    ["plage", "Des numéros qui se suivent"],
+                    ["liste", "Je tape la liste"]
+                  ] as const
+                ).map(([mode, label]) => (
+                  <label
+                    key={mode}
+                    className={
+                      lot.mode === mode
+                        ? "cursor-pointer rounded-full border border-accent-500 bg-accent-500/15 px-3 py-1 text-xs font-semibold text-white"
+                        : "cursor-pointer rounded-full border border-brand-800 px-3 py-1 text-xs text-white/70 hover:border-accent-500/50 hover:text-white"
                     }
-                    className="input font-mono"
-                    placeholder="ex. A-"
+                  >
+                    <input
+                      type="radio"
+                      name="lot-mode"
+                      className="sr-only"
+                      checked={lot.mode === mode}
+                      onChange={() => setLot((l) => ({ ...l, mode }))}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+
+              {lot.mode === "plage" ? (
+                <>
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="label" htmlFor="lot-de">
+                        Du n°
+                      </label>
+                      <input
+                        id="lot-de"
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        value={lot.de}
+                        onChange={(e) => setLot((l) => ({ ...l, de: e.target.value }))}
+                        className="input font-mono"
+                        placeholder="1"
+                      />
+                    </div>
+                    <div>
+                      <label className="label" htmlFor="lot-a">
+                        au n°
+                      </label>
+                      <input
+                        id="lot-a"
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        value={lot.a}
+                        onChange={(e) => setLot((l) => ({ ...l, a: e.target.value }))}
+                        className="input font-mono"
+                        placeholder="24"
+                      />
+                    </div>
+                  </div>
+                  {avecAvantApres || lot.prefixe || lot.suffixe ? (
+                    <div className="mt-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="label" htmlFor="lot-prefixe">
+                            Texte avant le n°
+                          </label>
+                          <input
+                            id="lot-prefixe"
+                            value={lot.prefixe}
+                            onChange={(e) =>
+                              setLot((l) => ({ ...l, prefixe: e.target.value }))
+                            }
+                            className="input font-mono"
+                            placeholder="ex. A-"
+                          />
+                        </div>
+                        <div>
+                          <label className="label" htmlFor="lot-suffixe">
+                            Texte après le n°
+                          </label>
+                          <input
+                            id="lot-suffixe"
+                            value={lot.suffixe}
+                            onChange={(e) =>
+                              setLot((l) => ({ ...l, suffixe: e.target.value }))
+                            }
+                            className="input font-mono"
+                            placeholder="ex. B"
+                          />
+                        </div>
+                      </div>
+                      <p className="mt-1.5 text-[11px] text-white/60">
+                        {lot.prefixe.trim() || lot.suffixe.trim()
+                          ? `Ça donne : ${exempleNumeros(lot.prefixe, lot.suffixe, premierNumero)}`
+                          : "Facultatif. « A- » avant donne A-1, A-2… ; « B » après donne 1B, 2B…"}
+                      </p>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setAvecAvantApres(true)}
+                      className="mt-2 text-xs text-accent-500 underline decoration-dotted hover:text-accent-300"
+                    >
+                      Ajouter un texte avant ou après le numéro (ex. A-1, 1B)
+                    </button>
+                  )}
+                </>
+              ) : (
+                <div className="mt-3">
+                  <label className="label" htmlFor="lot-liste">
+                    Les numéros, séparés par une virgule ou un retour à la ligne
+                  </label>
+                  <textarea
+                    id="lot-liste"
+                    rows={3}
+                    value={lot.liste}
+                    onChange={(e) => setLot((l) => ({ ...l, liste: e.target.value }))}
+                    className="input"
+                    placeholder={"101, 102, 201, 202\n301A, 301B"}
                   />
                 </div>
-                <div>
-                  <label className="label">Suffixe</label>
-                  <input
-                    value={lot.suffixe}
-                    onChange={(e) =>
-                      setLot((l) => ({ ...l, suffixe: e.target.value }))
-                    }
-                    className="input font-mono"
-                    placeholder="ex. -B"
-                  />
-                </div>
+              )}
+
+              <div className="mt-3 border-t border-accent-500/20 pt-2.5">
+                {numerosDuLot.length === 0 ? (
+                  <p className="text-xs text-white/60">
+                    {lot.mode === "plage"
+                      ? "Indique le premier et le dernier numéro pour voir la liste."
+                      : "Tape ou colle les numéros pour voir la liste."}
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-xs font-semibold text-white">
+                      {numerosDuLot.length} logement
+                      {numerosDuLot.length > 1 ? "s" : ""} à créer
+                    </p>
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {numerosDuLot.slice(0, 30).map((n) => (
+                        <span
+                          key={n}
+                          className="rounded-md border border-brand-800 bg-brand-900 px-1.5 py-0.5 font-mono text-[11px] text-white"
+                        >
+                          {n}
+                        </span>
+                      ))}
+                      {numerosDuLot.length > 30 ? (
+                        <span className="px-1 py-0.5 text-[11px] text-white/60">
+                          + {numerosDuLot.length - 30} autres
+                        </span>
+                      ) : null}
+                    </div>
+                  </>
+                )}
+                <p className="mt-2 text-[11px] text-white/60">
+                  Les champs ci-dessous s&apos;appliquent à tous ces logements ;
+                  un numéro déjà présent dans l&apos;immeuble est ignoré. Chaque
+                  fiche se corrige ensuite.
+                </p>
               </div>
-              <div className="mt-2">
-                <label className="label">Ou une liste (séparés par virgule ou retour à la ligne)</label>
-                <textarea
-                  rows={2}
-                  value={lot.liste}
-                  onChange={(e) => setLot((l) => ({ ...l, liste: e.target.value }))}
-                  className="input"
-                  placeholder="101, 102, 201, 202, 301A, 301B"
-                />
-              </div>
-              <p className="mt-2 text-[11px] text-white/60">
-                {numerosDuLot.length === 0
-                  ? "Aucun numéro pour l'instant."
-                  : `${numerosDuLot.length} logement${
-                      numerosDuLot.length > 1 ? "s" : ""
-                    } : ${numerosDuLot.slice(0, 12).join(", ")}${
-                      numerosDuLot.length > 12 ? " …" : ""
-                    }`}
-                {" "}
-                Les champs ci-dessous s&apos;appliquent à tous ; un numéro
-                déjà présent est ignoré. Chaque fiche se corrige ensuite.
-              </p>
             </div>
           ) : null}
           <div className="grid gap-3 sm:grid-cols-2">

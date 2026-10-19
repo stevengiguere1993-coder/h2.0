@@ -5,7 +5,7 @@ seeds the line items from the project's approved (or all) punches —
 grouped by employee × hourly_rate.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -27,6 +27,7 @@ from app.models.soumission import Soumission, SoumissionStatus
 from app.models.soumission_item import SoumissionItem
 from app.models.user import User
 from app.schemas.business import FactureRead
+from app.services.facture_echeance import aujourd_hui, echeance_du_jour
 from app.services.facture_lignes import (
     KIND_SERVICE,
     clause_hors_soumission,
@@ -151,9 +152,11 @@ async def convert_project_to_facture(
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
 
+    # Conditions comptées depuis l'ENVOI : l'échéance du brouillon n'est
+    # qu'un aperçu, recalculé quand la facture part (facture_echeance).
     due_at = None
     if data.due_in_days is not None:
-        due_at = datetime.now(timezone.utc) + timedelta(days=data.due_in_days)
+        due_at = echeance_du_jour(aujourd_hui() + timedelta(days=data.due_in_days))
 
     facture = Facture(
         # Référence PROVISOIRE : le vrai numéro est attribué à l'ENVOI
@@ -165,6 +168,7 @@ async def convert_project_to_facture(
         # issued_at reste vide : la facture n'est « émise » qu'à l'envoi
         # au client, pas à sa création (cf. send_facture).
         due_at=due_at,
+        due_in_days=data.due_in_days,
     )
     db.add(facture)
     await db.flush()
@@ -698,31 +702,31 @@ async def convert_project_to_facture(
             contracts_by_st = {c.sous_traitant_id: c for c in ctr_rows}
 
         new_items: list[tuple[Achat, FactureItem]] = []
-        # REGROUPEMENT : plusieurs achats au MÊME descriptif (accents/casse
-        # ignorés) fusionnent en UNE ligne dont le montant additionne chaque
-        # facture sélectionnée AVEC sa majoration. Les lignes horaires
+        # REGROUPEMENT : tout le matériel s'additionne sur UNE ligne
+        # « Matériaux » ; les sous-traitants au MÊME descriptif (accents/casse
+        # ignorés) fusionnent en une ligne. Montants majorés. Les lignes horaires
         # (contrat flat_hourly) ne fusionnent jamais. Chaque achat garde son
         # lien retour (facture_item_id) pour la dé-refacturation.
         from app.api.v1.endpoints.facture_import import (
             _merge_label_key,
-            achat_line_prefix,
+            libelle_ligne_achat,
         )
+        from app.services.facture_lignes import ajouter_au_montant
 
         merged: dict[str, FactureItem] = {}
         for ac in achats:
             billed, _rule_label = _compute_billed_amount(
                 ac, data.achat_markup_overrides, contracts_by_st
             )
-            base_desc = ac.description or f"Achat {ac.reference or ac.id}"
-            line_prefix = achat_line_prefix(ac.kind)
+            ac.montant_refacture = billed
             # La majoration / règle de facturation (`rule_label`) est
             # INTERNE : on l'applique au montant (`billed`) mais on ne
             # l'affiche JAMAIS dans la description vue par le client.
-            label = f"{line_prefix} — {base_desc}"
-            if bon_demande:
-                # Facture d'un bon : la demande de départ coiffe la
-                # sous-description matériel/sous-traitance.
-                label = f"{bon_demande}\n{label}"
+            # Matériel → une seule ligne « Matériaux » ; facture d'un bon :
+            # la demande de départ coiffe la ligne.
+            label = await libelle_ligne_achat(
+                db, facture.id, ac, bon_demande or None, merged
+            )
             contract = (
                 contracts_by_st.get(ac.sous_traitant_id or 0)
                 if ac.kind == "sub_invoice"
@@ -735,10 +739,7 @@ async def convert_project_to_facture(
             if not is_hourly:
                 existing = merged.get(_merge_label_key(label))
                 if existing is not None:
-                    existing.total = round(
-                        float(existing.total) + billed, 2
-                    )
-                    existing.unit_price = existing.total
+                    ajouter_au_montant(existing, billed)
                     new_items.append((ac, existing))
                     continue
             if is_hourly:

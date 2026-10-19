@@ -25,6 +25,7 @@ from app.models.facture_item import FactureItem
 from app.models.payment import Payment
 from app.models.project import Project
 from app.models.soumission import Soumission
+from app.services.facture_echeance import jour_local
 from app.services.soumission_pdf import (
     ACCENT_HEX,
     COMPANY_EMAIL,
@@ -350,7 +351,9 @@ async def _build_statement(
 
     lines: List[StatementLine] = []
     for f in factures:
-        when = (f.issued_at.date() if f.issued_at else f.created_at.date())
+        # Jour de Montréal : une facture envoyée le soir n'est pas datée du
+        # lendemain (UTC).
+        when = jour_local(f.issued_at or f.created_at)
         raw_status = (f.status or "").lower()
         # La facture en cours d'envoi est encore « draft » en base au
         # moment du rendu (le statut passe à « sent » juste après) : on
@@ -601,7 +604,10 @@ def _render_bytes(
     right_cell: list = [
         Paragraph("FACTURE", s["h1"]),
         Paragraph(_ref_display, s["accent"]),
-        Paragraph(f"Émise le {_date(fa.issued_at or fa.created_at)}", s["small"]),
+        Paragraph(
+            f"Émise le {_date(jour_local(fa.issued_at or fa.created_at))}",
+            s["small"],
+        ),
     ]
     if fa.due_at:
         right_cell.append(

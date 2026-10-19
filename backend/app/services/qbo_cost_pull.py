@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy import select
@@ -71,13 +71,22 @@ async def _import_qbo_receipts(db: AsyncSession, qbo: Any) -> int:
             )
         )
     ).scalars().all()
-    candidates: dict[tuple[str, str], Achat] = {}
+    # LISTE d'achats par clé : une facture FRACTIONNÉE sur plusieurs
+    # projets donne plusieurs achats pour la même transaction QB — chaque
+    # part reçoit le reçu.
+    candidates: dict[tuple[str, str], list[Achat]] = {}
     for a in rows:
         if a.qbo_bill_id:
-            candidates[("bill", str(a.qbo_bill_id))] = a
-            candidates[("purchase", str(a.qbo_bill_id))] = a
+            candidates.setdefault(("bill", str(a.qbo_bill_id)), []).append(a)
+            candidates.setdefault(
+                ("purchase", str(a.qbo_bill_id)), []
+            ).append(a)
         if a.qbo_purchase_id:
-            candidates.setdefault(("purchase", str(a.qbo_purchase_id)), a)
+            lst = candidates.setdefault(
+                ("purchase", str(a.qbo_purchase_id)), []
+            )
+            if all(x.id != a.id for x in lst):
+                lst.append(a)
     if not candidates:
         return 0
 
@@ -100,25 +109,43 @@ async def _import_qbo_receipts(db: AsyncSession, qbo: Any) -> int:
                 str(ent.get("type") or "").lower(),
                 str(ent.get("value") or ""),
             )
-            achat = candidates.get(key)
-            if achat is None or achat.id in done:
+            cibles = [
+                x for x in candidates.get(key) or [] if x.id not in done
+            ]
+            if not cibles:
                 continue
             content = await qbo.download_attachable(att_id)
             if not content or len(content) > _MAX_RECEIPT_BYTES:
                 continue
-            achat.receipt_image = content
-            achat.receipt_image_content_type = ctype
-            done.add(achat.id)
-            imported += 1
-            log.info(
-                "Reçu QB %s (%s) importé sur achat %s",
-                att_id,
-                att.get("FileName") or ctype,
-                achat.id,
-            )
+            for achat in cibles:
+                achat.receipt_image = content
+                achat.receipt_image_content_type = ctype
+                done.add(achat.id)
+                imported += 1
+                log.info(
+                    "Reçu QB %s (%s) importé sur achat %s",
+                    att_id,
+                    att.get("FileName") or ctype,
+                    achat.id,
+                )
     if imported:
         await db.flush()
     return imported
+
+
+def _nom_fournisseur_de(ref: Optional[dict]) -> Optional[str]:
+    """Nom du bénéficiaire d'une dépense QB s'il s'agit d'un FOURNISSEUR.
+
+    L'EntityRef d'une Purchase peut viser un Vendor, mais aussi un
+    Customer (remboursement à un client) ou un Employee : ceux-là ne
+    sont pas des fournisseurs et ne doivent pas créer de fiche
+    Fournisseur (retour Steven 2026-10-16 : des clients apparaissaient
+    dans la liste des fournisseurs de l'ajout d'achat)."""
+    ref = ref or {}
+    kind = str(ref.get("type") or "").strip().lower()
+    if kind and kind != "vendor":
+        return None
+    return ref.get("name")
 
 
 async def _fournisseur_id_for(
@@ -190,6 +217,29 @@ def _parse_date(s: Any) -> Optional[date]:
         return None
 
 
+def _echeance_bill(b: dict) -> Optional[datetime]:
+    """Date limite de paiement d'un Bill QB : son `DueDate` (conditions du
+    fournisseur appliquées par QB), sinon date de facture + 30 j. Midi UTC
+    pour ne pas changer de jour en heure de l'Est."""
+    jour = _parse_date(b.get("DueDate"))
+    if jour is None:
+        txn = _parse_date(b.get("TxnDate"))
+        if txn is None:
+            return None
+        jour = txn + timedelta(days=30)
+    return datetime.combine(jour, time(12, 0), tzinfo=timezone.utc)
+
+
+def _est_lien_client_mere(job_id: str, parent_qbo_id: str) -> bool:
+    """Vrai si le « job » QB mémorisé sur un projet est le CLIENT MÈRE
+    lui-même (ancien repli, liaison manuelle) : ce n'est pas un
+    sous-client, donc pas une clé pour rapporter sur ce projet tout ce
+    qui est imputé au client dans QB (même lecture que
+    qbo_project_resolve côté push)."""
+    j = (job_id or "").strip()
+    return bool(j) and j == (parent_qbo_id or "").strip()
+
+
 def _project_for_txn(
     txn: dict, proj_by_job: dict[str, Project]
 ) -> Optional[Project]:
@@ -221,6 +271,30 @@ def _txn_customer_refs(txn: dict) -> set[str]:
     return out
 
 
+def _classe_generique(cname: str) -> bool:
+    """Vrai si la classe QB est une classe de VOLET posée par Kratos
+    (« Construction » sur les achats et le shop, « Kratos » sur les reçus
+    saisis dans Comptabilité) et non l'adresse d'un chantier : elle ne
+    désigne aucun projet — un projet nommé « Construction garage » ne
+    doit pas l'adopter (Steven 2026-10-16 : la classe d'un reçu poussé
+    est « Construction », le chantier passe par Client : Projet)."""
+    from app.core.config import settings
+    from app.services.qbo_project_resolve import _norm
+
+    c = _norm(cname)
+    if not c:
+        return False
+    generiques = {
+        _norm(getattr(settings, k, "") or "")
+        for k in (
+            "qbo_achat_class_name",
+            "qbo_shop_class_name",
+            "qbo_recus_class_name",
+        )
+    }
+    return c in generiques
+
+
 def _project_allocations(
     txn: dict,
     proj_by_job: dict[str, Project],
@@ -241,6 +315,10 @@ def _project_allocations(
     via ``class_resolver`` quand le CustomerRef pointe le client MÈRE
     plutôt que le sous-client (cas réel Atlant #173 : ligne « 9520-8955
     Québec Inc. » classée « 9085 Avenue Millen »).
+
+    Les lignes reliées à AUCUN projet Kratos (client mère, autre client,
+    aucun client) ne figurent pas dans le résultat : leur part reste dans
+    QuickBooks (cf. ``_lignes_ht_total`` / ``_part_hors_projet``).
     """
     out: list[dict] = []
     by_id: dict[int, dict] = {}
@@ -272,18 +350,112 @@ def _project_allocations(
     return out
 
 
-def _split_amounts(total: float, allocations: list[dict]) -> list[float]:
+def _lignes_ht_total(txn: dict) -> float:
+    """Somme HT de TOUTES les lignes de dépense d'un Bill/Purchase QB (par
+    compte ou par article), imputées à un projet Kratos ou non. C'est le
+    dénominateur de la part de chaque projet : une facture FRACTIONNÉE
+    dans QB entre un chantier et autre chose (client mère, autre client,
+    aucun client) ne rapporte sur le chantier que SA part — le reste de la
+    facture reste dans QuickBooks (retour Steven 2026-10-06 : « importer
+    la séparation de factures »)."""
+    total = 0.0
+    for line in txn.get("Line") or []:
+        for key in (
+            "AccountBasedExpenseLineDetail",
+            "ItemBasedExpenseLineDetail",
+        ):
+            if line.get(key):
+                total += _num(line.get("Amount"))
+                break
+    return round(total, 2)
+
+
+def _part_hors_projet(txn: dict, allocations: list[dict]) -> bool:
+    """Vrai si des lignes de la transaction ne sont imputées à AUCUN projet
+    Kratos (fraction « hors projet ») : cette part reste dans QB."""
+    base = _lignes_ht_total(txn)
+    connu = round(sum(float(a["ht"]) for a in allocations), 2)
+    return base > 0 and connu < base - 0.005
+
+
+def _split_amounts(
+    total: float,
+    allocations: list[dict],
+    base_ht: Optional[float] = None,
+) -> list[float]:
     """Répartit ``total`` (typiquement le TTC de la transaction) entre les
-    allocations AU PRORATA de leur HT de lignes. Le dernier slot reçoit le
-    reliquat d'arrondi pour que la somme retombe exactement sur le total."""
+    allocations AU PRORATA de leur HT de lignes.
+
+    ``base_ht`` = HT de TOUTES les lignes de la transaction. Quand il
+    dépasse le HT des allocations (lignes hors projet), chaque part est
+    calculée sur ce total : la somme des parts est alors INFÉRIEURE au
+    total, la différence étant la fraction restée dans QB. Sinon (tout est
+    imputé à des projets), le dernier slot reçoit le reliquat d'arrondi
+    pour que la somme retombe exactement sur le total."""
     known_ht = sum(float(a["ht"]) for a in allocations)
     if known_ht <= 0 or not allocations:
         return []
+    if base_ht is not None and base_ht > known_ht + 0.005:
+        return [
+            round(total * float(a["ht"]) / base_ht, 2) for a in allocations
+        ]
     shares: list[float] = []
     for a in allocations[:-1]:
         shares.append(round(total * float(a["ht"]) / known_ht, 2))
     shares.append(round(total - sum(shares), 2))
     return shares
+
+
+def _parts_a_importer(
+    total: float, txn: dict, allocs: list[dict]
+) -> list[float]:
+    """Parts TTC à importer pour une transaction FRACTIONNÉE dans QB
+    (plusieurs projets, ou projet + part hors projet) ; liste vide si la
+    transaction entière revient à un seul projet (import en bloc,
+    comportement historique)."""
+    partiel = _part_hors_projet(txn, allocs)
+    if len(allocs) < 2 and not partiel:
+        return []
+    return _split_amounts(
+        round(total, 2), allocs, _lignes_ht_total(txn) if partiel else None
+    )
+
+
+def _montant_attendu(
+    ach: Achat, total: float, allocs: list[dict], base_ht: float
+) -> float:
+    """Montant TTC que DEVRAIT porter cet achat d'après QB.
+
+    Le total de la transaction, sauf quand elle est fractionnée entre UN
+    projet et une part hors projet : l'achat ne porte alors que la part
+    de son projet (sinon chaque passage ramènerait l'achat au total, puis
+    le réduirait de nouveau). Avec PLUSIEURS projets, on vise encore le
+    total : c'est la condition pour que le passage suivant divise l'achat
+    en une part par projet."""
+    total = round(total, 2)
+    if len(allocs) != 1:
+        return total
+    partiel = base_ht > round(float(allocs[0]["ht"]), 2) + 0.005
+    if not partiel:
+        return total
+    shares = _split_amounts(total, allocs, base_ht)
+    return shares[0] if shares else total
+
+
+def _compter_division(
+    stats: dict, allocs: list[dict], partiel: bool, *, reparation: bool
+) -> None:
+    """Compteurs des factures fractionnées (affichés après l'import)."""
+    if len(allocs) >= 2:
+        stats["split_multi_projets"] = stats.get("split_multi_projets", 0) + 1
+    elif reparation:
+        stats["reduits_part_projet"] = stats.get("reduits_part_projet", 0) + 1
+    if partiel:
+        stats["parts_partielles"] = stats.get("parts_partielles", 0) + 1
+
+
+def _statut_division(allocs: list[dict]) -> str:
+    return "divise_multi_projets" if len(allocs) >= 2 else "reduit_part_projet"
 
 
 async def _split_achat_multi_projets(
@@ -292,15 +464,21 @@ async def _split_achat_multi_projets(
     allocs: list[dict],
     base_desc: Optional[str],
     is_billable_fn,
+    *,
+    base_ht: Optional[float] = None,
+    qbo_total: Optional[float] = None,
 ) -> bool:
     """RÉPARE un achat importé EN BLOC alors que la transaction QB est
-    ventilée sur plusieurs projets : l'achat existant devient la part du
-    PREMIER projet ; un achat frère (même lien QB) est créé pour chaque
-    autre projet. Montants au prorata du HT des lignes QB — la somme des
-    parts retombe exactement sur les montants d'origine. Renvoie True si
-    la division a eu lieu."""
+    FRACTIONNÉE : l'achat existant devient la part du PREMIER projet ; un
+    achat frère (même lien QB) est créé pour chaque autre projet.
+    Montants au prorata du HT des lignes QB — la somme des parts retombe
+    exactement sur les montants d'origine, SAUF avec ``base_ht`` (HT de
+    toutes les lignes, dont une part hors projet) : la somme des parts
+    est alors inférieure, la différence reste dans QB. ``qbo_total`` =
+    total TTC de la transaction QB, mémorisé sur chaque part pour
+    l'affichage. Renvoie True si la division a eu lieu."""
     amount_shares = _split_amounts(
-        round(float(ach.amount or 0), 2), allocs
+        round(float(ach.amount or 0), 2), allocs, base_ht
     )
     if not amount_shares or len(amount_shares) != len(allocs):
         return False
@@ -309,10 +487,19 @@ async def _split_achat_multi_projets(
     # chaque composante au même prorata.
     ht_style = float(ach.amount_taxes or 0) > 0
     tax_shares = (
-        _split_amounts(round(float(ach.amount_taxes or 0), 2), allocs)
+        _split_amounts(
+            round(float(ach.amount_taxes or 0), 2), allocs, base_ht
+        )
         if ht_style
         else None
     )
+    if qbo_total is not None:
+        ach.qbo_txn_total = round(float(qbo_total), 2)
+    # Le reçu de l'achat d'origine vaut pour chaque part (même facture).
+    recu: Optional[bytes] = None
+    if ach.receipt_image_content_type:
+        await db.refresh(ach, attribute_names=["receipt_image"])
+        recu = bytes(ach.receipt_image) if ach.receipt_image else None
     first = allocs[0]
     ach.project_id = first["project"].id
     if first["description"]:
@@ -351,6 +538,11 @@ async def _split_achat_multi_projets(
                 qbo_doc_number=ach.qbo_doc_number,
                 qbo_bill_payment_id=ach.qbo_bill_payment_id,
                 markup_percent=ach.markup_percent,
+                qbo_txn_total=ach.qbo_txn_total,
+                receipt_image=recu,
+                receipt_image_content_type=(
+                    ach.receipt_image_content_type if recu else None
+                ),
             )
         )
     await db.flush()
@@ -539,8 +731,38 @@ async def pull_project_costs_from_qbo(
                 )
         return out
 
+    # Client mère QB (qbo_customer_id) de chaque projet relié : un « job »
+    # mémorisé qui est en fait le client mère lui-même n'est PAS un
+    # sous-client → il ne sert pas de clé (sinon tout ce qui est imputé
+    # au client dans QB atterrirait sur ce projet).
+    _client_mere_qbo: dict[int, str] = {}
+    try:
+        from app.models.client import Client as _ClientMere
+
+        _cids_m = {int(p.client_id) for p in _projects if p.client_id}
+        if _cids_m:
+            _client_mere_qbo = {
+                int(_cid): str(_q or "").strip()
+                for _cid, _q in (
+                    await db.execute(
+                        select(
+                            _ClientMere.id, _ClientMere.qbo_customer_id
+                        ).where(_ClientMere.id.in_(list(_cids_m)))
+                    )
+                ).all()
+            }
+    except Exception:  # noqa: BLE001
+        log.warning("Lecture des clients mères QB échouée", exc_info=True)
+
+    def _job_valide(p: Project, jid: str) -> str:
+        """Id de sous-client à mapper pour ``p`` ('' = aucun)."""
+        parent_ = (
+            _client_mere_qbo.get(int(p.client_id), "") if p.client_id else ""
+        )
+        return "" if _est_lien_client_mere(jid, parent_) else jid
+
     proj_by_job: dict[str, Project] = _map_sans_collision(
-        [(str(p.qbo_job_id or ""), p) for p in _projects]
+        [(_job_valide(p, str(p.qbo_job_id or "")), p) for p in _projects]
     )
 
     # RÉPARATION des qbo_job_id PÉRIMÉS (sous-client converti en projet QB) :
@@ -608,44 +830,20 @@ async def pull_project_costs_from_qbo(
             await db.flush()
         # Reconstruit le mapping avec les ids réparés (couvre le converti).
         proj_by_job = _map_sans_collision(
-            [(_resolved.get(p.id) or "", p) for p in _projects]
+            [
+                (_job_valide(p, _resolved.get(p.id) or ""), p)
+                for p in _projects
+            ]
         )
-    # Repli CLIENT MÈRE : une facture QB imputée au customer PARENT (pas
-    # au sous-client/projet) n'était JAMAIS importée (« sans_projet »,
-    # cas Atlant #177 imputée « 2020 St-Thimothee inc. »). Quand la fiche
-    # client Kratos est reliée à ce customer ET n'a qu'UN SEUL projet,
-    # l'imputation est sans ambiguïté → on mappe l'id du customer parent
-    # sur ce projet. Client à plusieurs projets → on ne devine pas (le
-    # repli par classe de ligne reste disponible).
-    try:
-        from app.models.client import Client as _ClientMap
+    # Pas de repli CLIENT MÈRE. Une transaction QB laissée sur le client
+    # PARENT (sans sous-client) est une facture de GESTION, indépendante de
+    # la construction : c'est justement pour ça qu'elle n'est reliée à
+    # aucun sous-client/projet dans QB (règle Steven 2026-10-17). Elle
+    # reste « sans projet » et n'entre pas dans Kratos — même quand le
+    # client n'a qu'un seul projet régulier (l'ancien repli du cas Atlant
+    # #177 la rapportait sur ce projet, refacturable si contrat). Une
+    # facture de construction doit être imputée au sous-client dans QB.
 
-        _by_client: dict[int, list[Project]] = {}
-        for _p in _projects:
-            if _p.client_id:
-                _by_client.setdefault(int(_p.client_id), []).append(_p)
-        _single = {
-            cid: ps[0] for cid, ps in _by_client.items() if len(ps) == 1
-        }
-        if _single:
-            _crows = (
-                await db.execute(
-                    select(
-                        _ClientMap.id, _ClientMap.qbo_customer_id
-                    ).where(
-                        _ClientMap.id.in_(list(_single.keys())),
-                        _ClientMap.qbo_customer_id.is_not(None),
-                    )
-                )
-            ).all()
-            for _ccid, _qid in _crows:
-                _q = str(_qid or "").strip()
-                if _q and _q not in proj_by_job:
-                    proj_by_job[_q] = _single[int(_ccid)]
-    except Exception:  # noqa: BLE001
-        log.warning(
-            "Repli client mère → projet échoué", exc_info=True
-        )
     # Repli de résolution par CLASSE de ligne (= adresse du chantier) pour
     # la ventilation multi-projets : couvre les lignes dont le CustomerRef
     # pointe le client MÈRE plutôt que le sous-client du projet (cas
@@ -673,7 +871,8 @@ async def pull_project_costs_from_qbo(
     def _resolve_class_project(cname: str) -> Optional[Project]:
         c = _norm_cls(cname)
         # Trop court = risque de faux positif par inclusion → on ignore.
-        if len(c) < 5:
+        # Classe de VOLET (« Construction », « Kratos »…) = pas un chantier.
+        if len(c) < 5 or _classe_generique(cname):
             return None
         hit = _class_exact.get(c)
         if hit is not None:
@@ -865,6 +1064,13 @@ async def pull_project_costs_from_qbo(
         # lien réparé sur l'achat source / doublon évité.
         "relinked_kratos": 0,
         "skipped_kratos_origin": 0,
+        # Factures FRACTIONNÉES dans QB : divisées entre plusieurs projets
+        # (un achat par projet) ; importées pour la seule part des projets
+        # (le reste reste dans QB) ; achats déjà importés en bloc ramenés
+        # à la part de leur projet.
+        "split_multi_projets": 0,
+        "parts_partielles": 0,
+        "reduits_part_projet": 0,
     }
     preview: list[dict] = []
 
@@ -937,9 +1143,17 @@ async def pull_project_costs_from_qbo(
             if not dry_run:
                 _new_date = _parse_date(b.get("TxnDate"))
                 _real_pm = paid_bill_methods.get(bid)
+                _due = None if paid else _echeance_bill(b)
                 for ach in achs_bill:
                     if _new_date and _new_date != ach.invoice_date:
                         ach.invoice_date = _new_date
+                    # Échéance à payer = celle de QB (DueDate).
+                    if (
+                        _due is not None
+                        and ach.status != "paid"
+                        and ach.due_at != _due
+                    ):
+                        ach.due_at = _due
                     if paid and ach.status != "paid":
                         ach.status = "paid"
                         ach.paid_at = ach.paid_at or now
@@ -969,12 +1183,17 @@ async def pull_project_costs_from_qbo(
             # Atlant #173). On le divise comme dans QB : une part par
             # projet, au prorata des lignes. Jamais si l'achat est déjà
             # refacturé (invoiced_at / facture_item).
+            # … ou fractionnée entre UN projet et une part hors projet
+            # (client mère, autre client, aucun client) : l'achat est
+            # ramené à la part de son projet, le reste reste dans QB.
             _allocs = _project_allocations(
                 b, proj_by_job, _resolve_class_project
             )
+            _base_ht = _lignes_ht_total(b)
+            _partiel = _part_hors_projet(b, _allocs)
             if (
                 not dry_run
-                and len(_allocs) >= 2
+                and (len(_allocs) >= 2 or (_allocs and _partiel))
                 and ach.invoiced_at is None
                 and ach.facture_item_id is None
                 and _covers_full_txn(ach, total)
@@ -990,18 +1209,19 @@ async def pull_project_costs_from_qbo(
                     ) in ("", "bill_to_pay"):
                         ach.payment_method = _real_pm
                 if await _split_achat_multi_projets(
-                    db, ach, _allocs, _txn_description(b), _is_billable
+                    db, ach, _allocs, _txn_description(b), _is_billable,
+                    base_ht=_base_ht if _partiel else None,
+                    qbo_total=total,
                 ):
-                    stats["split_multi_projets"] = (
-                        stats.get("split_multi_projets", 0) + 1
+                    _compter_division(
+                        stats, _allocs, _partiel, reparation=True
                     )
                     preview.append(
                         {"type": "bill", "qbo_id": bid, "amount": total,
                          "vendor": vendor,
-                         "status": "divise_multi_projets",
-                         "projets": [
-                             a["project"].id for a in _allocs
-                         ]}
+                         "status": _statut_division(_allocs),
+                         "projets": [a["project"].id for a in _allocs],
+                         "hors_projet": _partiel}
                     )
                     continue
             updated = False
@@ -1025,6 +1245,18 @@ async def pull_project_costs_from_qbo(
             if not dry_run and _new_date and _new_date != ach.invoice_date:
                 ach.invoice_date = _new_date
                 updated = True
+            # Échéance d'un achat à payer = la date prévue dans QB
+            # (DueDate du Bill) — retour Steven 2026-10-17, factures Rona
+            # importées sans échéance.
+            _due = None if paid else _echeance_bill(b)
+            if (
+                not dry_run
+                and _due is not None
+                and ach.status != "paid"
+                and ach.due_at != _due
+            ):
+                ach.due_at = _due
+                updated = True
             # Reflète les MODIFS faites dans QB (montant / description) sur un
             # coût ORIGINAIRE de QB — stocké en TTC, SANS ventilation de taxe
             # côté Kratos (amount_taxes == 0). On ne touche PAS un achat
@@ -1033,10 +1265,12 @@ async def pull_project_costs_from_qbo(
             # reçu modifié dans QB ne se met pas à jour dans les dépenses ».
             if not dry_run and float(ach.amount_taxes or 0) == 0:
                 new_desc = _txn_description(b)
-                if total and round(float(ach.amount or 0), 2) != round(
-                    float(total), 2
-                ):
-                    ach.amount = total
+                # Part attendue : le total QB, ou seulement la part du
+                # projet quand la facture est fractionnée avec une part
+                # hors projet (sinon l'achat oscillerait à chaque passage).
+                _attendu = _montant_attendu(ach, total, _allocs, _base_ht)
+                if _attendu and round(float(ach.amount or 0), 2) != _attendu:
+                    ach.amount = _attendu
                     updated = True
                 if new_desc and (ach.description or "") != new_desc:
                     ach.description = new_desc
@@ -1107,24 +1341,29 @@ async def pull_project_costs_from_qbo(
         # Facture DIVISÉE sur plusieurs projets dans QB → un achat PAR
         # projet, montant TTC au prorata du HT des lignes. Sinon, un seul
         # achat au montant complet (comportement historique).
+        # … ou entre UN projet et une part hors projet (client mère, autre
+        # client, aucun client) : seule la part du projet entre dans
+        # Kratos, le reste de la facture reste dans QB.
         bill_allocs = _project_allocations(
             b, proj_by_job, _resolve_class_project
         )
-        bill_shares = (
-            _split_amounts(round(total, 2), bill_allocs)
-            if len(bill_allocs) >= 2
-            else []
-        )
+        _bill_partiel = _part_hors_projet(b, bill_allocs)
+        bill_shares = _parts_a_importer(total, b, bill_allocs)
         preview.append(
             {"type": "bill", "qbo_id": bid, "project_id": proj.id,
              "amount": total, "paid": paid, "vendor": vendor,
              "status": "a_importer",
              **(
-                 {"projets": [a["project"].id for a in bill_allocs]}
+                 {"projets": [a["project"].id for a in bill_allocs],
+                  "parts": bill_shares, "hors_projet": _bill_partiel}
                  if bill_shares
                  else {}
              )}
         )
+        if bill_shares:
+            _compter_division(
+                stats, bill_allocs, _bill_partiel, reparation=False
+            )
         if not dry_run:
             # Fournisseur lié — CRÉÉ dans Kratos s'il n'existait
             # pas (il travaille sur un projet Kratos).
@@ -1162,10 +1401,12 @@ async def pull_project_costs_from_qbo(
                         payment_method=_pm,
                         received_at=now,
                         paid_at=now if paid else None,
+                        due_at=None if paid else _echeance_bill(b),
                         invoice_date=_parse_date(b.get("TxnDate")),
                         supplier_invoice_number=doc or None,
                         qbo_bill_id=bid,
                         qbo_doc_number=doc or None,
+                        qbo_txn_total=round(total, 2),
                     )
                 )
             await db.flush()
@@ -1182,6 +1423,7 @@ async def pull_project_costs_from_qbo(
             continue
         total = _num(p.get("TotalAmt"))
         vendor = (p.get("EntityRef") or {}).get("name")
+        vendor_fourn = _nom_fournisseur_de(p.get("EntityRef"))
         doc = str(p.get("DocNumber") or "")
         # Anti-doublon : un Achat poussé DEPUIS Kratos vers QB stocke
         # l'Id de la Purchase dans `qbo_bill_id` (cf. achat_qbo.py), PAS
@@ -1236,26 +1478,29 @@ async def pull_project_costs_from_qbo(
             _allocs = _project_allocations(
                 p, proj_by_job, _resolve_class_project
             )
+            _base_ht = _lignes_ht_total(p)
+            _partiel = _part_hors_projet(p, _allocs)
             if (
                 not dry_run
-                and len(_allocs) >= 2
+                and (len(_allocs) >= 2 or (_allocs and _partiel))
                 and existing.invoiced_at is None
                 and existing.facture_item_id is None
                 and _covers_full_txn(existing, total)
             ):
                 if await _split_achat_multi_projets(
-                    db, existing, _allocs, _txn_description(p), _is_billable
+                    db, existing, _allocs, _txn_description(p), _is_billable,
+                    base_ht=_base_ht if _partiel else None,
+                    qbo_total=total,
                 ):
-                    stats["split_multi_projets"] = (
-                        stats.get("split_multi_projets", 0) + 1
+                    _compter_division(
+                        stats, _allocs, _partiel, reparation=True
                     )
                     preview.append(
                         {"type": "purchase", "qbo_id": pid,
                          "amount": total, "vendor": vendor,
-                         "status": "divise_multi_projets",
-                         "projets": [
-                             a["project"].id for a in _allocs
-                         ]}
+                         "status": _statut_division(_allocs),
+                         "projets": [a["project"].id for a in _allocs],
+                         "hors_projet": _partiel}
                     )
                     continue
             updated: list[str] = []
@@ -1273,24 +1518,58 @@ async def pull_project_costs_from_qbo(
                     existing.payment_method = new_method
                 updated.append("mode de paiement")
             # Backfill : fournisseur manquant sur l'achat lié.
-            if not dry_run and existing.fournisseur_id is None and vendor:
+            if (
+                not dry_run
+                and existing.fournisseur_id is None
+                and vendor_fourn
+            ):
                 existing.fournisseur_id = await _fournisseur_id_for(
                     db,
                     fourn_by_name,
-                    vendor,
+                    vendor_fourn,
                     (p.get("EntityRef") or {}).get("value"),
                 )
                 updated.append("fournisseur")
+            # Bénéficiaire CHANGÉ dans QB (ex. dépense d'abord mise au nom
+            # d'un client, corrigée ensuite vers le vrai fournisseur) : on
+            # le reflète sur une dépense ORIGINAIRE de QB, seulement si la
+            # fiche actuelle vient elle-même d'un import (hors annuaire)
+            # et ne correspond ni par nom ni par id Vendor au bénéficiaire
+            # QB — une fiche choisie ou renommée dans Kratos reste.
+            elif (
+                not dry_run
+                and vendor_fourn
+                and existing.fournisseur_id is not None
+                and float(existing.amount_taxes or 0) == 0
+            ):
+                _cur = await db.get(Fournisseur, existing.fournisseur_id)
+                _ref_id = str((p.get("EntityRef") or {}).get("value") or "")
+                if (
+                    _cur is not None
+                    and not _cur.in_directory
+                    and (_cur.name or "").strip().lower()
+                    != vendor_fourn.strip().lower()
+                    and (not _ref_id or (_cur.qbo_vendor_id or "") != _ref_id)
+                ):
+                    _fid = await _fournisseur_id_for(
+                        db, fourn_by_name, vendor_fourn, _ref_id or None
+                    )
+                    if _fid and _fid != existing.fournisseur_id:
+                        existing.fournisseur_id = _fid
+                        updated.append("fournisseur")
             # Reflète les MODIFS QB (montant / description) sur une dépense
             # ORIGINAIRE de QB (TTC, sans ventilation de taxe Kratos). On ne
             # touche PAS un achat maître-Kratos (amount = HT + amount_taxes).
             if float(existing.amount_taxes or 0) == 0:
                 new_desc = _txn_description(p)
-                if total and round(float(existing.amount or 0), 2) != round(
-                    float(total), 2
+                _attendu = _montant_attendu(
+                    existing, total, _allocs, _base_ht
+                )
+                if _attendu and round(float(existing.amount or 0), 2) != (
+                    _attendu
                 ):
                     if not dry_run:
-                        existing.amount = total
+                        existing.amount = _attendu
                     updated.append("montant")
                 if new_desc and (existing.description or "") != new_desc:
                     if not dry_run:
@@ -1349,27 +1628,29 @@ async def pull_project_costs_from_qbo(
         pur_allocs = _project_allocations(
             p, proj_by_job, _resolve_class_project
         )
-        pur_shares = (
-            _split_amounts(round(total, 2), pur_allocs)
-            if len(pur_allocs) >= 2
-            else []
-        )
+        _pur_partiel = _part_hors_projet(p, pur_allocs)
+        pur_shares = _parts_a_importer(total, p, pur_allocs)
         preview.append(
             {"type": "purchase", "qbo_id": pid, "project_id": proj.id,
              "amount": total, "vendor": vendor, "status": "a_importer",
              **(
-                 {"projets": [a["project"].id for a in pur_allocs]}
+                 {"projets": [a["project"].id for a in pur_allocs],
+                  "parts": pur_shares, "hors_projet": _pur_partiel}
                  if pur_shares
                  else {}
              )}
         )
+        if pur_shares:
+            _compter_division(
+                stats, pur_allocs, _pur_partiel, reparation=False
+            )
         if not dry_run:
             # Fournisseur lié — CRÉÉ dans Kratos s'il n'existait
             # pas (il travaille sur un projet Kratos).
             _fid = await _fournisseur_id_for(
                 db,
                 fourn_by_name,
-                vendor,
+                vendor_fourn,
                 (p.get("EntityRef") or {}).get("value"),
             )
             _base_desc = _txn_description(p)
@@ -1397,6 +1678,7 @@ async def pull_project_costs_from_qbo(
                         supplier_invoice_number=doc or None,
                         qbo_purchase_id=pid,
                         qbo_doc_number=doc or None,
+                        qbo_txn_total=round(total, 2),
                     )
                 )
             await db.flush()

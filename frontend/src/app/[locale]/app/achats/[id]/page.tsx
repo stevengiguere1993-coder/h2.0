@@ -24,7 +24,11 @@ import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 import { splitFromTotal, TPS_RATE, TVQ_RATE } from "@/lib/tax";
-import { projectLabel } from "@/lib/project";
+import {
+  projectLabel,
+  fournisseursPourAchat,
+  trierProjetsParAdresse
+} from "@/lib/project";
 import { useConfirm } from "@/components/confirm-dialog";
 
 const PAYMENT_OPTIONS = [
@@ -74,6 +78,8 @@ type Achat = {
   markup_percent: number | null;
   invoiced_at: string | null;
   facture_item_id: number | null;
+  // « inventaire » : sortie de l'inventaire interne, jamais dans QB.
+  kind?: string | null;
 };
 
 type Project = {
@@ -87,7 +93,12 @@ type Project = {
   // refacturer » quand on rattache l'achat à ce projet.
   billing_kind?: string | null;
 };
-type Fournisseur = { id: number; name: string };
+type Fournisseur = {
+  id: number;
+  name: string;
+  active?: boolean;
+  in_directory?: boolean;
+};
 
 // Bon de travail proposé dans le sélecteur « Projet / Bon de travail »
 // (retour 2026-09-18 : la fiche d'un achat ne listait que les projets —
@@ -100,16 +111,40 @@ type BonMini = {
   project_id?: number | null;
 };
 
+// Facture QuickBooks FRACTIONNÉE (retour Steven 2026-10-06, « importer la
+// séparation de factures ») : les achats Kratos qui partagent la même
+// transaction QB (un par projet) et la part restée dans QuickBooks.
+type AchatPart = {
+  id: number;
+  project_id: number | null;
+  description: string | null;
+  total: number;
+  status: string;
+};
+type AchatParts = {
+  qbo_id: string | null;
+  qbo_doc_number: string | null;
+  qbo_total: number | null;
+  total_kratos: number;
+  reste_qb: number | null;
+  parts: AchatPart[];
+};
+
+function fmtMoney(n: number | null | undefined): string {
+  if (n == null) return "—";
+  return new Intl.NumberFormat("fr-CA", {
+    style: "currency",
+    currency: "CAD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(n);
+}
+
 const STATUS_LABELS: Record<string, string> = {
   received: "À payer",
   paid: "Payé",
   cancelled: "Annulé"
 };
-
-function isoToDateInput(iso: string | null): string {
-  if (!iso) return "";
-  return iso.slice(0, 10);
-}
 
 export default function AchatDetailPage() {
   const confirm = useConfirm();
@@ -133,6 +168,7 @@ export default function AchatDetailPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [bons, setBons] = useState<BonMini[]>([]);
   const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
+  const [nomsClients, setNomsClients] = useState<string[]>([]);
   const [employes, setEmployes] = useState<Employe[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -191,13 +227,13 @@ export default function AchatDetailPage() {
   const [statusStr, setStatusStr] = useState("received");
   const [invoiceDate, setInvoiceDate] = useState("");
   const [supplierInvoiceNumber, setSupplierInvoiceNumber] = useState("");
-  const [receivedAt, setReceivedAt] = useState("");
   const [receiptUrl, setReceiptUrl] = useState("");
   const [notes, setNotes] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
   const [showFournisseurModal, setShowFournisseurModal] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [pendingReceipt, setPendingReceipt] = useState<File | null>(null);
+  const [parts, setParts] = useState<AchatParts | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -208,13 +244,14 @@ export default function AchatDetailPage() {
         // /projects sans `kind` exclut les mini-projets des bons → on les
         // charge à part pour que la valeur d'un achat déjà rattaché à un
         // bon reste affichable (retour 2026-09-18).
-        const [aRes, pRes, bpRes, frRes, eRes, bRes] = await Promise.all([
+        const [aRes, pRes, bpRes, frRes, eRes, bRes, cRes] = await Promise.all([
           authedFetch(`/api/v1/achats/${id}`),
           authedFetch("/api/v1/projects?limit=500"),
           authedFetch("/api/v1/projects?kind=bon_travail&limit=500"),
           authedFetch("/api/v1/fournisseurs?limit=500"),
           authedFetch("/api/v1/employes?limit=500&volet=construction"),
-          authedFetch("/api/v1/bons-travail?limit=500")
+          authedFetch("/api/v1/bons-travail?limit=500"),
+          authedFetch("/api/v1/clients?limit=500")
         ]);
         const bonsAll = bRes.ok
           ? ((await bRes.json()) as BonMini[]).filter(
@@ -233,6 +270,16 @@ export default function AchatDetailPage() {
         const data = (await aRes.json()) as Achat;
         if (cancelled) return;
         setA(data);
+        // Parts de la même facture QuickBooks (best-effort).
+        if (data.qbo_bill_id || data.qbo_purchase_id) {
+          try {
+            const prRes = await authedFetch(`/api/v1/achats/${id}/parts`);
+            if (prRes.ok && !cancelled)
+              setParts((await prRes.json()) as AchatParts);
+          } catch {
+            /* best-effort */
+          }
+        }
         setProjectId(data.project_id ? String(data.project_id) : "");
         setFournisseurId(
           data.fournisseur_id ? String(data.fournisseur_id) : ""
@@ -307,12 +354,15 @@ export default function AchatDetailPage() {
           data.invoice_date ? data.invoice_date.slice(0, 10) : ""
         );
         setSupplierInvoiceNumber(data.supplier_invoice_number || "");
-        setReceivedAt(isoToDateInput(data.received_at));
         setReceiptUrl(data.receipt_url || "");
         setNotes(data.notes || "");
         setPaymentMethod(data.payment_method || "");
         if (frRes.ok) setFournisseurs((await frRes.json()) as Fournisseur[]);
         if (eRes.ok) setEmployes((await eRes.json()) as Employe[]);
+        if (cRes.ok)
+          setNomsClients(
+            ((await cRes.json()) as { name: string }[]).map((c) => c.name)
+          );
       } catch {
         if (!cancelled) setError("Achat introuvable.");
       } finally {
@@ -338,14 +388,13 @@ export default function AchatDetailPage() {
       invoiceDate !==
         (a.invoice_date ? a.invoice_date.slice(0, 10) : "") ||
       supplierInvoiceNumber !== (a.supplier_invoice_number || "") ||
-      receivedAt !== isoToDateInput(a.received_at) ||
       receiptUrl !== (a.receipt_url || "") ||
       notes !== (a.notes || "") ||
       paymentMethod !== (a.payment_method || "")
     );
   }, [
     a, projectId, fournisseurId, description, amount, amountTps, amountTvq,
-    statusStr, invoiceDate, supplierInvoiceNumber, receivedAt,
+    statusStr, invoiceDate, supplierInvoiceNumber,
     receiptUrl, notes, paymentMethod
   ]);
 
@@ -368,7 +417,11 @@ export default function AchatDetailPage() {
         status: statusStr,
         invoice_date: invoiceDate || null,
         supplier_invoice_number: supplierInvoiceNumber.trim() || null,
-        received_at: receivedAt ? new Date(receivedAt).toISOString() : null,
+        // « Reçu le » = date de facture (midi UTC : pas de décalage de
+        // jour en heure de l'Est) ; sans date de facture, on garde l'actuel.
+        received_at: invoiceDate
+          ? `${invoiceDate}T12:00:00Z`
+          : a.received_at,
         receipt_url: receiptUrl.trim() || null,
         notes: notes.trim() || null,
         fournisseur_id: fournisseurId ? Number(fournisseurId) : null,
@@ -467,17 +520,36 @@ export default function AchatDetailPage() {
 
   async function onDelete() {
     if (!a) return;
-    if (!(await confirm(`Supprimer l'achat ${a.reference} ?`))) return;
+    const inventaire = a.kind === "inventaire";
+    if (
+      !(await confirm(
+        inventaire
+          ? `Supprimer l'achat ${a.reference} ? La marchandise retourne dans l'inventaire interne.`
+          : `Supprimer l'achat ${a.reference} ?`
+      ))
+    )
+      return;
     setDeleting(true);
     try {
       const res = await authedFetch(`/api/v1/achats/${id}`, {
         method: "DELETE"
       });
-      if (!res.ok && res.status !== 204) throw new Error();
+      if (!res.ok && res.status !== 204) {
+        // Refus expliqué par le serveur (ex. sortie d'inventaire déjà
+        // refacturée sur une facture).
+        let detail = "";
+        try {
+          const j = (await res.json()) as { detail?: unknown };
+          if (typeof j.detail === "string") detail = j.detail;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail);
+      }
       router.replace("/app/achats");
-    } catch {
+    } catch (e) {
       setDeleting(false);
-      setError("Suppression échouée.");
+      setError((e as Error).message || "Suppression échouée.");
     }
   }
 
@@ -510,20 +582,32 @@ export default function AchatDetailPage() {
             <header className="mt-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <h1 className="text-2xl font-bold text-white">{a.reference}</h1>
               <div className="flex flex-wrap items-start gap-2">
-                <AchatQboPushButton
-                  achat={a}
-                  onSynced={(billId, docNumber) =>
-                    setA((prev) =>
-                      prev
-                        ? {
-                            ...prev,
-                            qbo_bill_id: billId,
-                            qbo_doc_number: docNumber
-                          }
-                        : prev
-                    )
-                  }
-                />
+                {a.kind === "inventaire" ? (
+                  // Sortie de l'inventaire interne : coût du projet dans
+                  // Kratos seulement (le stock est entré dans QB à son
+                  // achat) — aucun bouton d'envoi.
+                  <div
+                    className="inline-flex items-center gap-2 self-start rounded-lg border border-brand-700 bg-brand-950 px-3 py-2.5 text-sm font-medium text-white/80"
+                    title="Le stock est déjà dans QuickBooks depuis son achat ; cette sortie n'y est pas renvoyée."
+                  >
+                    Inventaire interne · hors QuickBooks
+                  </div>
+                ) : (
+                  <AchatQboPushButton
+                    achat={a}
+                    onSynced={(billId, docNumber) =>
+                      setA((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              qbo_bill_id: billId,
+                              qbo_doc_number: docNumber
+                            }
+                          : prev
+                      )
+                    }
+                  />
+                )}
                 <button
                   type="button"
                   onClick={onDelete}
@@ -620,13 +704,13 @@ export default function AchatDetailPage() {
                       emptyLabel="— Aucun —"
                       placeholder="Choisis ou tape pour chercher…"
                       options={[
-                        ...projects
-                          .filter((p) => p.kind !== "bon_travail")
-                          .map((p) => ({
-                            value: String(p.id),
-                            label: projectLabel(p),
-                            group: "Projets"
-                          })),
+                        ...trierProjetsParAdresse(
+                          projects.filter((p) => p.kind !== "bon_travail")
+                        ).map((p) => ({
+                          value: String(p.id),
+                          label: projectLabel(p),
+                          group: "Projets"
+                        })),
                         // TOUS les bons (retour 2026-09-18) — même ceux
                         // sans mini-projet porteur : il est créé à la
                         // sélection. Un bon avec projet pointe droit
@@ -674,7 +758,11 @@ export default function AchatDetailPage() {
                       emptyLabel="— Aucun —"
                       placeholder="Choisis ou tape le nom du fournisseur…"
                       options={[
-                        ...fournisseurs.map((fr) => ({
+                        ...fournisseursPourAchat(
+                          fournisseurs,
+                          nomsClients,
+                          fournisseurId
+                        ).map((fr) => ({
                           value: String(fr.id),
                           label: fr.name
                         })),
@@ -728,6 +816,67 @@ export default function AchatDetailPage() {
                   </div>
                 </div>
               </section>
+
+              {parts && (parts.parts.length > 1 || parts.reste_qb != null) ? (
+                <section className="rounded-xl border border-sky-500/30 bg-brand-900 p-5">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Facture QuickBooks divisée
+                  </h2>
+                  <p className="mt-2 text-sm text-white/70">
+                    {parts.qbo_doc_number
+                      ? `Facture ${parts.qbo_doc_number} · `
+                      : ""}
+                    {parts.qbo_total != null
+                      ? `total dans QuickBooks ${fmtMoney(parts.qbo_total)} · `
+                      : ""}
+                    {parts.parts.length > 1
+                      ? `${parts.parts.length} parts dans Kratos, une par projet (${fmtMoney(parts.total_kratos)})`
+                      : `part du projet dans Kratos : ${fmtMoney(parts.total_kratos)}`}
+                    {parts.reste_qb != null
+                      ? ` · ${fmtMoney(parts.reste_qb)} hors projet, resté dans QuickBooks`
+                      : ""}
+                  </p>
+                  {parts.parts.length > 1 ? (
+                    <ul className="mt-3 divide-y divide-brand-800 text-sm">
+                      {parts.parts.map((p) => {
+                        const proj = p.project_id
+                          ? projects.find((x) => x.id === p.project_id)
+                          : undefined;
+                        return (
+                          <li
+                            key={p.id}
+                            className="flex items-center justify-between gap-3 py-2"
+                          >
+                            <span className="min-w-0">
+                              {p.id === a.id ? (
+                                <strong className="text-white">Cet achat</strong>
+                              ) : (
+                                <Link
+                                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                  href={`/app/achats/${p.id}` as any}
+                                  className="text-accent-500 underline decoration-dotted hover:text-accent-400"
+                                >
+                                  Achat #{p.id}
+                                </Link>
+                              )}
+                              <span className="ml-2 text-white/70">
+                                {proj
+                                  ? projectLabel(proj)
+                                  : p.project_id
+                                    ? `Projet #${p.project_id}`
+                                    : "Sans projet"}
+                              </span>
+                            </span>
+                            <span className="shrink-0 font-semibold text-white">
+                              {fmtMoney(p.total)}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : null}
+                </section>
+              ) : null}
 
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
@@ -891,6 +1040,9 @@ export default function AchatDetailPage() {
                     ) : null}
                   </div>
 
+                  {/* Une seule date : « Reçu le » (received_at, base de
+                      l'échéance et du payé le) suit la date de facture à la
+                      sauvegarde — retour Steven 2026-10-16. */}
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div>
                       <label htmlFor="aidate" className="label">
@@ -901,16 +1053,6 @@ export default function AchatDetailPage() {
                         type="date"
                         value={invoiceDate}
                         onChange={(e) => setInvoiceDate(e.target.value)}
-                        className="input"
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="arec" className="label">Reçu le</label>
-                      <input
-                        id="arec"
-                        type="date"
-                        value={receivedAt}
-                        onChange={(e) => setReceivedAt(e.target.value)}
                         className="input"
                       />
                     </div>

@@ -495,6 +495,20 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet factures en retard dans QB échoué", exc_info=True)
 
+    # ── Factures émises encore « Non envoyé » dans QB ──
+    # C'est Kratos qui envoie les factures ; QB ouvrait une tâche « Review
+    # Invoice » pour chacune (flux « Get unsent invoice reminder », Steven
+    # 2026-10-16). En-tête seulement : lignes, montants et paiements
+    # intacts.
+    try:
+        from app.services.facture_qbo import marquer_factures_envoyees_dans_qb
+
+        out["factures_marquees_envoyees"] = (
+            await marquer_factures_envoyees_dans_qb()
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("Filet factures « envoyées » dans QB échoué", exc_info=True)
+
     # ── Dépenses actives sans lien QB → re-push ──
     # NON gated : « tous les reçus sont envoyés dans QuickBooks
     # automatiquement ». Un reçu saisi dans Kratos dont le push immédiat a
@@ -504,7 +518,7 @@ async def run_qbo_nets() -> Dict[str, Any]:
     try:
         from sqlalchemy import select
 
-        from app.models.achat import Achat
+        from app.models.achat import KIND_INVENTAIRE, Achat
         from app.services.achat_qbo import sync_achat_to_qbo
 
         async with AsyncSessionLocal() as db:
@@ -528,6 +542,8 @@ async def run_qbo_nets() -> Dict[str, Any]:
                             Achat.fournisseur_id.is_not(None),
                             Achat.amount.is_not(None),
                             Achat.amount > 0,
+                            # Sortie d'inventaire interne : jamais dans QB.
+                            Achat.kind != KIND_INVENTAIRE,
                         )
                     )
                 ).all()
@@ -733,6 +749,23 @@ async def run_qbo_nets() -> Dict[str, Any]:
             out["bons_qb"] = {"candidates": len(bon_project_ids)}
     except Exception:  # noqa: BLE001
         log.warning("Filet bons de travail → QB échoué", exc_info=True)
+
+    # ── Compteur de factures au-dessus de QuickBooks ──
+    # Une facture créée directement dans QB (ou importée) doit faire
+    # avancer le compteur de Kratos : prochain numéro = plus haut numéro
+    # existant (Kratos ou QB) + 1 (Steven 2026-10-17).
+    try:
+        from app.services.numbering import aligner_compteur_factures_une_session
+
+        res = await aligner_compteur_factures_une_session()
+        out["compteur_factures"] = res
+        if res["apres"] != res["avant"]:
+            log.warning(
+                "Filet compteur de factures : %s → %s (Kratos %s, QB %s)",
+                res["avant"], res["apres"], res["kratos_max"], res["qb_max"],
+            )
+    except Exception:  # noqa: BLE001
+        log.warning("Filet compteur de factures échoué", exc_info=True)
 
     # (Plus aucun filet gated : tout le miroir Kratos ↔ QB est automatique.
     # L'interrupteur `qbo_auto_sync` ne conditionne plus que les outils de

@@ -22,7 +22,8 @@ import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { PaymentsPanel } from "@/components/payments-panel";
 import {
   QboConnexionExpiree,
-  estConnexionQboExpiree
+  estConnexionQboExpiree,
+  motifRefusQbo
 } from "@/components/qbo-connexion-expiree";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
@@ -44,6 +45,9 @@ type Facture = {
   status: string;
   issued_at: string | null;
   due_at: string | null;
+  // Conditions en jours après l'envoi (0 = payable sur réception) ;
+  // null = date d'échéance personnalisée.
+  due_in_days: number | null;
   paid_at: string | null;
   last_reminder_at: string | null;
   reminder_count: number;
@@ -82,6 +86,20 @@ type Item = {
   // Cumul facturé à date pour cet item de soumission (toutes factures non
   // annulées, celle-ci incluse). NULL hors soumission.
   billed_to_date?: number | null;
+  // Achats refacturés portés par la ligne : le détail dépliable de la
+  // ligne « Matériaux », qui additionne tout le matériel de la facture.
+  achats?: AchatRegroupe[];
+};
+
+type AchatRegroupe = {
+  id: number;
+  fournisseur: string | null;
+  reference: string | null;
+  supplier_invoice_number: string | null;
+  invoice_date: string | null;
+  description: string | null;
+  amount: number | null;
+  montant_refacture: number | null;
 };
 
 const KIND_LABELS: Record<string, string> = {
@@ -155,6 +173,25 @@ function isoToDateInput(iso: string | null): string {
   return iso.slice(0, 10);
 }
 
+// Jour civil de Montréal d'un horodatage (aujourd'hui sans argument),
+// comme le serveur : une facture envoyée le soir est du jour même, et une
+// date sans heure (minuit UTC pile, ex. import QuickBooks) garde son jour.
+function jourMontreal(iso: string | null): string {
+  const d = iso ? new Date(iso) : new Date();
+  if (iso && d.getTime() % 86400000 === 0) return d.toISOString().slice(0, 10);
+  return d.toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+}
+
+// Conditions proposées (jours après l'envoi).
+const TERMES_ECHEANCE: { jours: number; label: string }[] = [
+  { jours: 0, label: "Payable sur réception" },
+  { jours: 10, label: "Net 10 jours" },
+  { jours: 15, label: "Net 15 jours" },
+  { jours: 30, label: "Net 30 jours" },
+  { jours: 45, label: "Net 45 jours" },
+  { jours: 60, label: "Net 60 jours" }
+];
+
 async function explainError(res: Response): Promise<string> {
   try {
     const data = await res.json();
@@ -200,6 +237,9 @@ export default function FactureDetailPage() {
   const [includeStatement, setIncludeStatement] = useState(false);
   const [sendBusy, setSendBusy] = useState(false);
   const [sendNotice, setSendNotice] = useState<string | null>(null);
+  // Échec d'envoi affiché DANS la fenêtre d'envoi (le bandeau de la page
+  // est caché derrière elle).
+  const [sendError, setSendError] = useState<string | null>(null);
   const [stmtSendBusy, setStmtSendBusy] = useState(false);
   const [sendTo, setSendTo] = useState("");
   const [sendCc, setSendCc] = useState("");
@@ -207,6 +247,10 @@ export default function FactureDetailPage() {
   const [sendMessage, setSendMessage] = useState("");
 
   const [dueAt, setDueAt] = useState("");
+  // L'échéance affichée suit celle du serveur (envoi, conditions, statut).
+  useEffect(() => {
+    setDueAt(isoToDateInput(f?.due_at ?? null));
+  }, [f?.due_at]);
   const [nextReminderAt, setNextReminderAt] = useState("");
   const [internalNotes, setInternalNotes] = useState("");
   const [clientNote, setClientNote] = useState("");
@@ -413,9 +457,9 @@ export default function FactureDetailPage() {
   const tvq = +(subtotal * TVQ_RATE).toFixed(2);
   const total = +(subtotal + tps + tvq).toFixed(2);
 
-  async function refreshFacture() {
+  async function refreshFacture(): Promise<Facture | null> {
     const r = await authedFetch(`/api/v1/factures/${id}`);
-    if (!r.ok) return;
+    if (!r.ok) return null;
     const fd = (await r.json()) as Facture;
     setF(fd);
     if (fd.client_id && (!client || client.id !== fd.client_id)) {
@@ -426,6 +470,7 @@ export default function FactureDetailPage() {
         if (cd.email) setSendTo(cd.email);
       }
     }
+    return fd;
   }
 
   async function openClientPick() {
@@ -497,8 +542,29 @@ export default function FactureDetailPage() {
     }
   }
 
+  // Échéance au plus tôt le jour de l'envoi (aujourd'hui pour un
+  // brouillon) : même règle que le serveur, qui refuse une date antérieure.
+  const minDueDate: string | undefined = !f
+    ? undefined
+    : f.status === "draft"
+      ? jourMontreal(null)
+      : f.status === "void" || !f.issued_at
+        ? undefined
+        : jourMontreal(f.issued_at);
+
   async function saveDueAt(value: string = dueAt) {
     if (!f) return;
+    const actuelle = isoToDateInput(f.due_at);
+    // Champ quitté sans changement : rien à enregistrer (les conditions
+    // choisies, « Net 30 »…, restent).
+    if (value === actuelle) return;
+    if (value && minDueDate && value < minDueDate) {
+      setDueAt(actuelle);
+      setError(
+        `L'échéance ne peut pas précéder le ${minDueDate} : une facture est due au plus tôt le jour de son envoi.`
+      );
+      return;
+    }
     setSaving(true);
     try {
       const res = await authedFetch(`/api/v1/factures/${id}`, {
@@ -507,11 +573,33 @@ export default function FactureDetailPage() {
           due_at: value ? new Date(value).toISOString() : null
         })
       });
-      if (!res.ok) throw new Error();
-      const u = (await res.json()) as Facture;
-      setF(u);
-    } catch {
-      setError("Sauvegarde échéance échouée.");
+      if (!res.ok) throw new Error(await explainError(res));
+      setF((await res.json()) as Facture);
+    } catch (err) {
+      setDueAt(actuelle);
+      setError(`Sauvegarde échéance échouée : ${(err as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Conditions choisies : le serveur calcule l'échéance depuis le jour de
+  // l'envoi (aujourd'hui pour un brouillon, recalculée quand il part).
+  async function saveDueTerms(value: string) {
+    if (!f) return;
+    if (value === "custom" && f.due_in_days == null) return;
+    setSaving(true);
+    try {
+      const res = await authedFetch(`/api/v1/factures/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          due_in_days: value === "custom" ? null : Number(value)
+        })
+      });
+      if (!res.ok) throw new Error(await explainError(res));
+      setF((await res.json()) as Facture);
+    } catch (err) {
+      setError(`Sauvegarde des conditions échouée : ${(err as Error).message}`);
     } finally {
       setSaving(false);
     }
@@ -721,7 +809,12 @@ export default function FactureDetailPage() {
         // pour refléter le nouvel ordre.
         await reloadItems();
       } else {
-        setItems((xs) => xs.map((x) => (x.id === item_id ? updated : x)));
+        // Le détail des achats regroupés n'est pas renvoyé par le PATCH.
+        setItems((xs) =>
+          xs.map((x) =>
+            x.id === item_id ? { ...updated, achats: x.achats } : x
+          )
+        );
       }
     } catch (e) {
       setError(`Mise à jour échouée : ${(e as Error).message}`);
@@ -970,6 +1063,7 @@ export default function FactureDetailPage() {
       .filter(Boolean);
     setSendBusy(true);
     setSendNotice(null);
+    setSendError(null);
     try {
       const res = await authedFetch(`/api/v1/factures/${id}/send`, {
         method: "POST",
@@ -981,15 +1075,39 @@ export default function FactureDetailPage() {
           include_statement: includeStatement
         })
       });
+      if (res.status === 409) {
+        // QuickBooks n'a pas accepté la facture : rien n'est parti au
+        // client. Elle garde son statut et le motif est posé sur la fiche
+        // (bandeau ci-dessous) ; on la relit pour l'afficher. Le bandeau
+        // d'un brouillon dit déjà « non envoyée » ; pour un renvoi, le
+        // message le dit.
+        const detail = await explainError(res);
+        setSendOpen(false);
+        setQboNotice(null);
+        const fd = await refreshFacture();
+        if (!fd?.qbo_sync_error || fd.status !== "draft") setSendNotice(detail);
+        return;
+      }
       if (!res.ok) {
         throw new Error(await explainError(res));
       }
       const updated = (await res.json()) as Facture;
+      // Numéro déjà pris dans QuickBooks par une autre facture : il a été
+      // remplacé AVANT l'envoi, le client a reçu le nouveau.
+      const ancien =
+        f.reference && !f.reference.startsWith("BR-") && f.reference !== updated.reference
+          ? f.reference
+          : null;
       setF(updated);
       setSendOpen(false);
-      setSendNotice(`Facture envoyée à ${to.join(", ")}.`);
+      setSendNotice(
+        `Facture envoyée à ${to.join(", ")}.` +
+          (ancien
+            ? ` Elle est partie sous le numéro ${updated.reference} : le ${ancien} était déjà pris dans QuickBooks.`
+            : "")
+      );
     } catch (err) {
-      setSendNotice(`Erreur d'envoi : ${(err as Error).message}`);
+      setSendError(`Erreur d'envoi : ${(err as Error).message}`);
     } finally {
       setSendBusy(false);
     }
@@ -1226,10 +1344,42 @@ export default function FactureDetailPage() {
                 </p>
               )
             ) : null}
+            {/* Brouillon retenu à l'envoi (Steven 2026-10-17) : QuickBooks
+                reçoit la facture AVANT le client ; s'il la refuse, rien ne
+                part et le motif reste affiché ici jusqu'au prochain envoi. */}
+            {!qboNotice && f.qbo_sync_error && f.status === "draft" ? (
+              <div className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm">
+                <p className="font-semibold text-rose-300">
+                  ⛔ Facture non envoyée au client : QuickBooks ne l&apos;a pas
+                  acceptée. Elle reste en brouillon.
+                </p>
+                {estConnexionQboExpiree(f.qbo_sync_error) ? (
+                  <QboConnexionExpiree className="mt-2" echecEnregistre />
+                ) : (
+                  <p className="mt-1 text-rose-200" title={f.qbo_sync_error}>
+                    Motif : {motifRefusQbo(f.qbo_sync_error) || f.qbo_sync_error}
+                  </p>
+                )}
+                <p className="mt-1 text-xs text-white/70">
+                  Corrige le problème (numéro avec le crayon, lignes, client…),
+                  puis renvoie-la : elle repasse par QuickBooks avant de partir.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSendError(null);
+                    setSendOpen(true);
+                  }}
+                  className="btn-secondary btn-xs mt-2"
+                >
+                  Réessayer l&apos;envoi au client
+                </button>
+              </div>
+            ) : null}
             {/* Dernière erreur de synchro QBO PERSISTÉE (backend) : visible
                 automatiquement, sans clic — c'est le motif exact renvoyé
                 par QuickBooks au dernier push (envoi, filet ou resync). */}
-            {!qboNotice && f.qbo_sync_error ? (
+            {!qboNotice && f.qbo_sync_error && f.status !== "draft" ? (
               estConnexionQboExpiree(f.qbo_sync_error) ? (
                 // Connexion QuickBooks rompue : bouton de reconnexion
                 // plutôt que le message technique (2026-10-09).
@@ -1282,7 +1432,10 @@ export default function FactureDetailPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setSendOpen(true)}
+                onClick={() => {
+                  setSendError(null);
+                  setSendOpen(true);
+                }}
                 className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-accent-500"
               >
                 <Mail className="mt-0.5 h-5 w-5 flex-shrink-0 text-accent-500" />
@@ -1295,6 +1448,20 @@ export default function FactureDetailPage() {
                   </p>
                 </div>
               </button>
+              {f.status === "draft" ? (
+                <div
+                  className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left"
+                  title="QuickBooks reçoit le brouillon quand tu l'envoies au client, juste avant le courriel : s'il le refuse, rien ne part au client."
+                >
+                  <RefreshCw className="mt-0.5 h-5 w-5 flex-shrink-0 text-white/40" />
+                  <div>
+                    <p className="text-sm font-semibold text-white">QuickBooks</p>
+                    <p className="mt-0.5 text-xs text-white/60">
+                      Reçoit la facture à l&apos;envoi au client, avant le courriel.
+                    </p>
+                  </div>
+                </div>
+              ) : (
               <button
                 type="button"
                 onClick={syncToQbo}
@@ -1325,6 +1492,7 @@ export default function FactureDetailPage() {
                   </p>
                 </div>
               </button>
+              )}
               {isQboSynced ? (
                 <button
                   type="button"
@@ -1559,61 +1727,28 @@ export default function FactureDetailPage() {
               <div className="flex flex-wrap items-center gap-3">
                 <label className="label mb-0">Échéance</label>
                 <select
-                  value={(() => {
-                    if (!dueAt) return "custom";
-                    const issued = f?.issued_at
-                      ? new Date(f.issued_at)
-                      : new Date();
-                    const due = new Date(dueAt);
-                    const diffDays = Math.round(
-                      (due.getTime() -
-                        new Date(
-                          issued.getFullYear(),
-                          issued.getMonth(),
-                          issued.getDate()
-                        ).getTime()) /
-                        86400000
-                    );
-                    if (diffDays === 0) return "0";
-                    if ([10, 15, 30, 45, 60].includes(diffDays))
-                      return String(diffDays);
-                    return "custom";
-                  })()}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (v === "custom") return; // user éditera la date à droite
-                    const issued = f?.issued_at
-                      ? new Date(f.issued_at)
-                      : new Date();
-                    const base = new Date(
-                      issued.getFullYear(),
-                      issued.getMonth(),
-                      issued.getDate()
-                    );
-                    base.setDate(base.getDate() + Number(v));
-                    const yyyy = base.getFullYear();
-                    const mm = String(base.getMonth() + 1).padStart(2, "0");
-                    const dd = String(base.getDate()).padStart(2, "0");
-                    const next = `${yyyy}-${mm}-${dd}`;
-                    setDueAt(next);
-                    // #4 — l'échéance choisie est enregistrée tout de suite
-                    // (avant on devait cliquer l'icône de sauvegarde, vite
-                    // oubliée → le changement était perdu en quittant).
-                    void saveDueAt(next);
-                  }}
+                  value={f.due_in_days != null ? String(f.due_in_days) : "custom"}
+                  onChange={(e) => void saveDueTerms(e.target.value)}
+                  disabled={saving}
                   className="input w-48"
                 >
-                  <option value="0">Payable sur réception</option>
-                  <option value="10">Net 10 jours</option>
-                  <option value="15">Net 15 jours</option>
-                  <option value="30">Net 30 jours</option>
-                  <option value="45">Net 45 jours</option>
-                  <option value="60">Net 60 jours</option>
+                  {TERMES_ECHEANCE.map((t) => (
+                    <option key={t.jours} value={String(t.jours)}>
+                      {t.label}
+                    </option>
+                  ))}
+                  {f.due_in_days != null &&
+                  !TERMES_ECHEANCE.some((t) => t.jours === f.due_in_days) ? (
+                    <option value={String(f.due_in_days)}>
+                      Net {f.due_in_days} jours
+                    </option>
+                  ) : null}
                   <option value="custom">Date personnalisée</option>
                 </select>
                 <input
                   type="date"
                   value={dueAt}
+                  min={minDueDate}
                   onChange={(e) => setDueAt(e.target.value)}
                   onBlur={() => void saveDueAt()}
                   className="input w-44"
@@ -1637,6 +1772,19 @@ export default function FactureDetailPage() {
                 <strong>sur réception</strong>. Les soldes finaux suivent
                 tes conditions habituelles (souvent net 30).
               </p>
+              {f.status === "draft" ? (
+                <p className="mt-1 text-[11px] text-white/50">
+                  {f.due_in_days != null
+                    ? "Les conditions comptent à partir du jour de l'envoi : l'échéance sera recalculée quand la facture partira."
+                    : "Si la facture part après cette date, l'échéance sera ramenée au jour de l'envoi."}
+                </p>
+              ) : f.status === "sent" || f.status === "overdue" ? (
+                <p className="mt-1 text-[11px] text-white/50">
+                  Jamais avant le jour de l&apos;envoi
+                  {minDueDate ? ` (${minDueDate})` : ""}. Un nouvel envoi la
+                  recalcule à partir du jour où il part.
+                </p>
+              ) : null}
             </section>
 
             {project && projFin ? (
@@ -2309,6 +2457,12 @@ export default function FactureDetailPage() {
               </label>
             </div>
 
+            {sendError ? (
+              <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+                {sendError}
+              </p>
+            ) : null}
+
             <div className="mt-6 flex items-center justify-between gap-3">
               <button
                 type="button"
@@ -2693,6 +2847,55 @@ function ItemRow({
           ) : null}
         </div>
       ) : null}
+      {/* Achats refacturés sur la ligne (AFFICHAGE Kratos, jamais sur le
+          PDF ni dans QuickBooks) : la ligne « Matériaux » additionne tout
+          le matériel de la facture — le détail dit quels achats y sont. */}
+      {item.achats && item.achats.length > 0 ? (
+        <details className="mt-1.5 text-[11px] text-white/60">
+          <summary className="cursor-pointer select-none hover:text-white">
+            {item.achats.length === 1
+              ? "1 achat refacturé sur cette ligne"
+              : `${item.achats.length} achats refacturés sur cette ligne`}
+          </summary>
+          <ul className="mt-1 space-y-0.5 border-l border-white/10 pl-3">
+            {item.achats.map((a) => {
+              const no = a.supplier_invoice_number || a.reference;
+              return (
+                <li
+                  key={a.id}
+                  className="flex flex-wrap items-baseline gap-x-2"
+                >
+                  <span className="font-semibold text-white">
+                    {a.fournisseur || "Fournisseur inconnu"}
+                  </span>
+                  {no ? <span>no {no}</span> : null}
+                  {a.invoice_date ? (
+                    <span>
+                      {new Date(
+                        `${a.invoice_date}T12:00:00`
+                      ).toLocaleDateString("fr-CA")}
+                    </span>
+                  ) : null}
+                  {a.description ? (
+                    <span className="truncate">{a.description}</span>
+                  ) : null}
+                  <span className="ml-auto whitespace-nowrap">
+                    {a.amount != null ? `coût ${fmtMoney(a.amount)}` : null}
+                    {a.montant_refacture != null ? (
+                      <>
+                        {" → "}
+                        <span className="font-semibold text-white">
+                          {fmtMoney(a.montant_refacture)}
+                        </span>
+                      </>
+                    ) : null}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -2841,8 +3044,12 @@ function BonPickerModal({
       setDone((prev) => ({
         ...prev,
         [bon.id]:
-          r.added > 0
-            ? `${r.added} ligne${r.added > 1 ? "s" : ""} importée${r.added > 1 ? "s" : ""}${
+          r.added > 0 || (r.achats_importes ?? 0) > 0
+            ? `${
+                r.added > 0
+                  ? `${r.added} ligne${r.added > 1 ? "s" : ""} importée${r.added > 1 ? "s" : ""}`
+                  : "Ajouté à la ligne Matériaux"
+              }${
                 parts.length ? ` (${parts.join(", ")})` : ""
               }${notes.length ? ` · ${notes.join(", ")}` : ""}`
             : `rien à importer${notes.length ? ` (${notes.join(", ")})` : " (heures et achats déjà facturés ?)"}`

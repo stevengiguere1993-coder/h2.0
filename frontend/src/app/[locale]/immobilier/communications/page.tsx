@@ -13,6 +13,7 @@ import {
   Plus,
   Search,
   Send,
+  Pencil,
   Settings,
   Star,
   Trash2,
@@ -293,6 +294,8 @@ export default function CommunicationsPage() {
   const [nvEmail, setNvEmail] = useState("");
   const [nvNom, setNvNom] = useState("");
   const [nvReply, setNvReply] = useState("");
+  // Profil en cours de MODIFICATION (son nom d'origine) ; null = création.
+  const [editionLabel, setEditionLabel] = useState<string | null>(null);
   const [savingReglages, setSavingReglages] = useState(false);
   const [reglagesMsg, setReglagesMsg] = useState<string | null>(null);
 
@@ -537,6 +540,26 @@ export default function CommunicationsPage() {
     }
   };
 
+  // « Modifier » un profil existant (retour Steven 2026-10-18 : changer
+  // l'adresse de réponse de Kyle sans supprimer/recréer le profil) :
+  // le formulaire ci-dessous se remplit avec ses valeurs.
+  const modifierProfil = (pr: ProfilEnvoi) => {
+    setEditionLabel(pr.label);
+    setNvLabel(pr.label);
+    setNvEmail(pr.from_email);
+    setNvNom(pr.from_name);
+    setNvReply(pr.reply_to);
+    setReglagesMsg(null);
+  };
+
+  const annulerModification = () => {
+    setEditionLabel(null);
+    setNvLabel("");
+    setNvEmail("");
+    setNvNom("");
+    setNvReply("");
+  };
+
   const ajouterProfil = async () => {
     const label = nvLabel.trim();
     if (!label) {
@@ -547,22 +570,40 @@ export default function CommunicationsPage() {
       setReglagesMsg("L'adresse d'envoi (boîte Microsoft 365) est requise.");
       return;
     }
-    const next = [
-      ...profils.filter((p) => p.label !== label),
-      {
-        label,
-        from_email: nvEmail.trim(),
-        from_name: nvNom.trim(),
-        reply_to: nvReply.trim()
+    const ancien = editionLabel;
+    const nouveau: ProfilEnvoi = {
+      label,
+      from_email: nvEmail.trim(),
+      from_name: nvNom.trim(),
+      reply_to: nvReply.trim()
+    };
+    // Modification : le profil garde sa place dans la liste (même
+    // renommé) ; un homonyme est remplacé. Création : ajouté à la fin.
+    const next: ProfilEnvoi[] = [];
+    let remplace = false;
+    for (const p of profils) {
+      if (ancien !== null && p.label === ancien) {
+        next.push(nouveau);
+        remplace = true;
+      } else if (p.label !== label) {
+        next.push(p);
       }
-    ];
-    // Le 1er profil créé devient automatiquement le défaut.
-    const defaut = profils.length === 0 ? label : profilDefaut;
-    await persistReglages(next, defaut, `Profil « ${label} » enregistré.`);
-    setNvLabel("");
-    setNvEmail("");
-    setNvNom("");
-    setNvReply("");
+    }
+    if (!remplace) next.push(nouveau);
+    // Le 1er profil créé devient automatiquement le défaut ; le profil
+    // par défaut renommé reste le défaut.
+    const defaut =
+      profils.length === 0 || (ancien !== null && profilDefaut === ancien)
+        ? label
+        : profilDefaut;
+    await persistReglages(
+      next,
+      defaut,
+      ancien !== null
+        ? `Profil « ${label} » modifié.`
+        : `Profil « ${label} » enregistré.`
+    );
+    annulerModification();
     setProfilSel(label);
   };
 
@@ -572,6 +613,7 @@ export default function CommunicationsPage() {
     const next = profils.filter((p) => p.label !== label);
     const defaut =
       profilDefaut === label ? next[0]?.label || "" : profilDefaut;
+    if (editionLabel === label) annulerModification();
     await persistReglages(next, defaut, `Profil « ${label} » supprimé.`);
     if (profilSel === label) setProfilSel(defaut);
   };
@@ -1377,6 +1419,14 @@ export default function CommunicationsPage() {
                         </button>
                       )}
                       <button
+                        onClick={() => modifierProfil(pr)}
+                        disabled={savingReglages}
+                        className="shrink-0 rounded p-1 text-white/40 transition hover:text-white"
+                        title={`Modifier « ${pr.label} »`}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
                         onClick={() => void supprimerProfil(pr.label)}
                         disabled={savingReglages}
                         className="shrink-0 rounded p-1 text-white/40 transition hover:text-rose-300"
@@ -1391,7 +1441,9 @@ export default function CommunicationsPage() {
 
               <div className="mt-4 space-y-2 border-t border-brand-800 pt-3">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-white/45">
-                  Nouveau profil
+                  {editionLabel
+                    ? `Modifier le profil « ${editionLabel} »`
+                    : "Nouveau profil"}
                 </p>
                 <input
                   value={nvLabel}
@@ -1414,7 +1466,7 @@ export default function CommunicationsPage() {
                 <input
                   value={nvReply}
                   onChange={(e) => setNvReply(e.target.value)}
-                  placeholder="Répondre à — peut être externe (ex. kyle.gestion@gmail.com)"
+                  placeholder="Répondre à — peut être externe (ex. kyle@gestionmagnifica.com)"
                   className="input w-full text-sm"
                 />
                 <p className="text-[11px] text-white/40">
@@ -1430,11 +1482,22 @@ export default function CommunicationsPage() {
                   >
                     {savingReglages ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : editionLabel ? (
+                      <Pencil className="h-3.5 w-3.5" />
                     ) : (
                       <Plus className="h-3.5 w-3.5" />
                     )}
-                    Ajouter le profil
+                    {editionLabel ? "Enregistrer" : "Ajouter le profil"}
                   </button>
+                  {editionLabel ? (
+                    <button
+                      className="btn-secondary btn-sm"
+                      disabled={savingReglages}
+                      onClick={annulerModification}
+                    >
+                      Annuler
+                    </button>
+                  ) : null}
                   {reglagesMsg && (
                     <span className="text-xs text-white/60">
                       {reglagesMsg}

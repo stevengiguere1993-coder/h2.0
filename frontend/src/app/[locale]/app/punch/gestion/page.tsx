@@ -95,6 +95,28 @@ function heuresBrutes(p: Punch): number {
   return Number(p.hours ?? 0) + (p.diner_minutes ?? 0) / 60;
 }
 
+// Résumé des heures d'un employé sur la période affichée (Steven,
+// 2026-10-14) : le dîner retiré doit se voir dans le total de CHAQUE
+// employé, pas seulement punch par punch.
+type LigneResume = {
+  employeId: number;
+  name: string;
+  /** Heures punchées, avant le retrait des dîners. */
+  punchees: number;
+  /** Heures de dîner non payé retirées, et nombre de dîners. */
+  diner: number;
+  diners: number;
+  /** Heures payées (= punchées − dîners). */
+  payees: number;
+  approuvees: number;
+  attente: number;
+  /** Heures payées de la semaine 1 / 2 d'une période de paie. */
+  sem1: number;
+  sem2: number;
+  /** Punchs encore ouverts (pas d'heures). */
+  enCours: number;
+};
+
 const REGIME_LABEL: Record<string, string> = {
   ccq: "CCQ",
   hors_decret: "Hors décret"
@@ -451,6 +473,59 @@ export default function PunchGestionPage() {
     () => visible.reduce((sum, p) => sum + (p.diner_minutes ?? 0) / 60, 0),
     [visible]
   );
+  const totalDiners = useMemo(
+    () => visible.reduce((n, p) => n + (p.diner_minutes ? 1 : 0), 0),
+    [visible]
+  );
+
+  // Heures par employé sur la période affichée — tous les employés, sans
+  // le filtre employé (le résumé sert justement à les comparer). `hours`
+  // est déjà net : on remonte le dîner pour que le retrait se voie dans le
+  // total de chaque employé.
+  const resumeEmployes = useMemo<LigneResume[]>(() => {
+    const parEmploye = new Map<number, LigneResume>();
+    // Période de paie : la semaine 1 couvre les 7 premiers jours.
+    const finSem1 = new Date(period.start);
+    finSem1.setDate(finSem1.getDate() + 7);
+    for (const p of punches) {
+      const d = new Date(p.started_at);
+      if (d < period.start || d >= period.end) continue;
+      let l = parEmploye.get(p.employe_id);
+      if (!l) {
+        l = {
+          employeId: p.employe_id,
+          name: empById.get(p.employe_id)?.full_name || `#${p.employe_id}`,
+          punchees: 0,
+          diner: 0,
+          diners: 0,
+          payees: 0,
+          approuvees: 0,
+          attente: 0,
+          sem1: 0,
+          sem2: 0,
+          enCours: 0
+        };
+        parEmploye.set(p.employe_id, l);
+      }
+      if (p.hours == null) {
+        l.enCours += 1;
+        continue;
+      }
+      const h = Number(p.hours);
+      const dinerH = (p.diner_minutes ?? 0) / 60;
+      l.payees += h;
+      l.punchees += h + dinerH;
+      l.diner += dinerH;
+      if (p.diner_minutes) l.diners += 1;
+      if (p.approved) l.approuvees += h;
+      else l.attente += h;
+      if (d < finSem1) l.sem1 += h;
+      else l.sem2 += h;
+    }
+    return Array.from(parEmploye.values()).sort((a, b) =>
+      a.name.localeCompare(b.name, "fr")
+    );
+  }, [punches, period, empById]);
 
   // Après une saisie dans la modale : le serveur a pu retirer le dîner
   // d'un AUTRE punch de la même journée (le plus long) — on relit la liste.
@@ -783,7 +858,7 @@ export default function PunchGestionPage() {
           />
 
           <div className="rounded-md bg-brand-900 px-3 py-2 text-sm">
-            <span className="text-white/50">Total </span>
+            <span className="text-white/50">Total payé </span>
             <span className="font-bold text-white">
               {fmtHm(totalHours)}
             </span>{" "}
@@ -799,9 +874,10 @@ export default function PunchGestionPage() {
             {totalDiner > 0 ? (
               <span
                 className="ml-2 text-xs text-amber-300"
-                title="Dîners non payés déjà retirés du total"
+                title="Heures punchées moins les dîners non payés = heures payées"
               >
-                dîners −{fmtHm(totalDiner)}
+                {fmtHm(totalHours + totalDiner)} punchées · dîners −
+                {fmtHm(totalDiner)} ({totalDiners})
               </span>
             ) : null}
           </div>
@@ -819,6 +895,29 @@ export default function PunchGestionPage() {
               )
             }
             onSelectPunch={(p) => setModal(p)}
+          />
+        ) : null}
+
+        {/* Heures par employé sur la période : punchées, dîners retirés,
+            payées. Le retrait du dîner se lit dans le total de chaque
+            employé, pas seulement punch par punch (Steven, 2026-10-14). */}
+        {!loading && resumeEmployes.length > 0 ? (
+          <ResumeParEmploye
+            lignes={resumeEmployes}
+            libelle={
+              viewMode === "payperiod"
+                ? "période de paie"
+                : viewMode === "month"
+                  ? selectedDay
+                    ? `le ${shortISO(selectedDay)}`
+                    : "mois"
+                  : "semaine"
+            }
+            deuxSemaines={viewMode === "payperiod"}
+            filtre={filterEmploye}
+            onFiltrer={(id) =>
+              setFilterEmploye((cur) => (cur === String(id) ? "" : String(id)))
+            }
           />
         ) : null}
 
@@ -899,10 +998,10 @@ export default function PunchGestionPage() {
                         {p.diner_minutes ? (
                           <span
                             className="mt-0.5 flex items-center justify-end gap-1 whitespace-nowrap text-[10px] font-medium text-amber-300"
-                            title="Dîner non payé retiré des heures (case « dîner » de la fiche employé)"
+                            title="Heures payées = heures punchées moins le dîner non payé (case « dîner » de la fiche employé)"
                           >
                             <Utensils className="h-3 w-3" />
-                            Dîner −{p.diner_minutes} min
+                            {fmtHm(heuresBrutes(p))} punchées · dîner −{p.diner_minutes} min
                           </span>
                         ) : null}
                       </td>
@@ -1938,6 +2037,149 @@ function ChoixEmploye({
           )}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Heures par employé sur la période affichée : punchées, dîners retirés,
+// payées (approuvées / en attente). Un clic sur un employé filtre la liste
+// des punchs ; en vue « Période de paie », les deux semaines sont séparées
+// comme sur le rapport de paie.
+// ---------------------------------------------------------------------------
+function ResumeParEmploye({
+  lignes,
+  libelle,
+  deuxSemaines,
+  filtre,
+  onFiltrer
+}: {
+  lignes: LigneResume[];
+  libelle: string;
+  deuxSemaines: boolean;
+  filtre: string;
+  onFiltrer: (employeId: number) => void;
+}) {
+  const total = lignes.reduce(
+    (acc, l) => ({
+      punchees: acc.punchees + l.punchees,
+      diner: acc.diner + l.diner,
+      diners: acc.diners + l.diners,
+      payees: acc.payees + l.payees,
+      approuvees: acc.approuvees + l.approuvees,
+      attente: acc.attente + l.attente,
+      sem1: acc.sem1 + l.sem1,
+      sem2: acc.sem2 + l.sem2
+    }),
+    { punchees: 0, diner: 0, diners: 0, payees: 0, approuvees: 0, attente: 0, sem1: 0, sem2: 0 }
+  );
+  const cellule = "whitespace-nowrap px-4 py-2 text-right tabular-nums";
+  const tiret = <span className="text-white/30">—</span>;
+  return (
+    <div className="mb-4 overflow-x-auto rounded-xl border border-brand-800 bg-brand-900">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brand-800 px-4 py-2">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-white/70">
+          Heures par employé — {libelle}
+        </h2>
+        <p className="text-[11px] text-white/60">
+          Payées = punchées − dîners non payés. Clique un employé pour filtrer
+          la liste.
+        </p>
+      </div>
+      <table className="w-full text-sm">
+        <thead className="text-left text-[11px] uppercase tracking-wider text-white/50">
+          <tr>
+            <th className="px-4 py-2">Employé</th>
+            {deuxSemaines ? (
+              <>
+                <th className={cellule}>Sem. 1</th>
+                <th className={cellule}>Sem. 2</th>
+              </>
+            ) : null}
+            <th className={cellule}>Punchées</th>
+            <th className={cellule}>Dîners</th>
+            <th className={cellule}>Payées</th>
+            <th className={cellule}>Approuvées</th>
+            <th className={cellule}>En attente</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-brand-800">
+          {lignes.map((l) => {
+            const actif = filtre === String(l.employeId);
+            return (
+              <tr
+                key={l.employeId}
+                onClick={() => onFiltrer(l.employeId)}
+                className={`cursor-pointer ${
+                  actif ? "bg-brand-800" : "hover:bg-brand-800/50"
+                }`}
+                title={
+                  actif
+                    ? "Retirer le filtre"
+                    : "Voir seulement les punchs de cet employé"
+                }
+              >
+                <td className="px-4 py-2 font-semibold text-white">
+                  {l.name}
+                  {l.enCours > 0 ? (
+                    <span className="ml-2 text-[10px] font-medium text-accent-500">
+                      {l.enCours} en cours
+                    </span>
+                  ) : null}
+                </td>
+                {deuxSemaines ? (
+                  <>
+                    <td className={`${cellule} text-white/70`}>{fmtHm(l.sem1)}</td>
+                    <td className={`${cellule} text-white/70`}>{fmtHm(l.sem2)}</td>
+                  </>
+                ) : null}
+                <td className={`${cellule} text-white/70`}>{fmtHm(l.punchees)}</td>
+                <td
+                  className={`${cellule} ${l.diners > 0 ? "text-amber-300" : ""}`}
+                  title="Dîners non payés retirés des heures punchées (nombre de dîners entre parenthèses)"
+                >
+                  {l.diners > 0 ? `−${fmtHm(l.diner)} (${l.diners})` : tiret}
+                </td>
+                <td className={`${cellule} font-bold text-white`}>
+                  {fmtHm(l.payees)}
+                </td>
+                <td className={`${cellule} text-emerald-300`}>
+                  {l.approuvees > 0 ? fmtHm(l.approuvees) : tiret}
+                </td>
+                <td className={`${cellule} text-amber-300`}>
+                  {l.attente > 0 ? fmtHm(l.attente) : tiret}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+        {lignes.length > 1 ? (
+          <tfoot className="border-t-2 border-brand-800 bg-brand-950/40">
+            <tr>
+              <td className="px-4 py-2 text-[11px] uppercase tracking-wider text-white/60">
+                Totaux
+              </td>
+              {deuxSemaines ? (
+                <>
+                  <td className={`${cellule} text-white/70`}>{fmtHm(total.sem1)}</td>
+                  <td className={`${cellule} text-white/70`}>{fmtHm(total.sem2)}</td>
+                </>
+              ) : null}
+              <td className={`${cellule} text-white/70`}>{fmtHm(total.punchees)}</td>
+              <td className={`${cellule} text-amber-300`}>
+                {total.diners > 0 ? `−${fmtHm(total.diner)} (${total.diners})` : tiret}
+              </td>
+              <td className={`${cellule} font-bold text-white`}>{fmtHm(total.payees)}</td>
+              <td className={`${cellule} text-emerald-300`}>
+                {total.approuvees > 0 ? fmtHm(total.approuvees) : tiret}
+              </td>
+              <td className={`${cellule} text-amber-300`}>
+                {total.attente > 0 ? fmtHm(total.attente) : tiret}
+              </td>
+            </tr>
+          </tfoot>
+        ) : null}
+      </table>
     </div>
   );
 }

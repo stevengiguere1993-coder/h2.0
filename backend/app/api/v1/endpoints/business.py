@@ -367,6 +367,28 @@ async def _heal_facture_devis_overrun(db, fa) -> None:
         await _recompute_facture_totals(db, fa.id)
 
 
+def _normaliser_echeance(data, *, statut, emise_le, actuelle=None) -> None:
+    """Échéance d'une facture saisie : jamais avant le jour de l'envoi
+    (aujourd'hui pour un brouillon), conditions comptées depuis l'envoi
+    (services/facture_echeance.py). Date refusée → 422 avec la raison."""
+    from app.services.facture_echeance import (
+        EcheanceInvalide,
+        normaliser_saisie,
+    )
+
+    try:
+        valeurs = normaliser_saisie(
+            data.model_dump(exclude_unset=True),
+            statut=statut,
+            emise_le=emise_le,
+            actuelle=actuelle,
+        )
+    except EcheanceInvalide as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+    for champ, valeur in valeurs.items():
+        setattr(data, champ, valeur)
+
+
 async def _suggestion_numero_libre(db, model, item_id: int) -> str:
     """Fin du message quand un numéro saisi est refusé : pour une facture,
     le prochain numéro libre (Kratos + QuickBooks) ; sinon la consigne."""
@@ -438,6 +460,10 @@ def make_crud_router(
                 # le helper anti-collision (suffixe -N si la seconde est déjà
                 # prise) — format visible inchangé.
                 data.reference = await generate_bt_reference(db)
+        if model is Facture:
+            # Une facture créée est un brouillon : échéance au plus tôt
+            # aujourd'hui, recalculée à l'envoi.
+            _normaliser_echeance(data, statut=None, emise_le=None)
         crud = GenericCrud(db, model)
         obj = await crud.create(data)
         # Bon de travail : mémorise QUI l'a créé — affiché sur les
@@ -818,6 +844,13 @@ def make_crud_router(
                 punch_changed_fields = []
             for f in punch_changed_fields:
                 punch_before[f] = getattr(obj, f, None)
+        if model is Facture:
+            _normaliser_echeance(
+                data,
+                statut=obj.status,
+                emise_le=obj.issued_at,
+                actuelle=obj.due_at,
+            )
         obj = await crud.update(obj, data)
         # (Dé)cocher « à refacturer » à la main POSE LE VERROU : les
         # automatismes (correct_billable_for_contract_projects, appelé à
@@ -952,9 +985,17 @@ def make_crud_router(
             if (
                 prev_status == FactureStatus.DRAFT.value
                 and new_status != FactureStatus.DRAFT.value
-                and getattr(obj, "issued_at", None) is None
             ):
-                obj.issued_at = datetime.now(timezone.utc)
+                if getattr(obj, "issued_at", None) is None:
+                    obj.issued_at = datetime.now(timezone.utc)
+                # Sortie du brouillon sans « Envoyer » (marquée envoyée ou
+                # payée à la main) : même règle d'échéance qu'à l'envoi.
+                if new_status != FactureStatus.VOID.value:
+                    from app.services.facture_echeance import (
+                        appliquer_a_l_envoi,
+                    )
+
+                    appliquer_a_l_envoi(obj)
                 await db.flush()
             # Numéro DÉFINITIF : toute sortie de l'état brouillon (même
             # sans passer par « Envoyer » — ex. marquée payée à la main)
@@ -1073,6 +1114,18 @@ def make_crud_router(
             if model is Facture
             else ""
         )
+        # Sortie de l'inventaire interne supprimée depuis les achats : la
+        # marchandise revient en stock (refusé si déjà refacturée).
+        if model is Achat:
+            from app.services.inventaire import (
+                InventaireErreur,
+                remettre_en_stock_achat,
+            )
+
+            try:
+                await remettre_en_stock_achat(db, obj)
+            except InventaireErreur as exc:
+                raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
         await crud.delete(obj)
         if _punch_ta_id:
             import asyncio as _asyncio

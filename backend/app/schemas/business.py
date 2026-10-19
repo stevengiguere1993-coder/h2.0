@@ -448,6 +448,10 @@ class FactureCreate(BaseModel):
     balance: Optional[float] = None
     issued_at: Optional[datetime] = None
     due_at: Optional[datetime] = None
+    # Conditions en jours après l'envoi (0 = payable sur réception) :
+    # l'échéance en découle et suit le jour de l'envoi. Sans conditions,
+    # `due_at` est une date personnalisée (jamais avant aujourd'hui).
+    due_in_days: Optional[int] = Field(default=None, ge=0, le=365)
     internal_notes: Optional[str] = None
     client_note: Optional[str] = None
     is_final: bool = False
@@ -468,7 +472,11 @@ class FactureUpdate(BaseModel):
     balance: Optional[float] = None
     status: Optional[str] = None
     issued_at: Optional[datetime] = None
+    # `due_in_days` (conditions) recalcule l'échéance depuis le jour de
+    # l'envoi ; `due_at` seul = date personnalisée, refusée si elle
+    # précède le jour de l'envoi (aujourd'hui pour un brouillon).
     due_at: Optional[datetime] = None
+    due_in_days: Optional[int] = Field(default=None, ge=0, le=365)
     paid_at: Optional[datetime] = None
     next_reminder_at: Optional[datetime] = None
     reminders_paused: Optional[bool] = None
@@ -493,6 +501,7 @@ class FactureRead(_Base):
     status: str
     issued_at: Optional[datetime]
     due_at: Optional[datetime]
+    due_in_days: Optional[int] = None
     paid_at: Optional[datetime]
     last_reminder_at: Optional[datetime] = None
     reminder_count: int = 0
@@ -640,6 +649,10 @@ class AchatRead(_Base):
     #: Dépense importée de QB (pull des coûts) : Id QB de la Purchase.
     qbo_purchase_id: Optional[str] = None
     qbo_doc_number: Optional[str] = None
+    #: Total TTC de la transaction QB d'origine : quand il dépasse le
+    #: montant de l'achat, la facture est fractionnée dans QB et l'achat
+    #: n'en porte que la part de son projet.
+    qbo_txn_total: Optional[float] = None
     notes: Optional[str]
     is_billable: bool = True
     #: Choix MANUEL de la case « à refacturer » (verrou contre les
@@ -649,6 +662,10 @@ class AchatRead(_Base):
     markup_percent: Optional[float] = None
     invoiced_at: Optional[datetime] = None
     facture_item_id: Optional[int] = None
+    #: « Ne pas refacturer » autorisé explicitement (page À refacturer).
+    refacturation_dispense_at: Optional[datetime] = None
+    refacturation_dispense_par_user_id: Optional[int] = None
+    refacturation_dispense_raison: Optional[str] = None
     sous_traitant_id: Optional[int] = None
     kind: str = "material"
     hours: Optional[float] = None

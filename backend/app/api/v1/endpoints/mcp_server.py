@@ -660,6 +660,12 @@ _LIST_GENERIC_CHOICES = (
     "tal_transmissions",
     # Immobilier (2026-10-16) : dossiers de financement.
     "financements",
+    # Construction (2026-10-18) : inventaire interne (articles en stock)
+    # et ses mouvements (entrées, comptes, sorties vers un projet).
+    "inventaire",
+    "inventaire_mouvements",
+    # Zone employés (2026-10-18) : bloc-notes des employés.
+    "bloc_notes",
 )
 
 _LIMIT_PROP = {

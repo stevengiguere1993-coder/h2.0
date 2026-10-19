@@ -25,7 +25,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -69,7 +69,6 @@ router = APIRouter(tags=["materiaux"])
 
 #: Références des tâches de fond (un create_task non référencé peut être
 #: ramassé en cours d'exécution).
-_TACHES_FOND: set = set()
 
 
 # ───────────────────────────── Schémas ─────────────────────────────
@@ -441,31 +440,66 @@ class RechercheMateriauResult(BaseModel):
 
 @router.get("/materiaux/prix/etat")
 async def etat_releve(_: CurrentUser) -> dict:
-    """État du dernier relevé global (en cours / terminé + statistiques)."""
-    from app.services.materiaux_prix_auto import DERNIER_RELEVE
+    """État du dernier relevé global (en cours / terminé + statistiques EN
+    DIRECT : offres examinées, prix lus, échecs, dernier résultat) et sa
+    durée (``duree_s``)."""
+    from app.services.materiaux_prix_auto import DERNIER_RELEVE, avec_duree
 
-    return dict(DERNIER_RELEVE)
+    return avec_duree(DERNIER_RELEVE)
 
 
 @router.post("/materiaux/prix/relever-tout")
 async def relever_tout_endpoint(data: ReleveToutRequest, _: RequireManager) -> dict:
     """Lance en arrière-plan le relevé de toutes les offres avec lien
-    (un domaine à la fois). Répond tout de suite ; suivre avec
-    GET /materiaux/prix/etat."""
-    import asyncio
+    (un domaine à la fois, une session par domaine, durée maximale,
+    arrêtable par POST /materiaux/prix/arreter). Répond tout de suite ;
+    suivre avec GET /materiaux/prix/etat."""
+    from app.services.materiaux_prix_auto import DERNIER_RELEVE, avec_duree, lancer_releve_en_fond
 
-    from app.services.materiaux_prix_auto import (
-        DERNIER_RELEVE,
-        relever_tout_en_arriere_plan,
-    )
-
-    if DERNIER_RELEVE.get("en_cours"):
-        return {"lance": False, "raison": "Un relevé est déjà en cours.", **DERNIER_RELEVE}
-    asyncio.create_task(relever_tout_en_arriere_plan(
+    tache = lancer_releve_en_fond(
         magasin_id=data.magasin_id, materiau_id=data.materiau_id,
         max_age_hours=data.max_age_hours,
-    ))
-    return {"lance": True, **DERNIER_RELEVE}
+    )
+    if tache is None:
+        return {"lance": False, "raison": "Un relevé est déjà en cours.", **avec_duree(DERNIER_RELEVE)}
+    return {"lance": True, **avec_duree(DERNIER_RELEVE)}
+
+
+class ArreterRequest(BaseModel):
+    #: Course à arrêter : relevé des prix, recherche des prix de base,
+    #: analyse IA, ou le job de nuit hebdomadaire (qui enchaîne les trois).
+    job: Literal["releve", "recherche", "analyse", "hebdo"]
+
+
+@router.post("/materiaux/prix/arreter")
+async def arreter_course_endpoint(data: ArreterRequest, _: RequireManager) -> dict:
+    """Arrête une course de fond du catalogue (bouton « Arrêter ») : la
+    tâche est annulée, l'état « en cours » libéré, ce qui a déjà été
+    enregistré reste. ``arrete`` = une course tournait bel et bien. Une
+    course lancée par le cron ou le job de nuit s'arrête de la même façon
+    (c'est la même tâche)."""
+    from app.services.materiaux_analyse_ia import DERNIERE_ANALYSE, annuler_analyse
+    from app.services.materiaux_hebdo import DERNIER_HEBDO, annuler_hebdo
+    from app.services.materiaux_prix_auto import DERNIER_RELEVE, avec_duree, annuler_releve
+    from app.services.materiaux_recherche import DERNIERE_RECHERCHE, annuler_recherche
+
+    courses = {
+        "releve": (annuler_releve, DERNIER_RELEVE),
+        "recherche": (annuler_recherche, DERNIERE_RECHERCHE),
+        "analyse": (annuler_analyse, DERNIERE_ANALYSE),
+        "hebdo": (annuler_hebdo, DERNIER_HEBDO),
+    }
+    annuler, etat = courses[data.job]
+    arrete = annuler()
+    # L'annulation se fait au prochain tour de boucle : on lui laisse le
+    # temps de libérer l'état pour renvoyer un état déjà à jour.
+    import asyncio
+
+    for _i in range(20):
+        if not etat.get("en_cours"):
+            break
+        await asyncio.sleep(0.05)
+    return {"arrete": arrete, "job": data.job, **avec_duree(etat)}
 
 
 class AnalyserRequest(BaseModel):
@@ -478,14 +512,13 @@ class AnalyserRequest(BaseModel):
 @router.get("/materiaux/prix/analyser/etat")
 async def etat_analyse(_: CurrentUser) -> dict:
     """État de la dernière analyse IA des prix (en cours / terminée +
-    compteurs) et du job de nuit hebdomadaire."""
-    import copy
-
+    compteurs) et du job de nuit hebdomadaire, avec leur durée."""
     from app.services.materiaux_analyse_ia import DERNIERE_ANALYSE
     from app.services.materiaux_hebdo import DERNIER_HEBDO
+    from app.services.materiaux_prix_auto import avec_duree
 
-    etat = copy.deepcopy(DERNIERE_ANALYSE)
-    etat["hebdo"] = copy.deepcopy(DERNIER_HEBDO)
+    etat = avec_duree(DERNIERE_ANALYSE)
+    etat["hebdo"] = avec_duree(DERNIER_HEBDO)
     return etat
 
 
@@ -494,21 +527,18 @@ async def analyser_tout_endpoint(data: AnalyserRequest, _: RequireManager) -> di
     """Lance en arrière-plan l'analyse IA de l'historique des prix
     (verdict bon moment / attendre par matériau). Le job de nuit
     hebdomadaire fait la même chose automatiquement."""
-    import asyncio
-
     from app.integrations.ai import is_configured
-    from app.services.materiaux_analyse_ia import DERNIERE_ANALYSE, analyser_tout_en_arriere_plan
+    from app.services.materiaux_analyse_ia import DERNIERE_ANALYSE, lancer_analyse_en_fond
+    from app.services.materiaux_prix_auto import avec_duree
 
     if not is_configured():
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "IA non configurée sur le serveur (GEMINI_API_KEY).")
-    if DERNIERE_ANALYSE.get("en_cours"):
-        return {"lance": False, "raison": "Une analyse est déjà en cours.", **DERNIERE_ANALYSE}
-    task = asyncio.create_task(analyser_tout_en_arriere_plan(
+    tache = lancer_analyse_en_fond(
         materiau_id=data.materiau_id, limit=data.limit, max_age_days=(data.max_age_days or None),
-    ))
-    _TACHES_FOND.add(task)
-    task.add_done_callback(_TACHES_FOND.discard)
-    return {"lance": True, **DERNIERE_ANALYSE}
+    )
+    if tache is None:
+        return {"lance": False, "raison": "Une analyse est déjà en cours.", **avec_duree(DERNIERE_ANALYSE)}
+    return {"lance": True, **avec_duree(DERNIERE_ANALYSE)}
 
 
 @router.post("/materiaux/{materiau_id}/analyser", response_model=MateriauRead)
@@ -531,13 +561,12 @@ async def analyser_materiau_endpoint(materiau_id: int, db: DBSession, _: Current
 async def etat_recherche(_: CurrentUser) -> dict:
     """État de la dernière recherche automatique de prix (en cours /
     terminée + statistiques EN DIRECT) et du scraper VPS (Rona / BMR)."""
-    import copy
-
+    from app.services.materiaux_prix_auto import avec_duree
     from app.services.materiaux_recherche import DERNIERE_RECHERCHE, etat_scraper_vps
 
     from app.services.prix_magasins import appariement_ia as _ia
 
-    etat = copy.deepcopy(DERNIERE_RECHERCHE)
+    etat = avec_duree(DERNIERE_RECHERCHE)
     etat["scraper"] = await etat_scraper_vps()
     etat["ia"] = {"configuree": _ia.disponible() or _ia.web_disponible(), "web": _ia.web_disponible()}
     return etat
@@ -549,25 +578,19 @@ async def chercher_tout_endpoint(data: RechercheToutRequest, db: DBSession, _: R
     chaque matériau sans lien chez une quincaillerie principale, trouve le
     produit sur le site du magasin, pose le lien et le prix. Répond tout
     de suite ; suivre avec GET /materiaux/prix/chercher/etat."""
-    import asyncio
-
-    from app.services.materiaux_recherche import (
-        DERNIERE_RECHERCHE,
-        chercher_tout_en_arriere_plan,
-    )
+    from app.services.materiaux_prix_auto import avec_duree
+    from app.services.materiaux_recherche import DERNIERE_RECHERCHE, lancer_recherche_en_fond
 
     await _ensure_principaux(db)
     # Les magasins principaux (créés à l'instant au premier appel) doivent
     # être visibles de la session de fond : commit avant de la lancer.
     await db.commit()
-    if DERNIERE_RECHERCHE.get("en_cours"):
-        return {"lance": False, "raison": "Une recherche est déjà en cours.", **DERNIERE_RECHERCHE}
-    task = asyncio.create_task(chercher_tout_en_arriere_plan(
+    tache = lancer_recherche_en_fond(
         magasin_id=data.magasin_id, materiau_id=data.materiau_id, limit=data.limit,
-    ))
-    _TACHES_FOND.add(task)
-    task.add_done_callback(_TACHES_FOND.discard)
-    return {"lance": True, **DERNIERE_RECHERCHE}
+    )
+    if tache is None:
+        return {"lance": False, "raison": "Une recherche est déjà en cours.", **avec_duree(DERNIERE_RECHERCHE)}
+    return {"lance": True, **avec_duree(DERNIERE_RECHERCHE)}
 
 
 @router.post("/materiaux/{materiau_id}/chercher", response_model=RechercheMateriauResult)

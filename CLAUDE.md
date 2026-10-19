@@ -141,3 +141,56 @@ puis POST. Le double de test `QBMiroir` ignore `Line` quand `sparse` est
 vrai pour que ce piège reste couvert. Même précaution à prendre pour
 Bill / Purchase / Estimate (`achat_qbo.py`, `soumission_qbo.py` envoient
 encore `sparse`).
+
+## QuickBooks — factures « envoyées » (2026-10-16)
+
+C'est Kratos qui envoie les factures (PDF, courriel, rappels). Toute
+Invoice que Kratos crée ou met à jour porte `EmailStatus: "EmailSent"`
+(et `BillEmail` du client s'il manque) ; le filet horaire
+`marquer_factures_envoyees_dans_qb` rattrape les anciennes par une mise à
+jour « sparse » d'en-tête seulement. Sans ça, le flux QB « Get unsent
+invoice reminder » (Paramètres > Automatisation des flux de travaux)
+ouvrait une tâche « Review Invoice » par facture dans « Nécessite votre
+attention ».
+
+## Factures — QuickBooks d'abord, le client ensuite (2026-10-17)
+
+Steven : « si une facture bloque en envoi à QB, ne pas l'envoyer au
+client, la laisser en brouillon et mettre une notification dessus ».
+`send_facture` (`app/services/facture_send.py`) attribue le numéro, date
+la facture, puis la pousse dans QuickBooks (`sync_facture_to_qbo(...,
+avant_envoi=True)`) AVANT le PDF et le courriel. Refus de QB → 409, rien
+ne part, la facture garde son statut et son numéro, le motif va dans
+`qbo_sync_error` (bandeau rouge sur la fiche, alerte dans la liste) et
+une notification `facture_envoi_bloque` va aux admins (une par motif).
+Plus aucun push QB en arrière-plan après l'envoi. Sans clés Intuit
+(staging), la facture part comme avant (`quickbooks_branche()`).
+
+## Catalogue de matériaux — courses de fond (2026-10-18)
+
+Steven : « Catalogue à travailler, extraction bloque ». Les courses du
+catalogue (relevé des prix, recherche des prix de base, analyse IA, job de
+nuit) passent par `lancer_*_en_fond()` / `annuler_*()` de leur service
+(`materiaux_prix_auto`, `materiaux_recherche`, `materiaux_analyse_ia`,
+`materiaux_hebdo`) : une seule à la fois par processus, référence de tâche
+gardée, durée maximale (`DUREE_MAX_*_S`) après laquelle l'état « en cours »
+est libéré, bouton « Arrêter » (`POST /materiaux/prix/arreter`), ce qui est
+committé reste. Le cron et le job de nuit lancent LA MÊME course que le
+bouton (visible et arrêtable depuis le catalogue). Règles : jamais deux
+tâches sur une même AsyncSession (une session par domaine / magasin, commit
+par offre) ; un VPS de scraping injoignable = site bloqué (le domaine est
+court-circuité, pas un délai réseau par offre).
+
+## Dépenses construction — coût à l'heure (2026-10-18)
+
+Steven (bug 14) : « vue d'ensemble des dépenses construction général et
+calculer coût à l'heure vs entrée de fonds ». Page Entreprises → Dépenses
+construction (`page:entreprises.depenses_construction`, admins), calculs
+dans `app/services/depenses_construction.py`. Tout est HORS TAXES. Heures
+= punchs fermés, au jour de Montréal ; main-d'œuvre = `resolve_real_cost`
+daté (comme la fiche projet) ; achats datés de `invoice_date`, sinon
+`received_at`, sinon `created_at`, annulés et sorties d'inventaire exclus,
+« shop et frais généraux » = achat sans projet ni client ; entrées de fonds
+= lignes `facture_payments` à leur `paid_at` (les paiements QB y sont
+reflétés). Le bloc QuickBooks (P&L, exercice) contient déjà les achats de
+Kratos : ne jamais l'additionner aux dépenses Kratos.
