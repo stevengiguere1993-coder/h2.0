@@ -118,7 +118,7 @@ def test_creer_bail_parallele_depuis_financement(client, auth_headers, fin_seed,
     IDS["b103"] = b["id"]
     assert b["status"] == "parallele" and b["categorie"] == "parallele" and b["parallele_type"] == "bail_principal"
     assert b["locataire_nom"] == "Marc Sous-Locataire" and b["locataire_categorie"] == "parallele"
-    assert b["type_label"] == "Bail principal (exploitant)"
+    assert b["type_label"] == "Bail principal (le locataire sous-loue)"
 
     async def _etat():
         async with TestSessionLocal() as s:
@@ -170,7 +170,7 @@ def test_rent_roll_json_et_exports(client, auth_headers, fin_seed):
     pars = {p["bail_id"]: p for p in rr["paralleles"]}
     assert set(pars) == {fin_seed["b_par"], IDS["b103"]}
     assert pars[fin_seed["b_par"]]["locateur_bail"] == "Opérateur ABC inc." and pars[fin_seed["b_par"]]["loyer"] == 1300
-    assert pars[IDS["b103"]]["loyer"] == 1475 and pars[IDS["b103"]]["type_label"] == "Bail principal (exploitant)"
+    assert pars[IDS["b103"]]["loyer"] == 1475 and pars[IDS["b103"]]["type_label"] == "Bail principal (le locataire sous-loue)"
     t = rr["totaux"]
     assert t["nb_unites"] == 3 and t["nb_occupees"] == 2 and t["nb_vacantes"] == 1
     assert t["mensuel_standard"] == 1000 and t["annuel_standard"] == 12000
@@ -248,6 +248,70 @@ def test_rent_roll_unite_en_chambres(client, auth_headers, run):
     assert "Occupé · 2 chambres" in csv and "2 chambres : Anne Chambre, Bruno Chambre" in csv
     r = client.get(f"{FIN}/immeubles/{imm}/rent-roll", headers=auth_headers, params={"fmt": "pdf"})
     assert r.status_code == 200 and r.content[:5] == b"%PDF-"
+
+
+# ─── Bail principal : le locataire loue l'unité et sous-loue les chambres ──
+
+
+def test_rent_roll_bail_principal_locataire_qui_sous_loue(client, auth_headers, run):
+    """Phil 2026-10-16 (cas Jacques) : Jacques loue toute l'unité 3 500 $,
+    paie ce loyer, et sous-loue les chambres par Horizon. Son bail
+    (parallèle, type bail principal, locateur = le propriétaire) est LE bail
+    de l'unité dans le rent roll ; les baux de chambre sont ses
+    sous-locations, hors du revenu du propriétaire."""
+    from app.models.entreprise import Entreprise
+
+    async def _seed():
+        async with TestSessionLocal() as s:
+            ent = Entreprise(name="Proprio Smoke INC", type="immobilier", contact_email="proprio@smoke.test",
+                             siege_social="1 rue du Siège, Montréal (Québec) H1A 1A1")
+            s.add(ent)
+            await s.flush()
+            imm = Immeuble(name="Immeuble Smoke Jacques", address="1660 rue Principal", city="Montréal", owner_entreprise_id=ent.id, is_active=True)
+            s.add(imm)
+            await s.flush()
+            u1 = Logement(immeuble_id=imm.id, numero="1", nb_pieces_decimal=5.5, status=LogementStatus.OCCUPE.value, location_en_chambres=True)
+            jacques = Locataire(full_name="Jacques Principal", email="jacques@test.ca", categorie="parallele")
+            r1, r2 = Locataire(full_name="Rita Chambre"), Locataire(full_name="Sam Chambre")
+            s.add_all([u1, jacques, r1, r2])
+            await s.flush()
+            s.add_all([
+                Bail(logement_id=u1.id, locataire_id=r1.id, date_debut=date(2026, 1, 1), date_fin=date(2026, 12, 31), loyer_mensuel=500.0, status=BailStatus.ACTIF.value, au_mois=True),
+                Bail(logement_id=u1.id, locataire_id=r2.id, date_debut=date(2026, 2, 1), date_fin=date(2027, 1, 31), loyer_mensuel=550.0, status=BailStatus.ACTIF.value, au_mois=True),
+            ])
+            principal = Bail(logement_id=u1.id, locataire_id=jacques.id, date_debut=date(2026, 1, 1), date_fin=date(2026, 12, 31), loyer_mensuel=3500.0,
+                             status=BailStatus.PARALLELE.value, categorie="parallele", parallele_type="bail_principal", parallele_locateur=None)
+            s.add(principal)
+            await s.flush()
+            await s.commit()
+            return imm.id, principal.id, u1.id
+
+    imm, principal_id, u1 = run(_seed())
+    rr = client.get(f"{FIN}/immeubles/{imm}/rent-roll", headers=auth_headers).json()
+    assert len(rr["lignes"]) == 1
+    l = rr["lignes"][0]
+    assert l["categorie"] == "bail_principal" and l["bail_id"] == principal_id and l["locataire"] == "Jacques Principal"
+    assert l["loyer"] == 3500 and l["occupation"] == "occupe" and l["baux"] == []
+    assert [s["loyer"] for s in l["sous_locations"]] == [500, 550] and "sous-loue 2 chambres" in l["mention"]
+    assert rr["paralleles"] == []                      # le bail principal est SUR la ligne, pas en section à part
+    t = rr["totaux"]
+    assert t["mensuel_standard"] == 3500 and t["nb_paralleles"] == 0 and t["nb_occupees"] == 1
+    csv = client.get(f"{FIN}/immeubles/{imm}/rent-roll", headers=auth_headers, params={"fmt": "csv"}).content.decode("utf-8-sig")
+    assert "Bail principal;1;" in csv and "Sous-location du locataire;1;" in csv and "Occupé · bail principal (2 sous-locations)" in csv
+    assert client.get(f"{FIN}/immeubles/{imm}/rent-roll", headers=auth_headers, params={"fmt": "pdf"}).content[:5] == b"%PDF-"
+    # Le bail officiel TAL de Jacques : locateur = le propriétaire, clause de sous-location écrite.
+    r = client.get("/api/v1/immobilier/tal-bail/preparer", headers=auth_headers, params={"bail_id": principal_id})
+    assert r.status_code == 200, r.text
+    f = r.json()["form"]
+    assert f["locateurs"][0]["nom"] == "Proprio Smoke INC" and f["locataires"][0]["nom"] == "Jacques Principal" and f["coutLoyer"] == "3500"
+    assert f["possedeAutresServicesConditionsRestriction"] == "true" and "sous-louer les chambres" in f["precisionAutresServicesConditionsRestriction"]
+    # Création par l'API sans locateur nommé → le propriétaire.
+    r = client.post(f"{FIN}/baux-paralleles", headers=auth_headers, json={
+        "logement_id": u1, "locataire": {"full_name": "Autre Principal"}, "parallele_type": "bail_principal",
+        "date_debut": "2027-01-01", "date_fin": "2027-12-31", "loyer_mensuel": 3600, "statut": "propose",
+    })
+    assert r.status_code == 201, r.text
+    assert r.json()["parallele_locateur"] is None and r.json()["locateur_effectif"] == "Propriétaire"
 
 
 # ─── Dossier de financement ───────────────────────────────────────────

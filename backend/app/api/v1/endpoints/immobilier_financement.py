@@ -188,7 +188,9 @@ class BailParalleleIn(BaseModel):
     locataire_id: Optional[int] = None
     locataire: Optional[LocataireInline] = None
     parallele_type: str = Field(default="sous_location", max_length=24)
-    parallele_locateur: str = Field(..., min_length=2, max_length=255)
+    #: Locateur nommé sur le bail ; vide = le PROPRIÉTAIRE (bail principal
+    #: d'un locataire qui sous-loue les chambres).
+    parallele_locateur: Optional[str] = Field(default=None, max_length=255)
     parallele_locateur_courriel: Optional[str] = Field(default=None, max_length=320)
     parallele_locateur_telephone: Optional[str] = Field(default=None, max_length=32)
     parallele_note: Optional[str] = None
@@ -238,6 +240,7 @@ def _bail_parallele_out(b: Bail, lg: Optional[Logement], lo: Optional[Locataire]
         "locataire_email": lo.email if lo else None,
         "locataire_categorie": (getattr(lo, "categorie", None) or "standard") if lo else None,
         "type_label": svc.PARALLELE_TYPE_LABELS.get(b.parallele_type or "", b.parallele_type or ""),
+        "locateur_effectif": b.parallele_locateur or "Propriétaire",
         "en_vigueur": b.status == BailStatus.PARALLELE.value,
         "echu": bool(b.date_fin and b.date_fin < date.today() and not b.au_mois and b.status == BailStatus.PARALLELE.value),
     })
@@ -314,7 +317,7 @@ async def creer_bail_parallele(payload: BailParalleleIn, db: DBSession, user: Cu
         electricite_inclus=payload.electricite_inclus, internet_inclus=payload.internet_inclus,
         status=payload.statut, notes=payload.notes, au_mois=payload.au_mois, jour_echeance=payload.jour_echeance or 1,
         categorie="parallele", parallele_type=payload.parallele_type,
-        parallele_locateur=payload.parallele_locateur.strip(),
+        parallele_locateur=(payload.parallele_locateur or "").strip() or None,
         parallele_locateur_courriel=(payload.parallele_locateur_courriel or "").strip() or None,
         parallele_locateur_telephone=(payload.parallele_locateur_telephone or "").strip() or None,
         parallele_note=payload.parallele_note,
@@ -347,6 +350,8 @@ async def modifier_bail_parallele(bail_id: int, payload: BailParallelePatch, db:
         data.pop("jour_echeance", None)
     for k, v in data.items():
         setattr(bail, k, v)
+    if "parallele_locateur" in data:
+        bail.parallele_locateur = (bail.parallele_locateur or "").strip() or None
     if bail.date_fin and bail.date_debut and bail.date_fin <= bail.date_debut:
         raise HTTPException(status_code=422, detail="La fin du bail doit être après son début.")
     if statut is not None:
