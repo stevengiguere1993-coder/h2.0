@@ -29,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
+from app.models.entreprise import Entreprise
 from app.models.financement import (
     FINANCEMENT_TYPES,
     Financement,
@@ -53,7 +54,7 @@ MAX_PAQUET_BYTES = 150 * 1024 * 1024
 #: Libellés des types de bail parallèle (menus + exports).
 PARALLELE_TYPE_LABELS: dict[str, str] = {
     "sous_location": "Sous-location",
-    "bail_principal": "Bail principal (exploitant)",
+    "bail_principal": "Bail principal (le locataire sous-loue)",
     "colocation": "Colocation",
     "autre": "Autre",
 }
@@ -70,6 +71,9 @@ STATUT_LOGEMENT_LABELS: dict[str, str] = {
 def occupation_label(ligne: dict[str, Any]) -> str:
     """Libellé d'occupation d'une ligne du rent roll (chambres comptées)."""
     occ = ligne.get("occupation") or ""
+    if ligne.get("categorie") == "bail_principal":
+        n = len(ligne.get("sous_locations") or [])
+        return "Occupé · bail principal" + (f" ({n} sous-location{'s' if n > 1 else ''})" if n else "")
     if occ == "occupe_chambres":
         n = len(ligne.get("baux") or [])
         return f"Occupé · {n} chambre{'s' if n > 1 else ''}"
@@ -181,6 +185,8 @@ async def rent_roll(
     im = await db.get(Immeuble, immeuble_id)
     if im is None:
         raise ValueError("Immeuble introuvable.")
+    proprio = await db.get(Entreprise, im.owner_entreprise_id) if im.owner_entreprise_id else None
+    nom_proprietaire = (proprio.name if proprio else None) or "Propriétaire"
     logements = (
         await db.execute(select(Logement).where(Logement.immeuble_id == immeuble_id))
     ).scalars().all()
@@ -237,8 +243,25 @@ async def rent_roll(
                 if prochain is None or (b.date_debut or date.max) < (prochain.date_debut or date.max):
                     prochain = b
         par_vigueur = [b for b in pars if b.status == BailStatus.PARALLELE.value]
+        # Bail PRINCIPAL dont le locateur est le PROPRIÉTAIRE : le locataire
+        # loue toute l'unité, paie ce loyer, et sous-loue les chambres (gérées
+        # ici). C'est LE bail de l'unité pour le propriétaire ; les baux de
+        # chambre sont ses sous-locations, hors du revenu du propriétaire
+        # (sinon on compterait deux fois).
+        principal = next(
+            (
+                b for b in par_vigueur
+                if (b.parallele_type or "") == "bail_principal" and not (b.parallele_locateur or "").strip()
+            ),
+            None,
+        )
+        if principal is not None:
+            par_vigueur = [b for b in par_vigueur if b.id != principal.id]
 
-        if lg.status == LogementStatus.HORS_LOC.value and courant is None and not chambres:
+        if principal is not None:
+            occupation = "occupe"
+            nb_occ += 1
+        elif lg.status == LogementStatus.HORS_LOC.value and courant is None and not chambres:
             occupation = "hors_location"
             nb_hors += 1
         elif chambres:
@@ -257,7 +280,9 @@ async def rent_roll(
             occupation = "vacant"
             nb_vac += 1
 
-        if chambres:
+        if principal is not None:
+            loyer = _f(principal.loyer_mensuel)
+        elif chambres:
             loyer = round(sum(float(b.loyer_mensuel or 0) for b in chambres), 2)
         else:
             loyer = _f(courant.loyer_mensuel) if courant else None
@@ -318,7 +343,41 @@ async def rent_roll(
             "nb_paralleles": len(par_vigueur),
             "categorie": "standard",
         }
-        if prochain is not None:
+        if principal is not None:
+            plo_p = locs.get(principal.locataire_id)
+            sous = chambres or ([courant] if courant else [])
+            n_sous = len(sous)
+            ligne.update({
+                "bail_id": principal.id,
+                "locataire_id": principal.locataire_id,
+                "locataire": plo_p.full_name if plo_p else None,
+                "loyer": loyer,
+                "inclusions": inclusions_de(principal),
+                "date_debut": principal.date_debut.isoformat() if principal.date_debut else None,
+                "date_fin": principal.date_fin.isoformat() if principal.date_fin else None,
+                "au_mois": bool(principal.au_mois),
+                "jour_echeance": principal.jour_echeance,
+                "depot": _f(principal.depot_garantie),
+                "document_signe": bool(principal.document_id),
+                "categorie": "bail_principal",
+                "locateur_bail": nom_proprietaire,
+                "baux": [],
+                "sous_locations": [
+                    {
+                        "bail_id": b.id, "locataire_id": b.locataire_id,
+                        "locataire": (locs.get(b.locataire_id).full_name if locs.get(b.locataire_id) else None),
+                        "loyer": _f(b.loyer_mensuel), "date_debut": b.date_debut.isoformat() if b.date_debut else None,
+                        "date_fin": b.date_fin.isoformat() if b.date_fin else None, "au_mois": bool(b.au_mois),
+                        "document_signe": bool(b.document_id),
+                    }
+                    for b in sous
+                ],
+                "mention": (
+                    f"Bail principal : le locataire sous-loue {n_sous} chambre{'s' if n_sous > 1 else ''} (hors du revenu du propriétaire)."
+                    if sous else "Bail principal de l'unité."
+                ),
+            })
+        if prochain is not None and principal is None:
             plo = locs.get(prochain.locataire_id)
             ligne["prochain"] = {
                 "bail_id": prochain.id,
@@ -344,6 +403,8 @@ async def rent_roll(
             for b in sorted(pars, key=lambda x: (x.status != BailStatus.PARALLELE.value, x.date_debut or date.min)):
                 if b.status in (BailStatus.TERMINE.value, BailStatus.RESILIE.value):
                     continue
+                if principal is not None and b.id == principal.id:
+                    continue  # déjà SUR la ligne de l'unité
                 plo = locs.get(b.locataire_id)
                 lp_ = _f(b.loyer_mensuel)
                 en_vigueur = b.status == BailStatus.PARALLELE.value
@@ -355,7 +416,7 @@ async def rent_roll(
                     "numero": lg.numero,
                     "locataire_id": b.locataire_id,
                     "locataire": plo.full_name if plo else None,
-                    "locateur_bail": b.parallele_locateur,
+                    "locateur_bail": b.parallele_locateur or nom_proprietaire,
                     "type": b.parallele_type,
                     "type_label": PARALLELE_TYPE_LABELS.get(b.parallele_type or "", b.parallele_type or ""),
                     "loyer": lp_,
@@ -439,10 +500,11 @@ def rent_roll_tableau(rr: RentRoll) -> tuple[list[str], list[list[Any]]]:
 
     for l in rr.lignes:
         inc = set(l.get("inclusions") or [])
+        principal = l.get("categorie") == "bail_principal"
         row = [
-            "Standard", l["numero"], l.get("nb_pieces"),
+            "Bail principal" if principal else "Standard", l["numero"], l.get("nb_pieces"),
             occupation_label(l),
-            l.get("locataire"), None, None, l.get("loyer"),
+            l.get("locataire"), l.get("locateur_bail") if principal else None, ("Bail principal (le locataire sous-loue)" if principal else None), l.get("loyer"),
             oui_non("chauffage" in inc) if (l.get("bail_id") or l.get("baux")) else None,
             oui_non("eau chaude" in inc) if (l.get("bail_id") or l.get("baux")) else None,
             oui_non("électricité" in inc) if (l.get("bail_id") or l.get("baux")) else None,
@@ -456,6 +518,16 @@ def rent_roll_tableau(rr: RentRoll) -> tuple[list[str], list[list[Any]]]:
             p = l.get("projection") or {}
             row += [p.get("loyer"), p.get("source")]
         rows.append(row)
+        # Sous-locations du locataire principal : information, hors totaux.
+        for s in l.get("sous_locations") or []:
+            sub = [
+                "Sous-location du locataire", l["numero"], None, "Sous-loué par le locataire", s.get("locataire"), l.get("locataire"), None, s.get("loyer"),
+                None, None, None, None, s.get("date_debut"), s.get("date_fin"), oui_non(s.get("au_mois")), None, None, oui_non(s.get("document_signe")),
+                None, None, None,
+            ]
+            if avec_proj:
+                sub += [None, None]
+            rows.append(sub)
     for p in rr.paralleles:
         inc = set(p.get("inclusions") or [])
         row = [
@@ -543,6 +615,9 @@ def rent_roll_pdf(rr: RentRoll, *, titre: Optional[str] = None, preteur: Optiona
     data = [[P(f"<b>{e}</b>") for e in entetes]]
     for l in rr.lignes:
         occ = occupation_label(l)
+        if l.get("sous_locations"):
+            detail = ", ".join(f"{s.get('locataire') or '—'} ({_money(s.get('loyer'))})" for s in l["sous_locations"])
+            occ += f"<br/><font size='6'>sous-locations du locataire (hors totaux) : {detail}</font>"
         if l.get("prochain"):
             occ += f"<br/><font size='6'>prochain : {l['prochain'].get('locataire') or '—'} ({l['prochain'].get('date_debut') or '?'})</font>"
         row = [
