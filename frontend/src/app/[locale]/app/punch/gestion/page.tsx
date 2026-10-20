@@ -231,26 +231,6 @@ function fmtHm(h: number): string {
   return `${hh} h ${String(mm).padStart(2, "0")}`;
 }
 
-// Les mêmes heures en décimal (ex. 178.05 → « 178,05 h ») — c'est le
-// format des taux horaires, de la paie et de la facturation.
-function fmtDec(h: number): string {
-  return `${(h || 0).toLocaleString("fr-CA", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  })} h`;
-}
-
-// « 37 h 53 (37,88 h) » : le h min se lit d'un coup d'œil, le décimal
-// sert à la paie (Steven, 2026-10-20).
-function HmEtDecimal({ h }: { h: number }) {
-  return (
-    <>
-      {fmtHm(h)}{" "}
-      <span className="font-normal text-white/60">({fmtDec(h)})</span>
-    </>
-  );
-}
-
 // Recherche insensible aux accents et à la casse (« eric » trouve « Éric »).
 function sansAccents(s: string): string {
   return s
@@ -884,7 +864,13 @@ export default function PunchGestionPage() {
             </span>{" "}
             {/* Décimal à côté du h min — c'est le format des taux
                 horaires et de la facturation. */}
-            <span className="text-white/60">({fmtDec(totalHours)})</span>
+            <span className="text-white/60">
+              ({totalHours.toLocaleString("fr-CA", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+              })}{" "}
+              h)
+            </span>
             {totalDiner > 0 ? (
               <span
                 className="ml-2 text-xs text-amber-300"
@@ -2147,9 +2133,7 @@ function ResumeParEmploye({
                     <td className={`${cellule} text-white/70`}>{fmtHm(l.sem2)}</td>
                   </>
                 ) : null}
-                <td className={`${cellule} text-white/70`}>
-                  <HmEtDecimal h={l.punchees} />
-                </td>
+                <td className={`${cellule} text-white/70`}>{fmtHm(l.punchees)}</td>
                 <td
                   className={`${cellule} ${l.diners > 0 ? "text-amber-300" : ""}`}
                   title="Dîners non payés retirés des heures punchées (nombre de dîners entre parenthèses)"
@@ -2157,7 +2141,7 @@ function ResumeParEmploye({
                   {l.diners > 0 ? `−${fmtHm(l.diner)} (${l.diners})` : tiret}
                 </td>
                 <td className={`${cellule} font-bold text-white`}>
-                  <HmEtDecimal h={l.payees} />
+                  {fmtHm(l.payees)}
                 </td>
                 <td className={`${cellule} text-emerald-300`}>
                   {l.approuvees > 0 ? fmtHm(l.approuvees) : tiret}
@@ -2181,15 +2165,11 @@ function ResumeParEmploye({
                   <td className={`${cellule} text-white/70`}>{fmtHm(total.sem2)}</td>
                 </>
               ) : null}
-              <td className={`${cellule} text-white/70`}>
-                <HmEtDecimal h={total.punchees} />
-              </td>
+              <td className={`${cellule} text-white/70`}>{fmtHm(total.punchees)}</td>
               <td className={`${cellule} text-amber-300`}>
                 {total.diners > 0 ? `−${fmtHm(total.diner)} (${total.diners})` : tiret}
               </td>
-              <td className={`${cellule} font-bold text-white`}>
-                <HmEtDecimal h={total.payees} />
-              </td>
+              <td className={`${cellule} font-bold text-white`}>{fmtHm(total.payees)}</td>
               <td className={`${cellule} text-emerald-300`}>
                 {total.approuvees > 0 ? fmtHm(total.approuvees) : tiret}
               </td>
