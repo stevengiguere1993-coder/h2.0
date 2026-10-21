@@ -332,33 +332,36 @@ def test_dossier_checklist_projection_paquet(client, auth_headers, employee_head
     types = [p["type"] for p in d["pieces"]]
     assert types[0] == "rent_roll" and "baux_paralleles" in types and "releve_hypothecaire" in types and "etats_financiers" in types
     assert all(p["fournie"] is False for p in d["pieces"])
-    # Projection de départ = loyers des baux (source « bail »), loyer demandé sinon.
-    proj = d["projection"]["logements"]
-    assert proj[str(fin_seed["l101"])] == {"loyer": 1000, "source": "bail", "note": ""}
-    assert proj[str(fin_seed["l102"])]["source"] == "demande" and proj[str(fin_seed["l102"])]["loyer"] == 950
+    # Départ : toutes les unités « fixes » (telles quelles) — aucun loyer visé.
+    assert d["projection"]["logements"] == {}
+    assert all(l["cible"]["mode"] == "fixe" and l["cible"]["statut"] == "fixe" for l in d["rent_roll"]["lignes"])
     tb = d["tableau_de_bord"]
     assert tb["reel_mensuel"] == 1000 and tb["paralleles_mensuel"] == 2775 and tb["pieces_fournies"] == 0
     assert tb["jours_avant_echeance"] in (44, 45) and len(tb["pieces_manquantes"]) == tb["pieces_requises"]
     assert d["journal"][0]["type"] == "statut"
-    # Le rent roll du dossier porte la colonne projection (séparée, marquée).
-    rr = d["rent_roll"]
-    assert rr["projection"] is not None and {l["numero"]: l["projection"]["source"] for l in rr["lignes"]}["101"] == "bail"
-    assert rr["totaux"]["projection_mensuelle"] == 1000 + 950 + 1400
+    # Sans unité à ajuster : pas de colonne « loyer visé ».
+    assert d["rent_roll"]["projection"] is None and tb["nb_a_ajuster"] == 0 and tb["vise_mensuel"] == 1000
 
     # Projection manuelle + vacance.
+    # Unités à ajuster (loyer visé) en lot + vacance.
     r = client.put(f"{FIN}/dossiers/{d['id']}/projection", headers=auth_headers, json={
-        "logements": {str(fin_seed["l101"]): {"loyer": 1200, "source": "manuel", "note": "après rénovation"},
-                      str(fin_seed["l102"]): {"loyer": 1000, "source": "marche"}},
+        "logements": {str(fin_seed["l101"]): {"mode": "ajuster", "loyer": 1200, "note": "après rénovation"},
+                      str(fin_seed["l102"]): {"mode": "ajuster", "loyer": 1000},
+                      str(fin_seed["l103"]): {"mode": "fixe", "loyer": 5000}},
         "hypotheses": {"vacance_pct": 3},
     })
     assert r.status_code == 200, r.text
     tb = r.json()["tableau_de_bord"]
-    assert tb["projection_mensuelle"] == 1200 + 1000 + 1400 and tb["ecart_projection_pct"] == 260.0
-    assert tb["projection_annuelle"] == round(3600 * 12 * 0.97, 2)
-    assert client.put(f"{FIN}/dossiers/{d['id']}/projection", headers=auth_headers, json={"logements": {"1": {"loyer": -5}}}).status_code == 422
-    # L'export du dossier a la colonne projection, en PDF aussi.
+    # Visé = 101 : 1 200 (au lieu de 1 000) + 102 : 1 000 (vacant) ; 103 fixe sans bail standard → rien.
+    assert tb["projection_mensuelle"] == 1200 + 1000 and tb["ecart_projection_pct"] == 120.0 and tb["nb_a_ajuster"] == 2
+    assert tb["projection_annuelle"] == round(2200 * 12 * 0.97, 2) and tb["vise_mensuel"] == 2200
+    assert str(fin_seed["l103"]) not in r.json()["projection"]["logements"]  # fixe = rien à retenir
+    assert client.put(f"{FIN}/dossiers/{d['id']}/projection", headers=auth_headers, json={"logements": {"1": {"mode": "ajuster", "loyer": -5}}}).status_code == 422
+    assert client.put(f"{FIN}/dossiers/{d['id']}/projection", headers=auth_headers, json={"logements": {"1": {"mode": "bidon", "loyer": 5}}}).status_code == 422
+    # L'export du dossier a la colonne « loyer visé » (objectif, pas un bail), en PDF aussi.
     r = client.get(f"{FIN}/dossiers/{d['id']}/rent-roll", headers=auth_headers, params={"fmt": "csv"})
-    assert r.status_code == 200 and "Projection — loyer (estimation)" in r.content.decode("utf-8-sig")
+    txt = r.content.decode("utf-8-sig")
+    assert r.status_code == 200 and "Loyer visé (objectif du propriétaire, pas un bail)" in txt and "À faire" in txt and "LOYERS VISÉS" in txt
     r = client.get(f"{FIN}/dossiers/{d['id']}/rent-roll", headers=auth_headers, params={"fmt": "pdf"})
     assert r.status_code == 200 and r.content[:5] == b"%PDF-"
 
@@ -413,6 +416,59 @@ def test_dossier_checklist_projection_paquet(client, auth_headers, employee_head
     r = client.get(f"{FIN}/dossiers", headers=auth_headers, params={"immeuble_id": imm})
     assert r.status_code == 200 and r.json()["total"] == 1 and r.json()["items"][0]["nb_pieces_fournies"] == 2
     assert client.get(f"{FIN}/dossiers/{d['id']}", headers=auth_headers).status_code == 200
+
+
+def test_unites_fixes_ou_a_ajuster_et_statuts(client, auth_headers, fin_seed):
+    """Phil 2026-10-21 : je choisis les unités FIXES (telles quelles, baux et
+    avis visibles, rien à changer) ; pour les autres j'écris le loyer visé ;
+    le rent roll suit ; les avis de renouvellement et nouveaux baux se créent
+    au moment venu pour atteindre ce montant. Le statut de l'objectif vient
+    des baux et des avis réels — jamais l'inverse."""
+    did = IDS["dossier"]
+
+    def ligne(d, num):
+        return next(l for l in d["rent_roll"]["lignes"] if l["numero"] == num)
+
+    # Tout fixe d'abord.
+    r = client.put(f"{FIN}/dossiers/{did}/projection", headers=auth_headers, json={"logements": {}, "hypotheses": {"vacance_pct": 0}})
+    assert r.status_code == 200 and r.json()["tableau_de_bord"]["nb_a_ajuster"] == 0
+    # 101 : occupé 1 000 $ → visé 1 200 $ : à faire.
+    r = client.patch(f"{FIN}/dossiers/{did}/unites/{fin_seed['l101']}", headers=auth_headers, json={"mode": "ajuster", "loyer": 1200})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    c = ligne(d, "101")["cible"]
+    assert c["mode"] == "ajuster" and c["loyer_vise"] == 1200 and c["statut"] == "a_faire" and c["ecart"] == 200
+    assert ligne(d, "101")["projection"]["loyer"] == 1200 and ligne(d, "101")["loyer"] == 1000  # le bail n'a pas bougé
+    assert ligne(d, "102")["cible"]["statut"] == "fixe" and ligne(d, "102")["projection"]["loyer"] is None
+    assert d["journal"][0]["texte"] == "Unité 101 : à ajuster, loyer visé 1200.00 $."
+    # À ajuster sans montant encore : « loyer visé à indiquer ».
+    r = client.patch(f"{FIN}/dossiers/{did}/unites/{fin_seed['l102']}", headers=auth_headers, json={"mode": "ajuster"})
+    assert r.status_code == 200 and ligne(r.json(), "102")["cible"]["statut"] == "a_definir"
+    # 103 : un bail standard PROPOSÉ à 1 500 $ existe déjà → bail en signature.
+    r = client.patch(f"{FIN}/dossiers/{did}/unites/{fin_seed['l103']}", headers=auth_headers, json={"loyer": 1500})
+    assert r.status_code == 200 and ligne(r.json(), "103")["cible"]["statut"] == "bail_en_signature"
+    # 101 : visé 900 $ ≤ loyer en vigueur → atteint.
+    r = client.patch(f"{FIN}/dossiers/{did}/unites/{fin_seed['l101']}", headers=auth_headers, json={"loyer": 900})
+    assert r.status_code == 200 and ligne(r.json(), "101")["cible"]["statut"] == "atteint"
+    # Avis de renouvellement RÉEL envoyé au locataire en place à 1 200 $ → avis envoyé.
+    assert client.patch(f"{FIN}/dossiers/{did}/unites/{fin_seed['l101']}", headers=auth_headers, json={"loyer": 1200}).status_code == 200
+    r = client.post(f"/api/v1/immobilier/baux/{fin_seed['b_std']}/envoyer-renouvellement", headers=auth_headers, json={"nouveau_loyer": 1200})
+    assert r.status_code == 200, r.text
+    d = client.get(f"{FIN}/dossiers/{did}", headers=auth_headers).json()
+    c = ligne(d, "101")["cible"]
+    assert c["statut"] == "avis_envoye" and c["renouvellement"]["nouveau_loyer"] == 1200 and c["renouvellement"]["statut"] == "propose"
+    assert d["tableau_de_bord"]["nb_a_ajuster"] == 3 and d["tableau_de_bord"]["projection_mensuelle"] == 1200 + 1500
+    csv = client.get(f"{FIN}/dossiers/{did}/rent-roll", headers=auth_headers, params={"fmt": "csv"}).content.decode("utf-8-sig")
+    assert "Avis envoyé" in csv and "Bail en signature" in csv and "Loyer visé à indiquer" in csv
+    assert client.get(f"{FIN}/dossiers/{did}/rent-roll", headers=auth_headers, params={"fmt": "pdf"}).content[:5] == b"%PDF-"
+    # Retour à fixe : l'objectif disparaît, le loyer en vigueur reste.
+    r = client.patch(f"{FIN}/dossiers/{did}/unites/{fin_seed['l101']}", headers=auth_headers, json={"mode": "fixe"})
+    assert r.status_code == 200 and ligne(r.json(), "101")["cible"]["statut"] == "fixe"
+    assert str(fin_seed["l101"]) not in r.json()["projection"]["logements"] and ligne(r.json(), "101")["loyer"] == 1000
+    # Refus propres.
+    assert client.patch(f"{FIN}/dossiers/{did}/unites/999999", headers=auth_headers, json={"loyer": 1}).status_code == 404
+    assert client.patch(f"{FIN}/dossiers/{did}/unites/{fin_seed['l102']}", headers=auth_headers, json={"mode": "bidon"}).status_code == 422
+    assert client.patch(f"{FIN}/dossiers/{did}/unites/{fin_seed['l102']}", headers=auth_headers, json={"loyer": 0}).status_code == 422
 
 
 # ─── Bail officiel TAL d'un bail parallèle ────────────────────────────

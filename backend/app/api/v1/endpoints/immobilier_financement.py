@@ -443,6 +443,42 @@ class ProjectionIn(BaseModel):
     hypotheses: Dict[str, Any] = Field(default_factory=dict)
 
 
+class UniteIn(BaseModel):
+    """Une unité du dossier : « fixe » (telle quelle) ou « ajuster » (loyer
+    visé). Un loyer sans mode = à ajuster."""
+    mode: Optional[str] = None
+    loyer: Optional[float] = None
+    note: Optional[str] = Field(default=None, max_length=255)
+    echeance: Optional[date] = None
+
+
+def _entree_unite(k: str, v: Dict[str, Any]) -> Dict[str, Any]:
+    mode = str(v.get("mode") or ("ajuster" if v.get("loyer") not in (None, "") else "fixe"))
+    if mode not in ("fixe", "ajuster"):
+        raise HTTPException(status_code=422, detail=f"Mode inconnu pour le logement {k} : fixe ou ajuster.")
+    try:
+        loyer = round(float(v.get("loyer")), 2) if v.get("loyer") not in (None, "") else None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail=f"Loyer visé invalide pour le logement {k}.")
+    if loyer is not None and loyer <= 0:
+        raise HTTPException(status_code=422, detail=f"Le loyer visé du logement {k} doit être plus grand que 0.")
+    ech = v.get("echeance")
+    if isinstance(ech, date):
+        ech = ech.isoformat()
+    if ech:
+        try:
+            date.fromisoformat(str(ech)[:10])
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"Échéance invalide pour le logement {k}.")
+        ech = str(ech)[:10]
+    else:
+        ech = None
+    return {
+        "mode": mode, "loyer": loyer if mode == "ajuster" else None, "source": "vise" if mode == "ajuster" else "bail",
+        "note": (str(v.get("note") or "")[:255] or None), "echeance": ech,
+    }
+
+
 async def _detail(db, user, fin: Financement) -> Dict[str, Any]:
     pieces = await _pieces(db, fin.id)
     journal = (
@@ -686,13 +722,9 @@ async def enregistrer_projection(dossier_id: int, payload: ProjectionIn, db: DBS
     for k, v in (payload.logements or {}).items():
         if not isinstance(v, dict):
             continue
-        try:
-            loyer = round(float(v.get("loyer")), 2) if v.get("loyer") not in (None, "") else None
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=422, detail=f"Loyer projeté invalide pour le logement {k}.")
-        if loyer is not None and loyer < 0:
-            raise HTTPException(status_code=422, detail="Un loyer projeté ne peut pas être négatif.")
-        logs[str(k)] = {"loyer": loyer, "source": str(v.get("source") or "manuel")[:24], "note": (str(v.get("note") or "")[:255] or None)}
+        entree = _entree_unite(str(k), v)
+        if entree["mode"] == "ajuster":  # fixe = telle quelle : rien à retenir
+            logs[str(k)] = entree
     hyp = {}
     try:
         vac = payload.hypotheses.get("vacance_pct")
@@ -703,6 +735,46 @@ async def enregistrer_projection(dossier_id: int, payload: ProjectionIn, db: DBS
     fin.updated_at = _now()
     await log_action(db, user=user, action="financement.projection", entity_type="imm_financement", entity_id=fin.id,
                      details={"nb_logements": len(logs), "vacance_pct": hyp.get("vacance_pct")})
+    await db.commit()
+    await db.refresh(fin)
+    return await _detail(db, user, fin)
+
+
+@router.patch("/dossiers/{dossier_id}/unites/{logement_id}", summary="Unité fixe (telle quelle) ou à ajuster (loyer visé)")
+async def regler_unite(dossier_id: int, logement_id: int, payload: UniteIn, db: DBSession, user: CurrentUser) -> Dict[str, Any]:
+    """Étape 1 du dossier (Phil 2026-10-21) : les unités FIXES partent telles
+    quelles (baux et avis visibles, rien à changer) ; pour les autres on écrit
+    le loyer visé. Le rent roll suit ; les avis de renouvellement et nouveaux
+    baux se créent au moment venu. Aucun bail n'est modifié ici — jamais.
+    """
+    _require_volet(user)
+    fin = await _dossier_ou_404(db, user, dossier_id)
+    lg = await db.get(Logement, logement_id)
+    if lg is None or lg.immeuble_id != fin.immeuble_id:
+        raise HTTPException(status_code=404, detail="Logement introuvable dans cet immeuble.")
+    proj = svc._charger_projection(fin.projection_json)
+    logs = proj.get("logements") or {}
+    actuel = logs.get(str(logement_id)) if isinstance(logs.get(str(logement_id)), dict) else {}
+    data = payload.model_dump(exclude_unset=True)
+    if "echeance" in data and data["echeance"] is not None:
+        data["echeance"] = data["echeance"].isoformat()
+    entree = _entree_unite(str(logement_id), {**actuel, **data})
+    if entree["mode"] == "fixe":
+        logs.pop(str(logement_id), None)
+    else:
+        logs[str(logement_id)] = entree
+    proj["logements"] = logs
+    fin.projection_json = json.dumps(proj, ensure_ascii=False)
+    fin.updated_at = _now()
+    if entree["mode"] == "fixe":
+        texte = f"Unité {lg.numero} : fixe (telle quelle)."
+    elif entree["loyer"] is None:
+        texte = f"Unité {lg.numero} : à ajuster, loyer visé à indiquer."
+    else:
+        texte = f"Unité {lg.numero} : à ajuster, loyer visé {entree['loyer']:.2f} $."
+    db.add(FinancementJournal(financement_id=fin.id, type="note", texte=texte, auteur_email=getattr(user, "email", None)))
+    await log_action(db, user=user, action="financement.unite", entity_type="imm_financement", entity_id=fin.id,
+                     details={"logement_id": logement_id, "numero": lg.numero, **entree})
     await db.commit()
     await db.refresh(fin)
     return await _detail(db, user, fin)
