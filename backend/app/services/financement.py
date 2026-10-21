@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
 from app.models.entreprise import Entreprise
+from app.models.immobilier import BailRenouvellement, BailRenouvellementStatus
 from app.models.financement import (
     FINANCEMENT_TYPES,
     Financement,
@@ -166,7 +167,76 @@ def _charger_projection(txt: Optional[str]) -> dict[str, Any]:
         d["logements"] = {}
     if not isinstance(d["hypotheses"], dict):
         d["hypotheses"] = {}
+    propres: dict[str, Any] = {}
+    for k, v in d["logements"].items():
+        if not isinstance(v, dict):
+            continue
+        v = dict(v)
+        v["mode"] = "ajuster" if v.get("mode") == "ajuster" else "fixe"
+        propres[str(k)] = v
+    d["logements"] = propres
     return d
+
+
+CIBLE_STATUT_LABELS = {
+    "fixe": "Fixe (tel quel)",
+    "a_definir": "Loyer visé à indiquer",
+    "a_faire": "À faire",
+    "avis_envoye": "Avis envoyé",
+    "avis_accepte": "Avis accepté",
+    "avis_refuse": "Avis refusé",
+    "bail_en_signature": "Bail en signature",
+    "bail_a_venir": "Bail à venir",
+    "atteint": "Atteint",
+}
+
+
+def _cible_unite(
+    entree: Optional[dict[str, Any]], *, loyer: Optional[float], courant: Optional[Bail], principal: Optional[Bail],
+    prochain: Optional[Bail], pars: list[Bail], renouvellements: dict[int, BailRenouvellement],
+) -> dict[str, Any]:
+    """Objectif d'une unité du dossier (« fixe » = telle quelle, « à ajuster »
+    = loyer visé) et OÙ ON EN EST, lu dans les baux et les avis réels :
+    atteint (bail en vigueur ≥ visé), bail en signature / à venir, avis de
+    renouvellement envoyé / accepté / refusé, sinon à faire. Jamais l'inverse :
+    un objectif ne modifie aucun bail."""
+    rien = {"mode": "fixe", "loyer_vise": None, "note": None, "echeance": None, "statut": "fixe",
+            "statut_label": CIBLE_STATUT_LABELS["fixe"], "renouvellement": None, "ecart": None}
+    if not entree or entree.get("mode") != "ajuster":
+        return rien
+    vise = _f(entree.get("loyer"))
+    bail_ref = principal or courant
+    renou = renouvellements.get(bail_ref.id) if bail_ref is not None else None
+    r_out = None
+    if renou is not None:
+        r_out = {
+            "id": renou.id, "statut": renou.status, "nouveau_loyer": _f(renou.nouveau_loyer),
+            "avis_envoye_le": renou.avis_envoye_le.isoformat() if renou.avis_envoye_le else None,
+            "nouvelle_date_debut": renou.nouvelle_date_debut.isoformat() if renou.nouvelle_date_debut else None,
+            "document_id": renou.document_id,
+        }
+    if vise is None:
+        statut = "a_definir"
+    elif loyer is not None and loyer + 0.005 >= vise:
+        statut = "atteint"
+    elif prochain is not None and prochain.loyer_mensuel is not None and float(prochain.loyer_mensuel) + 0.005 >= vise:
+        statut = "bail_en_signature" if prochain.status == BailStatus.PROPOSE.value else "bail_a_venir"
+    elif any(b.status == BailStatus.PROPOSE.value and b.loyer_mensuel is not None and float(b.loyer_mensuel) + 0.005 >= vise for b in pars):
+        statut = "bail_en_signature"
+    elif renou is not None and renou.nouveau_loyer is not None and float(renou.nouveau_loyer) + 0.005 >= vise:
+        if renou.status == BailRenouvellementStatus.ACCEPTE.value:
+            statut = "avis_accepte"
+        elif renou.status == BailRenouvellementStatus.REFUSE.value:
+            statut = "avis_refuse"
+        else:
+            statut = "avis_envoye"
+    else:
+        statut = "a_faire"
+    return {
+        "mode": "ajuster", "loyer_vise": vise, "note": entree.get("note") or None, "echeance": entree.get("echeance") or None,
+        "statut": statut, "statut_label": CIBLE_STATUT_LABELS[statut], "renouvellement": r_out,
+        "ecart": round(vise - (loyer or 0.0), 2) if vise is not None else None,
+    }
 
 
 async def rent_roll(
@@ -204,9 +274,21 @@ async def rent_roll(
     for b in baux:
         par_log.setdefault(b.logement_id, []).append(b)
 
-    proj = _charger_projection(json.dumps(projection)) if isinstance(projection, dict) else {"logements": {}, "hypotheses": {}}
+    # Contexte DOSSIER : chaque unité est « fixe » (telle quelle) ou « à
+    # ajuster » (loyer visé). La colonne « loyer visé » n'apparaît que s'il
+    # y a au moins une unité à ajuster.
+    contexte_dossier = isinstance(projection, dict)
+    proj = _charger_projection(json.dumps(projection)) if contexte_dossier else {"logements": {}, "hypotheses": {}}
     proj_logs = proj.get("logements") or {}
-    avec_projection = bool(proj_logs)
+    cibles = {str(k): v for k, v in proj_logs.items() if isinstance(v, dict) and v.get("mode") == "ajuster"}
+    avec_projection = bool(cibles)
+    # Dernier avis de renouvellement par bail : où en est chaque objectif.
+    renouvellements: dict[int, BailRenouvellement] = {}
+    if contexte_dossier and baux:
+        for r in (await db.execute(select(BailRenouvellement).where(BailRenouvellement.bail_id.in_([b.id for b in baux])))).scalars().all():
+            cur = renouvellements.get(r.bail_id)
+            if cur is None or ((r.avis_envoye_le or date.min), r.id) > ((cur.avis_envoye_le or date.min), cur.id):
+                renouvellements[r.bail_id] = r
 
     lignes: list[dict[str, Any]] = []
     paralleles: list[dict[str, Any]] = []
@@ -386,17 +468,23 @@ async def rent_roll(
                 "loyer": _f(prochain.loyer_mensuel),
                 "statut": prochain.status,
             }
-        if avec_projection:
-            p = proj_logs.get(str(lg.id)) or proj_logs.get(lg.id) or {}
-            lp = _f(p.get("loyer")) if isinstance(p, dict) else None
-            if lp is None:
-                lp = loyer if loyer is not None else _f(lg.loyer_demande)
-                source = "bail" if loyer is not None else ("demande" if lp is not None else None)
-            else:
-                source = (p.get("source") if isinstance(p, dict) else None) or "manuel"
-            ligne["projection"] = {"loyer": lp, "source": source, "note": (p.get("note") if isinstance(p, dict) else None)}
-            if lp:
-                tot_proj += lp
+        if contexte_dossier:
+            cible = _cible_unite(
+                cibles.get(str(lg.id)), loyer=loyer, courant=courant, principal=principal, prochain=prochain, pars=pars,
+                renouvellements=renouvellements,
+            )
+            ligne["cible"] = cible
+            if avec_projection:
+                # Loyer visé : l'objectif pour une unité à ajuster, le loyer en
+                # vigueur pour une unité fixe (elle part telle quelle).
+                ajuster = cible["mode"] == "ajuster"
+                lp = cible["loyer_vise"] if (ajuster and cible["loyer_vise"] is not None) else loyer
+                ligne["projection"] = {
+                    "loyer": lp, "source": "vise" if ajuster else "bail", "note": cible.get("note"),
+                    "statut": cible["statut"], "statut_label": cible["statut_label"],
+                }
+                if lp:
+                    tot_proj += lp
         lignes.append(ligne)
 
         if inclure_paralleles:
@@ -446,6 +534,9 @@ async def rent_roll(
         "mensuel_paralleles": round(tot_par, 2),
         "annuel_paralleles": round(tot_par * 12, 2),
     }
+    if contexte_dossier:
+        totaux["nb_a_ajuster"] = sum(1 for l in lignes if (l.get("cible") or {}).get("mode") == "ajuster")
+        totaux["nb_cibles_atteintes"] = sum(1 for l in lignes if (l.get("cible") or {}).get("statut") == "atteint")
     if avec_projection:
         vac = _f((proj.get("hypotheses") or {}).get("vacance_pct")) or 0.0
         totaux["projection_mensuelle"] = round(tot_proj, 2)
@@ -484,7 +575,7 @@ COLONNES_RENT_ROLL = [
     "Début", "Fin", "Au mois", "Payable le", "Dépôt", "Bail signé", "Prochain locataire",
     "Prochain début", "Prochain loyer",
 ]
-COLONNES_PROJECTION = ["Projection — loyer (estimation)", "Projection — source"]
+COLONNES_PROJECTION = ["Loyer visé (objectif du propriétaire, pas un bail)", "Objectif — statut"]
 
 
 def rent_roll_tableau(rr: RentRoll) -> tuple[list[str], list[list[Any]]]:
@@ -516,7 +607,7 @@ def rent_roll_tableau(rr: RentRoll) -> tuple[list[str], list[list[Any]]]:
         ]
         if avec_proj:
             p = l.get("projection") or {}
-            row += [p.get("loyer"), p.get("source")]
+            row += [p.get("loyer"), p.get("statut_label") or p.get("source")]
         rows.append(row)
         # Sous-locations du locataire principal : information, hors totaux.
         for s in l.get("sous_locations") or []:
@@ -548,7 +639,7 @@ def rent_roll_tableau(rr: RentRoll) -> tuple[list[str], list[list[Any]]]:
     if rr.paralleles:
         rows.append(["TOTAL baux parallèles (en vigueur)", f"{t['nb_paralleles']} bail(s)", None, None, None, None, None, t["mensuel_paralleles"]] + vide)
     if avec_proj:
-        rows.append(["PROJECTION (estimation, pas un bail)", f"vacance {t.get('projection_vacance_pct', 0)} %", None, None, None, None, None, t.get("projection_mensuelle")] + vide)
+        rows.append(["LOYERS VISÉS (objectif, pas un bail)", f"vacance {t.get('projection_vacance_pct', 0)} %", None, None, None, None, None, t.get("projection_mensuelle")] + vide)
     return colonnes, rows
 
 
@@ -611,7 +702,7 @@ def rent_roll_pdf(rr: RentRoll, *, titre: Optional[str] = None, preteur: Optiona
 
     entetes = ["Unité", "Pièces", "Occupation", "Locataire", "Loyer / mois", "Inclusions", "Début", "Fin", "Payable", "Dépôt", "Bail signé"]
     if avec_proj:
-        entetes += ["Projection*", "Source"]
+        entetes += ["Loyer visé*", "Objectif"]
     data = [[P(f"<b>{e}</b>") for e in entetes]]
     for l in rr.lignes:
         occ = occupation_label(l)
@@ -630,7 +721,7 @@ def rent_roll_pdf(rr: RentRoll, *, titre: Optional[str] = None, preteur: Optiona
         ]
         if avec_proj:
             p = l.get("projection") or {}
-            row += [P(_money(p.get("loyer")) if p.get("loyer") is not None else "—"), P(p.get("source") or "")]
+            row += [P(_money(p.get("loyer")) if p.get("loyer") is not None else "—"), P(p.get("statut_label") or p.get("source") or "")]
         data.append(row)
     t = rr.totaux
     tot_row = [P("<b>Total</b>"), P(""), P(f"<b>{t['nb_occupees']} occ. / {t['nb_vacantes']} vac.</b>"), P(""), P(f"<b>{_money(t['mensuel_standard'])}</b>"),
@@ -694,8 +785,9 @@ def rent_roll_pdf(rr: RentRoll, *, titre: Optional[str] = None, preteur: Optiona
     )
     if avec_proj:
         pied += (
-            " * La colonne « Projection » est une ESTIMATION du propriétaire (loyer visé par unité, "
-            f"vacance {t.get('projection_vacance_pct', 0)} %) — ce n'est pas un bail et elle n'engage personne."
+            " * « Loyer visé » = objectif du propriétaire pour les unités à ajuster (avis de renouvellement ou "
+            f"nouveau bail à venir ; vacance {t.get('projection_vacance_pct', 0)} %) — ce n'est pas un bail en vigueur "
+            "et n'engage personne. Les unités fixes partent telles quelles."
         )
     story.append(Paragraph(pied, small))
     doc.build(story)
@@ -825,16 +917,11 @@ def pieces_defaut(type_dossier: str, *, avec_paralleles: bool = False) -> list[d
     return [{"type": t, "libelle": l, "requis": True, "ordre": i} for i, (t, l) in enumerate(base)]
 
 
-def projection_defaut(rr: RentRoll) -> dict[str, Any]:
-    """Point de départ d'une projection : le loyer du bail, sinon le loyer
-    demandé du logement — toujours marqué par sa source."""
-    logs: dict[str, Any] = {}
-    for l in rr.lignes:
-        if l.get("loyer") is not None:
-            logs[str(l["logement_id"])] = {"loyer": l["loyer"], "source": "bail", "note": ""}
-        elif l.get("loyer_demande") is not None:
-            logs[str(l["logement_id"])] = {"loyer": l["loyer_demande"], "source": "demande", "note": ""}
-    return {"logements": logs, "hypotheses": {"vacance_pct": 0}}
+def projection_defaut(rr: RentRoll) -> dict[str, Any]:  # noqa: ARG001 — signature conservée
+    """Point de départ d'un dossier : TOUTES les unités « fixes » (telles
+    quelles dans Gestion locative) — aucun loyer visé tant que Phil n'a pas
+    marqué une unité « à ajuster »."""
+    return {"logements": {}, "hypotheses": {"vacance_pct": 0}}
 
 
 async def tableau_de_bord(db: AsyncSession, fin: Financement, rr: RentRoll, pieces: list[FinancementPiece]) -> dict[str, Any]:
@@ -853,6 +940,9 @@ async def tableau_de_bord(db: AsyncSession, fin: Financement, rr: RentRoll, piec
         "projection_mensuelle": t.get("projection_mensuelle"),
         "projection_annuelle": t.get("projection_annuelle"),
         "ecart_projection_pct": t.get("ecart_projection_pct"),
+        "vise_mensuel": t.get("projection_mensuelle", t["mensuel_standard"]),
+        "nb_a_ajuster": t.get("nb_a_ajuster", 0),
+        "nb_cibles_atteintes": t.get("nb_cibles_atteintes", 0),
         "taux_occupation_pct": t["taux_occupation_pct"],
         "nb_unites": t["nb_unites"],
         "nb_vacantes": t["nb_vacantes"],
