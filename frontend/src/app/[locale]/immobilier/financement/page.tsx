@@ -23,8 +23,6 @@ import {
   AlertTriangle,
   ArrowLeft,
   Check,
-  ChevronDown,
-  ChevronRight,
   Download,
   FileSignature,
   FileText,
@@ -33,6 +31,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Send,
   Trash2,
   Upload,
   X
@@ -42,6 +41,7 @@ import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar } from "../layout";
 import { TalFormDropdown } from "@/components/immobilier/tal-avis";
+import { docTypeLabel } from "@/components/immobilier/doc-types";
 import { TalBailModal, ouvrirPdfDocument } from "@/components/immobilier/tal-bail-modal";
 
 const FIN = "/api/v1/immobilier/financement";
@@ -53,6 +53,18 @@ const INPUT =
 type ImmeubleLite = { id: number; name: string; address?: string | null; gestion_externe?: boolean };
 type LogementLite = { id: number; numero: string; loyer_demande: number | null };
 
+//: Objectif d'une unité du dossier : fixe (telle quelle) ou à ajuster (loyer
+//: visé) ; le statut vient des baux et des avis réels.
+type Cible = {
+  mode: "fixe" | "ajuster";
+  loyer_vise: number | null;
+  note: string | null;
+  echeance: string | null;
+  statut: string;
+  statut_label: string;
+  renouvellement: { id: number; statut: string; nouveau_loyer: number | null; avis_envoye_le: string | null; nouvelle_date_debut: string | null; document_id: number | null } | null;
+  ecart: number | null;
+};
 type RentRollLigne = {
   logement_id: number;
   numero: string;
@@ -79,7 +91,8 @@ type RentRollLigne = {
   //: Unité louée en chambres : un bail par chambre, la ligne porte le total.
   baux?: { bail_id: number; locataire_id: number | null; locataire: string | null; loyer: number | null; date_debut: string | null; date_fin: string | null; au_mois: boolean; document_signe: boolean }[];
   prochain?: { bail_id: number; locataire: string | null; date_debut: string | null; loyer: number | null; statut: string };
-  projection?: { loyer: number | null; source: string | null; note: string | null };
+  projection?: { loyer: number | null; source: string | null; note: string | null; statut?: string; statut_label?: string };
+  cible?: Cible;
 };
 type RentRollParallele = {
   bail_id: number;
@@ -107,7 +120,7 @@ type RentRoll = {
   lignes: RentRollLigne[];
   paralleles: RentRollParallele[];
   totaux: Record<string, number | string[] | null>;
-  projection: { logements: Record<string, { loyer: number | null; source: string; note: string | null }>; hypotheses: { vacance_pct?: number } } | null;
+  projection: { logements: Record<string, { mode?: string; loyer: number | null; source: string; note: string | null; echeance?: string | null }>; hypotheses: { vacance_pct?: number } } | null;
   genere_le: string;
 };
 
@@ -141,7 +154,7 @@ type Dossier = {
   date_echeance: string | null;
   inclure_standards: boolean;
   inclure_paralleles: boolean;
-  projection: { logements: Record<string, { loyer: number | null; source: string; note: string | null }>; hypotheses: { vacance_pct?: number } };
+  projection: { logements: Record<string, { mode?: string; loyer: number | null; source: string; note: string | null; echeance?: string | null }>; hypotheses: { vacance_pct?: number } };
   notes: string | null;
   nb_pieces_requises: number | null;
   nb_pieces_fournies: number | null;
@@ -165,6 +178,9 @@ type DossierDetail = Dossier & {
     pieces_fournies: number;
     pieces_manquantes: string[];
     jours_avant_echeance: number | null;
+    vise_mensuel?: number | null;
+    nb_a_ajuster?: number;
+    nb_cibles_atteintes?: number;
   };
   rent_roll: RentRoll;
   types: string[];
@@ -180,6 +196,7 @@ type DocumentImm = {
   created_at: string | null;
   signed_at: string | null;
   bail_id: number | null;
+  logement_id: number | null;
   numero: string | null;
   locataire: string | null;
   bail_categorie: string | null;
@@ -370,8 +387,8 @@ export default function FinancementPage() {
           <div className="min-w-0 flex-1">
             <h1 className="text-2xl font-bold text-white">Financement</h1>
             <p className="mt-1 max-w-3xl text-sm text-white/60">
-              Un immeuble, un dossier par demande de prêt. Dans le dossier : rent roll depuis les baux
-              enregistrés, pièces, projection clairement identifiée, baux parallèles, suivi dans le temps.
+              Un immeuble, un dossier par demande de prêt. Dans le dossier : les unités fixes (telles quelles) ou à
+              ajuster (loyer visé), le rent roll à envoyer, les baux et avis à produire au moment venu, les pièces, le suivi.
             </p>
           </div>
           <label className="text-[11px] font-semibold text-white/60">
@@ -584,12 +601,12 @@ function NouveauDossierModal({ immeuble, onClose, onCreated }: { immeuble: Immeu
 
 // ─── Étape 3 : le dossier ─────────────────────────────────────────────
 
-type Vue = "apercu" | "rentroll" | "pieces" | "paralleles" | "suivi";
+type Vue = "unites" | "rentroll" | "pieces" | "paralleles" | "suivi";
 
 function DossierVue({ dossierId, immeuble, onBack, onError }: { dossierId: number; immeuble: ImmeubleLite; onBack: () => void; onError: (m: string | null) => void }) {
   const [d, setD] = useState<DossierDetail | null>(null);
   const [docs, setDocs] = useState<DocumentImm[]>([]);
-  const [vue, setVue] = useState<Vue>("apercu");
+  const [vue, setVue] = useState<Vue>("unites");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -659,11 +676,11 @@ function DossierVue({ dossierId, immeuble, onBack, onError }: { dossierId: numbe
       <nav className="flex flex-wrap gap-1 rounded-xl border border-brand-800 bg-brand-900/60 p-1">
         {(
           [
-            ["apercu", "Aperçu"],
-            ["rentroll", "Rent roll"],
-            ["pieces", "Pièces et exports"],
+            ["unites", "1. Unités"],
+            ["rentroll", "2. Rent roll"],
+            ["pieces", "3. Pièces et exports"],
             ["paralleles", "Baux parallèles"],
-            ["suivi", "Suivi"]
+            ["suivi", "Dossier et suivi"]
           ] as [Vue, string][]
         ).map(([id, label]) => (
           <button
@@ -676,13 +693,16 @@ function DossierVue({ dossierId, immeuble, onBack, onError }: { dossierId: numbe
           >
             {label}
             {id === "pieces" && tb.pieces_manquantes.length ? <span className="badge badge-amber ml-1">{tb.pieces_manquantes.length}</span> : null}
+            {id === "unites" && tb.nb_a_ajuster ? <span className="badge badge-amber ml-1">{tb.nb_a_ajuster} à ajuster</span> : null}
           </button>
         ))}
       </nav>
 
       {err ? <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{err}</p> : null}
 
-      {vue === "apercu" ? (
+      {vue === "unites" ? <UnitesTab immeuble={immeuble} dossier={d} docs={docs} onChanged={load} /> : null}
+
+      {vue === "suivi" ? (
         <>
           <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-4">
             <label className="text-[11px] font-semibold text-white/60">
@@ -720,9 +740,9 @@ function DossierVue({ dossierId, immeuble, onBack, onError }: { dossierId: numbe
             <Tuile label="Revenus réels / mois" valeur={money(tb.reel_mensuel)} sous={`${money(tb.reel_annuel)} / an · baux standards`} />
             <Tuile label="Baux parallèles / mois" valeur={money(tb.paralleles_mensuel)} sous={d.inclure_paralleles ? `${money(tb.paralleles_annuel)} / an` : "exclus du dossier"} />
             <Tuile
-              label="Projection / mois"
-              valeur={tb.projection_mensuelle != null ? money(tb.projection_mensuelle) : "—"}
-              sous={tb.ecart_projection_pct != null ? `${tb.ecart_projection_pct > 0 ? "+" : ""}${tb.ecart_projection_pct} % vs réel · estimation` : "estimation"}
+              label="Loyers visés / mois"
+              valeur={money(tb.vise_mensuel ?? tb.reel_mensuel)}
+              sous={tb.nb_a_ajuster ? `${tb.nb_a_ajuster} unité(s) à ajuster${tb.ecart_projection_pct != null ? ` · ${tb.ecart_projection_pct > 0 ? "+" : ""}${tb.ecart_projection_pct} % vs en vigueur` : ""}` : "toutes les unités fixes"}
               accent
             />
             <Tuile label="Occupation" valeur={tb.taux_occupation_pct != null ? `${tb.taux_occupation_pct} %` : "—"} sous={`${tb.nb_unites} unités · ${tb.nb_vacantes} vacante(s)`} />
@@ -738,6 +758,7 @@ function DossierVue({ dossierId, immeuble, onBack, onError }: { dossierId: numbe
             Notes du dossier
             <NotesBlur value={d.notes || ""} onSave={(v) => void patch({ notes: v || null })} />
           </label>
+          <Suivi d={d} onReload={load} onSupprimer={supprimer} />
         </>
       ) : null}
 
@@ -754,7 +775,6 @@ function DossierVue({ dossierId, immeuble, onBack, onError }: { dossierId: numbe
         </>
       ) : null}
 
-      {vue === "suivi" ? <Suivi d={d} onReload={load} onSupprimer={supprimer} /> : null}
     </div>
   );
 }
@@ -765,30 +785,11 @@ function NotesBlur({ value, onSave }: { value: string; onSave: (v: string) => vo
   return <textarea rows={3} value={v} onChange={(e) => setV(e.target.value)} onBlur={() => (v !== value ? onSave(v) : undefined)} className={`${INPUT} mt-0.5 block w-full`} />;
 }
 
-// ─── Pièces, projection, exports ─────────────────────────────────────
+// ─── Pièces et exports ─────────────────────────────────────────────
 
 function PiecesEtExports({ d, docs, onReload, onPatch, busy }: { d: DossierDetail; docs: DocumentImm[]; onReload: () => Promise<void>; onPatch: (b: Record<string, unknown>) => Promise<void>; busy: boolean }) {
   const [err, setErr] = useState<string | null>(null);
   const [showPaquet, setShowPaquet] = useState(false);
-  const [proj, setProj] = useState<Record<string, { loyer: string; source: string; note: string }>>({});
-  const [vacance, setVacance] = useState("0");
-  const [projOuvert, setProjOuvert] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    const p: Record<string, { loyer: string; source: string; note: string }> = {};
-    for (const l of d.rent_roll.lignes) {
-      const e = d.projection?.logements?.[String(l.logement_id)];
-      p[String(l.logement_id)] = {
-        loyer: e?.loyer != null ? String(e.loyer) : l.loyer != null ? String(l.loyer) : l.loyer_demande != null ? String(l.loyer_demande) : "",
-        source: e?.source || (l.loyer != null ? "bail" : "demande"),
-        note: e?.note || ""
-      };
-    }
-    setProj(p);
-    setVacance(String(d.projection?.hypotheses?.vacance_pct ?? 0));
-  }, [d]);
-
   async function patchPiece(id: number, body: Record<string, unknown>) {
     setErr(null);
     const r = await authedFetch(`${FIN}/pieces/${id}`, { method: "PATCH", body: JSON.stringify(body) });
@@ -816,26 +817,6 @@ function PiecesEtExports({ d, docs, onReload, onPatch, busy }: { d: DossierDetai
       return;
     }
     await onReload();
-  }
-  async function enregistrerProjection() {
-    setSaving(true);
-    setErr(null);
-    try {
-      const logements: Record<string, { loyer: number | null; source: string; note: string }> = {};
-      for (const [k, v] of Object.entries(proj)) {
-        logements[k] = { loyer: v.loyer.trim() ? Number(v.loyer.replace(",", ".")) : null, source: v.source, note: v.note };
-      }
-      const r = await authedFetch(`${FIN}/dossiers/${d.id}/projection`, {
-        method: "PUT",
-        body: JSON.stringify({ logements, hypotheses: { vacance_pct: Number(vacance.replace(",", ".")) || 0 } })
-      });
-      if (!r.ok) throw new Error(await lireErreur(r));
-      await onReload();
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setSaving(false);
-    }
   }
 
   return (
@@ -921,62 +902,9 @@ function PiecesEtExports({ d, docs, onReload, onPatch, busy }: { d: DossierDetai
             <FileText className="h-3 w-3" /> Paquet PDF…
           </button>
         </div>
-        <p className="mt-2 text-[11px] text-white/40">Tous les montants viennent des baux enregistrés. La colonne « Projection » est une estimation, marquée comme telle dans le document.</p>
-
-        <button type="button" onClick={() => setProjOuvert((v) => !v)} className="mt-3 flex w-full items-center gap-2 text-left text-xs font-semibold text-white">
-          {projOuvert ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-          Projection pro forma par unité (estimation)
-        </button>
-        {projOuvert ? (
-          <div className="mt-2 space-y-2">
-            <table className="w-full text-xs">
-              <thead className="text-[11px] uppercase tracking-wider text-white/45">
-                <tr>
-                  <th className="py-1 text-left">Unité</th>
-                  <th className="py-1 text-right">Loyer au bail</th>
-                  <th className="py-1 text-right">Projeté</th>
-                  <th className="py-1 text-left">Source</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-brand-800">
-                {d.rent_roll.lignes.map((l) => {
-                  const p = proj[String(l.logement_id)] || { loyer: "", source: "manuel", note: "" };
-                  return (
-                    <tr key={l.logement_id}>
-                      <td className="py-1 text-white/85">{l.numero}</td>
-                      <td className="py-1 text-right font-mono text-white/70">{money(l.loyer)}</td>
-                      <td className="py-1 text-right">
-                        <input
-                          inputMode="decimal"
-                          value={p.loyer}
-                          onChange={(e) => setProj({ ...proj, [String(l.logement_id)]: { ...p, loyer: e.target.value, source: p.source === "bail" ? "manuel" : p.source } })}
-                          className={`${INPUT} w-24 text-right`}
-                        />
-                      </td>
-                      <td className="py-1">
-                        <select value={p.source} onChange={(e) => setProj({ ...proj, [String(l.logement_id)]: { ...p, source: e.target.value } })} className={`${INPUT} py-1`}>
-                          <option value="bail">bail actuel</option>
-                          <option value="demande">loyer demandé</option>
-                          <option value="marche">marché</option>
-                          <option value="manuel">manuel</option>
-                        </select>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="text-[11px] font-semibold text-white/60">
-                Vacance (%)
-                <input inputMode="decimal" value={vacance} onChange={(e) => setVacance(e.target.value)} className={`${INPUT} ml-2 w-16 text-right`} />
-              </label>
-              <button type="button" disabled={saving} onClick={() => void enregistrerProjection()} className="btn-accent btn-xs ml-auto disabled:opacity-60">
-                {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />} Enregistrer la projection
-              </button>
-            </div>
-          </div>
-        ) : null}
+        <p className="mt-2 text-[11px] text-white/40">
+          Tous les montants viennent des baux enregistrés. Les loyers visés des unités à ajuster (onglet Unités) apparaissent dans une colonne à part, identifiée comme objectif, jamais comme loyer en vigueur.
+        </p>
       </section>
       {showPaquet ? <PaquetModal dossier={d} docs={docs} onClose={() => setShowPaquet(false)} /> : null}
     </div>
@@ -1037,6 +965,367 @@ function Suivi({ d, onReload, onSupprimer }: { d: DossierDetail; onReload: () =>
   );
 }
 
+// ─── Étape 3 : unités fixes ou à ajuster ──────────────────────────────
+
+const CIBLE_BADGE: Record<string, string> = {
+  fixe: "badge-neutral",
+  a_definir: "badge-amber",
+  a_faire: "badge-amber",
+  avis_envoye: "badge-sky",
+  avis_accepte: "badge-emerald",
+  avis_refuse: "badge-rose",
+  bail_en_signature: "badge-violet",
+  bail_a_venir: "badge-violet",
+  atteint: "badge-emerald"
+};
+
+const CIBLE_FIXE: Cible = { mode: "fixe", loyer_vise: null, note: null, echeance: null, statut: "fixe", statut_label: "Fixe (tel quel)", renouvellement: null, ecart: null };
+
+function LoyerViseInput({ valeur, disabled, onSave }: { valeur: number | null; disabled: boolean; onSave: (v: number | null) => void }) {
+  const [v, setV] = useState(valeur != null ? String(valeur) : "");
+  useEffect(() => {
+    setV(valeur != null ? String(valeur) : "");
+  }, [valeur]);
+  function commit() {
+    const n = v.trim() ? Number(v) : null;
+    if (n != null && !Number.isFinite(n)) return;
+    if (n === valeur) return;
+    onSave(n);
+  }
+  return (
+    <input
+      type="number"
+      min={0}
+      step={5}
+      inputMode="decimal"
+      value={v}
+      disabled={disabled}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+      }}
+      placeholder="Loyer visé"
+      className={`${INPUT} w-28 text-right font-mono`}
+    />
+  );
+}
+
+function UnitesTab({ immeuble, dossier, docs, onChanged }: { immeuble: ImmeubleLite; dossier: DossierDetail; docs: DocumentImm[]; onChanged: () => Promise<void> }) {
+  const [err, setErr] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [avisFor, setAvisFor] = useState<RentRollLigne | null>(null);
+  const [bailFor, setBailFor] = useState<RentRollLigne | null>(null);
+  const [docsOuverts, setDocsOuverts] = useState<Record<number, boolean>>({});
+  const lignes = dossier.rent_roll.lignes;
+  const t = dossier.rent_roll.totaux as Record<string, number | null>;
+  const tb = dossier.tableau_de_bord;
+
+  async function regler(l: RentRollLigne, body: Record<string, unknown>) {
+    setBusyId(l.logement_id);
+    setErr(null);
+    try {
+      const r = await authedFetch(`${FIN}/dossiers/${dossier.id}/unites/${l.logement_id}`, { method: "PATCH", body: JSON.stringify(body) });
+      if (!r.ok) throw new Error(await lireErreur(r));
+      await onChanged();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  function docsDe(l: RentRollLigne): DocumentImm[] {
+    const bails = new Set<number>([...(l.bail_id != null ? [l.bail_id] : []), ...(l.baux || []).map((b) => b.bail_id), ...(l.sous_locations || []).map((b) => b.bail_id)]);
+    return docs.filter((d) => d.logement_id === l.logement_id || (d.bail_id != null && bails.has(d.bail_id)));
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl border border-brand-800 bg-brand-900/60 px-3 py-2 text-xs text-white/70">
+        <b className="text-white">Fixe</b> : l&apos;unité part telle qu&apos;elle est dans Gestion locative — ses baux et avis sont à côté, rien à changer.{" "}
+        <b className="text-white">À ajuster</b> : tu écris le loyer visé ; le rent roll le montre à côté du loyer en vigueur et tu crées l&apos;avis de renouvellement ou le nouveau bail au moment venu.
+        Le statut vient des baux et des avis réels.
+      </div>
+      {err ? <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{err}</p> : null}
+      <div className="overflow-x-auto rounded-xl border border-brand-800 bg-brand-900">
+        <table className="w-full text-xs">
+          <thead className="bg-brand-950/60 text-[11px] uppercase tracking-wider text-white/50">
+            <tr>
+              <th className="px-3 py-2 text-left">Unité</th>
+              <th className="px-3 py-2 text-left">En vigueur (Gestion locative)</th>
+              <th className="px-3 py-2 text-left">Mode</th>
+              <th className="px-3 py-2 text-right">Loyer visé</th>
+              <th className="px-3 py-2 text-left">Statut</th>
+              <th className="px-3 py-2 text-left">Baux et avis</th>
+              <th className="px-3 py-2 text-right">Au moment venu</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-brand-800">
+            {lignes.map((l) => {
+              const c = l.cible || CIBLE_FIXE;
+              const ajuster = c.mode === "ajuster";
+              const busy = busyId === l.logement_id;
+              const dd = docsDe(l);
+              const ren = c.renouvellement;
+              const bailStandardCourant = !!l.bail_id && !l.baux?.length && l.categorie !== "bail_principal";
+              const visibles = docsOuverts[l.logement_id] ? dd : dd.slice(0, 3);
+              return (
+                <tr key={l.logement_id} className={ajuster ? "bg-amber-500/[0.04]" : ""}>
+                  <td className="px-3 py-2 font-semibold text-white">
+                    {l.numero}
+                    {l.nb_pieces ? <span className="ml-1 font-normal text-white/40">{String(l.nb_pieces).replace(".5", "½")}</span> : null}
+                  </td>
+                  <td className="px-3 py-2 text-white/85">
+                    <div>{l.locataire || <span className="text-white/40">{OCCUPATION_LABEL[l.occupation] || l.occupation}</span>}</div>
+                    <div className="text-[11px] text-white/50">
+                      {l.loyer != null ? <span className="font-mono text-white/85">{money(l.loyer)}</span> : "—"}
+                      {l.bail_id ? (
+                        <>
+                          {" "}
+                          · {fmtDate(l.date_debut)} → {l.au_mois ? "au mois" : fmtDate(l.date_fin)}
+                        </>
+                      ) : null}
+                      {l.categorie === "bail_principal" ? " · bail principal" : ""}
+                      {l.baux?.length ? ` · ${l.baux.length} chambres` : ""}
+                      {l.nb_paralleles ? ` · +${l.nb_paralleles} parallèle` : ""}
+                    </div>
+                    {l.prochain ? (
+                      <div className="text-[11px] text-white/40">
+                        prochain : {l.prochain.locataire || "—"} · {fmtDate(l.prochain.date_debut)} · {money(l.prochain.loyer)}
+                      </div>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="inline-flex rounded-lg border border-brand-800 p-0.5">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => (ajuster ? void regler(l, { mode: "fixe" }) : undefined)}
+                        className={`rounded-md px-2 py-1 text-[11px] font-semibold ${!ajuster ? "bg-white/10 text-white" : "text-white/50 hover:text-white"}`}
+                      >
+                        Fixe
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => (!ajuster ? void regler(l, { mode: "ajuster" }) : undefined)}
+                        className={`rounded-md px-2 py-1 text-[11px] font-semibold ${ajuster ? "bg-amber-500/20 text-amber-200" : "text-white/50 hover:text-white"}`}
+                      >
+                        À ajuster
+                      </button>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {ajuster ? (
+                      <>
+                        <LoyerViseInput valeur={c.loyer_vise} disabled={busy} onSave={(v) => void regler(l, { mode: "ajuster", loyer: v })} />
+                        {c.ecart != null ? (
+                          <div className="text-[10px] text-white/40">
+                            {c.ecart >= 0 ? "+" : ""}
+                            {money(c.ecart)} vs en vigueur
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <span className="font-mono text-white/40">{l.loyer != null ? money(l.loyer) : "—"}</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className={`badge ${CIBLE_BADGE[c.statut] || "badge-neutral"}`}>{c.statut_label}</span>
+                    {ren ? (
+                      <div className="text-[11px] text-white/40">
+                        avis du {fmtDate(ren.avis_envoye_le)} · {money(ren.nouveau_loyer)}
+                        {ren.document_id ? (
+                          <>
+                            {" · "}
+                            <button type="button" onClick={() => void ouvrirPdfDocument(ren.document_id as number).catch((e) => setErr((e as Error).message))} className="text-accent-500 hover:underline">
+                              PDF
+                            </button>
+                          </>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {c.note ? <div className="text-[11px] text-white/40">{c.note}</div> : null}
+                  </td>
+                  <td className="px-3 py-2 text-white/70">
+                    {dd.length ? (
+                      <div className="space-y-0.5">
+                        {visibles.map((doc) => (
+                          <div key={doc.id} className="flex items-center gap-1 text-[11px]">
+                            <span className="badge badge-neutral">{docTypeLabel(doc.type) || doc.type}</span>
+                            <button type="button" onClick={() => void ouvrirPdfDocument(doc.id).catch((e) => setErr((e as Error).message))} className="max-w-[220px] truncate text-accent-500 hover:underline" title={doc.titre}>
+                              {doc.titre}
+                            </button>
+                            {doc.signed_at ? <Check className="h-3 w-3 text-emerald-400" /> : null}
+                          </div>
+                        ))}
+                        {dd.length > 3 ? (
+                          <button type="button" onClick={() => setDocsOuverts({ ...docsOuverts, [l.logement_id]: !docsOuverts[l.logement_id] })} className="text-[11px] text-white/40 hover:text-white">
+                            {docsOuverts[l.logement_id] ? "moins" : `+${dd.length - 3} autres`}
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <span className="text-[11px] text-white/30">aucun document</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    {ajuster ? (
+                      <div className="flex flex-wrap justify-end gap-1">
+                        {bailStandardCourant ? (
+                          <button type="button" onClick={() => setAvisFor(l)} className="btn-outline-accent btn-xs" title="Avis officiel TAL de renouvellement (hausse de loyer) au locataire en place, au loyer visé">
+                            <Send className="h-3 w-3" /> Avis de renouvellement
+                          </button>
+                        ) : null}
+                        <button type="button" onClick={() => setBailFor(l)} className="btn-secondary btn-xs" title="Nouveau bail parallèle (sous-location, bail principal…) au loyer visé">
+                          <FileSignature className="h-3 w-3" /> Nouveau bail
+                        </button>
+                        {l.occupation === "vacant" || l.occupation === "reserve" ? (
+                          <Link
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            href={"/immobilier/locations" as any}
+                            className="btn-ghost btn-xs"
+                            title="Louer l'unité à un vrai locataire (Locations & nouveaux baux)"
+                          >
+                            Louer
+                          </Link>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <span className="block text-right text-[11px] text-white/30">tel quel</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot className="bg-brand-950/60 text-xs font-semibold text-white">
+            <tr>
+              <td className="px-3 py-2" colSpan={2}>
+                En vigueur : {money(t.mensuel_standard)} / mois · {tb.nb_a_ajuster || 0} unité(s) à ajuster
+              </td>
+              <td className="px-3 py-2 text-right text-amber-200" colSpan={2}>
+                Visé : {money(tb.vise_mensuel ?? t.mensuel_standard)} / mois
+              </td>
+              <td className="px-3 py-2 text-white/60" colSpan={3}>
+                {tb.nb_cibles_atteintes || 0} objectif(s) atteint(s) · le rent roll (onglet suivant) montre les deux colonnes
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      {avisFor ? <AvisRenouvellementModal ligne={avisFor} onClose={() => setAvisFor(null)} onSent={() => void onChanged()} /> : null}
+      {bailFor ? (
+        <BailParalleleModal
+          immeuble={immeuble}
+          prefill={{ logement_id: bailFor.logement_id, loyer_mensuel: bailFor.cible?.loyer_vise ?? null }}
+          onClose={() => setBailFor(null)}
+          onSaved={() => {
+            setBailFor(null);
+            void onChanged();
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function AvisRenouvellementModal({ ligne, onClose, onSent }: { ligne: RentRollLigne; onClose: () => void; onSent: () => void }) {
+  const [nouveau, setNouveau] = useState(ligne.cible?.loyer_vise != null ? String(ligne.cible.loyer_vise) : "");
+  const [debut, setDebut] = useState("");
+  const [fin, setFin] = useState("");
+  const [motif, setMotif] = useState("");
+  const [certifie, setCertifie] = useState(true);
+  const [force, setForce] = useState(false);
+  const [busy, setBusy] = useState<"apercu" | "envoi" | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const bailId = ligne.bail_id as number;
+
+  function corps() {
+    return { nouveau_loyer: Number(nouveau) || null, nouvelle_date_debut: debut || null, nouvelle_date_fin: fin || null, motif: motif.trim() || null };
+  }
+
+  async function apercu() {
+    setBusy("apercu");
+    setErr(null);
+    try {
+      const r = await authedFetch(`/api/v1/immobilier/baux/${bailId}/tal/avis_modification.pdf`, { method: "POST", body: JSON.stringify(corps()) });
+      if (!r.ok) throw new Error(await lireErreur(r));
+      window.open(URL.createObjectURL(await r.blob()), "_blank");
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function envoyer() {
+    if (!(Number(nouveau) > 0)) {
+      setErr("Indique le nouveau loyer.");
+      return;
+    }
+    setBusy("envoi");
+    setErr(null);
+    setMsg(null);
+    try {
+      const r = await authedFetch(`/api/v1/immobilier/baux/${bailId}/envoyer-renouvellement`, {
+        method: "POST",
+        body: JSON.stringify({ ...corps(), force, request_read_receipt: certifie, bcc_to_sender: certifie })
+      });
+      if (!r.ok) throw new Error(await lireErreur(r));
+      const d = (await r.json()) as { courriel_envoye: boolean; erreur_envoi?: string | null; expediteur?: string | null };
+      setMsg(d.courriel_envoye ? `Avis envoyé au locataire${d.expediteur ? ` depuis ${d.expediteur}` : ""}. Rien reçu ? Qu'il vérifie ses courriers indésirables.` : `Avis créé, mais courriel NON parti : ${d.erreur_envoi || "raison inconnue"}`);
+      onSent();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Modal titre={`Avis de renouvellement — logement ${ligne.numero} · ${ligne.locataire || ""}`} onClose={onClose}>
+      <p className="text-xs text-white/60">
+        Avis officiel TAL de modification du bail (hausse de loyer), envoyé par courriel au locataire en place — le même qu&apos;à la page Renouvellements. Loyer en vigueur :{" "}
+        <b className="text-white">{money(ligne.loyer)}</b>
+        {ligne.date_fin ? ` · bail jusqu'au ${fmtDate(ligne.date_fin)}` : ""}.
+      </p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <Champ label="Nouveau loyer ($ / mois)" value={nouveau} onChange={setNouveau} inputMode="decimal" />
+        <Champ label="Début du bail renouvelé (vide = lendemain de la fin)" value={debut} onChange={setDebut} type="date" />
+        <Champ label="Fin (vide = 12 mois)" value={fin} onChange={setFin} type="date" />
+      </div>
+      <label className="mt-3 block text-[11px] font-semibold text-white/60">
+        Motif (optionnel)
+        <input value={motif} onChange={(e) => setMotif(e.target.value)} className={`${INPUT} mt-0.5 block w-full`} />
+      </label>
+      <div className="mt-2 flex flex-wrap gap-4 text-xs text-white/70">
+        <label className="flex items-center gap-1.5">
+          <input type="checkbox" checked={certifie} onChange={(e) => setCertifie(e.target.checked)} /> Envoi certifié (accusé de lecture + copie à l&apos;expéditeur)
+        </label>
+        <label className="flex items-center gap-1.5">
+          <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} /> Remplacer un avis déjà envoyé pour ce cycle
+        </label>
+      </div>
+      {err ? <p className="mt-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{err}</p> : null}
+      {msg ? <p className="mt-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">{msg}</p> : null}
+      <div className="mt-4 flex flex-wrap justify-end gap-2">
+        <button type="button" onClick={onClose} className="btn-ghost btn-sm">
+          Fermer
+        </button>
+        <button type="button" disabled={busy !== null} onClick={() => void apercu()} className="btn-secondary btn-sm">
+          {busy === "apercu" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />} Aperçu PDF
+        </button>
+        <button type="button" disabled={busy !== null || !!msg} onClick={() => void envoyer()} className="btn-primary btn-sm">
+          {busy === "envoi" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} Envoyer l&apos;avis au locataire
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 function PaquetModal({ dossier, docs, onClose }: { dossier: DossierDetail; docs: DocumentImm[]; onClose: () => void }) {
   const [choisis, setChoisis] = useState<number[]>(() => docs.filter((x) => x.est_bail_courant || x.type === "bail").map((x) => x.id));
   const [rentRoll, setRentRoll] = useState(true);
@@ -1068,7 +1357,7 @@ function PaquetModal({ dossier, docs, onClose }: { dossier: DossierDetail; docs:
         <input type="checkbox" checked={rentRoll} onChange={(e) => setRentRoll(e.target.checked)} /> Rent roll en première page
         {rentRoll ? (
           <label className="ml-3 inline-flex items-center gap-1 text-white/60">
-            <input type="checkbox" checked={projection} onChange={(e) => setProjection(e.target.checked)} /> avec la colonne projection (estimation)
+            <input type="checkbox" checked={projection} onChange={(e) => setProjection(e.target.checked)} /> avec la colonne « loyer visé » (unités à ajuster)
           </label>
         ) : null}
       </label>
@@ -1163,7 +1452,7 @@ function RentRollTab({ immeuble, dossier, onPatchDossier }: { immeuble: Immeuble
                     <th className="px-3 py-2 text-left">Occupation</th>
                     <th className="px-3 py-2 text-left">Locataire</th>
                     <th className="px-3 py-2 text-right">Loyer / mois</th>
-                    {avecProj ? <th className="px-3 py-2 text-right text-amber-300">Projection*</th> : null}
+                    {avecProj ? <th className="px-3 py-2 text-right text-amber-300">Loyer visé*</th> : null}
                     <th className="px-3 py-2 text-left">Inclusions</th>
                     <th className="px-3 py-2 text-left">Bail</th>
                     <th className="px-3 py-2 text-left">Signé</th>
@@ -1210,7 +1499,7 @@ function RentRollTab({ immeuble, dossier, onPatchDossier }: { immeuble: Immeuble
                       {avecProj ? (
                         <td className="px-3 py-2 text-right font-mono text-amber-200">
                           {money(l.projection?.loyer)}
-                          <span className="ml-1 text-[10px] text-amber-200/60">{l.projection?.source || ""}</span>
+                          <span className="ml-1 text-[10px] text-amber-200/60">{l.projection?.statut_label || ""}</span>
                         </td>
                       ) : null}
                       <td className="px-3 py-2 text-white/60">{l.inclusions.join(", ") || (l.bail_id ? "—" : "")}</td>
@@ -1277,7 +1566,7 @@ function RentRollTab({ immeuble, dossier, onPatchDossier }: { immeuble: Immeuble
                     {avecProj ? <td className="px-3 py-2 text-right font-mono text-amber-200">{money(t.projection_mensuelle)}</td> : null}
                     <td className="px-3 py-2 text-white/60" colSpan={4}>
                       {money(t.annuel_standard)} / an
-                      {avecProj && t.projection_annuelle != null ? ` · projection ${money(t.projection_annuelle)} / an (estimation)` : ""}
+                      {avecProj && t.projection_annuelle != null ? ` · visé ${money(t.projection_annuelle)} / an (objectif, pas un bail)` : ""}
                     </td>
                   </tr>
                 </tfoot>
@@ -1359,7 +1648,7 @@ function RentRollTab({ immeuble, dossier, onPatchDossier }: { immeuble: Immeuble
           ) : null}
           <p className="text-[11px] text-white/40">
             Situation au {fmtDate(rr.a_date)}. Le rent roll est produit par les baux enregistrés, jamais l&apos;inverse : pour changer un chiffre, corrige le bail (« Corriger »), c&apos;est journalisé et l&apos;export suit.
-            {avecProj ? " * La projection est une estimation, séparée des baux." : ""}
+            {avecProj ? " * Loyer visé = objectif du propriétaire pour les unités à ajuster (onglet Unités), pas un bail." : ""}
           </p>
         </>
       )}
@@ -1606,12 +1895,12 @@ function ParallelesTab({ immeuble, onChanged }: { immeuble: ImmeubleLite; onChan
   );
 }
 
-function BailParalleleModal({ immeuble, existant, onClose, onSaved }: { immeuble: ImmeubleLite; existant?: BailParallele; onClose: () => void; onSaved: () => void }) {
+function BailParalleleModal({ immeuble, existant, prefill, onClose, onSaved }: { immeuble: ImmeubleLite; existant?: BailParallele; prefill?: { logement_id: number; loyer_mensuel: number | null }; onClose: () => void; onSaved: () => void }) {
   const [logements, setLogements] = useState<LogementLite[]>([]);
   const [locataires, setLocataires] = useState<{ id: number; full_name: string; email: string | null }[]>([]);
   const [modeOccupant, setModeOccupant] = useState<"nouveau" | "existant">("nouveau");
   const [f, setF] = useState({
-    logement_id: existant ? String(existant.logement_id) : "",
+    logement_id: existant ? String(existant.logement_id) : prefill ? String(prefill.logement_id) : "",
     locataire_id: "",
     full_name: "",
     email: "",
@@ -1623,7 +1912,7 @@ function BailParalleleModal({ immeuble, existant, onClose, onSaved }: { immeuble
     parallele_note: existant?.parallele_note || "",
     date_debut: existant?.date_debut || "",
     date_fin: existant?.date_fin || "",
-    loyer_mensuel: existant ? String(existant.loyer_mensuel) : "",
+    loyer_mensuel: existant ? String(existant.loyer_mensuel) : prefill?.loyer_mensuel != null ? String(prefill.loyer_mensuel) : "",
     depot_garantie: existant?.depot_garantie != null ? String(existant.depot_garantie) : "",
     chauffage_inclus: existant?.chauffage_inclus || false,
     eau_chaude_inclus: existant?.eau_chaude_inclus || false,
