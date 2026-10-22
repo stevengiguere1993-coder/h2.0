@@ -56,7 +56,6 @@ from app.models.immobilier import (
     ImmeubleCode,
 )
 from app.models.tal_bail import TalTransmission
-from app.models.financement import Financement
 from app.models.project import Project
 from app.models.inventaire import InventaireArticle, InventaireMouvement
 from app.models.materiau import Materiau
@@ -1649,11 +1648,6 @@ _DETAIL_ENTITIES: dict[str, tuple] = {
         TalTransmission, "immobilier", "tal_transmission",
         "immobilier:tal_dossiers:read",
     ),
-    # Financement d'un immeuble (2026-10-16).
-    "financement": (
-        Financement, "immobilier", "imm_financement",
-        "immobilier:tal_dossiers:read",
-    ),
     # Codes d'accès d'un immeuble (porte, lock box, garage…, 2026-10-18).
     "immeuble_code": (
         ImmeubleCode, "immobilier", "imm_immeuble_code",
@@ -2022,14 +2016,6 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         list_cap="immobilier:tal_dossiers:list",
         order_attr="updated_at", stage_attr="statut", supports_active=False,
     ),
-    # Immobilier (2026-10-16) : dossiers de financement ; `stage` filtre le
-    # statut (preparation | envoye | en_analyse | approuve | refuse | clos).
-    "financements": _ListSpec(
-        model=Financement, pole="immobilier",
-        entity_type="imm_financement",
-        list_cap="immobilier:tal_dossiers:list",
-        order_attr="updated_at", stage_attr="statut", supports_active=False,
-    ),
     # Téléphonie (bug 19, 2026-10-18) : règles d'acheminement des appels —
     # sujet (suivi_projet | nouveau_client | urgence_locataire |
     # demande_locataire | general), chantier optionnel, liste ordonnée des
@@ -2108,9 +2094,6 @@ _LIST_ALIASES: dict[str, str] = {
     "prospection_courtiers": "courtiers",
     "registre_courtiers": "courtiers",
     "tal_transmission": "tal_transmissions",
-    "financement": "financements",
-    "imm_financement": "financements",
-    "dossiers_financement": "financements",
     "immeuble_code": "immeuble_codes",
     "imm_immeuble_code": "immeuble_codes",
     "codes_immeuble": "immeuble_codes",
