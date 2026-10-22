@@ -83,13 +83,6 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "tal_schemas",
     "tal_connexion",
     "tal_transmissions",
-    #: Financement d'un immeuble (Gestion locative → Financement, 2026-10-16) :
-    #: dossiers (prêteur, montant, statut), checklist des pièces, journal.
-    #: Lecture IA : kratos_list_entities(financements) + détail financement ;
-    #: routes /immobilier/financement (rent roll, paquet PDF, baux parallèles).
-    "imm_financements",
-    "imm_financement_pieces",
-    "imm_financement_journal",
     "client_documents",
     "clients",
     "contact_hides",

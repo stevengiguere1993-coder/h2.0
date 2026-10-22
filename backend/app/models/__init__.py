@@ -25,11 +25,6 @@ from app.models.prospection_courtier import (  # noqa: F401
     ProspectionCourtierAnnonce,
     ProspectionCourtierContact,
 )
-from app.models.financement import (  # noqa: F401
-    Financement,
-    FinancementJournal,
-    FinancementPiece,
-)
 from app.models.tal_bail import (  # noqa: F401
     TalConnexion,
     TalSchema,
