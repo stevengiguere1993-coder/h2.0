@@ -101,7 +101,12 @@ def _echapper(s: Any) -> str:
 
 
 #: Balises qui encadrent le bloc JSON dans le courriel : la routine
-#: n'a qu'à prendre le texte entre les deux.
+#: n'a qu'à prendre le texte entre les deux. ⚠️ Dans le HTML, elles sont
+#: ÉCHAPPÉES (&lt;&lt;&lt;KRATOS_JSON) : envoyées brutes, Exchange lisait
+#: « <KRATOS_JSON … > » comme une balise inconnue et avalait TOUT le bloc —
+#: le courriel reçu ne contenait plus que « <<>> » (bug Phil 2026-10-22,
+#: « le JSON semble vide tous les matins »). En texte, Outlook rend les
+#: entités : la routine retrouve bien <<<KRATOS_JSON … KRATOS_JSON>>>.
 JSON_DEBUT = "<<<KRATOS_JSON"
 JSON_FIN = "KRATOS_JSON>>>"
 _MAX_EVENEMENTS = 150
@@ -250,7 +255,7 @@ def construire_html(donnees: dict[str, Any], prenom: str, quand: datetime) -> st
         + "<h3>Bloc machine (pour la routine Claude)</h3>"
         "<p style=\"color:#666;font-size:12px\">Le texte entre les deux balises est du JSON : periode, digest, "
         "sommaire (synthese, evenements), analyses, deals, avertissements.</p>"
-        f"<pre style=\"font-size:11px;white-space:pre-wrap\">{JSON_DEBUT}\n{_echapper(bloc_json)}\n{JSON_FIN}</pre>"
+        f"<pre style=\"font-size:11px;white-space:pre-wrap\">{_echapper(JSON_DEBUT)}\n{_echapper(bloc_json)}\n{_echapper(JSON_FIN)}</pre>"
         "<p style=\"color:#666;font-size:12px\">Courriel produit par Kratos pour les routines Claude "
         "(Paramètres → Automatisations → Brief du matin par courriel). "
         "<a href=\"https://immohorizon.com/app\">Ouvrir Kratos</a></p>"
