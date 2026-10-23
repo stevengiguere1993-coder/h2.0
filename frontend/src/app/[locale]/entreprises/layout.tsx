@@ -275,10 +275,13 @@ export default function EntreprisesLayout({
     { href: "/entreprises", label: "Entreprises", icon: Briefcase },
     { href: "/entreprises/dashboards", label: "Tableaux de bord", icon: LayoutGrid },
     // Coût à l'heure contre les entrées de fonds (Steven 2026-10-03, bug 14).
+    // En développement (Steven 2026-10-23) → propriétaires seulement, titre
+    // en rouge.
     {
       href: "/entreprises/depenses-construction",
       label: "Dépenses construction",
-      icon: HardHat
+      icon: HardHat,
+      enDeveloppement: "entreprises.depenses_construction_dev"
     },
     {
       href: "/entreprises/taches",

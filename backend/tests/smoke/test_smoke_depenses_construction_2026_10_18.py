@@ -5,15 +5,21 @@ calculer coût à l'heure vs entrée de fonds »).
 Données en mars-avril 2032 (aucun autre test n'y écrit), retirées à la
 fin du module. Employés sans prime CNESST ni CCQ : coût réel = taux.
 QuickBooks est simulé : aucun appel réseau.
+
+En développement depuis le 2026-10-23 (« juste permettre au dev de
+voir ») : propriétaires seulement, sauf exception individuelle.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import date, datetime, timezone
+from typing import Dict
 
 import pytest
 from sqlalchemy import delete
 
 import app.services.qbo_optimisation as opti
+from app.core.security import create_access_token, get_password_hash
 from app.integrations.quickbooks import QuickBooksError
 from app.models.achat import Achat
 from app.models.client import Client
@@ -23,6 +29,8 @@ from app.models.payment import Payment
 from app.models.project import Project
 from app.models.punch import Punch
 from app.models.sous_traitant import SousTraitant
+from app.models.user import User
+from app.models.user_access_override import UserAccessOverride
 from app.services import depenses_construction as svc
 from app.services.punch_diner import aujourd_hui_local
 
@@ -30,6 +38,35 @@ from tests.smoke.conftest import TestSessionLocal
 
 URL = "/api/v1/depenses-construction"
 PERIODE = {"debut": "2032-03-01", "fin": "2032-04-30"}
+PAGE = "page:entreprises.depenses_construction_dev"
+
+
+def _compte(run, role: str, *, exception: bool = False) -> Dict[str, str]:
+    """Compte de test et son jeton ; ``exception`` ouvre la page par une
+    exception individuelle (Paramètres → Permissions)."""
+
+    async def _seed() -> int:
+        async with TestSessionLocal() as s:
+            u = User(
+                email=f"smoke-depenses-{role}-{uuid.uuid4().hex[:8]}@example.com",
+                hashed_password=get_password_hash("smoke-depenses-x"),
+                is_active=True,
+                is_admin=role in ("owner", "admin"),
+                role=role,
+            )
+            s.add(u)
+            await s.flush()
+            if exception:
+                s.add(UserAccessOverride(user_id=u.id, key=PAGE, allow=True))
+            await s.commit()
+            return u.id
+
+    return {"Authorization": f"Bearer {create_access_token(subject=str(run(_seed())))}"}
+
+
+@pytest.fixture(scope="module")
+def owner_headers(client, run) -> Dict[str, str]:
+    return _compte(run, "owner")
 
 
 def _utc(*args: int) -> datetime:
@@ -149,8 +186,8 @@ def donnees(run, db_setup):
 # ── Vue d'ensemble Kratos ──────────────────────────────────────────────
 
 
-def test_vue_ensemble(client, auth_headers, donnees):
-    r = client.get(URL, headers=auth_headers, params=PERIODE)
+def test_vue_ensemble(client, owner_headers, donnees):
+    r = client.get(URL, headers=owner_headers, params=PERIODE)
     assert r.status_code == 200, r.text
     v = r.json()
 
@@ -196,8 +233,8 @@ def test_vue_ensemble(client, auth_headers, donnees):
     assert avril["entrees_ht"] == 1000 and avril["ecart_heure"] == -225.71
 
 
-def test_mois_entame_et_periode_sans_donnees(client, auth_headers, donnees):
-    r = client.get(URL, headers=auth_headers, params={"debut": "2032-03-15", "fin": "2032-03-31"})
+def test_mois_entame_et_periode_sans_donnees(client, owner_headers, donnees):
+    r = client.get(URL, headers=owner_headers, params={"debut": "2032-03-15", "fin": "2032-03-31"})
     assert r.status_code == 200, r.text
     v = r.json()
     # Le 10 et le 11 mars sont avant le 15 ; les 50 $ saisis le 15 et
@@ -206,37 +243,49 @@ def test_mois_entame_et_periode_sans_donnees(client, auth_headers, donnees):
     assert v["materiaux"] == 50 and v["entrees_ht"] == 4000
     assert [(m["mois"], m["debut"]) for m in v["mois"]] == [("2032-03", "2032-03-15")]
 
-    r = client.get(URL, headers=auth_headers, params={"debut": "2033-01-01", "fin": "2033-02-15"})
+    r = client.get(URL, headers=owner_headers, params={"debut": "2033-01-01", "fin": "2033-02-15"})
     v = r.json()
     assert v["depenses"] == 0 and v["entrees_ht"] == 0 and v["heures"] == 0
     assert all(c["part_pct"] == 0 for c in v["categories"])
     assert [m["mois"] for m in v["mois"]] == ["2033-01", "2033-02"]
 
 
-def test_periode_par_defaut_et_validation(client, auth_headers):
-    r = client.get(URL, headers=auth_headers)
+def test_periode_par_defaut_et_validation(client, owner_headers):
+    r = client.get(URL, headers=owner_headers)
     assert r.status_code == 200, r.text
     auj = aujourd_hui_local()
     v = r.json()
     assert v["fin"] == auj.isoformat()
     assert v["debut"].endswith("-01") and len(v["mois"]) == 12
 
-    r = client.get(URL, headers=auth_headers, params={"debut": "2032-05-01", "fin": "2032-04-30"})
+    r = client.get(URL, headers=owner_headers, params={"debut": "2032-05-01", "fin": "2032-04-30"})
     assert r.status_code == 422
     assert "précéder" in r.json()["detail"]
-    r = client.get(URL, headers=auth_headers, params={"debut": "2020-01-01", "fin": "2032-04-30"})
+    r = client.get(URL, headers=owner_headers, params={"debut": "2020-01-01", "fin": "2032-04-30"})
     assert r.status_code == 422
 
 
-def test_reserve_aux_gestionnaires_du_pole(client, employee_headers):
-    assert client.get(URL, headers=employee_headers, params=PERIODE).status_code == 403
-    assert client.get(f"{URL}/quickbooks", headers=employee_headers).status_code == 403
+def test_en_developpement_reserve_au_dev(client, run, owner_headers, auth_headers, employee_headers):
+    # Propriétaire : la page est accordée (lien rouge dans le menu).
+    assert client.get("/api/v1/auth/me", headers=owner_headers).json()["access"][PAGE] is True
+    assert client.get(URL, headers=owner_headers, params=PERIODE).status_code == 200
+
+    # Admin et employé : ni lien ni données.
+    for h in (auth_headers, employee_headers):
+        assert client.get("/api/v1/auth/me", headers=h).json()["access"][PAGE] is False
+        assert client.get(URL, headers=h, params=PERIODE).status_code == 403
+        assert client.get(f"{URL}/quickbooks", headers=h).status_code == 403
+
+    # Exception individuelle : l'ouvrir à un admin sans changer le seuil.
+    invite = _compte(run, "admin", exception=True)
+    assert client.get("/api/v1/auth/me", headers=invite).json()["access"][PAGE] is True
+    assert client.get(URL, headers=invite, params=PERIODE).status_code == 200
 
 
 # ── QuickBooks ─────────────────────────────────────────────────────────
 
 
-def test_quickbooks_ramene_aux_heures(client, auth_headers, donnees, monkeypatch):
+def test_quickbooks_ramene_aux_heures(client, owner_headers, donnees, monkeypatch):
     appels: list[tuple] = []
 
     async def faux_cashflow(scope, debut, fin, hypotheque_account_id=None):
@@ -260,7 +309,7 @@ def test_quickbooks_ramene_aux_heures(client, auth_headers, donnees, monkeypatch
         }
 
     monkeypatch.setattr(opti, "cashflow_mensuel", faux_cashflow)
-    r = client.get(f"{URL}/quickbooks", headers=auth_headers, params=PERIODE)
+    r = client.get(f"{URL}/quickbooks", headers=owner_headers, params=PERIODE)
     assert r.status_code == 200, r.text
     v = r.json()
     assert appels == [("construction", "2032-03-01", "2032-04-30")]
@@ -279,12 +328,12 @@ def test_quickbooks_ramene_aux_heures(client, auth_headers, donnees, monkeypatch
     ]
 
 
-def test_quickbooks_non_connecte_ou_en_erreur(client, auth_headers, monkeypatch):
+def test_quickbooks_non_connecte_ou_en_erreur(client, owner_headers, monkeypatch):
     async def non_connecte(*a, **kw):
         raise RuntimeError("QuickBooks n'est pas connecté pour « construction ».")
 
     monkeypatch.setattr(opti, "cashflow_mensuel", non_connecte)
-    r = client.get(f"{URL}/quickbooks", headers=auth_headers, params=PERIODE)
+    r = client.get(f"{URL}/quickbooks", headers=owner_headers, params=PERIODE)
     assert r.status_code == 200, r.text
     assert r.json()["connecte"] is False
     assert "pas connecté" in r.json()["erreur"]
@@ -293,7 +342,7 @@ def test_quickbooks_non_connecte_ou_en_erreur(client, auth_headers, monkeypatch)
         raise QuickBooksError("QBO 500")
 
     monkeypatch.setattr(opti, "cashflow_mensuel", panne)
-    r = client.get(f"{URL}/quickbooks", headers=auth_headers, params=PERIODE)
+    r = client.get(f"{URL}/quickbooks", headers=owner_headers, params=PERIODE)
     assert r.status_code == 200, r.text
     assert r.json()["connecte"] is True
     assert "QBO 500" in r.json()["erreur"]
