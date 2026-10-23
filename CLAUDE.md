@@ -185,9 +185,7 @@ court-circuité, pas un délai réseau par offre).
 
 Steven (bug 14) : « vue d'ensemble des dépenses construction général et
 calculer coût à l'heure vs entrée de fonds ». Page Entreprises → Dépenses
-construction (`page:entreprises.depenses_construction_dev`), en
-développement depuis le 2026-10-23 : titre rouge dans le menu,
-propriétaires seulement (« juste permettre au dev de voir »), calculs
+construction (`page:entreprises.depenses_construction`, admins), calculs
 dans `app/services/depenses_construction.py`. Tout est HORS TAXES. Heures
 = punchs fermés, au jour de Montréal ; main-d'œuvre = `resolve_real_cost`
 daté (comme la fiche projet) ; achats datés de `invoice_date`, sinon

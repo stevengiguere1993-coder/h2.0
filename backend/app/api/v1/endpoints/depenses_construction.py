@@ -5,8 +5,7 @@ Dépenses construction, Steven 2026-10-03, bug 14).
     GET /api/v1/depenses-construction/quickbooks?debut=&fin=  P&L QuickBooks de la construction ramené aux heures
 
 Lecture seule. Page « Dépenses construction » du pôle Entreprises
-(``page:entreprises.depenses_construction_dev``, en développement :
-propriétaires seulement par défaut). Calculs :
+(``page:entreprises.depenses_construction``, admins par défaut). Calculs :
 ``app/services/depenses_construction.py``.
 """
 
@@ -26,7 +25,7 @@ router = APIRouter(
     prefix="/depenses-construction",
     tags=["depenses-construction"],
     dependencies=[
-        Depends(require_capability("page:entreprises.depenses_construction_dev"))
+        Depends(require_capability("page:entreprises.depenses_construction"))
     ],
 )
 
