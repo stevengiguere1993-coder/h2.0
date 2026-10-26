@@ -362,8 +362,3 @@ class TimesheetPunch(Base, TimestampUpdateMixin):
     stopped_by_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    #: Position GPS au moment du punch, ``"lat,lng|lat,lng"`` (début|fin),
-    #: même format que ``Punch.geolocation`` (Steven, 2026-10-26). Prise
-    #: seulement au punch, jamais entre les deux ; NULL si l'appareil n'a
-    #: pas donné la position (le punch n'est jamais bloqué pour autant).
-    geolocation: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)

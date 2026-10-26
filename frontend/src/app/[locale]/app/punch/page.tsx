@@ -15,7 +15,6 @@ import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { authedFetch } from "@/lib/auth";
-import { capturerPositionPunch, parsePositionPunch } from "@/lib/punch-geo";
 import { useConfirm } from "@/components/confirm-dialog";
 
 type Employe = { id: number; full_name: string; email: string | null };
@@ -113,9 +112,15 @@ async function explainError(res: Response): Promise<string> {
   }
 }
 
-/** Position prise au moment du punch seulement ; null si refusée. */
-async function getPosition(): Promise<{ lat: number; lng: number } | null> {
-  return parsePositionPunch(await capturerPositionPunch());
+async function getPosition(): Promise<GeolocationPosition | null> {
+  if (!("geolocation" in navigator)) return null;
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve(pos),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 30_000 }
+    );
+  });
 }
 
 export default function PunchPage() {
@@ -231,8 +236,8 @@ export default function PunchPage() {
       }
       if (task.trim()) payload.task = task.trim();
       if (pos) {
-        payload.latitude = pos.lat;
-        payload.longitude = pos.lng;
+        payload.latitude = pos.coords.latitude;
+        payload.longitude = pos.coords.longitude;
       }
       const res = await authedFetch("/api/v1/punch/clock-in", {
         method: "POST",
@@ -266,8 +271,8 @@ export default function PunchPage() {
       const pos = await getPosition();
       const payload: Record<string, unknown> = {};
       if (pos) {
-        payload.latitude = pos.lat;
-        payload.longitude = pos.lng;
+        payload.latitude = pos.coords.latitude;
+        payload.longitude = pos.coords.longitude;
       }
       if (notes.trim()) payload.notes = notes.trim();
       const res = await authedFetch("/api/v1/punch/clock-out", {

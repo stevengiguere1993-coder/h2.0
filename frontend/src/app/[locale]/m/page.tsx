@@ -20,7 +20,6 @@ import {
 
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
-import { capturerPositionPunch } from "@/lib/punch-geo";
 import { useZoneEmploye } from "./zone-employe-context";
 import { AccueilAutre } from "./_autre/accueil-autre";
 import { BlocNotesBanner } from "./bloc-notes-banner";
@@ -223,9 +222,32 @@ function MobileHomeConstruction() {
   async function punchStop() {
     setPunchBusy(true);
     try {
-      // Position de sortie, prise au moment du punch seulement. Pas
-      // bloquant si l'appareil la refuse.
-      const geo = await capturerPositionPunch();
+      // Best-effort geo capture pour ajouter le lieu d'arrêt à
+      // l'historique. Pas bloquant si l'utilisateur refuse / pas dispo.
+      let geo: string | null = null;
+      if (typeof navigator !== "undefined" && navigator.geolocation) {
+        geo = await new Promise<string | null>((resolve) => {
+          const timeoutId = setTimeout(() => resolve(null), 6000);
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              clearTimeout(timeoutId);
+              const { latitude, longitude } = pos.coords;
+              resolve(
+                `${latitude.toFixed(6)},${longitude.toFixed(6)}`
+              );
+            },
+            () => {
+              clearTimeout(timeoutId);
+              resolve(null);
+            },
+            {
+              enableHighAccuracy: true,
+              timeout: 5000,
+              maximumAge: 30000
+            }
+          );
+        });
+      }
       const res = await authedFetch("/api/v1/mobile/punch/stop", {
         method: "POST",
         body: JSON.stringify(geo ? { geolocation: geo } : {})

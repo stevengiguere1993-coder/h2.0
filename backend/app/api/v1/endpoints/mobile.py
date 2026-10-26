@@ -26,8 +26,6 @@ from app.models.contact_request import ContactRequest, ContactRequestStatus
 from app.models.employe import Employe
 from app.models.project import Project, ProjectStatus
 from app.models.punch import Punch
-from app.services.punch_geo import ajouter_fin
-from app.services.punch_geo import normaliser as normaliser_position
 
 
 router = APIRouter(prefix="/mobile", tags=["mobile"])
@@ -317,7 +315,7 @@ async def punch_start(
         bon_travail_id=body.bon_travail_id,
         started_at=now,
         task=body.task,
-        geolocation=normaliser_position(body.geolocation),
+        geolocation=body.geolocation,
         # Hors décret par défaut ; le régime CCQ se pose à l'approbation
         # par un admin+ (retour Phil 2026-09-26).
         regime="hors_decret",
@@ -382,11 +380,14 @@ async def punch_stop(
         started = started.replace(tzinfo=timezone.utc)
     delta = (now - started).total_seconds() / 3600.0
     p.hours = round(delta, 2)
-    # Position de sortie ajoutée à celle d'entrée (« début|fin ») pour
-    # distinguer début et fin dans l'historique admin.
-    p.geolocation = ajouter_fin(
-        p.geolocation, normaliser_position(body.geolocation if body else None)
-    )
+    # Concatène le geolocation de fin si fourni — séparateur '|' pour
+    # qu'on puisse distinguer début et fin dans l'historique admin.
+    if body and body.geolocation:
+        end_geo = body.geolocation.strip()
+        if p.geolocation:
+            p.geolocation = f"{p.geolocation}|{end_geo}"[:128]
+        else:
+            p.geolocation = end_geo[:128]
     await db.flush()
     # Case « dîner » de la fiche : 30 min retirées si la journée dépasse 5 h.
     from app.services.punch_diner import appliquer_diner_auto
