@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   Clock,
   Loader2,
+  MapPin,
   Target,
   Timer,
   Users
@@ -22,6 +23,7 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { lienCarte, positionsPunch } from "@/lib/punch-geo";
 import { useConfirm } from "@/components/confirm-dialog";
 import {
   CARD,
@@ -236,6 +238,7 @@ function PunchEnCours({
   const [erreur, setErreur] = useState<string | null>(null);
   const p = employe.punch_en_cours;
   if (!p) return null;
+  const position = positionsPunch(p.geolocation).debut;
   const debut = new Date(p.started_at);
   const heure = debut.toLocaleTimeString("fr-CA", {
     hour: "2-digit",
@@ -295,6 +298,19 @@ function PunchEnCours({
             {p.title}
             {p.company_label ? ` · ${p.company_label}` : ""}
           </p>
+          {position ? (
+            <a
+              href={lienCarte(position)}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="mt-0.5 inline-flex items-center gap-1 text-xs text-[var(--qg-text-muted)] hover:text-[var(--qg-text)] hover:underline"
+              title="Position au début du punch (Google Maps)"
+            >
+              <MapPin className="h-3 w-3" />
+              {position.lat.toFixed(5)}, {position.lng.toFixed(5)}
+            </a>
+          ) : null}
         </div>
         <button
           type="button"

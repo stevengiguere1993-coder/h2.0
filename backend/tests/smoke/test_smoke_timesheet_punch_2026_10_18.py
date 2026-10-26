@@ -326,3 +326,72 @@ def test_punch_oublie_annulation_et_gestionnaire(client, auth_headers, employee_
     # Arrêté : l'approbation passe.
     r = client.post(f"/api/v1/timesheets/{feuille['id']}/approve", headers=auth_headers)
     assert r.status_code == 200, r.text
+
+
+def test_punch_garde_la_position(client, auth_headers, video, run):
+    """Position GPS prise à chaque punch (Steven, 2026-10-26) : au début
+    et à l'arrêt, « début|fin » ; le gestionnaire qui ferme un punch
+    oublié n'ajoute pas la sienne ; sans position, le punch part quand
+    même."""
+    h = video["headers"]
+    cie = _compagnie(client, video)
+    # Le test précédent a approuvé la feuille de la période courante : on
+    # la rouvre, sinon aucun punch ne peut commencer.
+    courante = client.get("/api/v1/timesheets/resolve", headers=h).json()
+    if courante["status"] == "approuve":
+        r = client.post(f"/api/v1/timesheets/{courante['id']}/reopen", headers=auth_headers)
+        assert r.status_code == 200, r.text
+
+    r = client.post(
+        "/api/v1/timesheets/punch/start",
+        headers=h,
+        json={"company_id": cie, "title": "Tournage", "geolocation": "45.5016889,-73.567256"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["geolocation"] == "45.501689,-73.567256"
+    # Le gestionnaire voit où le punch a commencé.
+    r = client.get("/api/v1/entreprises/employes", headers=auth_headers)
+    moi = next(e for e in r.json() if e["id"] == video["id"])
+    assert moi["punch_en_cours"]["geolocation"] == "45.501689,-73.567256"
+
+    _deplacer_debut(run, video["id"], T1)
+    r = client.post(
+        "/api/v1/timesheets/punch/stop",
+        headers=h,
+        json={"fin": (T1 + timedelta(hours=1)).isoformat(), "geolocation": "45.52,-73.58"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["punch"]["geolocation"] == "45.501689,-73.567256|45.520000,-73.580000"
+
+    # Position refusée au début, reçue à la fin : la fin reste à droite.
+    r = client.post(
+        "/api/v1/timesheets/punch/start", headers=h, json={"company_id": cie, "title": "Sans GPS"}
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["geolocation"] is None
+    _deplacer_debut(run, video["id"], T1 + timedelta(hours=2))
+    r = client.post(
+        "/api/v1/timesheets/punch/stop",
+        headers=h,
+        json={"fin": (T1 + timedelta(hours=3)).isoformat(), "geolocation": "45.52,-73.58"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["punch"]["geolocation"] == "|45.520000,-73.580000"
+
+    # Texte invalide : ignoré, le punch part quand même.
+    r = client.post(
+        "/api/v1/timesheets/punch/start",
+        headers=h,
+        json={"company_id": cie, "title": "Oubli", "geolocation": "n/a"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["geolocation"] is None
+    # Le gestionnaire ferme l'oubli : sa position n'est pas celle de l'employé.
+    _deplacer_debut(run, video["id"], T1 + timedelta(hours=4))
+    r = client.post(
+        "/api/v1/timesheets/punch/stop",
+        headers=auth_headers,
+        json={"user_id": video["id"], "geolocation": "46.8,-71.2"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["punch"]["geolocation"] is None

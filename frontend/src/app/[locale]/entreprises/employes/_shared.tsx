@@ -61,6 +61,8 @@ export type PunchEnCoursOut = {
   started_at: string;
   title: string;
   company_label: string;
+  /** Position GPS « lat,lng » prise au début du punch (null si refusée). */
+  geolocation: string | null;
 };
 
 // ── Contexte de section ────────────────────────────────────────────────

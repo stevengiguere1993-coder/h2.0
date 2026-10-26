@@ -15,6 +15,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2, Play, Square, Timer, X } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { capturerPositionPunch } from "@/lib/punch-geo";
 import { useConfirm } from "@/components/confirm-dialog";
 import {
   fmtDayShort,
@@ -35,6 +36,8 @@ export type PunchEnCours = {
   started_at: string;
   ended_at: string | null;
   hours: number | null;
+  /** Position GPS « début|fin » prise au punch (null si refusée). */
+  geolocation: string | null;
 };
 
 /** POST /timesheets/punch/stop */
@@ -230,13 +233,17 @@ export function PunchFeuille({
     setError(null);
     setInfo(null);
     try {
+      // Position prise au moment du punch seulement ; le punch part
+      // sans elle si l'appareil la refuse.
+      const geolocation = await capturerPositionPunch();
       const res = await authedFetch("/api/v1/timesheets/punch/start", {
         method: "POST",
         body: JSON.stringify({
           company_id: companyId,
           entreprise_tache_id:
             effectiveMode === "import" ? selected?.id ?? null : null,
-          title: finalTitle
+          title: finalTitle,
+          geolocation
         })
       });
       if (!res.ok) {
@@ -276,9 +283,12 @@ export function PunchFeuille({
     setError(null);
     setInfo(null);
     try {
+      const geolocation = await capturerPositionPunch();
       const res = await authedFetch("/api/v1/timesheets/punch/stop", {
         method: "POST",
-        body: JSON.stringify(finIso ? { fin: finIso } : {})
+        body: JSON.stringify(
+          finIso ? { fin: finIso, geolocation } : { geolocation }
+        )
       });
       if (!res.ok) {
         const msg = await readApiError(res, "Le punch n'a pas pu s'arrêter.");
