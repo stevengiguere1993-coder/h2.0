@@ -13,8 +13,12 @@ import {
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import {
+  composerNumeroLogement,
+  decomposerNumeroLogement,
   exempleNumeros,
+  nettoyerSuffixeLogement,
   numerosDuLot as calculerNumerosDuLot,
+  SUFFIXE_LOGEMENT_MAX,
   type LotNumerosParams
 } from "@/lib/logements-numeros";
 import {
@@ -156,8 +160,12 @@ export function LogementFiche({
   const premierNumero = Number.isNaN(parseInt(lot.de, 10))
     ? 1
     : parseInt(lot.de, 10);
+  //: Numéro de porte et suffixe dans deux cases (Steven, 2026-10-26 :
+  //: « 976 - A, le A séparé du numéro de porte ») ; enregistré « 976-A ».
+  const numeroInitial = decomposerNumeroLogement(logement?.numero ?? "");
   const [form, setForm] = useState({
-    numero: logement?.numero ?? "",
+    numero: numeroInitial.numero,
+    suffixe: numeroInitial.suffixe,
     type: logement?.type ?? "residentiel",
     status: logement?.status ?? "vacant",
     nb_pieces_decimal:
@@ -176,6 +184,7 @@ export function LogementFiche({
       logement?.loyer_demande != null ? String(logement.loyer_demande) : "",
     notes: logement?.notes ?? ""
   });
+  const numeroComplet = composerNumeroLogement(form.numero, form.suffixe);
   const [enChambres, setEnChambres] = useState(
     !!logement?.location_en_chambres
   );
@@ -232,7 +241,7 @@ export function LogementFiche({
     setDoublon(null);
     try {
       const body: Record<string, unknown> = {
-        numero: form.numero.trim(),
+        numero: numeroComplet,
         type: form.type,
         status: form.status,
         nb_pieces_decimal: numOrNull(form.nb_pieces_decimal),
@@ -594,14 +603,45 @@ export function LogementFiche({
           <div className="grid gap-3 sm:grid-cols-2">
             {!(isCreate && plusieurs) ? (
               <div>
-                <label className="label">Numéro *</label>
-                <input
-                  required
-                  value={form.numero}
-                  onChange={(e) => set("numero", e.target.value)}
-                  className="input"
-                  placeholder="ex. 101"
-                />
+                <div className="flex gap-2">
+                  <div className="min-w-0 flex-1">
+                    <label className="label" htmlFor="lg-numero">
+                      Numéro *
+                    </label>
+                    <input
+                      id="lg-numero"
+                      required
+                      value={form.numero}
+                      onChange={(e) => set("numero", e.target.value)}
+                      className="input"
+                      placeholder="ex. 101"
+                    />
+                  </div>
+                  <div className="w-[5.5rem] shrink-0">
+                    <label className="label" htmlFor="lg-suffixe">
+                      Suffixe
+                    </label>
+                    <input
+                      id="lg-suffixe"
+                      value={form.suffixe}
+                      onChange={(e) =>
+                        set("suffixe", nettoyerSuffixeLogement(e.target.value))
+                      }
+                      className="input text-center font-mono"
+                      placeholder="A"
+                      maxLength={SUFFIXE_LOGEMENT_MAX}
+                      autoComplete="off"
+                      autoCapitalize="characters"
+                      title="Lettre après le numéro de porte : 976 et A donnent 976-A"
+                    />
+                  </div>
+                </div>
+                {form.suffixe ? (
+                  <p className="mt-1 text-xs text-white/70">
+                    Enregistré comme{" "}
+                    <span className="font-mono text-white">{numeroComplet}</span>
+                  </p>
+                ) : null}
               </div>
             ) : null}
             <div>
