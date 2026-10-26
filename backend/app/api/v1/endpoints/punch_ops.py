@@ -29,6 +29,7 @@ from app.services.employe_rates import (
 )
 from app.services.project_auto_status import bump_to_in_progress_if_needed
 from app.services.punch_diner import appliquer_diner_auto, heures_brutes, heures_nettes
+from app.services.punch_geo import ajouter_fin, position as position_punch
 
 
 router = APIRouter(prefix="/punch", tags=["punch"])
@@ -142,9 +143,7 @@ async def _active_punch(db, employe_id: int) -> Optional[Punch]:
 
 
 def _geo_str(lat: Optional[float], lng: Optional[float]) -> Optional[str]:
-    if lat is None or lng is None:
-        return None
-    return f"{lat:.6f},{lng:.6f}"
+    return position_punch(lat, lng)
 
 
 # ---------- Endpoints ----------
@@ -291,13 +290,10 @@ async def clock_out(
             open_punch.notes = (
                 f"{open_punch.notes}\n{extra}" if open_punch.notes else extra
             )
-    # End-location can be appended to geolocation for audit.
-    end_geo = _geo_str(data.latitude, data.longitude)
-    if end_geo:
-        if open_punch.geolocation:
-            open_punch.geolocation = f"{open_punch.geolocation}|{end_geo}"
-        else:
-            open_punch.geolocation = end_geo
+    # Position de sortie ajoutée à celle d'entrée (« début|fin »).
+    open_punch.geolocation = ajouter_fin(
+        open_punch.geolocation, _geo_str(data.latitude, data.longitude)
+    )
     await db.flush()
     # Case « dîner » de la fiche : 30 min retirées si la journée dépasse 5 h.
     await appliquer_diner_auto(db, open_punch, emp)
