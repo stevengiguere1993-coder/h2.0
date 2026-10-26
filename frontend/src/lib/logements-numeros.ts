@@ -57,3 +57,56 @@ export function exempleNumeros(prefixe: string, suffixe: string, de = 1): string
   const s = suffixe.trim();
   return [de, de + 1, de + 2].map((n) => `${p}${n}${s}`).join(", ") + "…";
 }
+
+/*
+ * Suffixe du numéro d'UN logement (Steven, 2026-10-26 : « on devrait
+ * retrouver le lieu pour mettre des suffixes, ex. 976 - A, le A séparé du
+ * numéro de porte »). Le numéro reste UNE chaîne en base, « 976-A »,
+ * comme les « 8906-C » déjà saisis : la liste, le tri naturel et la
+ * détection de doublons (`cleNumero`) n'ont rien à changer. Le
+ * formulaire montre deux cases (Numéro, Suffixe) ; ces fonctions les
+ * séparent à l'ouverture et les recollent à l'enregistrement.
+ */
+
+export const SUFFIXE_LOGEMENT_MAX = 4;
+
+/** Numéro de porte en chiffres, tiret, puis 1 à 4 lettres ou chiffres
+ *  dont au moins une lettre : « 976-A », « 8906-C », « 12-B2 ». Pas
+ *  « 3-8900 » (unité devant le civique) ni « 976-2 », qui restent tels
+ *  quels dans la case Numéro. */
+const RE_NUMERO_SUFFIXE = /^(\d+)-([A-Za-z0-9]{1,4})$/;
+
+/** Ce que l'utilisateur tape dans la case « Suffixe » : lettres et
+ *  chiffres seulement, en majuscules, 4 signes au plus. */
+export function nettoyerSuffixeLogement(brut: string): string {
+  return (brut ?? "")
+    .replace(/[^A-Za-z0-9]/g, "")
+    .slice(0, SUFFIXE_LOGEMENT_MAX)
+    .toUpperCase();
+}
+
+/** Recolle les deux cases : « 976 » + « A » → « 976-A » ; sans suffixe,
+ *  le numéro tel quel (espaces de bord retirés). La casse du suffixe est
+ *  gardée (la case met en majuscules ce qu'on tape) : rouvrir puis
+ *  enregistrer un « 8906-c » existant ne le change pas. */
+export function composerNumeroLogement(numero: string, suffixe: string): string {
+  const n = (numero ?? "").trim();
+  const s = (suffixe ?? "")
+    .replace(/[^A-Za-z0-9]/g, "")
+    .slice(0, SUFFIXE_LOGEMENT_MAX);
+  if (!s) return n;
+  if (!n) return s;
+  return `${n.replace(/[\s-]+$/, "")}-${s}`;
+}
+
+/** Sépare un numéro enregistré en ses deux cases ; un numéro d'une
+ *  autre forme (« 101 », « A-1 », « 976A ») va entier dans Numéro. */
+export function decomposerNumeroLogement(numero: string): {
+  numero: string;
+  suffixe: string;
+} {
+  const t = (numero ?? "").trim();
+  const m = RE_NUMERO_SUFFIXE.exec(t);
+  if (!m || !/[A-Za-z]/.test(m[2])) return { numero: t, suffixe: "" };
+  return { numero: m[1], suffixe: m[2] };
+}
