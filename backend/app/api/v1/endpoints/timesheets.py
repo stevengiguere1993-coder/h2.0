@@ -23,6 +23,8 @@ from app.integrations.quickbooks import QuickBooksError, get_qbo
 from app.services.qbo_monthly_invoice import add_lines_to_monthly_invoice
 from app.models.automation_setting import AutomationSetting
 from app.services.permissions_service import user_has_capability
+from app.services.punch_geo import ajouter_fin
+from app.services.punch_geo import normaliser as normaliser_position
 from app.models.timesheet import (
     TIMESHEET_DAYS,
     Timesheet,
@@ -1840,6 +1842,9 @@ class PunchOut(BaseModel):
     started_at: datetime
     ended_at: Optional[datetime] = None
     hours: Optional[float] = None
+    #: Position GPS « début|fin » prise au punch (None si l'appareil ne
+    #: l'a pas donnée).
+    geolocation: Optional[str] = None
 
 
 class PunchEtatOut(BaseModel):
@@ -1852,6 +1857,9 @@ class PunchStartIn(BaseModel):
     entreprise_tache_id: Optional[int] = None
     #: Tâche saisie à la main ; par défaut, le titre de la tâche importée.
     title: Optional[str] = Field(default=None, max_length=255)
+    #: Position GPS ``"lat,lng"`` de l'appareil au moment du punch
+    #: (Steven, 2026-10-26) ; absente si refusée ou indisponible.
+    geolocation: Optional[str] = Field(default=None, max_length=128)
 
 
 class PunchStopIn(BaseModel):
@@ -1859,6 +1867,8 @@ class PunchStopIn(BaseModel):
     fin: Optional[datetime] = None
     #: Gestionnaire : arrêter le punch d'un employé (oubli).
     user_id: Optional[int] = None
+    #: Position GPS ``"lat,lng"`` de l'appareil à l'arrêt.
+    geolocation: Optional[str] = Field(default=None, max_length=128)
 
 
 class PunchStopOut(BaseModel):
@@ -1920,6 +1930,7 @@ async def _punch_out(db, p: TimesheetPunch) -> PunchOut:
         started_at=_utc(p.started_at),
         ended_at=_utc(p.ended_at) if p.ended_at else None,
         hours=p.hours,
+        geolocation=p.geolocation,
     )
 
 
@@ -2079,6 +2090,7 @@ async def punch_start(
         entreprise_tache_id=tache_id,
         title=titre[:255],
         started_at=now,
+        geolocation=normaliser_position(payload.geolocation),
     )
     db.add(p)
     await db.commit()
@@ -2124,6 +2136,12 @@ async def punch_stop(
     p.timesheet_id = ts.id
     p.day_index = (jour - ts.period_start).days
     p.stopped_by_user_id = user.id
+    # Position de sortie : celle de l'appareil qui arrête le punch. Un
+    # gestionnaire qui ferme un punch oublié n'en envoie pas.
+    if payload.user_id is None or payload.user_id == user.id:
+        p.geolocation = ajouter_fin(
+            p.geolocation, normaliser_position(payload.geolocation)
+        )
     ajoutees = 0.0
     message: Optional[str] = None
     if ts.status == "approuve":

@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Download,
   Loader2,
+  MapPin,
   Plus,
   Search,
   Trash2,
@@ -20,6 +21,7 @@ import { SearchSelect } from "@/components/search-select";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch, hasMinRole } from "@/lib/auth";
+import { lienCarte, positionsPunch } from "@/lib/punch-geo";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { projectLabel } from "@/lib/project";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -1000,10 +1002,18 @@ export default function PunchGestionPage() {
                       </td>
                       <td className="px-4 py-3 text-white/70">{target}</td>
                       <td className="px-4 py-3 text-white/70">
-                        {fmtDateTime(p.started_at)}
+                        <span className="inline-flex items-center gap-1">
+                          {fmtDateTime(p.started_at)}
+                          <PositionPin raw={p.geolocation} quoi="debut" />
+                        </span>
                       </td>
                       <td className="px-4 py-3 text-white/70">
-                        {p.ended_at ? fmtDateTime(p.ended_at) : (
+                        {p.ended_at ? (
+                          <span className="inline-flex items-center gap-1">
+                            {fmtDateTime(p.ended_at)}
+                            <PositionPin raw={p.geolocation} quoi="fin" />
+                          </span>
+                        ) : (
                           <span className="text-accent-500">EN COURS</span>
                         )}
                       </td>
@@ -1548,20 +1558,50 @@ function PunchModal({
 // ---------------------------------------------------------------------------
 
 function GeolocationDisplay({ raw }: { raw: string }) {
-  const parts = raw.split("|");
-  const start = parseLatLng(parts[0]);
-  const end = parts.length > 1 ? parseLatLng(parts[1]) : null;
-  if (!start) return null;
+  // « début|fin » ; l'un ou l'autre peut manquer (appareil qui n'a pas
+  // donné la position à ce punch-là).
+  const { debut: start, fin: end } = positionsPunch(raw);
+  if (!start && !end) return null;
   return (
     <div className="rounded-md border border-brand-800 bg-brand-900 px-3 py-2 text-sm">
       <p className="text-xs uppercase tracking-wider text-white/50">
         📍 Lieu du punch
       </p>
       <div className="mt-1 space-y-2">
-        <GeoLine label="Début" geo={start} />
+        {start ? (
+          <GeoLine label="Début" geo={start} />
+        ) : (
+          <p className="text-xs text-white/50">Début : position non reçue</p>
+        )}
         {end ? <GeoLine label="Fin" geo={end} /> : null}
       </div>
     </div>
+  );
+}
+
+/** Épingle dans la liste : position reçue à ce punch (lien Maps). */
+function PositionPin({
+  raw,
+  quoi
+}: {
+  raw: string | null;
+  quoi: "debut" | "fin";
+}) {
+  const pos = positionsPunch(raw);
+  const geo = quoi === "debut" ? pos.debut : pos.fin;
+  if (!geo) return null;
+  return (
+    <a
+      href={lienCarte(geo)}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      className="text-accent-300 hover:text-accent-200"
+      title={`Position au ${quoi === "debut" ? "début" : "fin"} : ${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)} (ouvrir dans Google Maps)`}
+      aria-label="Position du punch"
+    >
+      <MapPin className="h-3.5 w-3.5" />
+    </a>
   );
 }
 
@@ -1662,15 +1702,6 @@ function GeoLine({
       </div>
     </div>
   );
-}
-
-function parseLatLng(s: string): { lat: number; lng: number } | null {
-  if (!s) return null;
-  const [latStr, lngStr] = s.split(",");
-  const lat = Number(latStr);
-  const lng = Number(lngStr);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-  return { lat, lng };
 }
 
 
