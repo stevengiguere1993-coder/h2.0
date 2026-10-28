@@ -153,6 +153,27 @@ async def qbo_webhook(request: Request) -> Response:
                     other_realms.add(str(conn_row.realm_id))
     except Exception as exc:  # noqa: BLE001
         log.warning("webhook QBO: résolution des realms échouée: %s", exc)
+
+    # Fusion de deux clients faite dans QuickBooks (Comptabilité → Clients
+    # en double, 2026-10-18), dans N'IMPORTE QUELLE compagnie connectée :
+    # Kratos remet ses liens sur la fiche gardée (``id``) à la place de
+    # celle qui a disparu (``deletedId``).
+    fusions: List[Tuple[str, str, str]] = []
+    for note in payload.get("eventNotifications") or []:
+        rid = str(note.get("realmId") or "")
+        for ent in (note.get("dataChangeEvent") or {}).get("entities") or []:
+            if (
+                str(ent.get("name") or "") == "Customer"
+                and str(ent.get("operation") or "") == "Merge"
+                and ent.get("id")
+                and ent.get("deletedId")
+                and rid
+                and (rid == realm or rid in other_realms)
+            ):
+                fusions.append((rid, str(ent["deletedId"]), str(ent["id"])))
+    if fusions:
+        _garder_tache(asyncio.create_task(_suivre_fusions_clients(fusions)))
+
     changed: List[Tuple[str, str]] = []
     pull_needed = False
     for note in payload.get("eventNotifications") or []:
@@ -213,6 +234,40 @@ async def qbo_webhook(request: Request) -> Response:
     # Toujours 200 : sinon Intuit ré-émet en boucle (le traitement est
     # best-effort, chaque entité est isolée).
     return Response(status_code=status.HTTP_200_OK)
+
+
+#: Tâches de fond en cours : sans référence, la boucle d'événements peut
+#: ramasser une tâche avant qu'elle ait fini.
+_TACHES: set = set()
+
+
+def _garder_tache(tache: "asyncio.Task") -> None:
+    _TACHES.add(tache)
+    tache.add_done_callback(_TACHES.discard)
+
+
+async def _suivre_fusions_clients(fusions: List[Tuple[str, str, str]]) -> None:
+    """(realm, id disparu, id gardé) de chaque fusion de clients signalée
+    par Intuit → liens Kratos remis sur la fiche gardée. Idempotent : un
+    événement rejoué ne trouve plus rien à déplacer."""
+    from app.services.qbo_doublons import suivre_fusion_webhook
+
+    for realm_id, ancien, garde in fusions:
+        try:
+            async with AsyncSessionLocal() as db:
+                res = await suivre_fusion_webhook(
+                    db, realm_id=realm_id, source_id=ancien, cible_id=garde
+                )
+                await db.commit()
+            log.info(
+                "Fusion de clients QuickBooks suivie (realm %s, %s → %s) : %s",
+                realm_id, ancien, garde, res,
+            )
+        except Exception:  # noqa: BLE001
+            log.warning(
+                "Suivi de la fusion QuickBooks %s → %s (realm %s) échoué",
+                ancien, garde, realm_id, exc_info=True,
+            )
 
 
 # Coalescence du pull complet déclenché par webhook. L'ANCIEN débounce
