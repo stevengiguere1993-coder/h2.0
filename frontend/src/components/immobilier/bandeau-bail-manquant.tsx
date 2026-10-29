@@ -2,8 +2,8 @@
 
 /**
  * Bandeau « Bail manquant au dossier » — même portée et même rendu que
- * `BandeauAvisRenouvellement` (page Baux, fiche immeuble — retiré de la
- * page Paiements le 2026-10-29).
+ * `BandeauAvisRenouvellement` (page Paiements, page Baux, fiche
+ * immeuble).
  *
  * Pourquoi il existe (audit 2026-08-19) : les baux sont signés HORS de
  * Kratos, le seul exemplaire au dossier est celui qu'on IMPORTE à
