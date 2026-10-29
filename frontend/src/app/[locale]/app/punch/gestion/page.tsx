@@ -21,13 +21,7 @@ import { SearchSelect } from "@/components/search-select";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch, hasMinRole } from "@/lib/auth";
-import {
-  NOTE_APPROX,
-  lienCarte,
-  positionsPunch,
-  texteCoordonnees,
-  type PositionPunch
-} from "@/lib/punch-geo";
+import { lienCarte, positionsPunch } from "@/lib/punch-geo";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { projectLabel } from "@/lib/project";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -1602,13 +1596,9 @@ function PositionPin({
       target="_blank"
       rel="noopener noreferrer"
       onClick={(e) => e.stopPropagation()}
-      className={
-        geo.approx
-          ? "text-amber-300 hover:text-amber-200"
-          : "text-accent-300 hover:text-accent-200"
-      }
-      title={`Position ${geo.approx ? "approximative (adresse internet) " : ""}au ${quoi === "debut" ? "début" : "fin"} : ${texteCoordonnees(geo)} (ouvrir dans Google Maps)`}
-      aria-label={geo.approx ? "Position approximative du punch" : "Position du punch"}
+      className="text-accent-300 hover:text-accent-200"
+      title={`Position au ${quoi === "debut" ? "début" : "fin"} : ${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)} (ouvrir dans Google Maps)`}
+      aria-label="Position du punch"
     >
       <MapPin className="h-3.5 w-3.5" />
     </a>
@@ -1620,7 +1610,7 @@ function GeoLine({
   geo
 }: {
   label: string;
-  geo: PositionPunch;
+  geo: { lat: number; lng: number };
 }) {
   const [address, setAddress] = useState<string | null>(null);
   const [loadingAddr, setLoadingAddr] = useState(true);
@@ -1708,11 +1698,6 @@ function GeoLine({
               {geo.lat.toFixed(5)}, {geo.lng.toFixed(5)}
             </span>
           </p>
-          {geo.approx ? (
-            <p className="text-[11px] font-medium text-amber-300" title={NOTE_APPROX}>
-              ≈ Approximatif (adresse internet, GPS refusé)
-            </p>
-          ) : null}
         </div>
       </div>
     </div>
