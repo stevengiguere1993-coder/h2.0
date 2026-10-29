@@ -15,7 +15,6 @@ import {
   Home,
   FileDown,
   FileSignature,
-  GitMerge,
   KeyRound,
   Loader2,
   Mail,
@@ -37,11 +36,6 @@ import { useSearchParams } from "next/navigation";
 
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch, getToken } from "@/lib/auth";
-import {
-  FusionImmeubleModal,
-  resumeDeplaces,
-  type FusionResultat
-} from "@/components/immobilier/fusion-immeuble";
 import { parseNombre } from "@/lib/nombre";
 import { AddressInput } from "@/components/address-input";
 import { compareNumero } from "@/components/immobilier/numero-sort";
@@ -118,8 +112,6 @@ type Immeuble = {
   id: number;
   name: string;
   address: string;
-  /** Deuxième adresse du même bâtiment (fusion de fiches). */
-  address_secondaire?: string | null;
   /** Début de la collecte des loyers (1er du mois) ; vide = démarrage global. */
   collecte_depuis?: string | null;
   city?: string | null;
@@ -145,8 +137,6 @@ type Logement = {
   id: number;
   immeuble_id: number;
   numero: string;
-  /** Adresse civique propre au logement si elle diffère de l'immeuble. */
-  adresse?: string | null;
   nb_pieces_decimal?: number | null;
   nb_chambres?: number | null;
   nb_sdb?: number | null;
@@ -427,8 +417,6 @@ export default function ImmeubleDetailPage({
   const [immeuble, setImmeuble] = useState<Immeuble | null>(null);
   const [ownerships, setOwnerships] = useState<Ownership[]>([]);
   const [showDelete, setShowDelete] = useState(false);
-  const [showFusion, setShowFusion] = useState(false);
-  const [fusionMsg, setFusionMsg] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [savingOwner, setSavingOwner] = useState(false);
   const [actionErr, setActionErr] = useState<string | null>(null);
@@ -445,7 +433,6 @@ export default function ImmeubleDetailPage({
     address: "",
     city: "",
     postal_code: "",
-    address_secondaire: "",
     type: "residentiel",
     annee_construction: "",
     nb_logements: "",
@@ -691,7 +678,6 @@ export default function ImmeubleDetailPage({
       address: immeuble.address || "",
       city: immeuble.city || "",
       postal_code: immeuble.postal_code || "",
-      address_secondaire: immeuble.address_secondaire || "",
       type: immeuble.type || "residentiel",
       annee_construction: immeuble.annee_construction
         ? String(immeuble.annee_construction)
@@ -725,7 +711,6 @@ export default function ImmeubleDetailPage({
         address: editForm.address.trim(),
         city: editForm.city.trim() || null,
         postal_code: editForm.postal_code.trim() || null,
-        address_secondaire: editForm.address_secondaire.trim() || null,
         type: editForm.type,
         annee_construction: editForm.annee_construction
           ? parseNombre(editForm.annee_construction)
@@ -945,11 +930,6 @@ export default function ImmeubleDetailPage({
               {immeuble.city ? `, ${immeuble.city}` : ""}
               {immeuble.postal_code ? ` (${immeuble.postal_code})` : ""}
             </p>
-            {immeuble.address_secondaire ? (
-              <p className="mt-0.5 text-sm text-white/60">
-                Aussi : {immeuble.address_secondaire}
-              </p>
-            ) : null}
             <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
               <span className="badge badge-neutral font-mono">
                 {immeuble.type}
@@ -1050,17 +1030,11 @@ export default function ImmeubleDetailPage({
             />
             <ActionsMenu
               onEdit={openEdit}
-              onFusion={() => setShowFusion(true)}
               onDelete={() => setShowDelete(true)}
             />
           </div>
         </header>
 
-        {fusionMsg ? (
-          <p className="mt-3 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
-            {fusionMsg}
-          </p>
-        ) : null}
         {actionErr ? (
           <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
             {actionErr}
@@ -1352,24 +1326,6 @@ export default function ImmeubleDetailPage({
         </div>
       ) : null}
 
-      {showFusion && immeuble ? (
-        <FusionImmeubleModal
-          cible={{
-            id: immeuble.id,
-            name: immeuble.name,
-            address: immeuble.address
-          }}
-          onClose={() => setShowFusion(false)}
-          onDone={(res: FusionResultat) => {
-            setShowFusion(false);
-            setFusionMsg(
-              `« ${res.immeuble_supprime_nom} » a été fusionné dans cette fiche : ${resumeDeplaces(res)}.`
-            );
-            setReloadKey((k) => k + 1);
-          }}
-        />
-      ) : null}
-
       {showPasserInterne ? (
         <PasserInterneModal
           immeubleId={immeubleId}
@@ -1450,19 +1406,6 @@ export default function ImmeubleDetailPage({
                   />
                 </EditField>
               </div>
-              <EditField label="Adresse secondaire (même bâtiment, autre entrée)">
-                <input
-                  value={editForm.address_secondaire}
-                  onChange={(e) =>
-                    setEditForm((f) => ({
-                      ...f,
-                      address_secondaire: e.target.value
-                    }))
-                  }
-                  className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500"
-                  placeholder="ex. 9085 rue Millen (12 logements sur deux adresses)"
-                />
-              </EditField>
               {/* Propriétaire (INC) : le même réglage que le raccourci de
                   l'en-tête, exposé ici parce que c'est là qu'on le
                   cherche (retour Phil 2026-08-13). Réassigne l'immeuble à
@@ -1722,11 +1665,9 @@ export default function ImmeubleDetailPage({
  *  repo). */
 function ActionsMenu({
   onEdit,
-  onFusion,
   onDelete
 }: {
   onEdit: () => void;
-  onFusion: () => void;
   onDelete: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -1772,19 +1713,6 @@ function ActionsMenu({
             title="Modifier l'immeuble (nom, adresse, etc.)"
           >
             <Pencil className="h-3.5 w-3.5" /> Modifier
-          </button>
-          {/* Un bâtiment saisi en deux fiches (12 logements sur deux
-              adresses) : absorber l'autre fiche ici (Steven 2026-10-29). */}
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              onFusion();
-            }}
-            className={itemCls}
-            title="Rattacher à cette fiche tout ce qui pend à un autre immeuble, puis supprimer l'autre fiche"
-          >
-            <GitMerge className="h-3.5 w-3.5" /> Fusionner un autre immeuble ici
           </button>
           {/* « Bon de travail » déplacé dans l'onglet Maintenance
               (retour Phil 2026-07-10). */}
@@ -2570,7 +2498,6 @@ function LogementsTab({
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState({
     numero: "",
-    adresse: "",
     pieces: "",
     superficie: "",
     loyer: "",
@@ -2612,7 +2539,6 @@ function LogementsTab({
     setMsg(null);
     setDraft({
       numero: l.numero,
-      adresse: l.adresse ?? "",
       pieces: l.nb_pieces_decimal != null ? String(l.nb_pieces_decimal) : "",
       superficie: l.superficie_pi2 != null ? String(l.superficie_pi2) : "",
       loyer: l.loyer_demande != null ? String(l.loyer_demande) : "",
@@ -2666,7 +2592,6 @@ function LogementsTab({
     setMsg(null);
     const err = await patchLogement(editingId, {
       numero: draft.numero.trim(),
-      adresse: draft.adresse.trim() || null,
       nb_pieces_decimal: num(draft.pieces),
       superficie_pi2: num(draft.superficie),
       loyer_demande: num(draft.loyer),
@@ -2915,25 +2840,14 @@ function LogementsTab({
                   </td>
                   <td className="px-3 py-2 font-bold text-white">
                     {editing ? (
-                      <div className="flex flex-col gap-1">
-                        <input
-                          value={draft.numero}
-                          onChange={(e) =>
-                            setDraft((d) => ({ ...d, numero: e.target.value }))
-                          }
-                          className={`${CELL_INPUT} w-24 font-bold`}
-                          aria-label="Numéro"
-                        />
-                        <input
-                          value={draft.adresse}
-                          onChange={(e) =>
-                            setDraft((d) => ({ ...d, adresse: e.target.value }))
-                          }
-                          className={`${CELL_INPUT} w-40 font-normal`}
-                          placeholder="Adresse si différente"
-                          aria-label="Adresse civique du logement"
-                        />
-                      </div>
+                      <input
+                        value={draft.numero}
+                        onChange={(e) =>
+                          setDraft((d) => ({ ...d, numero: e.target.value }))
+                        }
+                        className={`${CELL_INPUT} w-24 font-bold`}
+                        aria-label="Numéro"
+                      />
                     ) : (
                       <button
                         type="button"
@@ -2951,14 +2865,6 @@ function LogementsTab({
                         {l.numero}
                       </button>
                     )}
-                    {!editing && l.adresse ? (
-                      <span
-                        className="badge badge-neutral ml-1 text-[10px] font-normal"
-                        title="Adresse civique propre à ce logement"
-                      >
-                        {l.adresse}
-                      </span>
-                    ) : null}
                   </td>
                   <td className="px-3 py-2 text-xs text-white/70">
                     {editing ? (
