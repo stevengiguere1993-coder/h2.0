@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, or_, select
 
@@ -23,7 +23,7 @@ from app.integrations.quickbooks import QuickBooksError, get_qbo
 from app.services.qbo_monthly_invoice import add_lines_to_monthly_invoice
 from app.models.automation_setting import AutomationSetting
 from app.services.permissions_service import user_has_capability
-from app.services.punch_geo import ajouter_fin
+from app.services.punch_geo import ajouter_fin, position_ou_approx
 from app.services.punch_geo import normaliser as normaliser_position
 from app.models.timesheet import (
     TIMESHEET_DAYS,
@@ -2054,7 +2054,7 @@ async def punch_etat(
     status_code=status.HTTP_201_CREATED,
 )
 async def punch_start(
-    payload: PunchStartIn, db: DBSession, user: CurrentUser
+    payload: PunchStartIn, request: Request, db: DBSession, user: CurrentUser
 ) -> PunchOut:
     """Démarre le punch sur une compagnie de SA feuille et une tâche
     (l'une de ses tâches assignées, ou saisie à la main). La feuille de la
@@ -2090,7 +2090,10 @@ async def punch_start(
         entreprise_tache_id=tache_id,
         title=titre[:255],
         started_at=now,
-        geolocation=normaliser_position(payload.geolocation),
+        # GPS reçu, sinon position approximative par adresse internet.
+        geolocation=await position_ou_approx(
+            normaliser_position(payload.geolocation), request
+        ),
     )
     db.add(p)
     await db.commit()
@@ -2100,6 +2103,7 @@ async def punch_start(
 
 @router.post("/punch/stop", response_model=PunchStopOut)
 async def punch_stop(
+    request: Request,
     db: DBSession,
     user: CurrentUser,
     payload: Optional[PunchStopIn] = None,
@@ -2140,7 +2144,10 @@ async def punch_stop(
     # gestionnaire qui ferme un punch oublié n'en envoie pas.
     if payload.user_id is None or payload.user_id == user.id:
         p.geolocation = ajouter_fin(
-            p.geolocation, normaliser_position(payload.geolocation)
+            p.geolocation,
+            await position_ou_approx(
+                normaliser_position(payload.geolocation), request
+            ),
         )
     ajoutees = 0.0
     message: Optional[str] = None

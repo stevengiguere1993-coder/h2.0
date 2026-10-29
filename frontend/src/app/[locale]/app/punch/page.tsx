@@ -15,7 +15,13 @@ import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { authedFetch } from "@/lib/auth";
-import { capturerPositionPunch, parsePositionPunch } from "@/lib/punch-geo";
+import {
+  NOTE_APPROX,
+  capturerPositionPunch,
+  parsePositionPunch,
+  positionsPunch,
+  texteCoordonnees
+} from "@/lib/punch-geo";
 import { useConfirm } from "@/components/confirm-dialog";
 
 type Employe = { id: number; full_name: string; email: string | null };
@@ -541,8 +547,7 @@ function ActivePunchCard({
   onStop: () => void;
   busy: boolean;
 }) {
-  const lat = geolocation?.split("|")[0]?.split(",")[0];
-  const lng = geolocation?.split("|")[0]?.split(",")[1];
+  const position = positionsPunch(geolocation).debut;
   return (
     <section className="rounded-2xl border border-accent-500/40 bg-accent-500/5 p-6">
       <div className="flex items-center gap-2 text-sm text-accent-300">
@@ -559,12 +564,16 @@ function ActivePunchCard({
       <dl className="mt-5 space-y-2 text-sm text-white/80">
         <Row label="Affecté à" value={targetLabel} />
         {task ? <Row label="Tâche" value={task} /> : null}
-        {lat && lng ? (
+        {position ? (
           <Row
             label="Position"
             value={
-              <span className="inline-flex items-center gap-1 text-xs text-white/70">
-                <MapPin className="h-3 w-3" /> {lat}, {lng}
+              <span
+                className="inline-flex items-center gap-1 text-xs text-white/70"
+                title={position.approx ? NOTE_APPROX : undefined}
+              >
+                <MapPin className="h-3 w-3" /> {texteCoordonnees(position)}
+                {position.approx ? " (approx.)" : ""}
               </span>
             }
           />

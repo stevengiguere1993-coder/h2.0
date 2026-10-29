@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, or_, select
 
@@ -26,7 +26,7 @@ from app.models.contact_request import ContactRequest, ContactRequestStatus
 from app.models.employe import Employe
 from app.models.project import Project, ProjectStatus
 from app.models.punch import Punch
-from app.services.punch_geo import ajouter_fin
+from app.services.punch_geo import ajouter_fin, position_ou_approx
 from app.services.punch_geo import normaliser as normaliser_position
 
 
@@ -274,6 +274,7 @@ async def me(db: DBSession, user: CurrentUser) -> MobileMe:
 @router.post("/punch/start", response_model=OpenPunch)
 async def punch_start(
     body: PunchStartBody,
+    request: Request,
     db: DBSession,
     user: CurrentUser,
 ) -> OpenPunch:
@@ -317,7 +318,10 @@ async def punch_start(
         bon_travail_id=body.bon_travail_id,
         started_at=now,
         task=body.task,
-        geolocation=normaliser_position(body.geolocation),
+        # GPS reçu, sinon position approximative par adresse internet.
+        geolocation=await position_ou_approx(
+            normaliser_position(body.geolocation), request
+        ),
         # Hors décret par défaut ; le régime CCQ se pose à l'approbation
         # par un admin+ (retour Phil 2026-09-26).
         regime="hors_decret",
@@ -354,6 +358,7 @@ class PunchStopBody(BaseModel):
 
 @router.post("/punch/stop", response_model=OpenPunch)
 async def punch_stop(
+    request: Request,
     db: DBSession,
     user: CurrentUser,
     body: Optional[PunchStopBody] = None,
@@ -385,7 +390,10 @@ async def punch_stop(
     # Position de sortie ajoutée à celle d'entrée (« début|fin ») pour
     # distinguer début et fin dans l'historique admin.
     p.geolocation = ajouter_fin(
-        p.geolocation, normaliser_position(body.geolocation if body else None)
+        p.geolocation,
+        await position_ou_approx(
+            normaliser_position(body.geolocation if body else None), request
+        ),
     )
     await db.flush()
     # Case « dîner » de la fiche : 30 min retirées si la journée dépasse 5 h.

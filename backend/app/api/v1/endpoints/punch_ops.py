@@ -12,7 +12,7 @@ The current user is matched to an Employe record by email.
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
@@ -29,7 +29,7 @@ from app.services.employe_rates import (
 )
 from app.services.project_auto_status import bump_to_in_progress_if_needed
 from app.services.punch_diner import appliquer_diner_auto, heures_brutes, heures_nettes
-from app.services.punch_geo import ajouter_fin, position as position_punch
+from app.services.punch_geo import ajouter_fin, position as position_punch, position_ou_approx
 
 
 router = APIRouter(prefix="/punch", tags=["punch"])
@@ -197,7 +197,7 @@ async def punch_debug(db: DBSession, admin: RequireAdminRole):
     summary="Start a punch (clock-in)",
 )
 async def clock_in(
-    data: ClockInRequest, db: DBSession, user: CurrentUser
+    data: ClockInRequest, request: Request, db: DBSession, user: CurrentUser
 ) -> PunchRead:
     emp = await _find_employe_for_user(db, user.email)
     if emp is None:
@@ -222,7 +222,10 @@ async def clock_in(
         bon_travail_id=data.bon_travail_id,
         started_at=datetime.now(timezone.utc),
         task=(data.task.strip() if data.task else None),
-        geolocation=_geo_str(data.latitude, data.longitude),
+        # GPS reçu, sinon position approximative par adresse internet.
+        geolocation=await position_ou_approx(
+            _geo_str(data.latitude, data.longitude), request
+        ),
         notes=(data.notes.strip() if data.notes else None),
         # Hors décret par défaut : le régime CCQ est posé par un admin+
         # à l'approbation (retour Phil 2026-09-26).
@@ -257,7 +260,7 @@ async def clock_in(
     summary="Close the active punch (clock-out)",
 )
 async def clock_out(
-    data: ClockOutRequest, db: DBSession, user: CurrentUser
+    data: ClockOutRequest, request: Request, db: DBSession, user: CurrentUser
 ) -> PunchRead:
     emp = await _find_employe_for_user(db, user.email)
     if emp is None:
@@ -292,7 +295,8 @@ async def clock_out(
             )
     # Position de sortie ajoutée à celle d'entrée (« début|fin »).
     open_punch.geolocation = ajouter_fin(
-        open_punch.geolocation, _geo_str(data.latitude, data.longitude)
+        open_punch.geolocation,
+        await position_ou_approx(_geo_str(data.latitude, data.longitude), request),
     )
     await db.flush()
     # Case « dîner » de la fiche : 30 min retirées si la journée dépasse 5 h.
