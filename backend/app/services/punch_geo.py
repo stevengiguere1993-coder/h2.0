@@ -10,11 +10,20 @@ le punch part quand même, sans position.
 Format stocké dans ``Punch.geolocation`` : ``"lat,lng"`` au début, puis
 ``"lat,lng|lat,lng"`` (début|fin) à l'arrêt. Début inconnu et fin connue
 → ``"|lat,lng"``, pour ne jamais confondre la fin avec le début.
+
+GPS refusé → « on va y aller approximatif » (Steven, 2026-10-29) : la
+position est déduite de l'adresse internet du téléphone
+(``app.integrations.ip_geo``) et préfixée d'un ``~`` (``"~lat,lng"``)
+pour s'afficher comme approximative. Le préfixe n'est jamais accepté de
+l'app : seule l'API le pose.
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
+
+#: Préfixe d'une position déduite de l'adresse internet.
+APPROX = "~"
 
 
 def position(lat: Optional[float], lng: Optional[float]) -> Optional[str]:
@@ -32,17 +41,53 @@ def position(lat: Optional[float], lng: Optional[float]) -> Optional[str]:
     return f"{la:.6f},{ln:.6f}"
 
 
+def approximative(lat: Optional[float], lng: Optional[float]) -> Optional[str]:
+    """``"~lat,lng"`` : position déduite de l'adresse internet."""
+    p = position(lat, lng)
+    return f"{APPROX}{p}" if p else None
+
+
 def normaliser(raw: Optional[str]) -> Optional[str]:
-    """Texte ``"lat,lng"`` envoyé par l'app → forme normalisée, ou None."""
+    """Texte ``"lat,lng"`` envoyé par l'app → forme normalisée, ou None.
+    Un ``~`` envoyé par l'app est refusé : l'approximation vient de l'API."""
     if not raw:
         return None
-    morceaux = str(raw).strip().split(",")
+    texte = str(raw).strip()
+    if texte.startswith(APPROX):
+        return None
+    morceaux = texte.split(",")
     if len(morceaux) != 2:
         return None
     try:
         return position(float(morceaux[0]), float(morceaux[1]))
     except ValueError:
         return None
+
+
+def ip_client(request: Any) -> Optional[str]:
+    """Adresse IP du téléphone derrière Render (premier ``X-Forwarded-For``),
+    sinon celle de la connexion."""
+    if request is None:
+        return None
+    brut = request.headers.get("x-forwarded-for") or (
+        request.client.host if request.client else None
+    )
+    if not brut:
+        return None
+    return brut.split(",")[0].strip()[:64] or None
+
+
+async def position_ou_approx(exacte: Optional[str], request: Any) -> Optional[str]:
+    """La position GPS reçue, sinon l'approximation par adresse internet,
+    sinon None. Ne bloque jamais le punch."""
+    if exacte:
+        return exacte
+    from app.integrations.ip_geo import position_par_ip
+
+    coords = await position_par_ip(ip_client(request))
+    if coords is None:
+        return None
+    return approximative(coords[0], coords[1])
 
 
 def ajouter_fin(existante: Optional[str], fin: Optional[str]) -> Optional[str]:

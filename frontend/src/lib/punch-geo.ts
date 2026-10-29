@@ -9,8 +9,17 @@
  * n'arrive pas à temps, le punch part quand même, sans position.
  *
  * Même format que le backend (`Punch.geolocation`,
- * `TimesheetPunch.geolocation`) : `"lat,lng"` à 6 décimales.
+ * `TimesheetPunch.geolocation`) : `"lat,lng"` à 6 décimales. GPS refusé →
+ * l'API déduit une position approximative de l'adresse internet
+ * (Steven, 2026-10-29), préfixée `~` : on l'affiche comme telle.
  */
+
+export type PositionPunch = {
+  lat: number;
+  lng: number;
+  /** Déduite de l'adresse internet (ville), pas du GPS. */
+  approx: boolean;
+};
 
 /** Délai total avant de punchér sans position (le GPS peut être lent). */
 const DELAI_MS = 8000;
@@ -47,22 +56,23 @@ export async function capturerPositionPunch(): Promise<string | null> {
   });
 }
 
-/** `"lat,lng"` → coordonnées, ou null si vide / invalide. */
+/** `"lat,lng"` ou `"~lat,lng"` → position, ou null si vide / invalide. */
 export function parsePositionPunch(
   s: string | null | undefined
-): { lat: number; lng: number } | null {
+): PositionPunch | null {
   if (!s) return null;
-  const [latStr, lngStr] = s.split(",");
+  const approx = s.startsWith("~");
+  const [latStr, lngStr] = (approx ? s.slice(1) : s).split(",");
   const lat = Number(latStr);
   const lng = Number(lngStr);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-  return { lat, lng };
+  return { lat, lng, approx };
 }
 
 /** `"début|fin"` stocké → les deux positions (chacune possiblement nulle). */
 export function positionsPunch(raw: string | null | undefined): {
-  debut: { lat: number; lng: number } | null;
-  fin: { lat: number; lng: number } | null;
+  debut: PositionPunch | null;
+  fin: PositionPunch | null;
 } {
   if (!raw) return { debut: null, fin: null };
   const [d, f] = raw.split("|");
@@ -73,3 +83,11 @@ export function positionsPunch(raw: string | null | undefined): {
 export function lienCarte(geo: { lat: number; lng: number }): string {
   return `https://www.google.com/maps?q=${geo.lat},${geo.lng}`;
 }
+
+/** « 45.50169, -73.56726 », précédé de « ≈ » si approximative. */
+export function texteCoordonnees(geo: PositionPunch): string {
+  return `${geo.approx ? "≈ " : ""}${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}`;
+}
+
+export const NOTE_APPROX =
+  "Position approximative : déduite de l'adresse internet du téléphone (ville), le GPS ayant été refusé.";

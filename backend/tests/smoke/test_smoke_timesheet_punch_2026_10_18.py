@@ -395,3 +395,50 @@ def test_punch_garde_la_position(client, auth_headers, video, run):
     )
     assert r.status_code == 200, r.text
     assert r.json()["punch"]["geolocation"] is None
+
+
+def test_punch_sans_gps_prend_une_position_approximative(client, auth_headers, video, run, monkeypatch):
+    """GPS refusé → position déduite de l'adresse internet, marquée « ~ »
+    (Steven, 2026-10-29). Le GPS reçu garde la priorité."""
+    from app.integrations import ip_geo
+
+    async def faux(ip):
+        return (45.5, -73.6) if ip == "24.1.2.3" else None
+
+    monkeypatch.setattr(ip_geo, "_interroger", faux)
+    ip_geo.vider_cache()
+    h = video["headers"]
+    cie = _compagnie(client, video)
+    courante = client.get("/api/v1/timesheets/resolve", headers=h).json()
+    if courante["status"] == "approuve":
+        r = client.post(f"/api/v1/timesheets/{courante['id']}/reopen", headers=auth_headers)
+        assert r.status_code == 200, r.text
+
+    # Sans GPS, derrière Render : adresse publique → approximation.
+    r = client.post(
+        "/api/v1/timesheets/punch/start",
+        headers={**h, "X-Forwarded-For": "24.1.2.3, 10.0.0.1"},
+        json={"company_id": cie, "title": "Sans GPS"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["geolocation"] == "~45.500000,-73.600000"
+    # À l'arrêt, le GPS reçu garde la priorité sur l'adresse.
+    _deplacer_debut(run, video["id"], T1 + timedelta(hours=6))
+    r = client.post(
+        "/api/v1/timesheets/punch/stop",
+        headers={**h, "X-Forwarded-For": "24.1.2.3"},
+        json={"fin": (T1 + timedelta(hours=7)).isoformat(), "geolocation": "45.52,-73.58"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["punch"]["geolocation"] == "~45.500000,-73.600000|45.520000,-73.580000"
+
+    # Adresse inconnue du service : le punch part sans position.
+    r = client.post(
+        "/api/v1/timesheets/punch/start",
+        headers={**h, "X-Forwarded-For": "24.9.9.9"},
+        json={"company_id": cie, "title": "Sans rien"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["geolocation"] is None
+    r = client.delete("/api/v1/timesheets/punch", headers=h)
+    assert r.status_code == 200, r.text
