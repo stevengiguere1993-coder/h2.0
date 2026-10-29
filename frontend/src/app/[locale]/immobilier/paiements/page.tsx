@@ -23,7 +23,6 @@ import { authedFetch } from "@/lib/auth";
 import { compareNumero } from "@/components/immobilier/numero-sort";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
 import { BandeauAvisRenouvellement } from "@/components/immobilier/bandeau-avis";
-import { BandeauBailManquant } from "@/components/immobilier/bandeau-bail-manquant";
 import { BandeauDepotARembourser } from "@/components/immobilier/bandeau-depot";
 import { echeanceLabel } from "@/components/immobilier/fin-bail";
 import {
@@ -262,7 +261,9 @@ export default function PaiementsPage() {
   const [search, setSearch] = useState("");
   const [etatFilter, setEtatFilter] = useState<
     "all" | "paye" | "partiel" | "retard" | "attente" | "vacant"
-  >("all");
+    // À l'ouverture, on voit les loyers en retard plutôt que tout le
+    // portefeuille (retour Steven 2026-10-29) ; « Tous » reste à un clic.
+  >("retard");
   const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
 
   const load = useCallback(async () => {
@@ -837,9 +838,10 @@ export default function PaiementsPage() {
             onConfirmer={() => void envoyerRelance(relanceApercu)}
           />
         ) : null}
+        {/* « Bail manquant au dossier » ne s'affiche plus ici (retour
+            Steven 2026-10-29) : c'est du suivi de bail, il reste sur la
+            page Baux et la fiche immeuble. */}
         <BandeauAvisRenouvellement entrepriseId={currentEntrepriseId} />
-        <BandeauBailManquant entrepriseId={currentEntrepriseId} />
-        <BandeauDepotARembourser entrepriseId={currentEntrepriseId} />
 
         {/* Filtres */}
         <div className="mt-5 flex flex-wrap items-center gap-2">
@@ -913,7 +915,11 @@ export default function PaiementsPage() {
           ) : !data || filteredRows.length === 0 ? (
             <div className="p-10 text-center text-sm text-white/50">
               {allRows.length > 0 ? (
-                "Aucun bail correspondant aux filtres."
+                etatFilter === "retard" && !search.trim() ? (
+                  "Aucun loyer en retard pour ce mois. 🎉"
+                ) : (
+                  "Aucun bail correspondant aux filtres."
+                )
               ) : (
                 <>
                   Aucun bail actif dans le portefeuille
@@ -1434,6 +1440,10 @@ export default function PaiementsPage() {
             rapprocher (2e validation bancaire). Rien quand la feature
             est inactive ou qu'il n'y a rien à traiter. */}
         <EncartValidationBancaire etat={valBanque} onChange={() => void load()} />
+
+        {/* Dépôts à rendre APRÈS les loyers non payés (retour Steven
+            2026-10-29) : la collection passe d'abord. */}
+        <BandeauDepotARembourser entrepriseId={currentEntrepriseId} />
 
         <p className="mt-3 text-[11px] text-white/40">
           « Retard » = aucun paiement après le 5 du mois · « Partiel » = un
