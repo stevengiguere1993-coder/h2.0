@@ -6397,12 +6397,6 @@ async def loyers_overview(
 
         total_attendu += du_mois
         total_recu += paye_mois
-        credit_couvre_mois = (
-            not apres_fin
-            and not transfert_bascule
-            and not ps
-            and du_mois <= 0.005
-        )
         if apres_fin:
             # Dette à percevoir : « partiel » si un versement est entré
             # ce mois-ci, sinon « retard » — jamais « attente », la fin
@@ -6414,18 +6408,6 @@ async def loyers_overview(
             # bascule : la ligne est « à jour », pas « en attente ».
             etat = "paye"
             nb_payes += 1
-        elif credit_couvre_mois:
-            # Crédit qui couvre tout le mois (Steven 2026-10-29 : rabais
-            # de 550 $ = le loyer, pour le ménage des lieux) : rien
-            # n'est dû, donc rien n'est en retard — et « Marquer payé »
-            # n'a aucun montant à enregistrer. Seul un mois antérieur
-            # impayé garde la ligne en jaune, comme un mois réglé.
-            if solde > 0.005 and not mois_futur:
-                etat = "partiel"
-                nb_retards += 1
-            else:
-                etat = "paye"
-                nb_payes += 1
         elif ps and paye_mois >= du_mois - 0.005:
             if solde > 0.005 and not mois_futur:
                 # Le mois affiché est payé, mais le COMPTE du bail ne
@@ -6464,7 +6446,7 @@ async def loyers_overview(
                 garants=[c.full_name for c in contacts_loc],
                 payeur_nom=payeur_de(contacts_loc),
                 solde_anterieur=bool(
-                    (ps or credit_couvre_mois)
+                    ps
                     and paye_mois >= du_mois - 0.005
                     and solde > 0.005
                     and not mois_futur

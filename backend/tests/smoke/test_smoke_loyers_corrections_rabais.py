@@ -244,27 +244,3 @@ def test_rabais_suit_le_debut_du_bail(client, auth_headers, run):
     assert r.status_code == 200, r.text
     assert _row(client, auth_headers, bid, _mois(m0, -2))["frais_mois"] == []
     assert _row(client, auth_headers, bid, m0)["frais_mois"][0]["montant"] == -100.0
-
-
-def test_credit_qui_couvre_le_loyer_vaut_paye(client, auth_headers, run):
-    # Steven 2026-10-29 : rabais de 550 $ = le loyer (ménage des lieux) —
-    # le dû du mois tombe à 0, le locataire ne doit plus être en retard.
-    seed = _seed(run, nom="CreditTotal")
-    m0 = date.today().replace(day=1)
-    m_1, m_2 = _mois(m0, -1), _mois(m0, -2)
-    bid = _bail(client, auth_headers, seed, debut=m_2, loyer=550)["id"]
-    r = client.post(f"/api/v1/immobilier/baux/{bid}/frais", headers=auth_headers, json={
-        "mois_couvert": m_1.isoformat(), "montant": -550, "libelle": "Pour ménage",
-    })
-    assert r.status_code in (200, 201), r.text
-    # Mois antérieur impayé : la ligne reste jaune (solde antérieur).
-    row = _row(client, auth_headers, bid, m_1)
-    assert row["etat"] == "partiel" and row["solde_anterieur"] is True
-    assert row["solde_total"] == 550.0
-    _payer(client, auth_headers, bid, m_2, 550, m_2)
-    row = _row(client, auth_headers, bid, m_1)
-    assert row["etat"] == "paye" and row["solde_total"] == 0.0
-    assert row["solde_anterieur"] is False
-    ov = client.get(f"/api/v1/immobilier/loyers/overview?mois={m_1.strftime('%Y-%m')}",
-                    headers=auth_headers).json()
-    assert all(x["bail_id"] != bid for x in ov["rows"] if x["etat"] == "retard")
