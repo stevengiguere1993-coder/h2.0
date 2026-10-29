@@ -450,8 +450,6 @@ async def ensure_critical_columns() -> None:
         # Hub Rencontres v2 : source d'import + fichiers archives Drive.
         ("rencontres", "source", "VARCHAR(16)"),
         ("rencontres", "drive_links_json", "TEXT"),
-        # Envoi du rapport de rencontre par courriel (historique).
-        ("rencontres", "envois_json", "TEXT"),
         # Optimisation v2 : type d'entente de la négo locataire.
         ("optimisation_negos", "type_entente", "VARCHAR(24)"),
         # Optimisation v5 : objectifs annuels, financement/comptant par
