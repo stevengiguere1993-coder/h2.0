@@ -85,6 +85,11 @@ class Rencontre(Base, TimestampUpdateMixin):
         Text, nullable=True
     )
 
+    #: Historique des envois du rapport par courriel — JSON
+    #: [{"le", "par", "de", "a": [...], "cc": [...], "sujet"}].
+    #: Colonne additive → ensure_critical_columns.
+    envois_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
 
 class RencontreSection(Base, TimestampUpdateMixin):
     """Une section = un topic discuté pendant la rencontre. Une retraite
