@@ -56,6 +56,7 @@ import {
   libelleModeTal,
   ouvrirPdfDocument
 } from "@/components/immobilier/tal-bail-modal";
+import { ImmeubleFiltre } from "@/components/immobilier/immeuble-filtre";
 
 type Signataire = {
   id: number;
@@ -411,22 +412,20 @@ export function LocationsBoard({
       {/* Barre d'actions */}
       <div className="flex flex-wrap items-center gap-2">
         {immeubleId == null ? (
-          <select
+          <ImmeubleFiltre
             value={immeubleFilter === "all" ? "all" : String(immeubleFilter)}
-            onChange={(e) =>
+            onChange={(v) =>
               setImmeubleFilter(
-                e.target.value === "all" ? "all" : Number(e.target.value)
+                v === "all" ? "all" : Number(v)
               )
             }
+            allValue="all"
+            options={immeubles.map((i) => ({
+              value: String(i.id),
+              label: i.name
+            }))}
             className="input w-auto max-w-[240px] text-sm"
-          >
-            <option value="all">Tous les immeubles</option>
-            {immeubles.map((i) => (
-              <option key={i.id} value={i.id}>
-                {i.name}
-              </option>
-            ))}
-          </select>
+          />
         ) : null}
         <button
           type="button"
