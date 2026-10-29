@@ -47,6 +47,7 @@ import {
 } from "@/components/immobilier/fin-bail";
 import { RENOUVELLEMENT_BADGES } from "@/components/immobilier/paiements-actions";
 import { TableauSuiviBaux } from "@/components/immobilier/tableau-suivi-baux";
+import { ImmeubleFiltre } from "@/components/immobilier/immeuble-filtre";
 
 type Row = SuiviBailRow;
 
@@ -205,18 +206,16 @@ export default function BauxPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <select
+          <ImmeubleFiltre
             value={fImmeuble}
-            onChange={(e) => setFImmeuble(e.target.value)}
+            onChange={(v) => setFImmeuble(v)}
+            allValue=""
+            options={immeubles.map((i) => ({
+              value: String(i.id),
+              label: i.name
+            }))}
             className="input w-auto text-sm"
-          >
-            <option value="">Tous les immeubles</option>
-            {immeubles.map((i) => (
-              <option key={i.id} value={String(i.id)}>
-                {i.name}
-              </option>
-            ))}
-          </select>
+          />
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/40" />
             <input

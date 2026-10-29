@@ -24,6 +24,7 @@ import { Link } from "@/i18n/navigation";
 import { ApercuEnvoiModal } from "@/components/immobilier/apercu-envoi";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar } from "../layout";
+import { ImmeubleFiltre } from "@/components/immobilier/immeuble-filtre";
 
 type RenouvellementOverview = {
   bail_id: number;
@@ -1235,22 +1236,20 @@ Nouvelle date de fin :`,
               className="input w-full pl-9"
             />
           </div>
-          <select
+          <ImmeubleFiltre
             value={immeubleFilter === "all" ? "all" : String(immeubleFilter)}
-            onChange={(e) =>
+            onChange={(v) =>
               setImmeubleFilter(
-                e.target.value === "all" ? "all" : Number(e.target.value)
+                v === "all" ? "all" : Number(v)
               )
             }
+            allValue="all"
+            options={immeubles.map((imm) => ({
+              value: String(imm.id),
+              label: imm.name
+            }))}
             className="input w-auto max-w-[220px] text-sm"
-          >
-            <option value="all">Tous les immeubles</option>
-            {immeubles.map((imm) => (
-              <option key={imm.id} value={imm.id}>
-                {imm.name}
-              </option>
-            ))}
-          </select>
+          />
           <FilterPill
             label="À envoyer"
             active={filter === "todo"}
@@ -2538,24 +2537,22 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
             ))}
           </select>
         </label>
-        <select
+        <ImmeubleFiltre
           value={fImmeuble}
-          onChange={(e) => setFImmeuble(e.target.value)}
-          className="input w-auto text-sm"
-        >
-          <option value="">Tous les immeubles</option>
-          {Array.from(
+          onChange={(v) => setFImmeuble(v)}
+          allValue=""
+          options={Array.from(
             new Map(
               (data?.rows || [])
                 .filter((r) => r.immeuble_id != null)
                 .map((r) => [r.immeuble_id as number, r.immeuble_name || ""])
             ).entries()
-          ).map(([iid, nom]) => (
-            <option key={iid} value={String(iid)}>
-              {nom}
-            </option>
-          ))}
-        </select>
+          ).map(([iid, nom]) => ({
+            value: String(iid),
+            label: nom
+          }))}
+          className="input w-auto text-sm"
+        />
         <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/40" />
           <input
