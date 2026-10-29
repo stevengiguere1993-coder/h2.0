@@ -772,6 +772,7 @@ async def list_immeubles(
                 id=imm.id,
                 name=imm.name,
                 address=imm.address,
+                address_secondaire=imm.address_secondaire,
                 city=imm.city,
                 type=imm.type,
                 nb_logements=imm.nb_logements,
