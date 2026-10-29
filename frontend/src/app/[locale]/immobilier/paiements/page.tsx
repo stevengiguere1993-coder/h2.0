@@ -52,6 +52,7 @@ import {
   chargerValidationBancaire,
   indexValidations
 } from "@/components/immobilier/validation-bancaire";
+import { ImmeubleFiltre } from "@/components/immobilier/immeuble-filtre";
 
 /**
  * Paiements — vue transversale « collection des loyers »
@@ -851,23 +852,21 @@ export default function PaiementsPage() {
               className="input w-full pl-9"
             />
           </div>
-          <select
+          <ImmeubleFiltre
             value={immeubleFilter === "all" ? "all" : String(immeubleFilter)}
-            onChange={(e) =>
+            onChange={(v) =>
               setImmeubleFilter(
-                e.target.value === "all" ? "all" : Number(e.target.value)
+                v === "all" ? "all" : Number(v)
               )
             }
+            allValue="all"
+            options={immeubleOptions.map((imm) => ({
+              value: String(imm.id),
+              label: imm.name
+            }))}
             className="input w-auto max-w-[220px] text-sm"
-            aria-label="Filtrer par immeuble"
-          >
-            <option value="all">Tous les immeubles</option>
-            {immeubleOptions.map((imm) => (
-              <option key={imm.id} value={imm.id}>
-                {imm.name}
-              </option>
-            ))}
-          </select>
+            ariaLabel="Filtrer par immeuble"
+          />
           <FilterPill
             label="Tous"
             active={etatFilter === "all"}
