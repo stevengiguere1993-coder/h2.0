@@ -67,6 +67,7 @@ from app.api.v1.endpoints import (
     immobilier_tal_garants,
     immobilier_tal_bail,
     immobilier_codes,
+    immobilier_fusion,
     immobilier_extras,
     immobilier_import_excel,
     immobilier_locations,
@@ -567,6 +568,8 @@ api_router.include_router(
 )
 # Codes d'accès d'un immeuble : porte, lock box, garage… (2026-10-18).
 api_router.include_router(immobilier_codes.router, dependencies=DEP_IMMOBILIER)
+# Fusion de deux fiches d'immeuble — 12 logements sur deux adresses (2026-10-29).
+api_router.include_router(immobilier_fusion.router, dependencies=DEP_IMMOBILIER)
 # Page Communications — envois courriel sans signature + audit.
 api_router.include_router(
     immobilier_communications.router, dependencies=DEP_IMMOBILIER

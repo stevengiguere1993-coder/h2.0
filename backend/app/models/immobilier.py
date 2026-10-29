@@ -122,6 +122,13 @@ class Immeuble(Base, TimestampUpdateMixin):
     address: Mapped[str] = mapped_column(String(500), nullable=False)
     city: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     postal_code: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    #: Deuxième adresse civique du MÊME bâtiment (12 logements sur deux
+    #: entrées : 710 Legendre + 9085 Millen — retour Steven 2026-10-29).
+    #: Remplie par la fusion de deux fiches ou à la main ; affichée sous
+    #: l'adresse principale. Plusieurs adresses : séparées par « · ».
+    address_secondaire: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True
+    )
 
     type: Mapped[str] = mapped_column(
         String(32), nullable=False,
@@ -313,6 +320,10 @@ class Logement(Base, TimestampUpdateMixin):
         nullable=False, index=True,
     )
     numero: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: Adresse civique propre au logement quand elle diffère de celle de
+    #: l'immeuble (après une fusion de fiches : les logements du 9085
+    #: Millen gardent leur adresse sous la fiche du 710 Legendre).
+    adresse: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     # Caractéristiques (nb pièces FR : 3½, 4½, 5½…)
     nb_pieces_decimal: Mapped[Optional[float]] = mapped_column(

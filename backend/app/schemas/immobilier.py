@@ -19,6 +19,8 @@ class ImmeubleBase(BaseModel):
     address: str = Field(..., min_length=1, max_length=500)
     city: Optional[str] = Field(default=None, max_length=128)
     postal_code: Optional[str] = Field(default=None, max_length=16)
+    #: Deuxième adresse civique du même bâtiment (fusion de fiches).
+    address_secondaire: Optional[str] = Field(default=None, max_length=500)
     type: str = Field(default="residentiel", max_length=32)
     annee_construction: Optional[int] = Field(default=None, ge=1700, le=2100)
     nb_logements: Optional[int] = Field(default=None, ge=0)
@@ -61,6 +63,8 @@ class ImmeubleUpdate(BaseModel):
     address: Optional[str] = Field(default=None, min_length=1, max_length=500)
     city: Optional[str] = Field(default=None, max_length=128)
     postal_code: Optional[str] = Field(default=None, max_length=16)
+    #: Deuxième adresse civique du même bâtiment (fusion de fiches).
+    address_secondaire: Optional[str] = Field(default=None, max_length=500)
     type: Optional[str] = Field(default=None, max_length=32)
     annee_construction: Optional[int] = Field(default=None, ge=1700, le=2100)
     nb_logements: Optional[int] = Field(default=None, ge=0)
@@ -98,6 +102,7 @@ class ImmeubleListItem(BaseModel):
     id: int
     name: str
     address: str
+    address_secondaire: Optional[str] = None
     city: Optional[str] = None
     type: str
     nb_logements: Optional[int] = None
@@ -190,6 +195,8 @@ class ImmeubleCodeRead(ImmeubleCodeBase):
 class LogementBase(BaseModel):
     immeuble_id: int
     numero: str = Field(..., min_length=1, max_length=32)
+    #: Adresse civique du logement si elle diffère de celle de l'immeuble.
+    adresse: Optional[str] = Field(default=None, max_length=255)
     nb_pieces_decimal: Optional[float] = Field(default=None, ge=0)
     nb_chambres: Optional[int] = Field(default=None, ge=0)
     nb_sdb: Optional[float] = Field(default=None, ge=0)
@@ -242,6 +249,7 @@ class LogementUpdate(BaseModel):
     #: son historique suivent.
     immeuble_id: Optional[int] = None
     numero: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    adresse: Optional[str] = Field(default=None, max_length=255)
     nb_pieces_decimal: Optional[float] = Field(default=None, ge=0)
     nb_chambres: Optional[int] = Field(default=None, ge=0)
     nb_sdb: Optional[float] = Field(default=None, ge=0)
@@ -1296,3 +1304,61 @@ class PasserInterneOut(BaseModel):
     baux_crees: int
     locataires_crees: int
     logements_liberes: int
+
+
+# ─── Fusion de deux fiches d'immeuble (retour Steven 2026-10-29) ────────
+# Un 12 logements sur deux adresses (710 Legendre + 9085 Millen) saisi en
+# deux fiches : la fiche « source » est absorbée par la fiche « cible ».
+
+
+class FusionImmeublesOptions(BaseModel):
+    source_immeuble_id: int
+    #: Préfixe posé devant les numéros des logements déplacés quand les
+    #: mêmes numéros existent déjà dans la cible (« 9085- » → « 9085-1 »).
+    prefixe_numeros: Optional[str] = Field(default=None, max_length=24)
+    #: Vrai = les hypothèques de la source sont les MÊMES que celles de la
+    #: cible (hypothèque conjointe saisie deux fois) : on ne les transfère
+    #: pas, elles disparaissent avec la source.
+    exclure_hypotheques: bool = False
+    #: Prix d'achat de la fiche fusionnée (vide = celui de la cible).
+    purchase_price: Optional[float] = Field(default=None, ge=0)
+
+
+class FusionHypothequeApercu(BaseModel):
+    id: int
+    preteur: str
+    montant_initial: float
+    paiement_mensuel: Optional[float] = None
+    status: str
+    conjointe: bool = False
+    #: Même prêteur et même montant qu'une hypothèque de la cible.
+    en_double: bool = False
+
+
+class FusionImmeubleResume(BaseModel):
+    id: int
+    name: str
+    address: str
+    address_secondaire: Optional[str] = None
+    nb_logements: int = 0
+    purchase_price: Optional[float] = None
+
+
+class FusionImmeublesApercu(BaseModel):
+    cible: FusionImmeubleResume
+    source: FusionImmeubleResume
+    #: Libellé → nombre de lignes qui seront rattachées à la cible.
+    a_deplacer: dict[str, int] = {}
+    numeros_en_conflit: List[str] = []
+    prefixe_suggere: str = ""
+    hypotheques_source: List[FusionHypothequeApercu] = []
+    hypotheques_en_double: int = 0
+    purchase_price_suggere: Optional[float] = None
+
+
+class FusionImmeublesResultat(BaseModel):
+    immeuble: ImmeubleRead
+    deplaces: dict[str, int] = {}
+    hypotheques_exclues: int = 0
+    immeuble_supprime_id: int
+    immeuble_supprime_nom: str
