@@ -23,7 +23,7 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
-import { lienCarte, positionsPunch } from "@/lib/punch-geo";
+import { NOTE_APPROX, lienCarte, positionsPunch, texteCoordonnees } from "@/lib/punch-geo";
 import { useConfirm } from "@/components/confirm-dialog";
 import {
   CARD,
@@ -305,10 +305,15 @@ function PunchEnCours({
               rel="noopener noreferrer"
               onClick={(e) => e.stopPropagation()}
               className="mt-0.5 inline-flex items-center gap-1 text-xs text-[var(--qg-text-muted)] hover:text-[var(--qg-text)] hover:underline"
-              title="Position au début du punch (Google Maps)"
+              title={
+                position.approx
+                  ? NOTE_APPROX
+                  : "Position au début du punch (Google Maps)"
+              }
             >
               <MapPin className="h-3 w-3" />
-              {position.lat.toFixed(5)}, {position.lng.toFixed(5)}
+              {texteCoordonnees(position)}
+              {position.approx ? " (approx.)" : ""}
             </a>
           ) : null}
         </div>
