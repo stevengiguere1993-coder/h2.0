@@ -19,6 +19,7 @@ import {
 
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar } from "../layout";
+import { ImmeubleFiltre } from "@/components/immobilier/immeuble-filtre";
 
 /**
  * Facturation (gestion locative) — v5 (retours Phil 2026-07-23) :
@@ -723,18 +724,16 @@ export default function FacturationImmoPage() {
                 </option>
               ))}
           </select>
-          <select
+          <ImmeubleFiltre
             value={filtreImmeuble}
-            onChange={(e) => setFiltreImmeuble(e.target.value)}
+            onChange={(v) => setFiltreImmeuble(v)}
+            allValue=""
+            options={actifs.map((r) => ({
+              value: String(r.immeuble_id),
+              label: r.name
+            }))}
             className="rounded-lg border border-brand-800 bg-brand-950 px-2.5 py-1.5 text-sm text-white outline-none transition focus:border-accent-500"
-          >
-            <option value="">Tous les immeubles</option>
-            {actifs.map((r) => (
-              <option key={r.immeuble_id} value={String(r.immeuble_id)}>
-                {r.name}
-              </option>
-            ))}
-          </select>
+          />
           {filtresActifs && (
             <button
               className="text-xs font-medium text-accent-500 hover:underline"

@@ -26,6 +26,7 @@ import { useSearchParams } from "next/navigation";
 import { authedFetch, hasMinRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { ImmobilierTopbar } from "../layout";
+import { ImmeubleFiltre } from "@/components/immobilier/immeuble-filtre";
 
 /**
  * Communications (gestion locative) — retour Phil 2026-07-27.
@@ -1515,18 +1516,16 @@ export default function CommunicationsPage() {
             <h2 className="flex items-center gap-2 text-base font-bold text-white">
               <Filter className="h-4 w-4 text-accent-500" /> Envois passés
             </h2>
-            <select
+            <ImmeubleFiltre
               value={fImmeuble}
-              onChange={(e) => setFImmeuble(e.target.value)}
+              onChange={(v) => setFImmeuble(v)}
+              allValue=""
+              options={(blocs || []).map((b) => ({
+                value: String(b.immeuble_id),
+                label: b.immeuble_name
+              }))}
               className="input py-1.5 text-sm"
-            >
-              <option value="">Tous les immeubles</option>
-              {(blocs || []).map((b) => (
-                <option key={b.immeuble_id} value={String(b.immeuble_id)}>
-                  {b.immeuble_name}
-                </option>
-              ))}
-            </select>
+            />
             <select
               value={fType}
               onChange={(e) => setFType(e.target.value)}
