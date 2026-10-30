@@ -18,6 +18,7 @@ Bill/Purchase pour la traçabilité comptable.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import date
@@ -291,6 +292,106 @@ def _strip_txn_tax_detail(payload: Dict[str, Any]) -> bool:
         payload.pop("TxnTaxDetail", None)
         return True
     return False
+
+
+#: Champs d'un Bill / d'une Purchase renvoyés par QuickBooks mais JAMAIS
+#: renvoyés dans une mise à jour complète : calculés (totaux, taxes quand
+#: Kratos ne les impose pas) ou en lecture seule. Même règle que
+#: facture_qbo.CHAMPS_QB_NON_RENVOYES (Invoice).
+CHAMPS_QB_NON_RENVOYES = frozenset(
+    {
+        "TotalAmt", "HomeTotalAmt", "Balance", "HomeBalance", "TxnTaxDetail",
+        "MetaData", "RecurDataRef", "domain", "sparse",
+    }
+)
+
+
+def _deballer(obj: Any) -> Dict[str, Any]:
+    """Objet QB nu, que le client l'ait renvoyé enveloppé ({"Bill": …})
+    ou non."""
+    if isinstance(obj, dict):
+        return obj.get("Bill") or obj.get("Purchase") or obj
+    return {}
+
+
+def corps_mise_a_jour_complete(
+    courante: Dict[str, Any], kratos: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Corps d'une mise à jour COMPLÈTE (``sparse: false``) d'un Bill ou
+    d'une Purchase déjà dans QuickBooks : l'objet tel que QB vient de le
+    renvoyer (liens de paiement, devise, conditions, pièces jointes…) dont
+    l'en-tête et les LIGNES sont remplacés par la vue Kratos.
+
+    Une mise à jour « sparse » qui porte ``Line`` ne remplace pas
+    forcément les lignes : constaté sur l'Invoice 120 (2026-10-14,
+    cf. facture_qbo.corps_mise_a_jour_complete et CLAUDE.md), QuickBooks
+    répondait 200 avec l'objet inchangé. Un reçu divisé vit de ses lignes
+    (une par projet : part modifiée, annulée, supprimée) → toute
+    transaction déjà liée est mise à jour en entier, puis les lignes
+    renvoyées sont VÉRIFIÉES (:func:`_controler_lignes`). Le SyncToken est
+    celui de l'objet relu (plus de « stale token »)."""
+    corps = {
+        k: v for k, v in courante.items() if k not in CHAMPS_QB_NON_RENVOYES
+    }
+    for k, v in kratos.items():
+        if k not in ("Id", "SyncToken", "sparse"):
+            corps[k] = v
+    corps["Id"] = str(courante.get("Id") or kratos.get("Id") or "")
+    tok = courante.get("SyncToken")
+    corps["SyncToken"] = str(
+        tok if tok is not None else (kratos.get("SyncToken") or "0")
+    )
+    corps["sparse"] = False
+    return corps
+
+
+_TYPES_LIGNE_DEPENSE = (
+    "AccountBasedExpenseLineDetail",
+    "ItemBasedExpenseLineDetail",
+)
+
+
+def _lignes_depense(obj: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [
+        ln
+        for ln in (obj.get("Line") or [])
+        if ln.get("DetailType") in _TYPES_LIGNE_DEPENSE
+    ]
+
+
+def _controler_lignes(
+    obj: Dict[str, Any], lignes: Sequence[Dict[str, Any]], achat_id: int
+) -> None:
+    """Vérifie que la transaction renvoyée par QuickBooks porte bien les
+    lignes envoyées (même nombre, même somme HT à ± 0,02 $). Sinon
+    AchatSyncError : le lien QB est déjà posé, l'écart devient visible
+    (bouton, journal) au lieu d'un « 200 » silencieux."""
+    recues = _lignes_depense(obj)
+    attendu = round(sum(float(ln.get("Amount") or 0) for ln in lignes), 2)
+    obtenu = round(sum(float(ln.get("Amount") or 0) for ln in recues), 2)
+    if len(recues) != len(lignes) or abs(attendu - obtenu) > 0.02:
+        raise AchatSyncError(
+            f"QuickBooks n'a pas repris les lignes de l'achat #{achat_id} : "
+            f"{len(lignes)} ligne(s) pour {attendu:.2f} $ envoyée(s), "
+            f"{len(recues)} ligne(s) pour {obtenu:.2f} $ dans la transaction "
+            f"QB {obj.get('Id') or ''}. Re-synchronise l'achat ; si l'écart "
+            "persiste, corrige la transaction dans QuickBooks."
+        )
+
+
+# Un seul push à la fois par reçu divisé : les filets poussent chaque part
+# et deux pushs concurrents du même groupe se marcheraient dessus
+# (doublon ou « stale token »). Verrou par groupe, lié à la boucle courante.
+_verrous_groupe: Dict[int, tuple[Any, asyncio.Lock]] = {}
+
+
+def _verrou_groupe(groupe_id: int) -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    entree = _verrous_groupe.get(groupe_id)
+    if entree is None or entree[0] is not loop:
+        entree = (loop, asyncio.Lock())
+        _verrous_groupe[groupe_id] = entree
+    return entree[1]
 
 
 async def _resolve_purchase_tax_rate_ids(
@@ -735,6 +836,21 @@ async def _resolve_expense_account(
 async def sync_achat_to_qbo(
     db: AsyncSession, achat_id: int
 ) -> Dict[str, Any]:
+    """Pousse l'achat (ou le reçu DIVISÉ dont il est une part) vers
+    QuickBooks. Un groupe est poussé sous verrou : une seule transaction
+    à la fois pour toutes ses parts."""
+    groupe_id = (
+        await db.execute(select(Achat.groupe_id).where(Achat.id == achat_id))
+    ).scalar_one_or_none()
+    if not groupe_id:
+        return await _sync_achat_sans_verrou(db, achat_id)
+    async with _verrou_groupe(int(groupe_id)):
+        return await _sync_achat_sans_verrou(db, achat_id)
+
+
+async def _sync_achat_sans_verrou(
+    db: AsyncSession, achat_id: int
+) -> Dict[str, Any]:
     # Sortie de l'inventaire interne (Steven 2026-10-18) : coût du projet
     # dans Kratos seulement. Le stock est entré dans QB à son achat ; le
     # pousser encore compterait la dépense deux fois. Garde commune à tous
@@ -787,6 +903,34 @@ async def sync_achat_to_qbo(
             p.qbo_sync_token = str(token) if token is not None else None
             if docnum:
                 p.qbo_doc_number = str(docnum)
+
+    async def _refuser_si_lie_ailleurs(qid: Any, docnum: Optional[str]) -> None:
+        """La transaction QB trouvée (même n° de document / même total)
+        appartient-elle déjà à un AUTRE achat Kratos (ou aux parts d'un
+        autre reçu divisé) ? Alors cet achat en est un doublon : on ne
+        s'y relie pas — on écraserait les lignes de l'autre (une part sur
+        deux, la facture QB ne vaudrait plus que la moitié du reçu). La
+        déduplication le fusionnera."""
+        autre = (
+            await db.execute(
+                select(Achat.id)
+                .where(
+                    (Achat.qbo_bill_id == str(qid))
+                    | (Achat.qbo_purchase_id == str(qid)),
+                    Achat.id.not_in([int(p.id) for p in parts]),
+                    Achat.status != "cancelled",
+                )
+                .order_by(Achat.id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if autre is not None:
+            raise AchatSyncError(
+                f"La transaction QuickBooks {qid} ({docnum or 'sans n°'}) est "
+                f"déjà liée à l'achat #{autre} : cet achat en est probablement "
+                "un doublon — rien n'a été poussé (la déduplication les "
+                "fusionnera)."
+            )
     # Achat IMPORTÉ de QB comme DÉPENSE (Purchase) : son lien QB vit dans
     # `qbo_purchase_id` seulement. On l'ADOPTE comme lien de push
     # (qbo_bill_id) pour que toute synchro METTE À JOUR l'objet QB
@@ -865,6 +1009,7 @@ async def sync_achat_to_qbo(
     # ligne QB par part. Achat simple : la liste reste vide.
     lignes_groupe: List[tuple[Achat, Optional[Project], Optional[str]]] = []
     noms_projets: Optional[str] = None
+    parts_sans_client: List[int] = []
     if groupe:
         projets_ids = [p.project_id for p in parts if p.project_id]
         projets = {
@@ -879,6 +1024,18 @@ async def sync_achat_to_qbo(
             proj = projets.get(part.project_id) if part.project_id else None
             cust = await _customer_du_projet(proj) if proj else None
             lignes_groupe.append((part, proj, cust))
+        # Part dont le projet n'a pas de sous-client QB (projet sans
+        # client, sans qbo_job_id) : sa ligne part SANS CustomerRef — QB ne
+        # peut pas l'attribuer au chantier. Signalé (journal + résultat).
+        parts_sans_client = [
+            int(part.id) for part, _, cust in lignes_groupe if not cust
+        ]
+        if parts_sans_client:
+            log.warning(
+                "Reçu divisé (groupe %s) : part(s) %s sans sous-client QB "
+                "→ ligne(s) sans CustomerRef",
+                achat.groupe_id, parts_sans_client,
+            )
         if any(proj is not None for _, proj, _ in lignes_groupe):
             # Classe = « Construction » (settings.qbo_achat_class_name) :
             # le chantier est porté par Client : Projet (CustomerRef).
@@ -966,6 +1123,9 @@ async def sync_achat_to_qbo(
     # que dans ce cas, pour éviter de dupliquer la facture à chaque
     # re-synchro (update).
     did_create = False
+    # Vrai quand l'objet QB renvoyé a seulement été RELIÉ (doublon de
+    # DocNumber d'un autre type) : ses lignes ne sont pas les nôtres.
+    etat = {"lie_seulement": False}
     try:
         vendor = await qbo.ensure_vendor(
             display_name=fournisseur.name,
@@ -1162,17 +1322,19 @@ async def sync_achat_to_qbo(
                     achat.id,
                     dup_id,
                 )
+                await _refuser_si_lie_ailleurs(dup_id, payload.get("DocNumber"))
                 try:
-                    fresh = await qbo.get_bill(dup_id)
+                    fresh = _deballer(await qbo.get_bill(dup_id))
                 except QuickBooksError:
                     # Le doublon n'est pas un Bill (ex. Dépense) : on se
                     # contente de RELIER — la prochaine synchro routera
                     # selon le type réel (règles Bill/Purchase plus haut).
+                    etat["lie_seulement"] = True
                     return await qbo.get_purchase(dup_id)
                 payload["Id"] = dup_id
-                payload["SyncToken"] = str(fresh.get("SyncToken") or "0")
-                payload["sparse"] = True
-                return await qbo.update_bill(payload)
+                return await qbo.update_bill(
+                    corps_mise_a_jour_complete(fresh, payload)
+                )
 
         async def _create_purchase_or_link(
             payload: Dict[str, Any]
@@ -1203,14 +1365,41 @@ async def sync_achat_to_qbo(
                     achat.id,
                     dup_id,
                 )
+                await _refuser_si_lie_ailleurs(dup_id, payload.get("DocNumber"))
                 try:
-                    fresh = await qbo.get_purchase(dup_id)
+                    fresh = _deballer(await qbo.get_purchase(dup_id))
                 except QuickBooksError:
+                    etat["lie_seulement"] = True
                     return await qbo.get_bill(dup_id)
                 payload["Id"] = dup_id
-                payload["SyncToken"] = str(fresh.get("SyncToken") or "0")
-                payload["sparse"] = True
-                return await qbo.update_purchase(payload)
+                return await qbo.update_purchase(
+                    corps_mise_a_jour_complete(fresh, payload)
+                )
+
+        async def _mettre_a_jour_complete(lire, ecrire, payload: Dict[str, Any]):
+            """Mise à jour COMPLÈTE de la transaction QB déjà liée (jamais
+            « sparse », cf. corps_mise_a_jour_complete) : relecture de
+            l'objet, corps complet avec son SyncToken courant, repli taxe
+            comme à la création."""
+            courante = _deballer(await lire(str(payload["Id"])))
+            corps = corps_mise_a_jour_complete(courante, payload)
+            try:
+                return await ecrire(corps)
+            except QuickBooksError as exc:
+                if _is_stale_token(exc):
+                    fresh = _deballer(await lire(str(payload["Id"])))
+                    corps["SyncToken"] = str(fresh.get("SyncToken") or "0")
+                    return await ecrire(corps)
+                if _is_invalid_tax_rate(exc) and _strip_txn_tax_detail(corps):
+                    # Taux d'achat refusé : on retire les lignes de taxe
+                    # exactes et on laisse QBO calculer (repli 643,58).
+                    log.warning(
+                        "QBO taxe exacte refusée → repli calcul QBO "
+                        "(achat %s)",
+                        achat.id,
+                    )
+                    return await ecrire(corps)
+                raise
 
         # Anti-doublon : si cet Achat n'est pas encore lie a un objet QB,
         # on verifie qu'un Bill/Purchase equivalent (meme fournisseur,
@@ -1286,6 +1475,9 @@ async def sync_achat_to_qbo(
                         )
                     )
                     if cross and cross.get("Id"):
+                        await _refuser_si_lie_ailleurs(
+                            cross["Id"], cross.get("DocNumber")
+                        )
                         _lier_parts(
                             str(cross["Id"]),
                             str(cross.get("SyncToken") or "0"),
@@ -1315,6 +1507,7 @@ async def sync_achat_to_qbo(
                 )
                 dup = None
             if dup and dup.get("Id"):
+                await _refuser_si_lie_ailleurs(dup["Id"], dup.get("DocNumber"))
                 _lier_parts(
                     str(dup["Id"]),
                     str(dup.get("SyncToken") or "0"),
@@ -1374,17 +1567,11 @@ async def sync_achat_to_qbo(
             )
             if payload.get("Id"):
                 try:
-                    qbo_obj = await qbo.update_purchase(payload)
+                    qbo_obj = await _mettre_a_jour_complete(
+                        qbo.get_purchase, qbo.update_purchase, payload
+                    )
                 except QuickBooksError as exc:
-                    if _is_stale_token(exc):
-                        # SyncToken périmé : on relit le token courant
-                        # depuis QBO et on réessaie la mise à jour.
-                        fresh = await qbo.get_purchase(str(payload["Id"]))
-                        payload["SyncToken"] = str(
-                            fresh.get("SyncToken") or "0"
-                        )
-                        qbo_obj = await qbo.update_purchase(payload)
-                    elif _is_stale_ref(exc):
+                    if _is_stale_ref(exc):
                         # L'objet QBO référencé n'est pas une Purchase
                         # (souvent : l'achat était un Bill « sur compte »
                         # puis est passé payé → Purchase). On recrée la
@@ -1402,17 +1589,6 @@ async def sync_achat_to_qbo(
                         payload.pop("SyncToken", None)
                         payload.pop("sparse", None)
                         qbo_obj = await _create_purchase_or_link(payload)
-                    elif _is_invalid_tax_rate(exc) and _strip_txn_tax_detail(
-                        payload
-                    ):
-                        # Taux d'achat refusé : on retire les lignes de taxe
-                        # exactes et on laisse QBO calculer (repli 643,58).
-                        log.warning(
-                            "QBO taxe exacte refusée → repli calcul QBO "
-                            "(achat %s)",
-                            achat.id,
-                        )
-                        qbo_obj = await qbo.update_purchase(payload)
                     else:
                         raise
             else:
@@ -1437,15 +1613,11 @@ async def sync_achat_to_qbo(
             )
             if payload.get("Id"):
                 try:
-                    qbo_obj = await qbo.update_bill(payload)
+                    qbo_obj = await _mettre_a_jour_complete(
+                        qbo.get_bill, qbo.update_bill, payload
+                    )
                 except QuickBooksError as exc:
-                    if _is_stale_token(exc):
-                        fresh = await qbo.get_bill(str(payload["Id"]))
-                        payload["SyncToken"] = str(
-                            fresh.get("SyncToken") or "0"
-                        )
-                        qbo_obj = await qbo.update_bill(payload)
-                    elif _is_stale_ref(exc):
+                    if _is_stale_ref(exc):
                         # Pas un Bill (souvent : l'achat était payé →
                         # Purchase, puis repassé « sur compte » → Bill). On
                         # recrée le Bill SANS supprimer l'ancienne Purchase
@@ -1460,15 +1632,6 @@ async def sync_achat_to_qbo(
                         payload.pop("SyncToken", None)
                         payload.pop("sparse", None)
                         qbo_obj = await _create_bill_or_link(payload)
-                    elif _is_invalid_tax_rate(exc) and _strip_txn_tax_detail(
-                        payload
-                    ):
-                        log.warning(
-                            "QBO taxe exacte refusée → repli calcul QBO "
-                            "(achat %s)",
-                            achat.id,
-                        )
-                        qbo_obj = await qbo.update_bill(payload)
                     else:
                         raise
             else:
@@ -1494,6 +1657,11 @@ async def sync_achat_to_qbo(
         p.qbo_sync_token = sync_token or None
         p.qbo_doc_number = doc_number or None
     await db.flush()
+    # Les lignes renvoyées par QB sont-elles les nôtres ? (Une mise à jour
+    # ignorée en silence laisserait la transaction QB fausse — l'erreur
+    # est levée APRÈS la pose du lien, pour ne jamais recréer de doublon.)
+    if not etat["lie_seulement"]:
+        _controler_lignes(_deballer(qbo_obj), payload.get("Line") or [], achat.id)
 
     kind = "Purchase" if as_purchase else "Bill"
     log.info(
@@ -1602,8 +1770,10 @@ async def sync_achat_to_qbo(
         "qbo_vendor_id": vendor_id,
         "receipt_attached": receipt_attached,
         "receipt_error": receipt_error,
-        # Reçu divisé : toutes les parts liées à cette transaction.
+        # Reçu divisé : toutes les parts liées à cette transaction, et
+        # celles dont la ligne est partie sans sous-client QB.
         "parts": [int(p.id) for p in parts],
+        "parts_sans_client": parts_sans_client,
     }
 
 
@@ -1794,6 +1964,25 @@ async def push_bill_payment_to_qbo(
     total = round(sum(_ttc_part(p) for p in parts), 2)
     if total <= 0:
         return {"ok": False, "reason": "zero_amount"}
+    # Le Bill QB se solde à SON solde : quand QB a calculé la taxe lui-même
+    # (repli), un cent d'écart avec Kratos laisserait le Bill « partiellement
+    # payé » ou surpayé. À ≤ 0,05 $ près, on paie le solde QB ; au-delà, le
+    # total Kratos (écart journalisé, à voir dans QB).
+    solde_qb = round(float(_bill.get("Balance") or 0), 2)
+    if solde_qb > 0 and abs(solde_qb - total) <= 0.05:
+        if solde_qb != total:
+            log.info(
+                "BillPayment achat %s : solde QB %.2f retenu (total Kratos "
+                "%.2f)",
+                achat.id, solde_qb, total,
+            )
+        total = solde_qb
+    elif solde_qb > 0:
+        log.warning(
+            "BillPayment achat %s : total Kratos %.2f ≠ solde QB %.2f — "
+            "paiement du total Kratos, à vérifier dans QuickBooks",
+            achat.id, total, solde_qb,
+        )
 
     pay_type_check = method == "cheque_horizon"
     payload: Dict[str, Any] = {

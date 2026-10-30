@@ -138,3 +138,22 @@ def test_montants_du_groupe():
     assert m2.amount == 700.0 and m2.amount_taxes == 89.85
     assert m2.amount_tps is None and m2.amount_tvq is None
     assert montants_groupe([c]).amount_taxes is None
+
+
+def test_arrondi_commercial_et_premieres_parts():
+    from app.services.achat_divise import _r, premieres_parts
+
+    # Demi-cent vers le haut (round() binaire donnerait 2,67).
+    assert _r(2.675) == 2.68
+    assert _r(1.005) == 1.01
+    assert _r(-0.0) == 0.0 and str(_r(-0.004)) == "0.0"
+    # Une seule part par groupe, achats simples conservés, ordre gardé.
+    assert premieres_parts([(1, None), (2, 7), (3, 7), (4, None), (5, 9), (6, 7)]) == [1, 2, 4, 5]
+    assert premieres_parts([]) == []
+
+
+def test_repartir_des_heures():
+    from app.services.achat_divise import repartir
+
+    assert repartir(10, [689.85, 459.90]) == [6.0, 4.0]
+    assert sum(repartir(7.5, [1, 1, 1])) == 7.5

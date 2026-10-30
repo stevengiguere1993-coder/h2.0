@@ -598,10 +598,15 @@ class AchatCreate(BaseModel):
 
 class AchatPartIn(BaseModel):
     """Une part d'un reçu divisé : le projet et le montant TTC qui lui
-    revient (ce que l'utilisateur lit ou décide sur le reçu)."""
+    revient (ce que l'utilisateur lit ou décide sur le reçu). Les
+    contraintes (part > 0, ≥ 2 projets distincts, somme = total) sont
+    vérifiées par le service, en français."""
 
     project_id: int
-    total: float = Field(..., gt=0)
+    total: float
+    #: Fourni = choix manuel pour CETTE part ; absent = défaut du projet
+    #: (contrat / bon de travail → refacturable), sauf choix global.
+    is_billable: Optional[bool] = None
 
 
 class AchatDiviseCreate(BaseModel):
@@ -615,7 +620,7 @@ class AchatDiviseCreate(BaseModel):
     fournisseur_id: Optional[int] = None
     description: Optional[str] = None
     #: Montant HT TOTAL du reçu (toutes parts confondues).
-    amount: float = Field(..., gt=0)
+    amount: float
     #: Taxes TOTALES du reçu (TPS + TVQ), 0 ou absent si exonéré.
     amount_taxes: Optional[float] = Field(default=None, ge=0)
     amount_tps: Optional[float] = Field(default=None, ge=0)
@@ -634,7 +639,7 @@ class AchatDiviseCreate(BaseModel):
     hours: Optional[float] = Field(default=None, ge=0)
     #: Au moins deux projets distincts ; la somme des ``total`` doit
     #: retomber sur amount + amount_taxes (± 0,02 $).
-    parts: list[AchatPartIn] = Field(..., min_length=2)
+    parts: list[AchatPartIn] = Field(default_factory=list)
 
 
 class AchatUpdate(BaseModel):

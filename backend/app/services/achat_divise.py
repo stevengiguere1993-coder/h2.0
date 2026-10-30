@@ -22,8 +22,9 @@ BillPayment) et reçu (image / PDF) valent pour tout le groupe.
 from __future__ import annotations
 
 import logging
+from decimal import ROUND_HALF_UP, Decimal
 from types import SimpleNamespace
-from typing import Optional, Sequence
+from typing import Any, Iterable, Optional, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,7 +60,11 @@ class DivisionErreur(ValueError):
 
 
 def _r(v: float) -> float:
-    return round(float(v) + 0.0, 2)
+    """Arrondi au cent « commercial » (demi-cent vers le haut), sans les
+    surprises du round() binaire (2,675 → 2,67)."""
+    return float(
+        Decimal(str(float(v))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    ) + 0.0
 
 
 def repartir(total: float, poids: Sequence[float]) -> list[float]:
@@ -174,6 +179,11 @@ async def creer_achat_divise(
     """Crée les parts d'un reçu divisé (un achat par projet) et les lie par
     ``groupe_id``. Ne committe pas ; ne pousse pas vers QuickBooks (le
     push du groupe est déclenché par l'appelant sur la tête)."""
+    if float(data.amount or 0) <= 0:
+        raise DivisionErreur(
+            "Entre le total de la facture : le montant hors taxes doit être "
+            "supérieur à 0 $."
+        )
     valider_parts(data.parts)
     ids = [p.project_id for p in data.parts]
     projets = {
@@ -196,18 +206,33 @@ async def creer_achat_divise(
         totals=[p.total for p in data.parts],
     )
     communs = data.model_dump(exclude_unset=True, exclude={"parts"})
-    for k in ("amount", "amount_taxes", "amount_tps", "amount_tvq", "is_billable", "status"):
+    for k in (
+        "amount", "amount_taxes", "amount_tps", "amount_tvq",
+        "is_billable", "status", "hours",
+    ):
         communs.pop(k, None)
     statut = (data.status or "").strip() or AchatStatus.RECEIVED.value
-    choix_manuel = data.is_billable is not None
+    # Heures (facture de sous-traitant au taux horaire) : réparties comme
+    # les montants — recopiées entières, chaque projet refacturerait toutes
+    # les heures.
+    heures: Optional[list[float]] = (
+        repartir(data.hours, [m["total"] for m in montants])
+        if data.hours is not None
+        else None
+    )
 
     achats: list[Achat] = []
-    for part, m in zip(data.parts, montants):
-        billable = (
-            bool(data.is_billable)
-            if choix_manuel
-            else await refacturable_par_defaut(db, part.project_id)
-        )
+    for i, (part, m) in enumerate(zip(data.parts, montants)):
+        # « À refacturer » : choix de LA part s'il est donné, sinon choix
+        # global, sinon défaut du projet (contrat / bon de travail → oui).
+        # Le verrou manuel n'est posé que sur un choix explicite.
+        if part.is_billable is not None:
+            billable, choix_manuel = bool(part.is_billable), True
+        elif data.is_billable is not None:
+            billable, choix_manuel = bool(data.is_billable), True
+        else:
+            billable = await refacturable_par_defaut(db, part.project_id)
+            choix_manuel = False
         a = Achat(
             **communs,
             project_id=part.project_id,
@@ -215,6 +240,7 @@ async def creer_achat_divise(
             amount_taxes=m["amount_taxes"],
             amount_tps=m["amount_tps"],
             amount_tvq=m["amount_tvq"],
+            hours=heures[i] if heures is not None else None,
             status=statut,
             is_billable=billable,
             billable_manual=choix_manuel,
@@ -303,3 +329,85 @@ async def propager_champs_communs(db: AsyncSession, achat: Achat) -> int:
     if modifiees:
         await db.flush()
     return modifiees
+
+
+async def verifier_projet_unique(db: AsyncSession, achat: Achat) -> None:
+    """Une part par projet : déplacer une part sur le projet d'une sœur
+    active est refusé (DivisionErreur) — sinon la dédup y verrait un
+    doublon. Sans effet pour un achat simple."""
+    if not achat.groupe_id or not achat.project_id:
+        return
+    for s in await parts_du_groupe(db, achat):
+        if s.id != achat.id and s.project_id == achat.project_id:
+            raise DivisionErreur(
+                f"Le projet est déjà une part de ce reçu divisé (achat "
+                f"#{s.id}). Pour regrouper deux parts, ajuste les montants "
+                "puis supprime l'autre part."
+            )
+
+
+async def propager_statut_paiement(db: AsyncSession, achat: Achat) -> int:
+    """Une facture fournisseur se paie en entier : le statut reçu ↔ payé,
+    la date de paiement et l'échéance d'une part valent pour ses sœurs
+    actives (l'annulation, elle, reste propre à la part). Renvoie le
+    nombre de sœurs alignées."""
+    if not achat.groupe_id or achat.status not in (
+        AchatStatus.RECEIVED.value,
+        AchatStatus.PAID.value,
+    ):
+        return 0
+    n = 0
+    for s in await parts_du_groupe(db, achat):
+        if s.id == achat.id or s.status == achat.status:
+            continue
+        s.status = achat.status
+        s.paid_at = achat.paid_at
+        s.due_at = achat.due_at
+        n += 1
+    if n:
+        await db.flush()
+    return n
+
+
+async def retirer_part_annulee(
+    db: AsyncSession, part: Achat
+) -> Optional[dict[str, Any]]:
+    """Part passée à « annulé » (ou en cours de suppression) : s'il reste
+    des parts actives, la transaction QB du groupe est réécrite SANS sa
+    ligne — dans la requête, même session ; une erreur QB remonte à
+    l'appelant (AchatSyncError) et rien n'est annulé — et la part perd son
+    lien QB (plus de ligne dans QB : les pulls ne la ressusciteront pas
+    « payée »). Dernière part active : la transaction QB reste entière,
+    avec son lien, comme un achat simple annulé. Renvoie le résultat du
+    push, ou None s'il n'y en a pas eu."""
+    if not part.groupe_id:
+        return None
+    soeurs = [s for s in await parts_du_groupe(db, part) if s.id != part.id]
+    if not soeurs:
+        return None
+    avait_lien = bool(part.qbo_bill_id or part.qbo_purchase_id)
+    part.qbo_bill_id = None
+    part.qbo_sync_token = None
+    part.qbo_doc_number = None
+    part.qbo_bill_payment_id = None
+    await db.flush()
+    if not avait_lien:
+        return None
+    from app.services.achat_qbo import sync_achat_to_qbo
+
+    return await sync_achat_to_qbo(db, soeurs[0].id)
+
+
+def premieres_parts(rows: Iterable[tuple[int, Optional[int]]]) -> list[int]:
+    """Ids à pousser vers QB parmi des couples (id, groupe_id) : une seule
+    part par reçu divisé (pousser une part pousse tout le groupe), tous les
+    achats simples. Ordre conservé."""
+    vus: set[int] = set()
+    out: list[int] = []
+    for aid, gid in rows:
+        if gid:
+            if gid in vus:
+                continue
+            vus.add(int(gid))
+        out.append(int(aid))
+    return out

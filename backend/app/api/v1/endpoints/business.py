@@ -868,15 +868,43 @@ def make_crud_router(
             new_status = getattr(obj, "status", None)
             # Reçu DIVISÉ entre plusieurs projets : les champs qui décrivent
             # la facture (fournisseur, n°, date, mode de paiement, nature,
-            # PO) valent pour toutes les parts → recopiés sur les sœurs. Le
-            # re-push live ci-dessous reconstruit la transaction QB du
-            # groupe (une ligne par part).
+            # PO) valent pour toutes les parts → recopiés sur les sœurs,
+            # comme le statut de paiement (une facture se paie en entier).
+            # Une part ne peut pas prendre le projet d'une sœur (409). Une
+            # part ANNULÉE perd sa ligne dans QB tout de suite (réécriture
+            # de la transaction dans la requête ; refus QB → 409, rien
+            # n'est annulé). Le re-push live ci-dessous reconstruit la
+            # transaction QB du groupe (une ligne par part) — après COMMIT,
+            # puisqu'il lit la base dans sa propre session.
             if getattr(obj, "groupe_id", None):
                 from app.services.achat_divise import (
+                    DivisionErreur,
                     propager_champs_communs,
+                    propager_statut_paiement,
+                    retirer_part_annulee,
+                    verifier_projet_unique,
+                )
+                from app.services.achat_qbo import (
+                    AchatSyncError as _AchatSyncError,
                 )
 
+                try:
+                    await verifier_projet_unique(db, obj)
+                except DivisionErreur as exc:
+                    raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
                 await propager_champs_communs(db, obj)
+                if new_status != prev_status:
+                    await propager_statut_paiement(db, obj)
+                if new_status == "cancelled" and prev_status != "cancelled":
+                    try:
+                        await retirer_part_annulee(db, obj)
+                    except _AchatSyncError as exc:
+                        raise HTTPException(
+                            status.HTTP_409_CONFLICT,
+                            "Part non annulée : QuickBooks n'a pas pu "
+                            f"retirer sa ligne de la facture — {exc}",
+                        )
+                await db.commit()
             # Push LIVE : TOUTE modification enregistrée d'un achat actif
             # (reçu/payé) est reflétée immédiatement dans QB — montants,
             # taxes, projet, mode de paiement, description, date… — sans
@@ -1105,23 +1133,30 @@ def make_crud_router(
             if model is Facture
             else ""
         )
+        # Reçu DIVISÉ : si d'autres parts restent, la transaction QB du
+        # groupe perd la ligne de la part supprimée — réécrite AVANT la
+        # suppression, dans la requête (la part est d'abord marquée
+        # annulée pour sortir des lignes). Un refus QB (facture payée,
+        # rapprochée…) → 409 et rien n'est supprimé : Kratos ne diverge
+        # jamais de QuickBooks en silence.
+        if model is Achat and getattr(obj, "groupe_id", None):
+            from app.services.achat_divise import retirer_part_annulee
+            from app.services.achat_qbo import (
+                AchatSyncError as _AchatSyncError,
+            )
+
+            obj.status = "cancelled"
+            await db.flush()
+            try:
+                await retirer_part_annulee(db, obj)
+            except _AchatSyncError as exc:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "Part non supprimée : QuickBooks n'a pas pu retirer sa "
+                    f"ligne de la facture — {exc}",
+                )
         # Sortie de l'inventaire interne supprimée depuis les achats : la
         # marchandise revient en stock (refusé si déjà refacturée).
-        # Reçu DIVISÉ : si d'autres parts restent, la transaction QB du
-        # groupe doit perdre la ligne de la part supprimée → re-push du
-        # groupe (ci-dessous, après la suppression). Ids capturés avant.
-        _soeurs_divise: list[int] = []
-        if model is Achat and getattr(obj, "groupe_id", None) and (
-            getattr(obj, "qbo_bill_id", None)
-            or getattr(obj, "qbo_purchase_id", None)
-        ):
-            from app.services.achat_divise import parts_du_groupe
-
-            _soeurs_divise = [
-                int(p.id)
-                for p in await parts_du_groupe(db, obj)
-                if p.id != obj.id
-            ]
         if model is Achat:
             from app.services.inventaire import (
                 InventaireErreur,
@@ -1133,24 +1168,6 @@ def make_crud_router(
             except InventaireErreur as exc:
                 raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
         await crud.delete(obj)
-        if _soeurs_divise:
-            # Dans la MÊME session (la part supprimée est déjà hors des
-            # requêtes) : la transaction QB est réécrite avec les parts
-            # restantes. Best-effort : un échec QB ne bloque pas la
-            # suppression (le prochain re-push d'une part la rattrape).
-            from app.services.achat_qbo import sync_achat_to_qbo
-
-            try:
-                await sync_achat_to_qbo(db, _soeurs_divise[0])
-            except Exception as exc:  # noqa: BLE001
-                import logging as _logging_divise
-
-                _logging_divise.getLogger(__name__).warning(
-                    "Reçu divisé : re-push QB après suppression de la part "
-                    "%s échoué : %s",
-                    item_id,
-                    exc,
-                )
         if _punch_ta_id:
             import asyncio as _asyncio
 

@@ -1083,19 +1083,38 @@ async def pull_project_costs_from_qbo(
         src_id = _kratos_source_achat_id(txn)
         if not src_id:
             return False
+        from app.services.achat_divise import parts_du_groupe
+
         src = await db.get(Achat, src_id)
+        # Reçu DIVISÉ dans Kratos (groupe_id) : la transaction QB porte
+        # toutes les parts ACTIVES → on répare le lien de chacune (une part
+        # annulée n'a plus de ligne dans QB : jamais reliée). Tête
+        # supprimée : ses sœurs gardent groupe_id = son id.
         if src is None:
-            return False
+            cibles = list(
+                (
+                    await db.execute(
+                        select(Achat)
+                        .where(
+                            Achat.groupe_id == src_id,
+                            Achat.status != "cancelled",
+                        )
+                        .order_by(Achat.id)
+                    )
+                ).scalars().all()
+            )
+            if not cibles:
+                return False
+            src = cibles[0]
+        elif src.groupe_id:
+            cibles = await parts_du_groupe(db, src) or await parts_du_groupe(
+                db, src, actives_seulement=False
+            )
+        else:
+            cibles = [src]
         vendor_n = (
             (txn.get("VendorRef") or txn.get("EntityRef") or {}).get("name")
         )
-        # Reçu DIVISÉ dans Kratos (groupe_id) : la transaction QB porte
-        # toutes les parts → on répare le lien de chacune.
-        cibles = [src]
-        if src.groupe_id:
-            from app.services.achat_divise import parts_du_groupe
-
-            cibles = await parts_du_groupe(db, src, actives_seulement=False)
         sans_lien = [c for c in cibles if not (c.qbo_bill_id or c.qbo_purchase_id)]
         if sans_lien:
             if not dry_run:
@@ -1163,7 +1182,7 @@ async def pull_project_costs_from_qbo(
                         and ach.due_at != _due
                     ):
                         ach.due_at = _due
-                    if paid and ach.status != "paid":
+                    if paid and ach.status not in ("paid", "cancelled"):
                         ach.status = "paid"
                         ach.paid_at = ach.paid_at or now
                         if _real_pm and (
@@ -1202,6 +1221,7 @@ async def pull_project_costs_from_qbo(
             _partiel = _part_hors_projet(b, _allocs)
             if (
                 not dry_run
+                and not ach.groupe_id  # part d'un reçu divisé DANS Kratos
                 and (len(_allocs) >= 2 or (_allocs and _partiel))
                 and ach.invoiced_at is None
                 and ach.facture_item_id is None
@@ -1272,7 +1292,11 @@ async def pull_project_costs_from_qbo(
             # « maître Kratos » (amount = HT + amount_taxes) pour ne pas
             # écraser sa ventilation. Corrige : « une facture à payer / un
             # reçu modifié dans QB ne se met pas à jour dans les dépenses ».
-            if not dry_run and float(ach.amount_taxes or 0) == 0:
+            if (
+                not dry_run
+                and not ach.groupe_id  # Kratos est maître d'un reçu divisé
+                and float(ach.amount_taxes or 0) == 0
+            ):
                 new_desc = _txn_description(b)
                 # Part attendue : le total QB, ou seulement la part du
                 # projet quand la facture est fractionnée avec une part
@@ -1296,6 +1320,7 @@ async def pull_project_costs_from_qbo(
             proj_link = _project_for_txn(b, proj_by_job)
             if (
                 not dry_run
+                and not ach.groupe_id  # chaque part garde SON projet
                 and proj_link is not None
                 and ach.project_id != proj_link.id
             ):
@@ -1309,7 +1334,7 @@ async def pull_project_costs_from_qbo(
                     ach.is_billable = _is_billable(proj_link)
                 updated = True
                 await db.flush()
-            if paid and ach.status != "paid":
+            if paid and ach.status not in ("paid", "cancelled"):
                 if not dry_run:
                     ach.status = "paid"
                     ach.paid_at = ach.paid_at or now
@@ -1491,6 +1516,7 @@ async def pull_project_costs_from_qbo(
             _partiel = _part_hors_projet(p, _allocs)
             if (
                 not dry_run
+                and not existing.groupe_id  # part d'un reçu divisé DANS Kratos
                 and (len(_allocs) >= 2 or (_allocs and _partiel))
                 and existing.invoiced_at is None
                 and existing.facture_item_id is None
@@ -1569,7 +1595,7 @@ async def pull_project_costs_from_qbo(
             # Reflète les MODIFS QB (montant / description) sur une dépense
             # ORIGINAIRE de QB (TTC, sans ventilation de taxe Kratos). On ne
             # touche PAS un achat maître-Kratos (amount = HT + amount_taxes).
-            if float(existing.amount_taxes or 0) == 0:
+            if not existing.groupe_id and float(existing.amount_taxes or 0) == 0:
                 new_desc = _txn_description(p)
                 _attendu = _montant_attendu(
                     existing, total, _allocs, _base_ht
@@ -1589,7 +1615,8 @@ async def pull_project_costs_from_qbo(
             # Jamais d'effacement de projet.
             proj_link = _project_for_txn(p, proj_by_job)
             if (
-                proj_link is not None
+                not existing.groupe_id  # chaque part garde SON projet
+                and proj_link is not None
                 and existing.project_id != proj_link.id
             ):
                 first_link = existing.project_id is None

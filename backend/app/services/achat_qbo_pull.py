@@ -452,7 +452,11 @@ async def pull_new_bills_from_qbo(
                 if (
                     paid_info is not None
                     and not existing_achat.qbo_bill_payment_id
-                    and existing_achat.status != AchatStatus.PAID.value
+                    and existing_achat.status
+                    not in (
+                        AchatStatus.PAID.value,
+                        AchatStatus.CANCELLED.value,
+                    )
                 ):
                     bp_id, paid_at, method_hint = paid_info
                     existing_achat.status = AchatStatus.PAID.value

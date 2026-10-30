@@ -15,7 +15,17 @@ Faux QuickBooks, aucun appel réseau. Couvre :
 4. reçu téléversé sur une part → présent sur l'autre ;
 5. suppression d'une part → le Bill est réécrit avec la part restante ;
 6. mode « carte de crédit » → UNE dépense (Purchase) à deux lignes ;
-7. saisies invalides refusées (somme, projets).
+7. saisies invalides refusées (somme, projets) ;
+8. (contestation 2026-10-30) toute transaction QB déjà liée est mise à
+   jour en ENTIER (jamais « sparse », dont QuickBooks ignore les lignes —
+   le faux QB se comporte comme la vraie compagnie) et les lignes
+   renvoyées sont vérifiées ; annulation d'une part → sa ligne sort de la
+   facture QB tout de suite et la part perd son lien ; refus QB → 409,
+   rien n'est annulé ; une part ne prend pas le projet d'une sœur ;
+   dédup : un doublon simple est absorbé par le groupe (jamais une part
+   supprimée), deux groupes identiques → le plus ancien reste, deux
+   groupes différents → rien ; « à refacturer » et heures par part ;
+   paiement d'une part → statut du groupe ; webhook sur toutes les parts.
 """
 
 from __future__ import annotations
@@ -36,7 +46,11 @@ from app.models.fournisseur import Fournisseur
 from app.models.project import Project
 from app.models.qbo_account_map import QboAccountMap
 from app.services.achat_dedupe import dedupe_achats
-from app.services.achat_qbo import push_bill_payment_to_qbo, sync_achat_to_qbo
+from app.services.achat_qbo import (
+    AchatSyncError,
+    push_bill_payment_to_qbo,
+    sync_achat_to_qbo,
+)
 
 from .conftest import TestSessionLocal
 
@@ -78,10 +92,17 @@ class _FauxQB:
         self.updates: List[tuple] = []
         self.pieces: List[Dict[str, Any]] = []
         self._seq = 100
+        self._marque = uuid.uuid4().hex[:4]
+        #: Simule une compagnie qui ignore les lignes même en mise à jour
+        #: complète (pour prouver que le push détecte l'écart).
+        self.ignorer_lignes = False
+        #: Message d'erreur à renvoyer à toute mise à jour (facture payée,
+        #: rapprochée…).
+        self.erreur_maj: Optional[str] = None
 
     def _next(self, prefix: str) -> str:
         self._seq += 1
-        return f"{prefix}{self._seq}"
+        return f"{prefix}{self._marque}-{self._seq}"
 
     async def _load_refresh_from_db(self) -> None:
         return None
@@ -170,15 +191,26 @@ class _FauxQB:
         cur = store.get(str(payload.get("Id")))
         if cur is None:
             raise QuickBooksError("Object Not Found : Something you're trying to use has been made inactive (id)")
+        if self.erreur_maj:
+            raise QuickBooksError(self.erreur_maj)
         if str(payload.get("SyncToken")) != str(cur["SyncToken"]):
             raise QuickBooksError("Stale Object Error : SyncToken")
-        # Mise à jour sparse : les champs envoyés remplacent, Line compris.
-        for k, v in payload.items():
-            if k in ("sparse",):
-                continue
-            cur[k] = copy.deepcopy(v)
+        p = copy.deepcopy(payload)
+        paye = round(float(cur["TotalAmt"]) - float(cur["Balance"]), 2)
+        if p.get("sparse") or self.ignorer_lignes:
+            # Comme la vraie compagnie (Invoice 120, 2026-10-14) : une mise
+            # à jour « sparse » accepte la requête mais laisse les LIGNES
+            # telles quelles.
+            p.pop("Line", None)
+            p.pop("TxnTaxDetail", None)
+        else:
+            # Mise à jour complète : jamais de champ calculé dans le corps.
+            for champ in ("TotalAmt", "Balance", "MetaData"):
+                assert champ not in p, f"{champ} renvoyé dans la mise à jour complète"
+        cur.update({k: v for k, v in p.items() if k != "sparse"})
         cur["SyncToken"] = str(int(cur["SyncToken"]) + 1)
         cur["TotalAmt"] = self._total(cur)
+        cur["Balance"] = round(cur["TotalAmt"] - paye, 2)
         return copy.deepcopy(cur)
 
     async def get_bill(self, bill_id: str) -> Dict[str, Any]:
@@ -416,7 +448,11 @@ def test_recu_divise_deux_projets_un_bill_deux_lignes(
     assert len(faux_qb.creations) == 1
     assert [t for t, _ in faux_qb.updates] == ["Bill"]
     maj = faux_qb.updates[-1][1]
-    assert maj["Id"] == bill["Id"] and maj.get("sparse") is True
+    # Mise à jour COMPLÈTE (jamais sparse : QB ignorerait les lignes), sans
+    # champ calculé, avec le SyncToken relu.
+    assert maj["Id"] == bill["Id"] and maj.get("sparse") is False
+    assert "TotalAmt" not in maj and "Balance" not in maj
+    assert maj["SyncToken"] == "0"
     assert [ln["Amount"] for ln in _lignes(maj)] == [600.0, 400.0]
     assert len(faux_qb.bills) == 1
 
@@ -590,3 +626,294 @@ def test_divisions_invalides_refusees(client, auth_headers, chantiers, faux_qb):
     assert r.status_code == 422 and "introuvable" in r.text
     # Rien n'a été créé ni poussé.
     assert faux_qb.creations == []
+
+
+# ── 8) Contestation de la conception (2026-10-30) ────────────────────
+
+
+def _simple(ch: dict, **extra: Any) -> Dict[str, Any]:
+    """Un achat SIMPLE qui ressemble au reçu divisé (même fournisseur,
+    même n° de facture, même total) — le doublon type."""
+    base: Dict[str, Any] = {
+        "fournisseur_id": ch["fournisseur"],
+        "project_id": ch["a"],
+        "description": "Bois traité et gypse (ressaisi)",
+        "amount": 1000.0,
+        "amount_taxes": 149.75,
+        "amount_tps": 50.0,
+        "amount_tvq": 99.75,
+        "supplier_invoice_number": f"RD-{ch['tag']}",
+        "invoice_date": "2026-10-28",
+        "payment_method": "cc_steven",
+        "status": "paid",
+        "kind": "material",
+    }
+    base.update(extra)
+    return base
+
+
+def _dedupe(run) -> int:
+    async def _go() -> int:
+        async with TestSessionLocal() as s:
+            n = await dedupe_achats(s)
+            await s.commit()
+            return n
+
+    return run(_go())
+
+
+def _creer_groupe(client, auth_headers, run, faux_qb, corps: dict) -> tuple:
+    res = client.post("/api/v1/achats/divise", headers=auth_headers, json=corps)
+    assert res.status_code == 201, res.text
+    tete, autre = res.json()["parts"]
+    _attendre(run, lambda: any(a.qbo_bill_id for a in _achats(run, [tete["id"]])))
+    return tete, autre
+
+
+def test_annuler_une_part_retire_sa_ligne_et_son_lien(
+    client, auth_headers, run, chantiers, faux_qb
+):
+    tete, autre = _creer_groupe(client, auth_headers, run, faux_qb, _corps(chantiers))
+    bill_id = next(iter(faux_qb.bills))
+
+    r = client.patch(
+        f"/api/v1/achats/{autre['id']}", headers=auth_headers, json={"status": "cancelled"},
+    )
+    assert r.status_code == 200, r.text
+    bill = faux_qb.bills[bill_id]
+    # La facture QB n'a plus que la ligne de la part A, au bon total.
+    assert [ln["Amount"] for ln in _lignes(bill)] == [600.0]
+    assert bill["TotalAmt"] == 689.85
+    a, b = _achats(run, [tete["id"], autre["id"]])
+    assert a.qbo_bill_id == bill_id and a.status == "received"
+    assert b.status == "cancelled"
+    assert b.qbo_bill_id is None and b.qbo_doc_number is None and b.qbo_sync_token is None
+    # /parts : la part annulée est listée mais exclue du total.
+    pj = client.get(f"/api/v1/achats/{tete['id']}/parts", headers=auth_headers).json()
+    assert [(p["id"], p["status"]) for p in pj["parts"]] == [
+        (tete["id"], "received"), (autre["id"], "cancelled"),
+    ]
+    assert pj["total_kratos"] == 689.85 and pj["qbo_total"] == 689.85
+
+    # Réactiver la part : elle revient dans la facture QB et reprend le lien.
+    r = client.patch(
+        f"/api/v1/achats/{autre['id']}", headers=auth_headers, json={"status": "received"},
+    )
+    assert r.status_code == 200, r.text
+    _attendre(run, lambda: _achats(run, [autre["id"]])[0].qbo_bill_id == bill_id)
+    bill = faux_qb.bills[bill_id]
+    assert sorted(ln["Amount"] for ln in _lignes(bill)) == [400.0, 600.0]
+    assert bill["TotalAmt"] == 1149.75
+    assert len(faux_qb.bills) == 1
+
+
+def test_refus_quickbooks_bloque_l_annulation_et_la_suppression(
+    client, auth_headers, run, chantiers, faux_qb
+):
+    tete, autre = _creer_groupe(client, auth_headers, run, faux_qb, _corps(chantiers))
+    bill_id = next(iter(faux_qb.bills))
+    faux_qb.erreur_maj = (
+        "Business Validation Error: You cannot change this transaction because it has payments applied"
+    )
+
+    r = client.patch(
+        f"/api/v1/achats/{autre['id']}", headers=auth_headers, json={"status": "cancelled"},
+    )
+    assert r.status_code == 409, r.text
+    assert "verrouillée dans QuickBooks" in r.json()["detail"]
+    r = client.delete(f"/api/v1/achats/{autre['id']}", headers=auth_headers)
+    assert r.status_code == 409, r.text
+    # Rien n'a bougé : part toujours active et liée, facture QB intacte.
+    b = _achats(run, [autre["id"]])[0]
+    assert b.status == "received" and b.qbo_bill_id == bill_id
+    assert [ln["Amount"] for ln in _lignes(faux_qb.bills[bill_id])] == [600.0, 400.0]
+    assert faux_qb.bills[bill_id]["TotalAmt"] == 1149.75
+
+
+def test_une_part_ne_prend_pas_le_projet_d_une_soeur(
+    client, auth_headers, run, chantiers, faux_qb
+):
+    tete, autre = _creer_groupe(client, auth_headers, run, faux_qb, _corps(chantiers))
+    r = client.patch(
+        f"/api/v1/achats/{autre['id']}", headers=auth_headers,
+        json={"project_id": chantiers["a"]},
+    )
+    assert r.status_code == 409, r.text
+    assert "déjà une part" in r.json()["detail"]
+    assert _achats(run, [autre["id"]])[0].project_id == chantiers["b"]
+
+
+def test_qb_qui_ignore_les_lignes_est_detecte(
+    client, auth_headers, run, chantiers, faux_qb
+):
+    tete, autre = _creer_groupe(client, auth_headers, run, faux_qb, _corps(chantiers))
+    bill_id = next(iter(faux_qb.bills))
+    faux_qb.ignorer_lignes = True
+
+    # Suppression de la part B : la mise à jour « passe » (200 QB) mais la
+    # facture garde ses deux lignes → écart détecté → 409, rien supprimé.
+    r = client.delete(f"/api/v1/achats/{autre['id']}", headers=auth_headers)
+    assert r.status_code == 409, r.text
+    assert "n'a pas repris les lignes" in r.json()["detail"]
+    assert len(_achats(run, [tete["id"], autre["id"]])) == 2
+    assert all(a.status == "received" for a in _achats(run, [tete["id"], autre["id"]]))
+
+    # Montant d'une part modifié : la facture QB garde ses anciennes lignes
+    # → le re-push le dit (le lien QB reste posé, jamais de doublon).
+    r = client.patch(f"/api/v1/achats/{tete['id']}", headers=auth_headers, json={"amount": 700.0})
+    assert r.status_code == 200, r.text
+
+    async def _repush() -> None:
+        async with TestSessionLocal() as s:
+            await sync_achat_to_qbo(s, tete["id"])
+
+    with pytest.raises(AchatSyncError, match="n'a pas repris les lignes"):
+        run(_repush())
+    assert all(a.qbo_bill_id == bill_id for a in _achats(run, [tete["id"], autre["id"]]))
+    assert [ln["Amount"] for ln in _lignes(faux_qb.bills[bill_id])] == [600.0, 400.0]
+
+
+def test_dedup_un_doublon_simple_est_absorbe_par_le_groupe(
+    client, auth_headers, run, chantiers, faux_qb
+):
+    ch = chantiers
+    tete, autre = _creer_groupe(client, auth_headers, run, faux_qb, _corps(ch))
+    bill_id = next(iter(faux_qb.bills))
+
+    # Le même reçu ressaisi comme achat SIMPLE, payé par carte : au score
+    # de l'ancienne dédup il aurait gagné et supprimé la part A.
+    res = client.post("/api/v1/achats", headers=auth_headers, json=_simple(ch))
+    assert res.status_code == 201, res.text
+    doublon = res.json()["id"]
+    for _ in range(50):
+        run(asyncio.sleep(0.02))
+    # Son push est REFUSÉ : la facture QB à ce numéro est déjà celle du
+    # groupe → aucune dépense créée dans QB, doublon sans lien.
+    assert faux_qb.purchases == {}
+    assert _achats(run, [doublon])[0].qbo_bill_id is None
+
+    assert _dedupe(run) >= 1
+    assert _achats(run, [doublon]) == []
+    a, b = _achats(run, [tete["id"], autre["id"]])
+    # Le groupe reste entier, lié à SA facture ; il hérite de l'état de
+    # paiement réel du doublon.
+    assert (a.qbo_bill_id, b.qbo_bill_id) == (bill_id, bill_id)
+    assert (a.status, b.status) == ("paid", "paid")
+    assert (a.payment_method, b.payment_method) == ("cc_steven", "cc_steven")
+    assert (a.amount, b.amount) == (600.0, 400.0)
+    # La facture du groupe reste intacte.
+    assert bill_id in faux_qb.bills
+    assert [ln["Amount"] for ln in _lignes(faux_qb.bills[bill_id])] == [600.0, 400.0]
+
+
+def test_dedup_deux_groupes_identiques_le_plus_ancien_reste(
+    client, auth_headers, run, chantiers, faux_qb
+):
+    ch = chantiers
+    t1, a1 = _creer_groupe(client, auth_headers, run, faux_qb, _corps(ch))
+    bill_id = next(iter(faux_qb.bills))
+    # Le même reçu divisé saisi une 2e fois : son push est REFUSÉ (la
+    # facture QB au même n° appartient déjà au premier groupe) → aucun
+    # doublon dans QB, groupe 2 sans lien.
+    res = client.post("/api/v1/achats/divise", headers=auth_headers, json=_corps(ch))
+    assert res.status_code == 201, res.text
+    t2, a2 = res.json()["parts"]
+    for _ in range(50):
+        run(asyncio.sleep(0.02))
+    assert len(faux_qb.bills) == 1 and faux_qb.purchases == {}
+    assert all(a.qbo_bill_id is None for a in _achats(run, [t2["id"], a2["id"]]))
+
+    assert _dedupe(run) >= 2
+    assert _achats(run, [t2["id"], a2["id"]]) == []
+    restes = _achats(run, [t1["id"], a1["id"]])
+    assert [(a.project_id, a.amount, a.qbo_bill_id) for a in restes] == [
+        (ch["a"], 600.0, bill_id), (ch["b"], 400.0, bill_id),
+    ]
+    assert len(faux_qb.bills) == 1
+
+
+def test_dedup_deux_groupes_differents_restent_intacts(
+    client, auth_headers, run, chantiers, faux_qb
+):
+    ch = chantiers
+    t1, a1 = _creer_groupe(client, auth_headers, run, faux_qb, _corps(ch))
+    res = client.post(
+        "/api/v1/achats/divise", headers=auth_headers,
+        json=_corps(ch, parts=[{"project_id": ch["a"], "total": 500.0}, {"project_id": ch["b"], "total": 649.75}]),
+    )
+    assert res.status_code == 201, res.text
+    t2, a2 = res.json()["parts"]
+    for _ in range(50):
+        run(asyncio.sleep(0.02))
+    assert _dedupe(run) == 0
+    assert len(_achats(run, [t1["id"], a1["id"], t2["id"], a2["id"]])) == 4
+
+
+def test_refacturable_et_heures_par_part(client, auth_headers, run, chantiers, faux_qb):
+    ch = chantiers
+    res = client.post(
+        "/api/v1/achats/divise", headers=auth_headers,
+        json=_corps(
+            ch, hours=10, kind="sub_invoice",
+            parts=[
+                {"project_id": ch["a"], "total": 689.85, "is_billable": True},
+                {"project_id": ch["b"], "total": 459.90},
+            ],
+        ),
+    )
+    assert res.status_code == 201, res.text
+    a, b = res.json()["parts"]
+    # Heures au prorata (6 h / 4 h), jamais recopiées entières.
+    assert (a["hours"], b["hours"]) == (6.0, 4.0)
+    # Part A : choix explicite (verrou) ; part B : défaut du projet (sans
+    # soumission → non refacturable), sans verrou.
+    assert (a["is_billable"], a["billable_manual"]) == (True, True)
+    assert (b["is_billable"], b["billable_manual"]) == (False, False)
+    _attendre(run, lambda: len(faux_qb.bills) == 1)
+    lignes = _lignes(next(iter(faux_qb.bills.values())))
+    assert [ln["AccountBasedExpenseLineDetail"]["BillableStatus"] for ln in lignes] == [
+        "Billable", "NotBillable",
+    ]
+    # Total HT absent → message français (plus de 422 pydantic anglais).
+    r = client.post("/api/v1/achats/divise", headers=auth_headers, json=_corps(ch, amount=0))
+    assert r.status_code == 422 and "total de la facture" in r.json()["detail"]
+    r = client.post(
+        "/api/v1/achats/divise", headers=auth_headers,
+        json=_corps(ch, parts=[{"project_id": ch["a"], "total": 1149.75}, {"project_id": ch["b"], "total": 0}]),
+    )
+    assert r.status_code == 422 and "supérieur à 0" in r.json()["detail"]
+
+
+def test_payer_une_part_par_la_fiche_paie_le_groupe(
+    client, auth_headers, run, chantiers, faux_qb
+):
+    tete, autre = _creer_groupe(client, auth_headers, run, faux_qb, _corps(chantiers))
+    r = client.patch(
+        f"/api/v1/achats/{autre['id']}", headers=auth_headers,
+        json={"status": "paid", "payment_method": "cc_steven", "paid_at": "2026-10-29T15:00:00Z"},
+    )
+    assert r.status_code == 200, r.text
+    a, b = _achats(run, [tete["id"], autre["id"]])
+    assert (a.status, b.status) == ("paid", "paid")
+    assert (a.payment_method, b.payment_method) == ("cc_steven", "cc_steven")
+    assert a.paid_at is not None
+
+
+def test_webhook_reflete_la_date_sur_toutes_les_parts(run, chantiers, faux_qb, client, auth_headers):
+    from datetime import date as _date
+
+    from app.api.v1.endpoints.qbo_webhook import _apply_reverse_sync
+
+    tete, autre = _creer_groupe(client, auth_headers, run, faux_qb, _corps(chantiers))
+    bill_id = next(iter(faux_qb.bills))
+    faux_qb.bills[bill_id]["TxnDate"] = "2026-10-25"
+
+    async def _go() -> None:
+        async with TestSessionLocal() as s:
+            await _apply_reverse_sync(s, faux_qb, None, "Bill", bill_id)
+            await s.commit()
+
+    run(_go())
+    assert [a.invoice_date for a in _achats(run, [tete["id"], autre["id"]])] == [
+        _date(2026, 10, 25), _date(2026, 10, 25),
+    ]
