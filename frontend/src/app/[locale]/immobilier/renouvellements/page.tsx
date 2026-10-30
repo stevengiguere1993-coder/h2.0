@@ -20,6 +20,8 @@ import {
   Upload
 } from "lucide-react";
 
+import { useSearchParams } from "next/navigation";
+
 import { Link } from "@/i18n/navigation";
 import { ApercuEnvoiModal } from "@/components/immobilier/apercu-envoi";
 import { authedFetch } from "@/lib/auth";
@@ -886,6 +888,28 @@ export default function RenouvellementsPage() {
   useEffect(() => {
     void reload();
   }, []);
+
+  // Lien profond ?bail_id=X (clic sur une ligne du bandeau « Avis de
+  // renouvellement » — Paiements, Baux, fiche immeuble) : ouvre
+  // directement la fiche « Préparer » de ce bail, une seule fois.
+  const searchParams = useSearchParams();
+  const bailIdParam = searchParams.get("bail_id");
+  const lienProfondTraite = useRef(false);
+  useEffect(() => {
+    if (!list || lienProfondTraite.current) return;
+    if (bailIdParam == null || !/^\d+$/.test(bailIdParam)) return;
+    lienProfondTraite.current = true;
+    const cible = list.find((r) => r.bail_id === Number(bailIdParam));
+    if (!cible) {
+      setError(
+        "Ce bail n'apparaît pas dans les renouvellements (avis déjà réglé ou bail fermé)."
+      );
+      return;
+    }
+    setTab("renouvellements");
+    setPrepForce(!!cible.reponse);
+    setPrepFor(cible);
+  }, [list, bailIdParam]);
 
   // Ouvre un document conservé (l'avis courant) dans un nouvel onglet.
   async function ouvrirDoc(docId: number) {
