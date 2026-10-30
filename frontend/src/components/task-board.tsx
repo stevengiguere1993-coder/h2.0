@@ -25,6 +25,7 @@ import {
   type TaskCardPatch
 } from "@/components/task-card";
 import { useConfirm } from "@/components/confirm-dialog";
+import { useColonnesRepliees } from "@/lib/ui-prefs";
 import {
   TASK_PRIORITY_OPTIONS,
   TASK_STATUS_OPTIONS,
@@ -1549,6 +1550,8 @@ function KeepCard({
   );
 }
 
+const KEEP_REPLIEES_DEFAUT = ["done"];
+
 function TaskKeepView({
   tasks, users, onPatch, onOpenDetails, onCreate, currentUserId
 }: {
@@ -1563,7 +1566,13 @@ function TaskKeepView({
   currentUserId: number | null;
 }) {
   const [draft, setDraft] = useState("");
-  const [showDone, setShowDone] = useState(false);
+  // « Terminé » replié par défaut ; ouvert / fermé mémorisé par
+  // utilisateur côté serveur (Steven, 2026-10-30).
+  const [keepReplies, basculerKeep] = useColonnesRepliees(
+    "kanban.taches-cartes",
+    KEEP_REPLIEES_DEFAUT
+  );
+  const showDone = !keepReplies.has("done");
   const userById = useMemo(
     () => new Map(users.map((u) => [u.id, u])),
     [users]
@@ -1817,7 +1826,7 @@ function TaskKeepView({
         <div style={{ marginTop: 18 }}>
           <button
             type="button"
-            onClick={() => setShowDone((v) => !v)}
+            onClick={() => basculerKeep("done")}
             className="inline-flex items-center gap-1.5 text-sm text-white/60 hover:text-white/90"
           >
             {showDone ? (
