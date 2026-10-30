@@ -13,6 +13,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
+import { useColonnesRepliees } from "@/lib/ui-prefs";
 import { useConfirm } from "@/components/confirm-dialog";
 import { Link } from "@/i18n/navigation";
 import {
@@ -83,38 +84,11 @@ const ARCHIVED_COL = "archived";
 // Colonnes repliées par défaut : « Refusées », « Expirées » et
 // « Terminées » (du bruit la plupart du temps). Toutes les colonnes
 // restent repliables/dépliables au clic ; le choix est mémorisé par
-// navigateur, sauf pour « Expirées » qui se replie à chaque ouverture
-// de la page même si on l'avait dépliée (Steven, 2026-10-18).
-const COLLAPSED_COLS_KEY = "hsi_soumissions_collapsed_columns_v1";
+// utilisateur côté serveur et reste tel quel jusqu'au prochain clic,
+// « Expirées » comprise (Steven, 2026-10-30, remplace la règle du
+// 2026-10-18 qui la repliait à chaque ouverture).
 const DEFAULT_COLLAPSED = ["rejected", "expired", "archived"];
-const ALWAYS_COLLAPSED_ON_LOAD = ["expired"];
-
-function loadCollapsedColumns(): Set<string> {
-  if (typeof window === "undefined") return new Set(DEFAULT_COLLAPSED);
-  try {
-    const raw = window.localStorage.getItem(COLLAPSED_COLS_KEY);
-    if (raw === null) return new Set(DEFAULT_COLLAPSED);
-    const parsed = JSON.parse(raw) as string[];
-    return new Set([
-      ...(Array.isArray(parsed) ? parsed : []),
-      ...ALWAYS_COLLAPSED_ON_LOAD
-    ]);
-  } catch {
-    return new Set(DEFAULT_COLLAPSED);
-  }
-}
-
-function saveCollapsedColumns(cols: Set<string>): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(
-      COLLAPSED_COLS_KEY,
-      JSON.stringify([...cols])
-    );
-  } catch {
-    /* localStorage indisponible — non bloquant */
-  }
-}
+const LEGACY_COLLAPSED_COLS_KEY = "hsi_soumissions_collapsed_columns_v1";
 
 function fmtMoney(n: number | null): string {
   if (n == null) return "—";
@@ -145,23 +119,11 @@ export default function SoumissionsPage() {
       setHoverCol(null);
     }
   });
-  const [collapsedCols, setCollapsedCols] = useState<Set<string>>(
-    () => new Set(DEFAULT_COLLAPSED)
+  const [collapsedCols, toggleColumnCollapsed] = useColonnesRepliees(
+    "kanban.soumissions",
+    DEFAULT_COLLAPSED,
+    LEGACY_COLLAPSED_COLS_KEY
   );
-
-  useEffect(() => {
-    setCollapsedCols(loadCollapsedColumns());
-  }, []);
-
-  function toggleColumnCollapsed(colId: string) {
-    setCollapsedCols((prev) => {
-      const next = new Set(prev);
-      if (next.has(colId)) next.delete(colId);
-      else next.add(colId);
-      saveCollapsedColumns(next);
-      return next;
-    });
-  }
 
   // Fallback : somme des items par soumission. Utilisé quand le total
   // persisté en DB est null/0 (cas legacy ou items ajoutés sans

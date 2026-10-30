@@ -21,6 +21,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
+import { useColonnesRepliees } from "@/lib/ui-prefs";
 import { useConfirm } from "@/components/confirm-dialog";
 import { Link, useRouter } from "@/i18n/navigation";
 import { formatPhone } from "@/lib/utils";
@@ -153,34 +154,12 @@ function loadCustomColumns(): Column[] {
   }
 }
 
-const COLLAPSED_COLS_KEY = "hsi_crm_collapsed_columns_v1";
 // Colonnes repliées par défaut au premier chargement : Acceptée et
 // Refusée prennent de la place pour des leads "terminés" qu'on
-// consulte rarement.
+// consulte rarement. Ensuite, le choix de l'utilisateur est mémorisé
+// côté serveur (useColonnesRepliees).
 const DEFAULT_COLLAPSED = ["won", "non_qualifie", "lost"];
-
-function loadCollapsedColumns(): Set<string> {
-  if (typeof window === "undefined") return new Set(DEFAULT_COLLAPSED);
-  try {
-    const raw = window.localStorage.getItem(COLLAPSED_COLS_KEY);
-    if (raw === null) return new Set(DEFAULT_COLLAPSED);
-    const parsed = JSON.parse(raw) as string[];
-    return new Set(Array.isArray(parsed) ? parsed : []);
-  } catch {
-    return new Set(DEFAULT_COLLAPSED);
-  }
-}
-
-function saveCollapsedColumns(ids: Set<string>) {
-  try {
-    window.localStorage.setItem(
-      COLLAPSED_COLS_KEY,
-      JSON.stringify(Array.from(ids))
-    );
-  } catch {
-    /* ignore */
-  }
-}
+const LEGACY_COLLAPSED_COLS_KEY = "hsi_crm_collapsed_columns_v1";
 
 export default function CrmKanbanPage() {
   const confirm = useConfirm();
@@ -193,8 +172,10 @@ export default function CrmKanbanPage() {
   const [dragging, setDragging] = useState<number | null>(null);
   const [hoverCol, setHoverCol] = useState<string | null>(null);
   const [customColumns, setCustomColumns] = useState<Column[]>([]);
-  const [collapsedCols, setCollapsedCols] = useState<Set<string>>(
-    () => new Set(DEFAULT_COLLAPSED)
+  const [collapsedCols, toggleColumnCollapsed] = useColonnesRepliees(
+    "kanban.crm",
+    DEFAULT_COLLAPSED,
+    LEGACY_COLLAPSED_COLS_KEY
   );
   const [createOpen, setCreateOpen] = useState<false | "nouveau" | "client">(false);
   // Horloge rafraîchie chaque minute : permet au badge « à rappeler »
@@ -206,7 +187,6 @@ export default function CrmKanbanPage() {
   }, []);
 
   useEffect(() => {
-    setCollapsedCols(loadCollapsedColumns());
     let cancelled = false;
     (async () => {
       try {
@@ -258,16 +238,6 @@ export default function CrmKanbanPage() {
       cancelled = true;
     };
   }, []);
-
-  function toggleColumnCollapsed(colId: string) {
-    setCollapsedCols((prev) => {
-      const next = new Set(prev);
-      if (next.has(colId)) next.delete(colId);
-      else next.add(colId);
-      saveCollapsedColumns(next);
-      return next;
-    });
-  }
 
   useEffect(() => {
     let cancelled = false;

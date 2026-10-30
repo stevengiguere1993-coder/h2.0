@@ -2025,6 +2025,9 @@ async def init_db() -> None:
                 "BOOLEAN NOT NULL DEFAULT FALSE",
             ),
             ("users", "agenda_invite_token", "VARCHAR(64)"),
+            # États d'interface par utilisateur (colonnes de kanban
+            # repliées, 2026-10-30).
+            ("users", "ui_prefs_json", "TEXT"),
             # Réinitialisation de mot de passe en libre-service
             # (2026-08-27) : jeton haché + échéance.
             # Ventilation du coûtant des lignes de soumission

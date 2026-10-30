@@ -157,6 +157,15 @@ class User(Base, TimestampMixin):
         server_default="light",
     )
 
+    # États d'interface mémorisés par utilisateur (2026-10-30), JSON
+    # ``{clé: valeur}``. Ex. ``kanban.crm`` → colonnes repliées du
+    # kanban CRM. Côté serveur pour suivre l'utilisateur d'un appareil
+    # à l'autre et après déconnexion (Steven : « peu importe la
+    # connexion »). Lu / écrit par ``/auth/me/ui-prefs/{cle}``.
+    ui_prefs_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+
     # Profil utilisateur — affichage dans la sidebar et dans toutes
     # les listes (assignations, agenda, etc.). Si NULL on retombe sur
     # la partie locale du courriel comme avant.
