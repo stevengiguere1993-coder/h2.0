@@ -496,16 +496,40 @@ def make_crud_router(
             if getattr(data, "is_billable", None) is not None:
                 obj.billable_manual = True
             if getattr(data, "is_billable", None) is None and obj.project_id:
-                from app.services.achat_refacturable import (
-                    refacturable_par_defaut,
-                )
+                from sqlalchemy import select as _sel_bill
 
+                from app.models.project import Project as _ProjBill
+                from app.models.soumission import Soumission as _SoumBill
+
+                _proj_row = (
+                    await db.execute(
+                        _sel_bill(
+                            _ProjBill.soumission_id, _ProjBill.kind
+                        ).where(_ProjBill.id == obj.project_id)
+                    )
+                ).first()
+                _soum_id = _proj_row[0] if _proj_row else None
                 # Mini-projet d'un BON DE TRAVAIL : matériaux refacturés en
                 # temps & matériel → refacturables par défaut (retour
-                # 2026-09-18), quel que soit le devis. Règle partagée avec
-                # le reçu divisé (services/achat_refacturable.py).
-                if obj.is_billable and not await refacturable_par_defaut(
-                    db, obj.project_id
+                # 2026-09-18), quel que soit le devis.
+                _is_bon_proj = bool(
+                    _proj_row and (_proj_row[1] or "") == "bon_travail"
+                )
+                _kind = (
+                    (
+                        await db.execute(
+                            _sel_bill(_SoumBill.kind).where(
+                                _SoumBill.id == _soum_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if _soum_id
+                    else None
+                )
+                if (
+                    _kind != "contract"
+                    and not _is_bon_proj
+                    and obj.is_billable
                 ):
                     obj.is_billable = False
             await db.flush()
@@ -866,45 +890,6 @@ def make_crud_router(
                 )
         if model is Achat:
             new_status = getattr(obj, "status", None)
-            # Reçu DIVISÉ entre plusieurs projets : les champs qui décrivent
-            # la facture (fournisseur, n°, date, mode de paiement, nature,
-            # PO) valent pour toutes les parts → recopiés sur les sœurs,
-            # comme le statut de paiement (une facture se paie en entier).
-            # Une part ne peut pas prendre le projet d'une sœur (409). Une
-            # part ANNULÉE perd sa ligne dans QB tout de suite (réécriture
-            # de la transaction dans la requête ; refus QB → 409, rien
-            # n'est annulé). Le re-push live ci-dessous reconstruit la
-            # transaction QB du groupe (une ligne par part) — après COMMIT,
-            # puisqu'il lit la base dans sa propre session.
-            if getattr(obj, "groupe_id", None):
-                from app.services.achat_divise import (
-                    DivisionErreur,
-                    propager_champs_communs,
-                    propager_statut_paiement,
-                    retirer_part_annulee,
-                    verifier_projet_unique,
-                )
-                from app.services.achat_qbo import (
-                    AchatSyncError as _AchatSyncError,
-                )
-
-                try:
-                    await verifier_projet_unique(db, obj)
-                except DivisionErreur as exc:
-                    raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
-                await propager_champs_communs(db, obj)
-                if new_status != prev_status:
-                    await propager_statut_paiement(db, obj)
-                if new_status == "cancelled" and prev_status != "cancelled":
-                    try:
-                        await retirer_part_annulee(db, obj)
-                    except _AchatSyncError as exc:
-                        raise HTTPException(
-                            status.HTTP_409_CONFLICT,
-                            "Part non annulée : QuickBooks n'a pas pu "
-                            f"retirer sa ligne de la facture — {exc}",
-                        )
-                await db.commit()
             # Push LIVE : TOUTE modification enregistrée d'un achat actif
             # (reçu/payé) est reflétée immédiatement dans QB — montants,
             # taxes, projet, mode de paiement, description, date… — sans
@@ -935,14 +920,10 @@ def make_crud_router(
             # effectif seulement si pas déjà refacturé (invoiced_at NULL) ;
             # décoché ⇒ NotBillable ⇒ l'« imputation de dépense
             # facturable » en attente disparaît côté QB.
-            # Reçu divisé : pas de flip ciblé (il forcerait TOUTES les
-            # lignes au statut de cette part) — le re-push live du groupe
-            # ci-dessus pose le statut de chaque part sur sa ligne.
             new_billable = bool(getattr(obj, "is_billable", False))
             if (
                 prev_is_billable is not None
                 and new_billable != prev_is_billable
-                and not getattr(obj, "groupe_id", None)
                 and (
                     getattr(obj, "qbo_bill_id", None)
                     or getattr(obj, "qbo_purchase_id", None)
@@ -1133,28 +1114,6 @@ def make_crud_router(
             if model is Facture
             else ""
         )
-        # Reçu DIVISÉ : si d'autres parts restent, la transaction QB du
-        # groupe perd la ligne de la part supprimée — réécrite AVANT la
-        # suppression, dans la requête (la part est d'abord marquée
-        # annulée pour sortir des lignes). Un refus QB (facture payée,
-        # rapprochée…) → 409 et rien n'est supprimé : Kratos ne diverge
-        # jamais de QuickBooks en silence.
-        if model is Achat and getattr(obj, "groupe_id", None):
-            from app.services.achat_divise import retirer_part_annulee
-            from app.services.achat_qbo import (
-                AchatSyncError as _AchatSyncError,
-            )
-
-            obj.status = "cancelled"
-            await db.flush()
-            try:
-                await retirer_part_annulee(db, obj)
-            except _AchatSyncError as exc:
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
-                    "Part non supprimée : QuickBooks n'a pas pu retirer sa "
-                    f"ligne de la facture — {exc}",
-                )
         # Sortie de l'inventaire interne supprimée depuis les achats : la
         # marchandise revient en stock (refusé si déjà refacturée).
         if model is Achat:

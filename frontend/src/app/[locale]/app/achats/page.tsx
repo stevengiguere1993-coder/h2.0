@@ -25,8 +25,6 @@ type Achat = {
   qbo_bill_id?: string | null;
   // Dépense IMPORTÉE de QB (pull des coûts) : l'Id QB vit ici.
   qbo_purchase_id?: string | null;
-  // Reçu DIVISÉ dans Kratos entre plusieurs projets (une facture QB).
-  groupe_id?: number | null;
   fournisseur_id: number | null;
   sous_traitant_id?: number | null;
   kind?: string | null;
@@ -154,18 +152,13 @@ export default function AchatsPage() {
   const [payTarget, setPayTarget] = useState<Achat | null>(null);
   const [pulling, setPulling] = useState(false);
   const [pullResult, setPullResult] = useState<string | null>(null);
-  // Facture DIVISÉE : plusieurs achats partagent la même transaction QB
-  // (importée par parts) ou le même reçu divisé dans Kratos (groupe_id)
-  // → badge « divisée » sur chacun.
-  const cleDivision = (a: Achat): string =>
-    a.groupe_id
-      ? `g:${a.groupe_id}`
-      : a.qbo_bill_id || a.qbo_purchase_id || "";
+  // Facture QuickBooks DIVISÉE : plusieurs achats partagent la même
+  // transaction QB (un par projet) → badge « divisée » sur chacun.
   const qbPartsCount = useMemo(() => {
     const m = new Map<string, number>();
     for (const a of items) {
-      const k = cleDivision(a);
-      if (k && a.status !== "cancelled") m.set(k, (m.get(k) || 0) + 1);
+      const k = a.qbo_bill_id || a.qbo_purchase_id;
+      if (k) m.set(k, (m.get(k) || 0) + 1);
     }
     return m;
   }, [items]);
@@ -653,7 +646,7 @@ export default function AchatsPage() {
                 {filtered.map((a) => {
                   const fr = a.fournisseur_id ? frById.get(a.fournisseur_id) : null;
                   const pr = a.project_id ? projById.get(a.project_id) : null;
-                  const qbKey = cleDivision(a);
+                  const qbKey = a.qbo_bill_id || a.qbo_purchase_id || "";
                   const nParts = qbKey ? qbPartsCount.get(qbKey) || 0 : 0;
                   return (
                     <tr
@@ -674,11 +667,7 @@ export default function AchatsPage() {
                         {nParts > 1 ? (
                           <span
                             className="ml-1 rounded bg-sky-500/15 px-1 text-[10px] font-normal text-sky-300"
-                            title={
-                              a.groupe_id
-                                ? `Reçu divisé entre ${nParts} projets — une seule facture dans QuickBooks`
-                                : `Facture QuickBooks divisée entre ${nParts} achats (un par projet)`
-                            }
+                            title={`Facture QuickBooks divisée entre ${nParts} achats (un par projet)`}
                           >
                             divisée ·{nParts}
                           </span>

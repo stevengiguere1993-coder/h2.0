@@ -80,9 +80,6 @@ type Achat = {
   facture_item_id: number | null;
   // « inventaire » : sortie de l'inventaire interne, jamais dans QB.
   kind?: string | null;
-  // Reçu DIVISÉ entre plusieurs projets : id de la première part, partagé
-  // par toutes (une seule facture dans QuickBooks).
-  groupe_id?: number | null;
 };
 
 type Project = {
@@ -123,15 +120,10 @@ type AchatPart = {
   description: string | null;
   total: number;
   status: string;
-  is_billable?: boolean;
 };
 type AchatParts = {
   qbo_id: string | null;
   qbo_doc_number: string | null;
-  // « kratos » : reçu divisé dans Kratos (groupe_id) ; « quickbooks » :
-  // facture fractionnée dans QB et importée par parts.
-  origine?: string;
-  groupe_id?: number | null;
   qbo_total: number | null;
   total_kratos: number;
   reste_qb: number | null;
@@ -278,9 +270,8 @@ export default function AchatDetailPage() {
         const data = (await aRes.json()) as Achat;
         if (cancelled) return;
         setA(data);
-        // Parts de la même facture QuickBooks, ou du même reçu divisé dans
-        // Kratos — même avant son envoi à QB (best-effort).
-        if (data.groupe_id || data.qbo_bill_id || data.qbo_purchase_id) {
+        // Parts de la même facture QuickBooks (best-effort).
+        if (data.qbo_bill_id || data.qbo_purchase_id) {
           try {
             const prRes = await authedFetch(`/api/v1/achats/${id}/parts`);
             if (prRes.ok && !cancelled)
@@ -443,31 +434,10 @@ export default function AchatDetailPage() {
         method: "PATCH",
         body: JSON.stringify(payload)
       });
-      if (!res.ok) {
-        // Refus expliqué par le serveur (reçu divisé : projet déjà pris
-        // par une autre part, QuickBooks qui refuse de retirer la ligne…).
-        let detail = "";
-        try {
-          const j = (await res.json()) as { detail?: unknown };
-          if (typeof j.detail === "string") detail = j.detail;
-        } catch {
-          /* ignore */
-        }
-        throw new Error(detail);
-      }
+      if (!res.ok) throw new Error();
       setA((await res.json()) as Achat);
-      // Les parts sœurs ont pu changer (statut, montants) → rafraîchies.
-      if (a.groupe_id) {
-        try {
-          const prRes = await authedFetch(`/api/v1/achats/${id}/parts`);
-          if (prRes.ok) setParts((await prRes.json()) as AchatParts);
-        } catch {
-          /* best-effort */
-        }
-      }
-    } catch (err) {
-      const msg = (err as Error).message;
-      setError(msg ? `Sauvegarde refusée : ${msg}` : "Sauvegarde échouée.");
+    } catch {
+      setError("Sauvegarde échouée.");
     } finally {
       setSaving(false);
     }
@@ -847,142 +817,66 @@ export default function AchatDetailPage() {
                 </div>
               </section>
 
-              {parts && (parts.parts.length > 1 || parts.reste_qb != null) ? (() => {
-                const kratos = parts.origine === "kratos";
-                const actives = parts.parts.filter((p) => p.status !== "cancelled");
-                const toutesAnnulees = actives.length === 0;
-                // Total des parts RECALCULÉ avec la saisie en cours de cette
-                // fiche : l'écart avec le total envoyé à QB se voit avant
-                // « Enregistrer ».
-                const autres = actives
-                  .filter((p) => p.id !== a.id)
-                  .reduce((s, p) => s + p.total, 0);
-                const courant =
-                  statusStr === "cancelled"
-                    ? 0
-                    : (Number(amount) || 0) +
-                      (Number(amountTps) || 0) +
-                      (Number(amountTvq) || 0);
-                const totalLive = Math.round((autres + courant) * 100) / 100;
-                const ecart = Math.abs(totalLive - parts.total_kratos) > 0.005;
-                return (
-                  <section className="rounded-xl border border-sky-500/30 bg-brand-900 p-5">
-                    <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-                      {kratos
-                        ? `Reçu divisé entre ${parts.parts.length} projets`
-                        : "Facture QuickBooks divisée"}
-                    </h2>
-                    <p className="mt-2 text-sm text-white/70">
-                      {kratos ? (
-                        parts.qbo_id ? (
-                          <>
-                            Une seule facture dans QuickBooks
-                            {parts.qbo_doc_number ? ` (n° ${parts.qbo_doc_number}, ` : " ("}
-                            total {fmtMoney(parts.qbo_total ?? parts.total_kratos)}) ·{" "}
-                            {parts.parts.length} parts, une par projet
-                          </>
-                        ) : (
-                          <>
-                            Pas encore dans QuickBooks — sera envoyé comme une
-                            seule facture (total {fmtMoney(parts.total_kratos)}) ·{" "}
-                            {parts.parts.length} parts, une par projet
-                          </>
-                        )
-                      ) : (
-                        <>
-                          {parts.qbo_doc_number
-                            ? `Facture ${parts.qbo_doc_number} · `
-                            : ""}
-                          {parts.qbo_total != null
-                            ? `total dans QuickBooks ${fmtMoney(parts.qbo_total)} · `
-                            : ""}
-                          {parts.parts.length > 1
-                            ? `${parts.parts.length} parts dans Kratos, une par projet (${fmtMoney(parts.total_kratos)})`
-                            : `part du projet dans Kratos : ${fmtMoney(parts.total_kratos)}`}
-                          {parts.reste_qb != null
-                            ? ` · ${fmtMoney(parts.reste_qb)} hors projet, resté dans QuickBooks`
-                            : ""}
-                        </>
-                      )}
-                    </p>
-                    {kratos && toutesAnnulees ? (
-                      <p className="mt-2 text-sm text-amber-300">
-                        Toutes les parts sont annulées : la facture reste telle
-                        quelle dans QuickBooks.
-                      </p>
-                    ) : null}
-                    {parts.parts.length > 1 ? (
-                      <ul className="mt-3 divide-y divide-brand-800 text-sm">
-                        {parts.parts.map((p) => {
-                          const proj = p.project_id
-                            ? projects.find((x) => x.id === p.project_id)
-                            : undefined;
-                          const annulee = p.status === "cancelled";
-                          return (
-                            <li
-                              key={p.id}
-                              className="flex items-center justify-between gap-3 py-2"
-                            >
-                              <span className="min-w-0">
-                                {p.id === a.id ? (
-                                  <strong className="text-white">Cet achat</strong>
-                                ) : (
-                                  <Link
-                                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                    href={`/app/achats/${p.id}` as any}
-                                    className="text-accent-500 underline decoration-dotted hover:text-accent-400"
-                                  >
-                                    Achat #{p.id}
-                                  </Link>
-                                )}
-                                <span className="ml-2 text-white/70">
-                                  {proj
-                                    ? projectLabel(proj)
-                                    : p.project_id
-                                      ? `Projet #${p.project_id}`
-                                      : "Sans projet"}
-                                </span>
-                                {annulee ? (
-                                  <span className="ml-2 rounded bg-white/10 px-1.5 text-[10px] uppercase tracking-wider text-white/60">
-                                    annulée
-                                  </span>
-                                ) : null}
-                                {kratos && !annulee ? (
-                                  <span
-                                    className="ml-2 text-[11px] text-white/50"
-                                    title="Refacturable au client"
-                                  >
-                                    {p.is_billable ? "à refacturer" : "non refacturable"}
-                                  </span>
-                                ) : null}
+              {parts && (parts.parts.length > 1 || parts.reste_qb != null) ? (
+                <section className="rounded-xl border border-sky-500/30 bg-brand-900 p-5">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Facture QuickBooks divisée
+                  </h2>
+                  <p className="mt-2 text-sm text-white/70">
+                    {parts.qbo_doc_number
+                      ? `Facture ${parts.qbo_doc_number} · `
+                      : ""}
+                    {parts.qbo_total != null
+                      ? `total dans QuickBooks ${fmtMoney(parts.qbo_total)} · `
+                      : ""}
+                    {parts.parts.length > 1
+                      ? `${parts.parts.length} parts dans Kratos, une par projet (${fmtMoney(parts.total_kratos)})`
+                      : `part du projet dans Kratos : ${fmtMoney(parts.total_kratos)}`}
+                    {parts.reste_qb != null
+                      ? ` · ${fmtMoney(parts.reste_qb)} hors projet, resté dans QuickBooks`
+                      : ""}
+                  </p>
+                  {parts.parts.length > 1 ? (
+                    <ul className="mt-3 divide-y divide-brand-800 text-sm">
+                      {parts.parts.map((p) => {
+                        const proj = p.project_id
+                          ? projects.find((x) => x.id === p.project_id)
+                          : undefined;
+                        return (
+                          <li
+                            key={p.id}
+                            className="flex items-center justify-between gap-3 py-2"
+                          >
+                            <span className="min-w-0">
+                              {p.id === a.id ? (
+                                <strong className="text-white">Cet achat</strong>
+                              ) : (
+                                <Link
+                                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                  href={`/app/achats/${p.id}` as any}
+                                  className="text-accent-500 underline decoration-dotted hover:text-accent-400"
+                                >
+                                  Achat #{p.id}
+                                </Link>
+                              )}
+                              <span className="ml-2 text-white/70">
+                                {proj
+                                  ? projectLabel(proj)
+                                  : p.project_id
+                                    ? `Projet #${p.project_id}`
+                                    : "Sans projet"}
                               </span>
-                              <span
-                                className={`shrink-0 font-semibold ${
-                                  annulee ? "text-white/50 line-through" : "text-white"
-                                }`}
-                              >
-                                {fmtMoney(p.total)}
-                              </span>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    ) : null}
-                    {kratos && !toutesAnnulees ? (
-                      <p
-                        className={`mt-3 text-sm font-semibold ${
-                          ecart ? "text-rose-400" : "text-white/70"
-                        }`}
-                      >
-                        Total des parts : {fmtMoney(totalLive)}
-                        {ecart
-                          ? ` (était ${fmtMoney(parts.total_kratos)} — la facture QuickBooks changera à l'enregistrement)`
-                          : ""}
-                      </p>
-                    ) : null}
-                  </section>
-                );
-              })() : null}
+                            </span>
+                            <span className="shrink-0 font-semibold text-white">
+                              {fmtMoney(p.total)}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : null}
+                </section>
+              ) : null}
 
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
@@ -1001,9 +895,7 @@ export default function AchatDetailPage() {
                   </div>
                   <div>
                     <label htmlFor="atotal" className="label">
-                      {a.groupe_id
-                        ? "Montant de cette part (TTC)"
-                        : "Montant total (TTC) — total de la facture"}
+                      Montant total (TTC) — total de la facture
                     </label>
                     <input
                       id="atotal"

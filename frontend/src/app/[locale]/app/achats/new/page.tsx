@@ -54,42 +54,6 @@ type POMini = {
   status: string;
 };
 
-// Une part d'un reçu DIVISÉ entre plusieurs projets (Steven 2026-10-30) :
-// un projet ou un bon de travail, le montant TTC qui lui revient et le choix
-// « à refacturer » (null = défaut du projet : contrat / bon → oui).
-type PartRow = {
-  key: number;
-  cible: "projet" | "bon";
-  id: string;
-  total: string;
-  billable: boolean | null;
-};
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
-function fmtMoney(n: number): string {
-  return new Intl.NumberFormat("fr-CA", {
-    style: "currency",
-    currency: "CAD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(n);
-}
-
-/** Message d'erreur lisible : le `detail` JSON du serveur (messages en
- *  français) plutôt que le corps brut. */
-function detailErreur(txt: string, status: number): string {
-  try {
-    const j = JSON.parse(txt) as { detail?: unknown };
-    if (typeof j.detail === "string") return j.detail;
-  } catch {
-    /* texte brut */
-  }
-  return txt.slice(0, 240) || `http_${status}`;
-}
-
 const PAYMENT_OPTIONS = [
   { value: "bill_to_pay", label: "Facture à payer (compte fournisseur — un ou plusieurs paiements)" },
   { value: "cheque_horizon", label: "Compte chèque Horizon" },
@@ -124,16 +88,6 @@ export default function NewAchatPage() {
   const [clientIdSel, setClientIdSel] = useState("");
   const [bons, setBons] = useState<BonMini[]>([]);
   const [clients, setClients] = useState<ClientMini[]>([]);
-  // Reçu DIVISÉ entre plusieurs projets : une coche, puis une ligne par
-  // projet / bon de travail avec le montant TTC qui lui revient. Un achat
-  // par projet dans Kratos, UNE seule facture dans QuickBooks (une ligne
-  // par projet). Possible pour la cible « Projet » seulement (client
-  // direct et shop n'ont pas de sous-client projet par ligne).
-  const [divise, setDivise] = useState(false);
-  const [parts, setParts] = useState<PartRow[]>([
-    { key: 1, cible: "projet", id: "", total: "", billable: null },
-    { key: 2, cible: "projet", id: "", total: "", billable: null }
-  ]);
 
   const [fournisseurId, setFournisseurId] = useState("");
   // Nature de l'achat : matériel, facture sous-traitant, outils ou
@@ -227,85 +181,14 @@ export default function NewAchatPage() {
     if (targetType === "bon") setIsBillable(true);
   }, [targetType]);
 
-  // ── Répartition entre projets (reçu divisé) ──
-  const enDivision = divise && targetType === "projet";
-  const totalNum = Number(total) || 0;
-  const sommeParts = round2(
-    parts.reduce((s, p) => s + (Number(p.total) || 0), 0)
-  );
-  const reste = round2(totalNum - sommeParts);
-  function defautRefact(p: PartRow): boolean {
-    // Bon de travail = T&M refacturé ; projet : contrat seulement.
-    if (p.cible === "bon") return true;
-    const pr = projects.find((x) => String(x.id) === p.id);
-    return pr?.billing_kind === "contrat";
-  }
-  const partsCles = parts.map((p) => (p.id ? `${p.cible}:${p.id}` : ""));
-  const partsDoublon = partsCles.some(
-    (k, i) => k !== "" && partsCles.indexOf(k) !== i
-  );
-  const partsIncompletes = parts.some(
-    (p) => !p.id || !(Number(p.total) > 0)
-  );
-  const repartiAuComplet = totalNum > 0 && Math.abs(reste) < 0.005;
-  const divisionPrete =
-    !enDivision ||
-    (parts.length >= 2 &&
-      !partsIncompletes &&
-      !partsDoublon &&
-      repartiAuComplet);
-  const refactParts = parts.some((p) => p.billable ?? defautRefact(p));
-  const refacturableEffectif = enDivision ? refactParts : isBillable;
-
-  function majPart(key: number, patch: Partial<PartRow>) {
-    setParts((prev) =>
-      prev.map((p) => (p.key === key ? { ...p, ...patch } : p))
-    );
-  }
-  function ajouterPart() {
-    setParts((prev) => [
-      ...prev,
-      { key: Date.now(), cible: "projet", id: "", total: "", billable: null }
-    ]);
-  }
-  function retirerPart(key: number) {
-    setParts((prev) =>
-      prev.length <= 2 ? prev : prev.filter((p) => p.key !== key)
-    );
-  }
-  // Parts égales au cent près ; la dernière absorbe l'arrondi.
-  function repartirEgalement() {
-    if (!(totalNum > 0) || parts.length === 0) return;
-    const n = parts.length;
-    const base = Math.floor((totalNum / n) * 100) / 100;
-    const dernier = round2(totalNum - base * (n - 1));
-    setParts((prev) =>
-      prev.map((p, i) => ({
-        ...p,
-        total: (i === n - 1 ? dernier : base).toFixed(2)
-      }))
-    );
-  }
-  function basculerDivise(on: boolean) {
-    setDivise(on);
-    // Le projet déjà choisi devient la première part.
-    if (on && projectId) {
-      setParts((prev) =>
-        prev.map((p, i) =>
-          i === 0 && !p.id ? { ...p, cible: "projet", id: projectId } : p
-        )
-      );
-    }
-  }
-
   // Majoration par défaut : 10 % dès que l'achat est refacturable (si le
   // champ est vide), vidée si non refacturable. La saisie manuelle est
-  // préservée. Reçu divisé : refacturable dès qu'une part l'est.
+  // préservée.
   useEffect(() => {
     setMarkupPercent((prev) =>
-      refacturableEffectif ? (prev.trim() === "" ? "10" : prev) : ""
+      isBillable ? (prev.trim() === "" ? "10" : prev) : ""
     );
-  }, [refacturableEffectif]);
+  }, [isBillable]);
 
   useEffect(() => {
     let cancelled = false;
@@ -370,9 +253,7 @@ export default function NewAchatPage() {
       };
       if (purchaseOrderId)
         payload.purchase_order_id = Number(purchaseOrderId);
-      if (enDivision) {
-        // Reçu divisé : les projets sont dans `parts` (ci-dessous).
-      } else if (targetType === "bon" && bonId) {
+      if (targetType === "bon" && bonId) {
         // Le bon porte ses coûts via son PROJET lié (garanti ici) : le
         // reçu suit alors toute la machinerie projet (sous-client QB
         // « BT-xx », classe, refacturation).
@@ -407,9 +288,7 @@ export default function NewAchatPage() {
             ((Number(amountTps) || 0) + (Number(amountTvq) || 0)) * 100
           ) / 100;
       }
-      // Reçu divisé : « à refacturer » se décide PAR PART (défaut du
-      // projet côté serveur quand la ligne n'a pas été touchée).
-      if (!enDivision) payload.is_billable = isBillable;
+      payload.is_billable = isBillable;
       if (markupPercent.trim()) {
         payload.markup_percent = Number(markupPercent);
       }
@@ -419,65 +298,21 @@ export default function NewAchatPage() {
       }
       if (invoiceDate) payload.invoice_date = invoiceDate;
 
-      let createdId: number;
-      if (enDivision) {
-        // Une part par projet ; un bon de travail passe par son projet
-        // porteur (garanti ici, comme pour un reçu simple).
-        const partsPayload: {
-          project_id: number;
-          total: number;
-          is_billable?: boolean;
-        }[] = [];
-        for (const p of parts) {
-          let pid = Number(p.id);
-          if (p.cible === "bon") {
-            const bp = await authedFetch(
-              `/api/v1/bons-travail/${pid}/ensure-project`,
-              { method: "POST" }
-            );
-            if (!bp.ok)
-              throw new Error("Projet du bon de travail introuvable.");
-            pid = ((await bp.json()) as { project_id: number }).project_id;
-          }
-          const row: {
-            project_id: number;
-            total: number;
-            is_billable?: boolean;
-          } = { project_id: pid, total: round2(Number(p.total) || 0) };
-          if (p.billable !== null) row.is_billable = p.billable;
-          partsPayload.push(row);
-        }
-        payload.parts = partsPayload;
-        const res = await authedFetch("/api/v1/achats/divise", {
-          method: "POST",
-          body: JSON.stringify(payload)
-        });
-        if (!res.ok) {
-          throw new Error(detailErreur(await res.text(), res.status));
-        }
-        const body = (await res.json()) as {
-          groupe_id: number;
-          parts: { id: number }[];
-        };
-        createdId = body.parts[0]?.id ?? body.groupe_id;
-      } else {
-        const res = await authedFetch("/api/v1/achats", {
-          method: "POST",
-          body: JSON.stringify(payload)
-        });
-        if (!res.ok) {
-          throw new Error(detailErreur(await res.text(), res.status));
-        }
-        createdId = ((await res.json()) as { id: number }).id;
+      const res = await authedFetch("/api/v1/achats", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt.slice(0, 240) || `http_${res.status}`);
       }
+      const created = (await res.json()) as { id: number };
 
       if (receiptFile) {
-        // Reçu divisé : téléversé sur la première part, recopié sur les
-        // autres par le serveur.
         const fd = new FormData();
         fd.append("file", receiptFile, receiptFile.name);
         const up = await authedFetch(
-          `/api/v1/achats/${createdId}/receipt`,
+          `/api/v1/achats/${created.id}/receipt`,
           { method: "POST", body: fd }
         );
         if (!up.ok && up.status !== 204) {
@@ -489,24 +324,12 @@ export default function NewAchatPage() {
         }
       }
 
-      router.replace(`/app/achats/${createdId}`);
+      router.replace(`/app/achats/${created.id}`);
     } catch (err) {
       setError((err as Error).message);
       setSubmitting(false);
     }
   }
-
-  const projetOptions = trierProjetsParAdresse(projects).map((p) => ({
-    value: String(p.id),
-    label: projectLabel(p)
-  }));
-  // Numéro + adresse du chantier + description.
-  const bonOptions = bons.map((b) => ({
-    value: String(b.id),
-    label: `${b.reference} — ${
-      (b.address || "").trim() ? `${(b.address || "").trim()} · ` : ""
-    }${b.title}`
-  }));
 
   return (
     <>
@@ -617,41 +440,31 @@ export default function NewAchatPage() {
                 ))}
               </div>
               {targetType === "projet" ? (
-                <>
-                  {divise ? (
-                    <p className="rounded-md border border-sky-500/30 bg-sky-500/15 px-3 py-2 text-xs text-white/80">
-                      Les projets et le montant de chacun se choisissent dans
-                      « Répartition entre projets », sous le total.
-                    </p>
-                  ) : (
-                    <SearchSelect
-                      id="project"
-                      value={projectId}
-                      onChange={setProjectId}
-                      options={projetOptions}
-                      placeholder="Choisis ou tape pour chercher un projet…"
-                      emptyLabel="— Aucun (frais généraux) —"
-                    />
-                  )}
-                  <label className="mt-2 flex items-start gap-2 text-xs text-white/80">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5"
-                      checked={divise}
-                      onChange={(e) => basculerDivise(e.target.checked)}
-                    />
-                    <span>
-                      Cette facture touche plusieurs projets (diviser le
-                      montant par projet)
-                    </span>
-                  </label>
-                </>
+                <SearchSelect
+                  id="project"
+                  value={projectId}
+                  onChange={setProjectId}
+                  options={trierProjetsParAdresse(projects).map((p) => ({
+                    value: String(p.id),
+                    label: projectLabel(p)
+                  }))}
+                  placeholder="Choisis ou tape pour chercher un projet…"
+                  emptyLabel="— Aucun (frais généraux) —"
+                />
               ) : targetType === "bon" ? (
                 <SearchSelect
                   id="bon"
                   value={bonId}
                   onChange={setBonId}
-                  options={bonOptions}
+                  options={bons.map((b) => ({
+                    value: String(b.id),
+                    // Numéro + adresse du chantier + description.
+                    label: `${b.reference} — ${
+                      (b.address || "").trim()
+                        ? `${(b.address || "").trim()} · `
+                        : ""
+                    }${b.title}`
+                  }))}
                   placeholder="Choisis ou tape pour chercher un bon de travail…"
                   emptyLabel="— Aucun —"
                 />
@@ -795,127 +608,6 @@ export default function NewAchatPage() {
             </p>
           </div>
 
-          {enDivision ? (
-            <div className="rounded-xl border border-sky-500/30 bg-brand-900/40 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs font-semibold uppercase tracking-wider text-white/60">
-                  Répartition entre projets
-                </p>
-                <span
-                  className={`text-xs font-semibold ${
-                    repartiAuComplet ? "text-emerald-300" : "text-rose-400"
-                  }`}
-                >
-                  {totalNum > 0
-                    ? repartiAuComplet
-                      ? "Réparti au complet"
-                      : `Reste à répartir : ${fmtMoney(reste)}`
-                    : "Entre d'abord le total de la facture"}
-                </span>
-              </div>
-              <div className="mt-3 space-y-2">
-                {parts.map((p, i) => (
-                  <div
-                    key={p.key}
-                    className="grid grid-cols-1 gap-2 rounded-lg border border-brand-800 p-2 sm:grid-cols-[7.5rem_minmax(0,1fr)_8rem_auto_auto] sm:items-center sm:border-0 sm:p-0"
-                  >
-                    <select
-                      value={p.cible}
-                      onChange={(e) =>
-                        majPart(p.key, {
-                          cible: e.target.value as "projet" | "bon",
-                          id: ""
-                        })
-                      }
-                      className="input text-xs"
-                      aria-label={`Type de la part ${i + 1}`}
-                    >
-                      <option value="projet">Projet</option>
-                      <option value="bon">Bon de travail</option>
-                    </select>
-                    <SearchSelect
-                      id={`part-${p.key}`}
-                      value={p.id}
-                      onChange={(v) => majPart(p.key, { id: v })}
-                      options={p.cible === "projet" ? projetOptions : bonOptions}
-                      placeholder={
-                        p.cible === "projet"
-                          ? "Choisis ou tape pour chercher un projet…"
-                          : "Choisis ou tape pour chercher un bon de travail…"
-                      }
-                    />
-                    <input
-                      type="number"
-                      inputMode="decimal"
-                      step="0.01"
-                      min="0"
-                      value={p.total}
-                      onChange={(e) => majPart(p.key, { total: e.target.value })}
-                      placeholder="Montant TTC"
-                      className="input"
-                      aria-label={`Montant TTC de la part ${i + 1}`}
-                    />
-                    <label
-                      className="flex min-h-9 items-center gap-1.5 text-xs text-white/80"
-                      title="À refacturer au client ? Par défaut : contrat ou bon de travail → oui ; forfait ou estimé → non."
-                    >
-                      <input
-                        type="checkbox"
-                        checked={p.billable ?? defautRefact(p)}
-                        onChange={(e) =>
-                          majPart(p.key, { billable: e.target.checked })
-                        }
-                      />
-                      Refact.
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => retirerPart(p.key)}
-                      disabled={parts.length <= 2}
-                      className="btn-secondary min-h-9 text-xs disabled:opacity-40"
-                      aria-label={`Retirer la part ${i + 1}`}
-                    >
-                      Retirer
-                    </button>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                <button
-                  type="button"
-                  onClick={ajouterPart}
-                  className="btn-secondary min-h-9 text-xs"
-                >
-                  + Ajouter un projet
-                </button>
-                <button
-                  type="button"
-                  onClick={repartirEgalement}
-                  disabled={!(totalNum > 0)}
-                  className="btn-secondary min-h-9 text-xs disabled:opacity-40"
-                >
-                  Répartir également
-                </button>
-              </div>
-              <p className="mt-2 text-[11px] text-white/50">
-                Un achat par projet dans Kratos (coûts et refacturation par
-                projet) et UNE seule facture dans QuickBooks, une ligne par
-                projet. Refacturation décidée projet par projet : contrat ou
-                bon de travail → refacturable ; forfait ou estimé → non.
-                Coche ou décoche par ligne au besoin.
-              </p>
-              {partsDoublon ? (
-                <p className="mt-1 text-xs text-rose-400">
-                  Chaque projet ne peut apparaître qu&apos;une fois.
-                </p>
-              ) : partsIncompletes ? (
-                <p className="mt-1 text-xs text-rose-400">
-                  Choisis un projet et entre un montant pour chaque ligne.
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <label htmlFor="amount" className="label">
@@ -1048,9 +740,6 @@ export default function NewAchatPage() {
                   Le montant facturé au client sera calculé selon le contrat
                   de projet (markup, taux horaire ou forfait). Configure le
                   contrat sur la page du projet.
-                  {enDivision
-                    ? " Reçu divisé : les heures sont réparties entre les projets au prorata des montants."
-                    : ""}
                 </p>
               </div>
             ) : null}
@@ -1061,21 +750,14 @@ export default function NewAchatPage() {
             <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-white/60">
               Refacturation au client
             </p>
-            {enDivision ? (
-              <p className="mb-3 text-sm text-white/80">
-                Décidée projet par projet dans « Répartition entre projets »
-                (case « Refact. » de chaque ligne).
-              </p>
-            ) : (
-              <label className="mb-3 flex items-center gap-2 text-sm text-white/80">
-                <input
-                  type="checkbox"
-                  checked={isBillable}
-                  onChange={(e) => setIsBillable(e.target.checked)}
-                />
-                Refacturable au client (apparaît dans « À refacturer »)
-              </label>
-            )}
+            <label className="mb-3 flex items-center gap-2 text-sm text-white/80">
+              <input
+                type="checkbox"
+                checked={isBillable}
+                onChange={(e) => setIsBillable(e.target.checked)}
+              />
+              Refacturable au client (apparaît dans « À refacturer »)
+            </label>
             <label htmlFor="markup" className="label">
               Majoration (%) — appliquée au montant à l&apos;import facture
             </label>
@@ -1088,7 +770,7 @@ export default function NewAchatPage() {
               value={markupPercent}
               onChange={(e) => setMarkupPercent(e.target.value)}
               placeholder="0"
-              disabled={!refacturableEffectif}
+              disabled={!isBillable}
               className="input"
             />
             <p className="mt-1 text-xs text-white/40">
@@ -1121,20 +803,13 @@ export default function NewAchatPage() {
           <div className="flex items-center gap-3">
             <button
               type="submit"
-              disabled={submitting || !divisionPrete}
-              className="btn-accent text-sm disabled:opacity-50"
-              title={
-                divisionPrete
-                  ? undefined
-                  : "Complète la répartition entre projets (reste à répartir = 0)"
-              }
+              disabled={submitting}
+              className="btn-accent text-sm"
             >
               {submitting ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Création…
                 </>
-              ) : enDivision ? (
-                `Créer le reçu divisé (${parts.length} projets)`
               ) : (
                 "Créer l'achat"
               )}

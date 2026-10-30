@@ -95,7 +95,6 @@ from app.api.v1.endpoints import (
     timesheets,
     achat_receipt,
     achat_mobile,
-    achat_divise,
     bon_items,
     bon_tasks,
     bon_photos,
@@ -461,9 +460,6 @@ api_router.include_router(project_to_facture.router, dependencies=DEP_CONSTRUCTI
 api_router.include_router(achat_receipt.router, dependencies=DEP_CONSTRUCTION_IMMO)
 # Idem : /achats/mobile/mon-dernier avant le CRUD générique.
 api_router.include_router(achat_mobile.router, dependencies=DEP_CONSTRUCTION_IMMO)
-# Idem : POST /achats/divise (reçu divisé entre plusieurs projets) avant
-# le CRUD générique.
-api_router.include_router(achat_divise.router, dependencies=DEP_CONSTRUCTION_IMMO)
 api_router.include_router(achats_router, dependencies=DEP_CONSTRUCTION_IMMO)
 api_router.include_router(purchase_orders_router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(purchase_order_items.router, dependencies=DEP_CONSTRUCTION)

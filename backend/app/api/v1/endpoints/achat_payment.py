@@ -74,21 +74,12 @@ async def mark_paid(
             status.HTTP_400_BAD_REQUEST,
             "Cet achat est annule.",
         )
-    # Reçu DIVISÉ entre plusieurs projets : une facture fournisseur se paie
-    # en entier → toutes les parts du groupe passent payées (même mode,
-    # même date) et UNE BillPayment du total du groupe part vers QB.
-    from app.services.achat_divise import parts_du_groupe
-
-    parts = await parts_du_groupe(db, achat)
-    if achat not in parts:
-        parts = [achat, *parts]
-    for part in parts:
-        await mark_achat_paid(
-            db,
-            part,
-            payment_method=payload.payment_method,
-            paid_at=payload.paid_at,
-        )
+    await mark_achat_paid(
+        db,
+        achat,
+        payment_method=payload.payment_method,
+        paid_at=payload.paid_at,
+    )
     await db.flush()
 
     # Sync vers QB en background : si l'Achat a un qbo_bill_id, on

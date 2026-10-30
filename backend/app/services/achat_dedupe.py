@@ -191,135 +191,6 @@ def _merge_into_keeper(keeper: Achat, other: Achat) -> None:
         keeper.payment_method = other.payment_method
 
 
-def _qids(a: Achat) -> set[str]:
-    return {str(a.qbo_bill_id or ""), str(a.qbo_purchase_id or "")} - {""}
-
-
-def _forme_groupe(parts: list[Achat]) -> list[tuple]:
-    """Signature d'un reçu divisé : (projet, TTC) de chaque part active."""
-    return sorted(
-        (a.project_id, _ttc(a)) for a in parts if a.status != "cancelled"
-    )
-
-
-async def _fusionner_dans_groupe(
-    db: AsyncSession, parts: list[Achat], other: Achat, supprimer_qb
-) -> int:
-    """Absorbe le doublon SIMPLE ``other`` dans toutes les parts du groupe
-    (infos manquantes, état de paiement, mode réel) puis le supprime, avec
-    son objet QB si le groupe ne l'a pas adopté. Le lien QB du doublon
-    n'est repris que si AUCUNE part n'en a (décision de groupe, jamais part
-    par part)."""
-    loser_qids = _qids(other)
-    groupe_lie = any(_qids(p) for p in parts)
-    lien = None
-    if not groupe_lie and loser_qids:
-        lien = (
-            other.qbo_bill_id,
-            other.qbo_sync_token,
-            other.qbo_doc_number,
-            other.qbo_purchase_id,
-        )
-    # Neutralise l'adoption INDIVIDUELLE du lien par _merge_into_keeper.
-    other.qbo_bill_id = None
-    other.qbo_purchase_id = None
-    for p in parts:
-        _merge_into_keeper(p, other)
-    if lien:
-        for p in parts:
-            p.qbo_bill_id = lien[0]
-            p.qbo_sync_token = lien[1]
-            p.qbo_doc_number = lien[2] or p.qbo_doc_number
-            p.qbo_purchase_id = lien[3]
-    groupe_qids = set().union(*(_qids(p) for p in parts))
-    for qid in loser_qids:
-        if qid not in groupe_qids:
-            await supprimer_qb(qid)
-    await db.delete(other)
-    return 1
-
-
-async def _fusionner_groupe_dans_groupe(
-    db: AsyncSession, gardes: list[Achat], perdants: list[Achat], supprimer_qb
-) -> int:
-    """Le MÊME reçu divisé saisi deux fois (formes identiques) : chaque
-    part du groupe le plus récent est fusionnée dans la part de même
-    projet du groupe gardé, puis supprimée ; la transaction QB du groupe
-    perdant est supprimée si le gardé a la sienne."""
-    loser_qids = set().union(*(_qids(p) for p in perdants))
-    groupe_lie = any(_qids(p) for p in gardes)
-    lien = None
-    if not groupe_lie and loser_qids:
-        src = next((p for p in perdants if _qids(p)), perdants[0])
-        lien = (
-            src.qbo_bill_id, src.qbo_sync_token,
-            src.qbo_doc_number, src.qbo_purchase_id,
-        )
-    restants = list(gardes)
-    n = 0
-    for lp in perdants:
-        cible = next(
-            (
-                g for g in restants
-                if g.project_id == lp.project_id
-                and abs(_ttc(g) - _ttc(lp)) <= 0.005
-            ),
-            None,
-        )
-        if cible is not None:
-            restants.remove(cible)
-        lp.qbo_bill_id = None
-        lp.qbo_purchase_id = None
-        _merge_into_keeper(cible or gardes[0], lp)
-        await db.delete(lp)
-        n += 1
-    if lien:
-        for g in gardes:
-            g.qbo_bill_id = lien[0]
-            g.qbo_sync_token = lien[1]
-            g.qbo_doc_number = lien[2] or g.qbo_doc_number
-            g.qbo_purchase_id = lien[3]
-    groupe_qids = set().union(*(_qids(g) for g in gardes))
-    for qid in loser_qids:
-        if qid not in groupe_qids:
-            await supprimer_qb(qid)
-    return n
-
-
-async def _dedupe_composante_avec_groupe(
-    db: AsyncSession, members: list[Achat], groupes: list[int], supprimer_qb
-) -> int:
-    """Composante qui contient au moins un reçu DIVISÉ : le groupe (le plus
-    ancien s'il y en a plusieurs) est le gardé — jamais une part supprimée
-    au profit d'un doublon simple. Plusieurs groupes de formes différentes
-    reliés par un signal : on ne touche à rien."""
-    par_groupe = {
-        g: sorted((a for a in members if a.groupe_id == g), key=lambda a: a.id)
-        for g in groupes
-    }
-    garde_gid = groupes[0]  # groupe_id = id de la tête → le plus petit = le plus ancien
-    gardes = par_groupe[garde_gid]
-    removed = 0
-    if len(groupes) > 1:
-        ref = _forme_groupe(gardes)
-        if any(_forme_groupe(par_groupe[g]) != ref for g in groupes[1:]):
-            log.warning(
-                "dedupe_achats: reçus divisés %s reliés par un signal de "
-                "doublon mais de formes différentes → laissés tels quels",
-                groupes,
-            )
-            return 0
-        for g in groupes[1:]:
-            removed += await _fusionner_groupe_dans_groupe(
-                db, gardes, par_groupe[g], supprimer_qb
-            )
-    for other in members:
-        if other.groupe_id:
-            continue
-        removed += await _fusionner_dans_groupe(db, gardes, other, supprimer_qb)
-    return removed
-
-
 async def dedupe_achats(db: AsyncSession) -> int:
     """Supprime les achats en double, en conservant le plus complet.
 
@@ -338,15 +209,6 @@ async def dedupe_achats(db: AsyncSession) -> int:
          client « long » vs réception « compact ») avec un écart d'arrondi
          d'un cent — invisible pour le signal 3 (réf + TTC EXACTS).
 
-    Reçu DIVISÉ entre plusieurs projets (``groupe_id``, Steven 2026-10-30) :
-    un groupe est UN document indivisible. Ses parts sont réunies d'office
-    dans la même composante (un doublon qui ressemble à l'une d'elles
-    ressemble au reçu entier) et un groupe n'est jamais démembré : c'est
-    lui le gardé, un doublon simple est fusionné dans TOUTES ses parts puis
-    supprimé ; deux groupes ne fusionnent que s'ils sont identiques (mêmes
-    projets, mêmes TTC — le même reçu divisé saisi deux fois), le plus
-    ancien reste ; sinon on ne touche à rien (journalisé).
-
     Retourne le nombre d'achats supprimés. Ne committe pas (l'appelant
     gère la transaction).
     """
@@ -360,14 +222,6 @@ async def dedupe_achats(db: AsyncSession) -> int:
     )
 
     uf = _UnionFind()
-    by_id: dict[int, Achat] = {a.id: a for a in achats}
-
-    def _meme_groupe(x: Achat, y: Achat) -> bool:
-        """Deux PARTS d'un même reçu DIVISÉ entre plusieurs projets
-        (groupe_id) : même fournisseur, même n° de facture, montants
-        souvent proches — mais jamais des doublons l'une de l'autre."""
-        return bool(x.groupe_id) and x.groupe_id == y.groupe_id
-
     # Index : clé de signal → premier achat vu portant cette clé. On unionne
     # chaque nouvel achat avec ce représentant.
     rep: dict[str, int] = {}
@@ -379,8 +233,7 @@ async def dedupe_achats(db: AsyncSession) -> int:
 
     def link(key: str, aid: int) -> None:
         if key in rep:
-            if not _meme_groupe(by_id[rep[key]], by_id[aid]):
-                uf.union(rep[key], aid)
+            uf.union(rep[key], aid)
         else:
             rep[key] = aid
             uf.find(aid)
@@ -450,19 +303,8 @@ async def dedupe_achats(db: AsyncSession) -> int:
                 witness = nref_rep.get(key)
                 if witness is None:
                     nref_rep[key] = a
-                elif _amounts_close(a, witness) and not _meme_groupe(
-                    a, witness
-                ):
+                elif _amounts_close(a, witness):
                     uf.union(witness.id, a.id)
-
-    # Reçu divisé : toutes les parts d'un groupe dans la même composante.
-    par_groupe: dict[int, list[Achat]] = defaultdict(list)
-    for a in achats:
-        if a.groupe_id:
-            par_groupe[int(a.groupe_id)].append(a)
-    for parts in par_groupe.values():
-        for p in parts[1:]:
-            uf.union(parts[0].id, p.id)
 
     # Reconstruit les groupes à partir des composantes connexes.
     comps: dict[int, list[Achat]] = defaultdict(list)
@@ -510,12 +352,6 @@ async def dedupe_achats(db: AsyncSession) -> int:
     for members in comps.values():
         if len(members) < 2:
             continue
-        groupes = sorted({int(a.groupe_id) for a in members if a.groupe_id})
-        if groupes:
-            removed += await _dedupe_composante_avec_groupe(
-                db, members, groupes, _delete_qbo_object
-            )
-            continue
         keeper = max(members, key=_keeper_score)
         for a in members:
             if a.id == keeper.id:
@@ -537,11 +373,6 @@ async def dedupe_achats(db: AsyncSession) -> int:
                 and keeper.project_id
                 and a.project_id != keeper.project_id
             ):
-                continue
-            # GARDE-FOU reçu DIVISÉ dans Kratos : deux parts d'un même
-            # groupe (avant ou après le push QB) ne sont jamais des
-            # doublons — ni l'achat ni la transaction QB partagée.
-            if _meme_groupe(a, keeper):
                 continue
             # Id(s) QB du perdant, AVANT merge (le merge peut en transférer
             # au gardé s'il n'en a pas — dans ce cas on ne les supprime pas).
