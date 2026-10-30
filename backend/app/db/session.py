@@ -374,6 +374,9 @@ async def ensure_critical_columns() -> None:
         # Total TTC de la transaction QB d'origine d'un achat importé
         # (facture fractionnée : part du projet vs facture entière).
         ("achats", "qbo_txn_total", "NUMERIC(12, 2)"),
+        # Reçu divisé entre plusieurs projets (2026-10-30) : id de la
+        # première part, commun à toutes les parts du même reçu.
+        ("achats", "groupe_id", "INTEGER"),
         # Gestion externe d'un immeuble (compagnie tierce) : sans ces
         # colonnes, tout SELECT sur imm_immeubles plante → 500 sur tout
         # le volet immobilier. Table préexistante → create_all ne les

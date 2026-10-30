@@ -1098,17 +1098,20 @@ async def trigger_all_hourly(
             return {"skipped": "qbo_auto_sync_off"}
         from sqlalchemy import select
         from app.models.achat import KIND_INVENTAIRE, Achat
+        from app.services.achat_divise import premieres_parts
         from app.services.achat_qbo import sync_achat_to_qbo
 
         from datetime import datetime, timedelta, timezone
 
         recent_cutoff = datetime.now(timezone.utc) - timedelta(days=14)
         async with AsyncSessionLocal() as db:
-            ids = [
-                int(r[0])
+            # Reçu divisé : une seule part par groupe (pousser une part
+            # pousse toute la transaction).
+            ids = premieres_parts(
+                (int(r[0]), r[1])
                 for r in (
                     await db.execute(
-                        select(Achat.id).where(
+                        select(Achat.id, Achat.groupe_id).where(
                             # Tout achat de PROJET, ou tout achat RÉCENT
                             # même sans projet (l'auto-push immédiat a pu
                             # échouer en silence). La fenêtre 14 j évite
@@ -1125,7 +1128,7 @@ async def trigger_all_hourly(
                         )
                     )
                 ).all()
-            ]
+            )
         pushed = 0
         failed = 0
         for aid in ids:

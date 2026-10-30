@@ -519,14 +519,17 @@ async def run_qbo_nets() -> Dict[str, Any]:
         from sqlalchemy import select
 
         from app.models.achat import KIND_INVENTAIRE, Achat
+        from app.services.achat_divise import premieres_parts
         from app.services.achat_qbo import sync_achat_to_qbo
 
         async with AsyncSessionLocal() as db:
-            ids = [
-                int(r[0])
+            # Reçu divisé : une seule part par groupe (pousser une part
+            # pousse toute la transaction).
+            ids = premieres_parts(
+                (int(r[0]), r[1])
                 for r in (
                     await db.execute(
-                        select(Achat.id).where(
+                        select(Achat.id, Achat.groupe_id).where(
                             # TOUT achat actif entré dans Kratos part vers QB,
                             # AVEC ou SANS projet/client (le Bill/Purchase QB
                             # se crée alors sans CustomerRef). L'ancien filtre
@@ -547,7 +550,7 @@ async def run_qbo_nets() -> Dict[str, Any]:
                         )
                     )
                 ).all()
-            ]
+            )
         pushed = failed = 0
         for aid in ids:
             try:
