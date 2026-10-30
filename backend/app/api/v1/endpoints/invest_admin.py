@@ -1639,6 +1639,61 @@ async def creer_compte_partenaire(
     }
 
 
+class CourrielPartenaire(BaseModel):
+    email: EmailStr
+
+
+@router.post(
+    "/partenaires/{partner_id}/courriel",
+    summary="Ajoute le courriel manquant d'un actionnaire, dans toutes "
+    "ses lignes « Parts & actionnaires »",
+)
+async def definir_courriel_partenaire(
+    partner_id: int,
+    payload: CourrielPartenaire,
+    db: DBSession,
+    user: CurrentUser,
+) -> dict:
+    """Saisie sur place depuis la console (Steven 2026-10-30 : « je
+    devrais pouvoir cliquer sur l'avis qui m'apporte à l'endroit de la
+    correction »). Le courriel va dans `partner_email` de chaque ligne
+    du même actionnaire (même nom) qui n'a ni compte lié ni courriel —
+    les lignes déjà renseignées ne sont jamais écrasées."""
+    pr = await db.get(EntreprisePartner, partner_id)
+    if pr is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Actionnaire introuvable."
+        )
+    pu = await _resolve_partner_user(db, pr)
+    nom, _email = _partner_identity(pr, pu)
+    email = str(payload.email).strip().lower()
+    cle = _norm_ident(nom)
+    nb = 0
+    for row in (
+        await db.execute(
+            select(EntreprisePartner).order_by(EntreprisePartner.id)
+        )
+    ).scalars().all():
+        if row.id != pr.id and (not cle or row.user_id):
+            continue
+        if (row.partner_email or "").strip():
+            continue
+        row_user = await _resolve_partner_user(db, row)
+        n, _e = _partner_identity(row, row_user)
+        if row.id != pr.id and _norm_ident(n) != cle:
+            continue
+        row.partner_email = email
+        nb += 1
+    if not nb:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{nom} a déjà un courriel — modifiez-le dans la fiche "
+            "entreprise (Partenaires & parts).",
+        )
+    await db.commit()
+    return {"email": email, "lignes_mises_a_jour": nb}
+
+
 @router.post(
     "/investisseurs/{user_id}/resend-invitation",
     summary="Renvoie l'invitation (nouveau mot de passe temporaire)",
