@@ -52,9 +52,10 @@ async def creer_recu_divise(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
     tete = parts[0]
     # Push QuickBooks du GROUPE (une transaction, une ligne par part) dès
-    # que le reçu est actif. BackgroundTasks : s'exécute après le commit de
-    # la requête (pas de course avec la session), comme la conversion d'un
-    # PO en achat.
+    # que le reçu est actif. On COMMITTE d'abord : la tâche de fond ouvre
+    # sa propre session et doit voir les parts (sinon « achat introuvable »
+    # et le reçu attendrait le filet horaire).
+    await db.commit()
     if tete.status in ("received", "paid"):
         from app.api.v1.endpoints.achat_qbo import autopush_achat
 

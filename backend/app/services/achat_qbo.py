@@ -1549,13 +1549,24 @@ async def sync_achat_to_qbo(
     porteur_recu = next(
         (p for p in parts if p.receipt_image_content_type), achat
     )
+    # `receipt_image` est une colonne deferred : y accéder sans l'avoir
+    # chargée déclenche un SELECT implicite, interdit sur une AsyncSession
+    # (MissingGreenlet) — ce qui faisait échouer le push APRÈS la création
+    # de la transaction QB pour tout achat SANS reçu (lien QB perdu jusqu'au
+    # filet horaire). On ne lit la colonne qu'après un refresh réussi.
+    recu_bytes: Optional[bytes] = None
     if did_create and qbo_id and porteur_recu.receipt_image_content_type:
         try:
             await db.refresh(porteur_recu, attribute_names=["receipt_image"])
+            recu_bytes = (
+                bytes(porteur_recu.receipt_image)
+                if porteur_recu.receipt_image
+                else None
+            )
         except Exception as exc:  # noqa: BLE001
             receipt_error = f"refresh: {exc}"
             log.warning("Refresh receipt_image failed: %s", exc)
-    if did_create and qbo_id and porteur_recu.receipt_image:
+    if recu_bytes:
         try:
             ctype = (
                 porteur_recu.receipt_image_content_type
@@ -1570,7 +1581,7 @@ async def sync_achat_to_qbo(
                 entity_id=qbo_id,
                 file_name=file_name,
                 content_type=ctype,
-                content=bytes(porteur_recu.receipt_image),
+                content=recu_bytes,
             )
             receipt_attached = True
             log.info(
