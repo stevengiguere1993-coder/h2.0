@@ -8,7 +8,7 @@
    documents) vit dans /investisseur/admin/projet/[id]. */
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import {
   BellRing,
   Building2,
@@ -67,6 +67,10 @@ export default function InvestAdminPage() {
   const [banner, setBanner] = useState<string | null>(null);
   const [busyResend, setBusyResend] = useState<number | null>(null);
   const [busyCreate, setBusyCreate] = useState<string | null>(null);
+  // Saisie sur place du courriel manquant (clic sur l'avertissement).
+  const [emailFor, setEmailFor] = useState<string | null>(null);
+  const [emailDraft, setEmailDraft] = useState("");
+  const [busyEmail, setBusyEmail] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -143,6 +147,39 @@ export default function InvestAdminPage() {
         : `Accès de ${u.name} désactivé — il ne peut plus se connecter.`
     );
     await load();
+  }
+
+  async function saveEmail(u: InvestisseurItem) {
+    if (!u.partner_id || !emailDraft.trim()) return;
+    setBusyEmail(true);
+    setBanner(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/invest/admin/partenaires/${u.partner_id}/courriel`,
+        {
+          method: "POST",
+          body: JSON.stringify({ email: emailDraft.trim() })
+        }
+      );
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        setBanner(
+          typeof body?.detail === "string"
+            ? body.detail
+            : "Courriel invalide — vérifiez l'adresse."
+        );
+        return;
+      }
+      setBanner(
+        `Courriel de ${u.name} enregistré. Vous pouvez maintenant ` +
+          "créer son compte et l'inviter."
+      );
+      setEmailFor(null);
+      setEmailDraft("");
+      await load();
+    } finally {
+      setBusyEmail(false);
+    }
   }
 
   async function createAccount(u: InvestisseurItem) {
@@ -368,10 +405,25 @@ export default function InvestAdminPage() {
                         </p>
                         <p className="truncate text-xs text-white/40">
                           {u.missing_email ? (
-                            <span className="text-amber-400">
-                              ⚠ Courriel manquant — ajoutez-le dans la
-                              fiche entreprise
-                            </span>
+                            u.partner_id ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEmailFor(u.key);
+                                  setEmailDraft("");
+                                }}
+                                title="Cliquez pour saisir son courriel ici"
+                                className="text-amber-400 underline decoration-dotted underline-offset-2 hover:decoration-solid"
+                              >
+                                ⚠ Courriel manquant — cliquez pour
+                                l&apos;ajouter
+                              </button>
+                            ) : (
+                              <span className="text-amber-400">
+                                ⚠ Courriel manquant — ajoutez-le dans la
+                                fiche entreprise
+                              </span>
+                            )
                           ) : (
                             u.email
                           )}
@@ -383,12 +435,51 @@ export default function InvestAdminPage() {
                               }`
                             : ""}
                         </p>
+                        {emailFor === u.key ? (
+                          <form
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              void saveEmail(u);
+                            }}
+                            className="mt-1.5 flex flex-wrap items-center gap-2"
+                          >
+                            <input
+                              type="email"
+                              required
+                              autoFocus
+                              value={emailDraft}
+                              onChange={(e) => setEmailDraft(e.target.value)}
+                              placeholder={`Courriel de ${u.name}`}
+                              className="input h-8 w-64 max-w-full text-xs"
+                            />
+                            <button
+                              type="submit"
+                              disabled={busyEmail || !emailDraft.trim()}
+                              className="btn-accent btn-xs inline-flex items-center gap-1 disabled:opacity-40"
+                            >
+                              {busyEmail ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : null}
+                              Enregistrer
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEmailFor(null)}
+                              className="btn-secondary btn-xs"
+                            >
+                              Annuler
+                            </button>
+                          </form>
+                        ) : null}
                         {u.entreprises.length > 0 ? (
                           <div className="mt-1 flex flex-wrap gap-1">
                             {u.entreprises.map((e) => (
-                              <span
+                              <Link
                                 key={e.id}
-                                className="inline-flex items-center rounded-full border border-brand-700 px-2 py-0.5 text-[10.5px] text-white/60"
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                href={`/entreprises/${e.id}` as any}
+                                title="Ouvrir la fiche entreprise (Partenaires & parts)"
+                                className="inline-flex items-center rounded-full border border-brand-700 px-2 py-0.5 text-[10.5px] text-white/60 transition hover:border-accent-500"
                               >
                                 {e.name}
                                 {e.pct !== null
@@ -396,7 +487,7 @@ export default function InvestAdminPage() {
                                       maximumFractionDigits: 1
                                     })} %`
                                   : ""}
-                              </span>
+                              </Link>
                             ))}
                           </div>
                         ) : null}
@@ -462,7 +553,7 @@ export default function InvestAdminPage() {
                             }
                             title={
                               u.missing_email
-                                ? "Ajoutez d'abord son courriel dans la fiche entreprise"
+                                ? "Ajoutez d'abord son courriel (cliquez sur l'avertissement)"
                                 : undefined
                             }
                             className="btn-accent btn-xs inline-flex items-center gap-1 disabled:opacity-40"

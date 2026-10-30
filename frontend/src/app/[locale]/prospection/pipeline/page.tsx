@@ -14,6 +14,7 @@ import {
 
 import { AppTopbar } from "@/components/app-topbar";
 import { authedFetch } from "@/lib/auth";
+import { useColonnesRepliees } from "@/lib/ui-prefs";
 import { useConfirm } from "@/components/confirm-dialog";
 import {
   LeadAnalysisCard,
@@ -119,6 +120,8 @@ const SECTION_DOT: Record<SectionKey, string> = {
   abandonne: "bg-rose-500"
 };
 
+const PIPELINE_REPLIEES_DEFAUT = ["termine", "abandonne"];
+
 export default function PipelineDealsListPage() {
   const { onOpenSidebar } = useProspectionLayout();
   const router = useRouter();
@@ -139,9 +142,14 @@ export default function PipelineDealsListPage() {
   // distinguer drag (déplacement) vs click (navigation).
   const [didDrop, setDidDrop] = useState(false);
 
-  // Sections terminés / abandonnés repliées par défaut.
-  const [openTermine, setOpenTermine] = useState(false);
-  const [openAbandonne, setOpenAbandonne] = useState(false);
+  // Sections terminés / abandonnés repliées par défaut ; le choix est
+  // ensuite mémorisé par utilisateur côté serveur (Steven, 2026-10-30).
+  const [sectionsRepliees, basculerSection] = useColonnesRepliees(
+    "kanban.prospection-pipeline",
+    PIPELINE_REPLIEES_DEFAUT
+  );
+  const openTermine = !sectionsRepliees.has("termine");
+  const openAbandonne = !sectionsRepliees.has("abandonne");
 
   // Vue Cartes / Liste — lue après montage (pas au premier rendu, pour
   // ne pas diverger du HTML serveur) et mémorisée par navigateur.
@@ -428,7 +436,7 @@ export default function PipelineDealsListPage() {
               deals={termineDeals}
               open={openTermine}
               collapsible
-              onToggle={() => setOpenTermine((v) => !v)}
+              onToggle={() => basculerSection("termine")}
               dimmed
               dragDealId={dragDealId}
               dragOverSection={dragOverSection}
@@ -449,7 +457,7 @@ export default function PipelineDealsListPage() {
               deals={abandonneDeals}
               open={openAbandonne}
               collapsible
-              onToggle={() => setOpenAbandonne((v) => !v)}
+              onToggle={() => basculerSection("abandonne")}
               dimmed
               extraDimmed
               dragDealId={dragDealId}
