@@ -12,6 +12,21 @@ from app.models.achat import Achat
 router = APIRouter(prefix="/achats", tags=["achat-receipt"])
 
 
+async def _soeurs(db, ac: Achat) -> list[Achat]:
+    """Autres parts d'un reçu DIVISÉ entre plusieurs projets : la même
+    facture vaut pour chacune → upload, rotation et suppression du reçu
+    s'appliquent à tout le groupe. Vide pour un achat simple."""
+    if not ac.groupe_id:
+        return []
+    from app.services.achat_divise import parts_du_groupe
+
+    return [
+        s
+        for s in await parts_du_groupe(db, ac, actives_seulement=False)
+        if s.id != ac.id
+    ]
+
+
 _ALLOWED_CONTENT = {
     "image/jpeg",
     "image/jpg",
@@ -61,6 +76,9 @@ async def upload_receipt(
 
     ac.receipt_image = blob
     ac.receipt_image_content_type = ct
+    for s in await _soeurs(db, ac):
+        s.receipt_image = blob
+        s.receipt_image_content_type = ct
     await db.flush()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -136,6 +154,9 @@ async def rotate_receipt(
             "Rotation impossible pour ce format de fichier.",
         )
     ac.receipt_image = rotated
+    for s in await _soeurs(db, ac):
+        s.receipt_image = rotated
+        s.receipt_image_content_type = ac.receipt_image_content_type
     await db.flush()
     return {"rotated": True, "direction": direction}
 
@@ -157,5 +178,8 @@ async def delete_receipt(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Achat not found")
     ac.receipt_image = None
     ac.receipt_image_content_type = None
+    for s in await _soeurs(db, ac):
+        s.receipt_image = None
+        s.receipt_image_content_type = None
     await db.flush()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

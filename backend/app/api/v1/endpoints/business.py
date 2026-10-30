@@ -496,40 +496,16 @@ def make_crud_router(
             if getattr(data, "is_billable", None) is not None:
                 obj.billable_manual = True
             if getattr(data, "is_billable", None) is None and obj.project_id:
-                from sqlalchemy import select as _sel_bill
+                from app.services.achat_refacturable import (
+                    refacturable_par_defaut,
+                )
 
-                from app.models.project import Project as _ProjBill
-                from app.models.soumission import Soumission as _SoumBill
-
-                _proj_row = (
-                    await db.execute(
-                        _sel_bill(
-                            _ProjBill.soumission_id, _ProjBill.kind
-                        ).where(_ProjBill.id == obj.project_id)
-                    )
-                ).first()
-                _soum_id = _proj_row[0] if _proj_row else None
                 # Mini-projet d'un BON DE TRAVAIL : matériaux refacturés en
                 # temps & matériel → refacturables par défaut (retour
-                # 2026-09-18), quel que soit le devis.
-                _is_bon_proj = bool(
-                    _proj_row and (_proj_row[1] or "") == "bon_travail"
-                )
-                _kind = (
-                    (
-                        await db.execute(
-                            _sel_bill(_SoumBill.kind).where(
-                                _SoumBill.id == _soum_id
-                            )
-                        )
-                    ).scalar_one_or_none()
-                    if _soum_id
-                    else None
-                )
-                if (
-                    _kind != "contract"
-                    and not _is_bon_proj
-                    and obj.is_billable
+                # 2026-09-18), quel que soit le devis. Règle partagée avec
+                # le reçu divisé (services/achat_refacturable.py).
+                if obj.is_billable and not await refacturable_par_defaut(
+                    db, obj.project_id
                 ):
                     obj.is_billable = False
             await db.flush()
@@ -890,6 +866,17 @@ def make_crud_router(
                 )
         if model is Achat:
             new_status = getattr(obj, "status", None)
+            # Reçu DIVISÉ entre plusieurs projets : les champs qui décrivent
+            # la facture (fournisseur, n°, date, mode de paiement, nature,
+            # PO) valent pour toutes les parts → recopiés sur les sœurs. Le
+            # re-push live ci-dessous reconstruit la transaction QB du
+            # groupe (une ligne par part).
+            if getattr(obj, "groupe_id", None):
+                from app.services.achat_divise import (
+                    propager_champs_communs,
+                )
+
+                await propager_champs_communs(db, obj)
             # Push LIVE : TOUTE modification enregistrée d'un achat actif
             # (reçu/payé) est reflétée immédiatement dans QB — montants,
             # taxes, projet, mode de paiement, description, date… — sans
@@ -920,10 +907,14 @@ def make_crud_router(
             # effectif seulement si pas déjà refacturé (invoiced_at NULL) ;
             # décoché ⇒ NotBillable ⇒ l'« imputation de dépense
             # facturable » en attente disparaît côté QB.
+            # Reçu divisé : pas de flip ciblé (il forcerait TOUTES les
+            # lignes au statut de cette part) — le re-push live du groupe
+            # ci-dessus pose le statut de chaque part sur sa ligne.
             new_billable = bool(getattr(obj, "is_billable", False))
             if (
                 prev_is_billable is not None
                 and new_billable != prev_is_billable
+                and not getattr(obj, "groupe_id", None)
                 and (
                     getattr(obj, "qbo_bill_id", None)
                     or getattr(obj, "qbo_purchase_id", None)
@@ -1116,6 +1107,21 @@ def make_crud_router(
         )
         # Sortie de l'inventaire interne supprimée depuis les achats : la
         # marchandise revient en stock (refusé si déjà refacturée).
+        # Reçu DIVISÉ : si d'autres parts restent, la transaction QB du
+        # groupe doit perdre la ligne de la part supprimée → re-push du
+        # groupe (ci-dessous, après la suppression). Ids capturés avant.
+        _soeurs_divise: list[int] = []
+        if model is Achat and getattr(obj, "groupe_id", None) and (
+            getattr(obj, "qbo_bill_id", None)
+            or getattr(obj, "qbo_purchase_id", None)
+        ):
+            from app.services.achat_divise import parts_du_groupe
+
+            _soeurs_divise = [
+                int(p.id)
+                for p in await parts_du_groupe(db, obj)
+                if p.id != obj.id
+            ]
         if model is Achat:
             from app.services.inventaire import (
                 InventaireErreur,
@@ -1127,6 +1133,24 @@ def make_crud_router(
             except InventaireErreur as exc:
                 raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
         await crud.delete(obj)
+        if _soeurs_divise:
+            # Dans la MÊME session (la part supprimée est déjà hors des
+            # requêtes) : la transaction QB est réécrite avec les parts
+            # restantes. Best-effort : un échec QB ne bloque pas la
+            # suppression (le prochain re-push d'une part la rattrape).
+            from app.services.achat_qbo import sync_achat_to_qbo
+
+            try:
+                await sync_achat_to_qbo(db, _soeurs_divise[0])
+            except Exception as exc:  # noqa: BLE001
+                import logging as _logging_divise
+
+                _logging_divise.getLogger(__name__).warning(
+                    "Reçu divisé : re-push QB après suppression de la part "
+                    "%s échoué : %s",
+                    item_id,
+                    exc,
+                )
         if _punch_ta_id:
             import asyncio as _asyncio
 

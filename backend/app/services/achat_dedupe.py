@@ -222,6 +222,14 @@ async def dedupe_achats(db: AsyncSession) -> int:
     )
 
     uf = _UnionFind()
+    by_id: dict[int, Achat] = {a.id: a for a in achats}
+
+    def _meme_groupe(x: Achat, y: Achat) -> bool:
+        """Deux PARTS d'un même reçu DIVISÉ entre plusieurs projets
+        (groupe_id) : même fournisseur, même n° de facture, montants
+        souvent proches — mais jamais des doublons l'une de l'autre."""
+        return bool(x.groupe_id) and x.groupe_id == y.groupe_id
+
     # Index : clé de signal → premier achat vu portant cette clé. On unionne
     # chaque nouvel achat avec ce représentant.
     rep: dict[str, int] = {}
@@ -233,7 +241,8 @@ async def dedupe_achats(db: AsyncSession) -> int:
 
     def link(key: str, aid: int) -> None:
         if key in rep:
-            uf.union(rep[key], aid)
+            if not _meme_groupe(by_id[rep[key]], by_id[aid]):
+                uf.union(rep[key], aid)
         else:
             rep[key] = aid
             uf.find(aid)
@@ -303,7 +312,9 @@ async def dedupe_achats(db: AsyncSession) -> int:
                 witness = nref_rep.get(key)
                 if witness is None:
                     nref_rep[key] = a
-                elif _amounts_close(a, witness):
+                elif _amounts_close(a, witness) and not _meme_groupe(
+                    a, witness
+                ):
                     uf.union(witness.id, a.id)
 
     # Reconstruit les groupes à partir des composantes connexes.
@@ -373,6 +384,11 @@ async def dedupe_achats(db: AsyncSession) -> int:
                 and keeper.project_id
                 and a.project_id != keeper.project_id
             ):
+                continue
+            # GARDE-FOU reçu DIVISÉ dans Kratos : deux parts d'un même
+            # groupe (avant ou après le push QB) ne sont jamais des
+            # doublons — ni l'achat ni la transaction QB partagée.
+            if _meme_groupe(a, keeper):
                 continue
             # Id(s) QB du perdant, AVANT merge (le merge peut en transférer
             # au gardé s'il n'en a pas — dans ce cas on ne les supprime pas).

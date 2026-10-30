@@ -1089,11 +1089,20 @@ async def pull_project_costs_from_qbo(
         vendor_n = (
             (txn.get("VendorRef") or txn.get("EntityRef") or {}).get("name")
         )
-        if not (src.qbo_bill_id or src.qbo_purchase_id):
+        # Reçu DIVISÉ dans Kratos (groupe_id) : la transaction QB porte
+        # toutes les parts → on répare le lien de chacune.
+        cibles = [src]
+        if src.groupe_id:
+            from app.services.achat_divise import parts_du_groupe
+
+            cibles = await parts_du_groupe(db, src, actives_seulement=False)
+        sans_lien = [c for c in cibles if not (c.qbo_bill_id or c.qbo_purchase_id)]
+        if sans_lien:
             if not dry_run:
-                src.qbo_bill_id = qid
-                if not src.qbo_doc_number and txn.get("DocNumber"):
-                    src.qbo_doc_number = str(txn.get("DocNumber"))
+                for c in sans_lien:
+                    c.qbo_bill_id = qid
+                    if not c.qbo_doc_number and txn.get("DocNumber"):
+                        c.qbo_doc_number = str(txn.get("DocNumber"))
                 await db.flush()
             stats["relinked_kratos"] += 1
             preview.append(
