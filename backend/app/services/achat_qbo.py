@@ -980,12 +980,11 @@ async def _sync_achat_sans_verrou(
             ).scalar_one_or_none()
             if client:
                 try:
-                    cust = await qbo.ensure_customer(
-                        display_name=client.name,
-                        email=client.email,
-                        phone=client.phone,
-                        billing_address=client.address,
+                    from app.services.qbo_client_mere import (
+                        client_mere_qbo,
                     )
+
+                    cust = await client_mere_qbo(db, qbo, client)
                     parent_customer_id = str(cust.get("Id") or "") or None
                 except QuickBooksError as exc:
                     log.warning(
@@ -1072,12 +1071,9 @@ async def _sync_achat_sans_verrou(
         ).scalar_one_or_none()
         if _cl is not None:
             try:
-                cust = await qbo.ensure_customer(
-                    display_name=_cl.name,
-                    email=_cl.email,
-                    phone=_cl.phone,
-                    billing_address=_cl.address,
-                )
+                from app.services.qbo_client_mere import client_mere_qbo
+
+                cust = await client_mere_qbo(db, qbo, _cl)
                 customer_id = str(cust.get("Id") or "") or None
             except QuickBooksError as exc:
                 log.warning(
