@@ -215,3 +215,14 @@ QB d'une AUTRE fiche Kratos retrouvé par un courriel partagé (deux
 compagnies du même proprio : le repli par courriel ramenait MGV
 Développement pour Groupe 1660 Saint-Clément). Filet horaire dans
 `qbo_nets` (`qbo_sous_clients_client_change`).
+
+## Part CCQ par employé — coût de chantier (2026-11-02)
+
+Steven : « si je mets 50 % CCQ sur un employé, calculer 50 % des heures en
+CCQ et l'autre 50 % hors décret pour se rapprocher du coût d'un chantier ».
+Champ `Employe.pourcentage_ccq` (0 à 100, NULL = comme avant) sur la fiche
+employé. Posé, `resolve_real_cost` coûte chaque heure
+`pct × coût CCQ + (1 − pct) × coût hors décret`, QUEL QUE SOIT le régime
+du punch (fiche projet, dépenses construction, main-d'œuvre poussée à QB,
+projection de main-d'œuvre). La paie (`resolve_base_rate`) ne change pas :
+elle suit toujours le régime du punch.

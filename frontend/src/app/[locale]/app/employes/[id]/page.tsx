@@ -36,6 +36,8 @@ type Employe = {
   ccq_rate: number | string | null;
   // Taux horaire de base sous régime CCQ (null = même que hourly_rate).
   hourly_rate_ccq: number | string | null;
+  // Part des heures coûtées au régime CCQ, en % (null = régime du punch).
+  pourcentage_ccq: number | string | null;
   employeur_d_url: string | null;
   // Case « dîner » : 30 min retirées des heures de punch quand la journée
   // dépasse 5 h, à partir de `diner_depuis` (jour où elle a été cochée).
@@ -131,6 +133,7 @@ export default function EmployeDetailPage() {
   const [cnesstGlobal, setCnesstGlobal] = useState<number | null>(null);
   const [ccqRate, setCcqRate] = useState("");
   const [hourlyRateCcq, setHourlyRateCcq] = useState("");
+  const [pourcentageCcq, setPourcentageCcq] = useState("");
   const [employeurDUrl, setEmployeurDUrl] = useState("");
   const [dinerAuto, setDinerAuto] = useState(false);
 
@@ -178,6 +181,7 @@ export default function EmployeDetailPage() {
         setCnesstRate(pctFromDecimal(data.cnesst_rate));
         setCcqRate(pctFromDecimal(data.ccq_rate));
         setHourlyRateCcq(data.hourly_rate_ccq != null ? String(data.hourly_rate_ccq) : "");
+        setPourcentageCcq(data.pourcentage_ccq != null ? String(Number(data.pourcentage_ccq)) : "");
         setEmployeurDUrl(data.employeur_d_url || "");
         setDinerAuto(Boolean(data.diner_auto));
         const histRes = await authedFetch(
@@ -247,6 +251,7 @@ export default function EmployeDetailPage() {
       cnesstRate !== pctFromDecimal(emp.cnesst_rate) ||
       ccqRate !== pctFromDecimal(emp.ccq_rate) ||
       hourlyRateCcq !== (emp.hourly_rate_ccq != null ? String(emp.hourly_rate_ccq) : "") ||
+      pourcentageCcq !== (emp.pourcentage_ccq != null ? String(Number(emp.pourcentage_ccq)) : "") ||
       employeurDUrl !== (emp.employeur_d_url || "") ||
       dinerAuto !== Boolean(emp.diner_auto)
     );
@@ -270,6 +275,7 @@ export default function EmployeDetailPage() {
     cnesstRate,
     ccqRate,
     hourlyRateCcq,
+    pourcentageCcq,
     employeurDUrl,
     dinerAuto
   ]);
@@ -295,6 +301,23 @@ export default function EmployeDetailPage() {
     return +(base * (1 + cnesst + ccq)).toFixed(2);
   }, [hourlyRate, cnesstPct, isCcq, ccqRate]);
 
+  // Coût horaire par régime (comme le serveur) et coût mixte quand une
+  // part CCQ est saisie (coût de chantier).
+  const coutsRegimes = useMemo(() => {
+    const base = Number(hourlyRate || 0);
+    if (base <= 0) return null;
+    const baseCcq = Number(hourlyRateCcq) || base;
+    const hd = base * (1 + cnesstPct / 100);
+    const ccq = baseCcq * (1 + cnesstPct / 100 + (Number(ccqRate) || 0) / 100);
+    const pctBrut = pourcentageCcq === "" ? null : Number(pourcentageCcq);
+    const pct =
+      pctBrut == null || Number.isNaN(pctBrut)
+        ? null
+        : Math.min(Math.max(pctBrut, 0), 100);
+    const mixte = pct == null ? null : (ccq * pct + hd * (100 - pct)) / 100;
+    return { hd, ccq, pct, mixte };
+  }, [hourlyRate, hourlyRateCcq, cnesstPct, ccqRate, pourcentageCcq]);
+
   async function saveAll() {
     if (!emp) return;
     setSaving(true);
@@ -319,6 +342,7 @@ export default function EmployeDetailPage() {
         cnesst_rate: cnesstActif ? decimalFromPct(cnesstRate) : null,
         ccq_rate: decimalFromPct(ccqRate),
         hourly_rate_ccq: hourlyRateCcq ? Number(hourlyRateCcq) : null,
+        pourcentage_ccq: pourcentageCcq !== "" ? Number(pourcentageCcq) : null,
         employeur_d_url: employeurDUrl.trim() || null,
         diner_auto: dinerAuto
       };
@@ -335,6 +359,9 @@ export default function EmployeDetailPage() {
       // Case décochée → le serveur efface le taux personnalisé.
       setCnesstActif(updated.cnesst_actif !== false);
       setCnesstRate(pctFromDecimal(updated.cnesst_rate));
+      setPourcentageCcq(
+        updated.pourcentage_ccq != null ? String(Number(updated.pourcentage_ccq)) : ""
+      );
       // Un changement de prime CNESST s'applique aussi au palier en vigueur.
       void reloadRateHistory();
     } catch (err) {
@@ -770,6 +797,44 @@ export default function EmployeDetailPage() {
                       change pas.
                     </p>
                   </div>
+                  <div>
+                    <label htmlFor="e_pct_ccq" className="label">
+                      Part des heures en CCQ (%)
+                    </label>
+                    <input
+                      id="e_pct_ccq"
+                      type="number"
+                      step="1"
+                      min="0"
+                      max="100"
+                      value={pourcentageCcq}
+                      onChange={(e) => setPourcentageCcq(e.target.value)}
+                      placeholder="Vide = selon le régime de chaque punch"
+                      className="input"
+                    />
+                    <p className="mt-1 text-xs text-white/60">
+                      Pour le coût des chantiers seulement : à 50 %, chaque
+                      heure de l&apos;employé est coûtée moitié au coût CCQ,
+                      moitié au coût hors décret, peu importe le régime du
+                      punch. La paie ne change pas.
+                    </p>
+                  </div>
+                  {coutsRegimes && coutsRegimes.mixte != null ? (
+                    <div className="sm:col-span-2 rounded-lg border border-brand-800 bg-brand-950/40 p-3">
+                      <p className="text-xs uppercase tracking-wider text-white/70">
+                        Coût de chantier ({coutsRegimes.pct} % CCQ)
+                      </p>
+                      <p className="mt-1 text-2xl font-bold text-white">
+                        {coutsRegimes.mixte.toFixed(2)} $/h
+                      </p>
+                      <p className="mt-0.5 text-xs text-white/70">
+                        {coutsRegimes.pct} % × {coutsRegimes.ccq.toFixed(2)} $ (CCQ)
+                        {" + "}
+                        {100 - (coutsRegimes.pct ?? 0)} % ×{" "}
+                        {coutsRegimes.hd.toFixed(2)} $ (hors décret).
+                      </p>
+                    </div>
+                  ) : null}
                   {realCost !== null ? (
                     <div className="sm:col-span-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
                       <p className="text-xs uppercase tracking-wider text-amber-300">
