@@ -189,6 +189,10 @@ _TASK_POLES: tuple[str, ...] = (
 )
 
 
+#: Scope transverse « lire tout Kratos » (outil MCP ``kratos_lire``).
+LECTURE_COMPLETE_SCOPE = "api:lecture:complete"
+
+
 def _build_capabilities() -> list[dict]:
     caps: list[dict] = []
     for pole in POLES:
@@ -374,6 +378,33 @@ def _build_capabilities() -> list[dict]:
             "coming_soon": False,
         }
     )
+    # Capacité TRANSVERSE de LECTURE (demande Steven 2026-11-02 : « que
+    # les connecteurs Kratos de Claude voient la totalité de Kratos ») :
+    # l'outil MCP ``kratos_lire`` lit N'IMPORTE QUELLE route GET de l'API
+    # (projets, clients, employés, punchs, factures, immobilier,
+    # dépenses…) au nom du propriétaire de la clé, avec SES permissions.
+    # Accordée d'office à une clé qui lit déjà tous les pôles (voir
+    # ``key_reads_everything``).
+    caps.append(
+        {
+            "id": LECTURE_COMPLETE_SCOPE,
+            "pole": "api",
+            "label_fr": "Lire tout Kratos (API complète en lecture)",
+            "description": (
+                "Permet au Claude connecté de LIRE n'importe quelle donnée "
+                "de la plateforme (toute route GET de l'API : projets, "
+                "clients, employés, punchs, factures, immobilier, "
+                "dépenses…) au nom du propriétaire de la clé, avec ses "
+                "permissions. Aucune écriture. Accordée d'office aux clés "
+                "qui lisent tous les pôles. Les secrets (coffre "
+                "d'abonnements), l'authentification et les clés restent "
+                "bloqués."
+            ),
+            "category": "lecture",
+            "risk": "faible",
+            "coming_soon": False,
+        }
+    )
     return caps
 
 
@@ -447,6 +478,18 @@ def readable_poles(scopes: Optional[list[str]]) -> set[str]:
     return out
 
 
+def key_reads_everything(scopes: Optional[list[str]]) -> bool:
+    """La clé peut-elle lire TOUT Kratos (outil ``kratos_lire``) ?
+
+    Oui si elle porte explicitement ``api:lecture:complete``, la capacité
+    « API complète » (qui permet déjà tout, lecture comprise), ou si elle
+    lit déjà TOUS les pôles (dont les clés sans scopes, rétrocompat)."""
+    norm = _normalize(scopes) or []
+    if LECTURE_COMPLETE_SCOPE in norm or "api:actions:executer" in norm:
+        return True
+    return readable_poles(scopes) >= set(POLE_SLUGS)
+
+
 def sanitize_scopes(scopes: Optional[list[str]]) -> list[str]:
     """Filtre une liste de scopes reçue du client : ne garde QUE des ids
     de capacités réellement accordables (existantes et non coming_soon),
@@ -477,7 +520,7 @@ def catalog() -> dict:
         groupes.append(
             {
                 "slug": "api",
-                "label_fr": "API complète (actions)",
+                "label_fr": "API complète",
                 "capabilities": by_pole["api"],
             }
         )
