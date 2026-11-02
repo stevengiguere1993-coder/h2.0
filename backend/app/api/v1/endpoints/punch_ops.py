@@ -29,7 +29,13 @@ from app.services.employe_rates import (
 )
 from app.services.project_auto_status import bump_to_in_progress_if_needed
 from app.services.punch_diner import appliquer_diner_auto, heures_brutes, heures_nettes
-from app.services.punch_geo import ajouter_fin, position as position_punch, position_ou_approx
+from app.services.punch_geo import (
+    ajouter_fin,
+    candidats_ip,
+    ip_client,
+    position as position_punch,
+    position_ou_approx,
+)
 
 
 router = APIRouter(prefix="/punch", tags=["punch"])
@@ -78,12 +84,24 @@ class ClockInRequest(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     notes: Optional[str] = None
+    #: Position approximative que le téléphone a obtenue lui-même de son
+    #: adresse internet (GPS refusé) ; l'API la marque « ~ ».
+    geolocation_approx: Optional[str] = Field(default=None, max_length=128)
+    #: Adresse internet publique vue par le téléphone, pour que l'API
+    #: déduise une position même derrière le relais Next.js.
+    ip_publique: Optional[str] = Field(default=None, max_length=64)
 
 
 class ClockOutRequest(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     notes: Optional[str] = None
+    #: Position approximative que le téléphone a obtenue lui-même de son
+    #: adresse internet (GPS refusé) ; l'API la marque « ~ ».
+    geolocation_approx: Optional[str] = Field(default=None, max_length=128)
+    #: Adresse internet publique vue par le téléphone, pour que l'API
+    #: déduise une position même derrière le relais Next.js.
+    ip_publique: Optional[str] = Field(default=None, max_length=64)
 
 
 class WeeklyEntry(BaseModel):
@@ -190,6 +208,41 @@ async def punch_debug(db: DBSession, admin: RequireAdminRole):
     }
 
 
+
+@router.get(
+    "/geo-debug",
+    summary="Diagnostic de la position approximative par adresse internet (admin)",
+)
+async def punch_geo_debug(
+    request: Request,
+    admin: RequireAdminRole,
+    ip: Optional[str] = Query(default=None, description="Adresse à tester (sinon celle de la requête)"),
+):
+    """Ce que l'API voit de l'adresse du téléphone (en-têtes des relais),
+    l'adresse retenue et la réponse de chaque fournisseur. Sert à comprendre
+    un punch sans position approximative (retour Steven, 2026-11-02)."""
+    from app.integrations.ip_geo import diagnostiquer
+
+    choisie = ip_client(request, ip)
+    position = None
+    comptes = ["aucune adresse publique parmi les candidates"]
+    if choisie:
+        coords, comptes = await diagnostiquer(choisie)
+        if coords:
+            position = f"{coords[0]:.6f},{coords[1]:.6f}"
+    return {
+        "entetes": {
+            nom: request.headers.get(nom)
+            for nom in ("x-forwarded-for", "true-client-ip", "cf-connecting-ip", "x-real-ip")
+        },
+        "connexion": request.client.host if request.client else None,
+        "ip_declaree": ip,
+        "candidates": candidats_ip(request, ip),
+        "ip_choisie": choisie,
+        "position_approx": position,
+        "fournisseurs": comptes,
+    }
+
 @router.post(
     "/clock-in",
     response_model=PunchRead,
@@ -224,7 +277,10 @@ async def clock_in(
         task=(data.task.strip() if data.task else None),
         # GPS reçu, sinon position approximative par adresse internet.
         geolocation=await position_ou_approx(
-            _geo_str(data.latitude, data.longitude), request
+            _geo_str(data.latitude, data.longitude),
+            request,
+            data.geolocation_approx,
+            data.ip_publique,
         ),
         notes=(data.notes.strip() if data.notes else None),
         # Hors décret par défaut : le régime CCQ est posé par un admin+
@@ -296,7 +352,12 @@ async def clock_out(
     # Position de sortie ajoutée à celle d'entrée (« début|fin »).
     open_punch.geolocation = ajouter_fin(
         open_punch.geolocation,
-        await position_ou_approx(_geo_str(data.latitude, data.longitude), request),
+        await position_ou_approx(
+            _geo_str(data.latitude, data.longitude),
+            request,
+            data.geolocation_approx,
+            data.ip_publique,
+        ),
     )
     await db.flush()
     # Case « dîner » de la fiche : 30 min retirées si la journée dépasse 5 h.

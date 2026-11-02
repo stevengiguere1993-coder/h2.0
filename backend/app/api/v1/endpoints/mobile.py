@@ -125,6 +125,12 @@ class PunchStartBody(BaseModel):
     # Free-form task label, e.g. "Admin", "Déplacement", "Formation".
     task: Optional[str] = Field(default=None, max_length=255)
     geolocation: Optional[str] = Field(default=None, max_length=128)
+    #: Position approximative que le téléphone a obtenue lui-même de son
+    #: adresse internet (GPS refusé) ; l'API la marque « ~ ».
+    geolocation_approx: Optional[str] = Field(default=None, max_length=128)
+    #: Adresse internet publique vue par le téléphone, pour que l'API
+    #: déduise une position même derrière le relais Next.js.
+    ip_publique: Optional[str] = Field(default=None, max_length=64)
 
 
 class LeaveRequestBody(BaseModel):
@@ -320,7 +326,10 @@ async def punch_start(
         task=body.task,
         # GPS reçu, sinon position approximative par adresse internet.
         geolocation=await position_ou_approx(
-            normaliser_position(body.geolocation), request
+            normaliser_position(body.geolocation),
+            request,
+            body.geolocation_approx,
+            body.ip_publique,
         ),
         # Hors décret par défaut ; le régime CCQ se pose à l'approbation
         # par un admin+ (retour Phil 2026-09-26).
@@ -354,6 +363,12 @@ async def punch_start(
 
 class PunchStopBody(BaseModel):
     geolocation: Optional[str] = Field(default=None, max_length=128)
+    #: Position approximative que le téléphone a obtenue lui-même de son
+    #: adresse internet (GPS refusé) ; l'API la marque « ~ ».
+    geolocation_approx: Optional[str] = Field(default=None, max_length=128)
+    #: Adresse internet publique vue par le téléphone, pour que l'API
+    #: déduise une position même derrière le relais Next.js.
+    ip_publique: Optional[str] = Field(default=None, max_length=64)
 
 
 @router.post("/punch/stop", response_model=OpenPunch)
@@ -392,7 +407,10 @@ async def punch_stop(
     p.geolocation = ajouter_fin(
         p.geolocation,
         await position_ou_approx(
-            normaliser_position(body.geolocation if body else None), request
+            normaliser_position(body.geolocation if body else None),
+            request,
+            body.geolocation_approx if body else None,
+            body.ip_publique if body else None,
         ),
     )
     await db.flush()
