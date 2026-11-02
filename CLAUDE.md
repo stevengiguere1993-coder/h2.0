@@ -251,3 +251,10 @@ s'il y a au moins un paiement et un reste ≤ plafond ; bouton sur la fiche
 sinon. Le report attend un brouillon du client (ajouté à son ouverture, à
 l'envoi, à la sortie de brouillon) ; ligne retirée = attend la suivante.
 Le rapatriement QB ignore ces Payments ; filet horaire dans `qbo_nets`.
+Fiche employé (retour Steven, même jour) : bloc « Heures CCQ » sous le
+taux horaire. `hourly_rate_ccq` = taux de SALAIRE du décret (sert à la
+paie), `ccq_rate` = charges CCQ en % du salaire (vacances, avantages, AE,
+RQAP, RRQ, FSS, cotisations, équipement) SANS la CNESST, comptée à part une
+seule fois. Aide de saisie : « coût complet CCQ connu » → charges calculées
+(`coût / salaire − 1 − CNESST`). Ne jamais saisir un coût complet dans le
+taux de salaire : CNESST et charges s'y ajouteraient en double.
