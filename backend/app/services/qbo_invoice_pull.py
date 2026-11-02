@@ -217,6 +217,12 @@ async def pull_invoices_from_qbo(
             )
         ).all()
     }
+    # Payments QB qui ferment un petit solde REPORTÉ sur une prochaine
+    # facture (dépôt dans le compte de transit) : ce n'est pas de l'argent
+    # reçu, on ne les recopie jamais en paiements Kratos.
+    from app.services.facture_report_solde import ids_paiements_qb_des_reports
+
+    existing_pay_ids |= await ids_paiements_qb_des_reports(db)
 
     now = datetime.now(timezone.utc)
     stats = {

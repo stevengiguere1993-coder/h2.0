@@ -720,6 +720,7 @@ async def _compute_finances(
     extras_subtotal = 0.0
     contract_subtotal = 0.0
     rabais_subtotal = 0.0  # lignes « rabais » (négatives) sur la base
+    reports_ttc = 0.0  # soldes reportés d'autres factures (TTC)
     if billed_factures:
         from app.models.facture_item import FactureItem as _FI
         from app.services.facture_lignes import est_hors_soumission
@@ -735,6 +736,11 @@ async def _compute_finances(
         ).all()
         for _fid, _it_total, _it_kind, _it_hors in items_rows:
             v = float(_it_total or 0)
+            if (_it_kind or "") == "report":
+                # Solde reporté d'une facture précédente (déjà TTC, déjà
+                # facturé ailleurs) : ni contrat, ni extra, ni facturé.
+                reports_ttc += v
+                continue
             if est_hors_soumission(_it_kind, _it_hors):
                 extras_subtotal += v
             else:
@@ -750,7 +756,10 @@ async def _compute_finances(
     # Les taxes ne changent pas la répartition contrat/extras au
     # niveau sous-total ; on calcule l'invoiced TTC total comme avant
     # pour les KPI cash-flow (Facturé / Reçu / Solde).
-    invoiced = sum(float(f.total or 0) for f in billed_factures)
+    # Les soldes reportés sont déjà comptés sur leur facture d'origine.
+    invoiced = round(
+        sum(float(f.total or 0) for f in billed_factures) - reports_ttc, 2
+    )
 
     # Facturé HT et taxes collectées — séparés pour calcul du profit
     # (HT) et pour afficher l'obligation fiscale (à remettre au gouv).

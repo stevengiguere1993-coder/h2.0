@@ -152,6 +152,7 @@ from app.models.qg_strategic import (  # noqa: F401
 )
 from app.models.facture import Facture
 from app.models.facture_item import FactureItem
+from app.models.facture_report_solde import FactureReportSolde  # noqa: F401
 from app.models.follow_up import FollowUp
 from app.models.fournisseur import Fournisseur
 from app.models.help_request import HelpRequest

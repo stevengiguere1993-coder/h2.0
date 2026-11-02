@@ -226,3 +226,28 @@ employé. Posé, `resolve_real_cost` coûte chaque heure
 du punch (fiche projet, dépenses construction, main-d'œuvre poussée à QB,
 projection de main-d'œuvre). La paie (`resolve_base_rate`) ne change pas :
 elle suit toujours le régime du punch.
+
+## Factures — petits soldes reportés (2026-11-02)
+
+Steven : « 15 $ oubliés sur une facture de 18 000 $ […] pour que tout
+balance dans QuickBooks et qu'on n'ait pas une facture en retard pour
+rien », puis « lorsque nous classons la facture dans payé, le report
+devrait se faire automatiquement ». Service
+`app/services/facture_report_solde.py`, table `facture_reports_solde`.
+Le solde (≤ `facture_report_plafond`, 100 $) est FERMÉ sur la facture
+d'origine par un Payment QB imputé à l'Invoice et déposé dans le compte de
+transit « Soldes reportés » (actif à court terme, créé au besoin), puis
+AJOUTÉ sur la prochaine facture du client en ligne `kind="report"` :
+déjà TTC, donc HORS TAXES (code QB exonéré / hors champ, cherché par nom
+ou `QBO_REPORT_TAX_CODE`), produit « Solde reporté » relié au même compte
+de transit → le compte revient à 0, ni revenu ni taxe en double. Pas de
+note de crédit : QB peut l'appliquer d'office à une autre facture ouverte.
+Un report n'est PAS un paiement Kratos : jamais dans `facture_payments`
+(entrées de fonds, finances projet, profit) ; la facture d'origine est
+soldée par « paiements + reports » (`_recompute_facture_status`). Totaux :
+`facture_lignes.totaux_facture` (sous-total = base taxable ; reports après
+les taxes) partout où on recalcule. Automatique au passage à « payée »
+s'il y a au moins un paiement et un reste ≤ plafond ; bouton sur la fiche
+sinon. Le report attend un brouillon du client (ajouté à son ouverture, à
+l'envoi, à la sortie de brouillon) ; ligne retirée = attend la suivante.
+Le rapatriement QB ignore ces Payments ; filet horaire dans `qbo_nets`.

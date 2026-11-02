@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ArrowRightLeft,
   Banknote,
   CreditCard,
   FileSignature,
@@ -26,6 +27,28 @@ type Payment = {
   notes: string | null;
   qbo_payment_id: string | null;
   created_at: string;
+};
+
+/** Petit solde reporté sur la prochaine facture du client (2026-11-02). */
+type ReportSolde = {
+  id: number;
+  origine_facture_id: number;
+  origine_reference: string | null;
+  cible_facture_id: number | null;
+  cible_reference: string | null;
+  montant: number;
+  statut: "en_attente" | "applique" | "annule";
+  automatique: boolean;
+  qbo_payment_id: string | null;
+  qbo_error: string | null;
+};
+
+type ReportsSolde = {
+  reportes: ReportSolde[];
+  recus: ReportSolde[];
+  solde_restant: number;
+  plafond: number;
+  reportable: boolean;
 };
 
 type PaymentMethod =
@@ -75,10 +98,13 @@ function today(): string {
 export function PaymentsPanel({
   factureId,
   factureTotal,
+  refreshKey,
   onStatusMayHaveChanged
 }: {
   factureId: number;
   factureTotal: number;
+  /** Change (ex. statut de la facture) → recharge paiements et reports. */
+  refreshKey?: string;
   onStatusMayHaveChanged?: () => void;
 }) {
   const confirm = useConfirm();
@@ -86,6 +112,76 @@ export function PaymentsPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [reports, setReports] = useState<ReportsSolde | null>(null);
+  const [reportBusy, setReportBusy] = useState(false);
+
+  const loadReports = useCallback(async () => {
+    try {
+      const res = await authedFetch(`/api/v1/factures/${factureId}/reports-solde`);
+      if (res.ok) setReports((await res.json()) as ReportsSolde);
+    } catch {
+      /* les reports restent masqués */
+    }
+  }, [factureId]);
+
+  useEffect(() => {
+    void loadReports();
+  }, [loadReports, refreshKey, payments.length]);
+
+  const reportesActifs = (reports?.reportes ?? []).filter((r) => r.statut !== "annule");
+  const reportedSum = reportesActifs.reduce((s, r) => s + Number(r.montant || 0), 0);
+
+  async function reporterSolde() {
+    if (!reports) return;
+    const ok = await confirm(
+      `Reporter le solde de ${money(reports.solde_restant)} sur la prochaine facture de ce client ? ` +
+        "Cette facture sera classée payée et le solde sera fermé dans QuickBooks."
+    );
+    if (!ok) return;
+    setReportBusy(true);
+    setError(null);
+    try {
+      const res = await authedFetch(`/api/v1/factures/${factureId}/reports-solde`, {
+        method: "POST"
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(body?.detail || "Report du solde échoué.");
+      }
+      await loadReports();
+      onStatusMayHaveChanged?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Report du solde échoué.");
+    } finally {
+      setReportBusy(false);
+    }
+  }
+
+  async function annulerReport(r: ReportSolde) {
+    if (
+      !(await confirm(
+        `Annuler le report de ${money(Number(r.montant))} ? La facture ${r.origine_reference ?? ""} redeviendra ouverte.`
+      ))
+    )
+      return;
+    setReportBusy(true);
+    setError(null);
+    try {
+      const res = await authedFetch(`/api/v1/factures/${factureId}/reports-solde/${r.id}`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204) {
+        const body = (await res.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(body?.detail || "Annulation échouée.");
+      }
+      await loadReports();
+      onStatusMayHaveChanged?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Annulation échouée.");
+    } finally {
+      setReportBusy(false);
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -111,7 +207,7 @@ export function PaymentsPanel({
     () => payments.reduce((s, p) => s + Number(p.amount || 0), 0),
     [payments]
   );
-  const balance = Math.max(0, factureTotal - paidSum);
+  const balance = Math.max(0, +(factureTotal - paidSum - reportedSum).toFixed(2));
   const progress =
     factureTotal > 0 ? Math.min(100, (paidSum / factureTotal) * 100) : 0;
 
@@ -172,6 +268,61 @@ export function PaymentsPanel({
 
       {error ? (
         <p className="mt-3 text-sm text-rose-300">{error}</p>
+      ) : null}
+
+      {/* Petits soldes reportés sur la prochaine facture du client. */}
+      {reportesActifs.length > 0 ? (
+        <ul className="mt-4 space-y-2">
+          {reportesActifs.map((r) => (
+            <li
+              key={r.id}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-white/70"
+            >
+              <span className="flex items-center gap-2">
+                <ArrowRightLeft className="h-4 w-4 text-sky-300" />
+                <span>
+                  <strong className="text-white">{money(Number(r.montant))}</strong>{" "}
+                  {r.statut === "applique" && r.cible_reference
+                    ? `reporté sur la facture ${r.cible_reference}`
+                    : "reporté : sera ajouté à la prochaine facture du client"}
+                  {r.automatique ? " (automatique)" : ""}
+                </span>
+              </span>
+              {r.qbo_error ? (
+                <span className="w-full text-rose-300">QuickBooks : {r.qbo_error}</span>
+              ) : null}
+              <button
+                type="button"
+                disabled={reportBusy}
+                onClick={() => annulerReport(r)}
+                className="rounded-md px-2 py-1 text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
+              >
+                Annuler le report
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {reports?.reportable ? (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-dashed border-brand-800 px-3 py-2 text-xs text-white/70">
+          <span>
+            Petit solde de <strong className="text-white">{money(reports.solde_restant)}</strong> ?
+            Fermez-le ici et ajoutez-le à la prochaine facture du client.
+          </span>
+          <button
+            type="button"
+            disabled={reportBusy}
+            onClick={reporterSolde}
+            className="btn-secondary text-xs"
+          >
+            {reportBusy ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <ArrowRightLeft className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            Reporter sur la prochaine facture
+          </button>
+        </div>
       ) : null}
 
       {/* List */}
