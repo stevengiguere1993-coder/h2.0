@@ -103,6 +103,7 @@ from app.api.v1.endpoints import (
     bons_refs,
     facture_import,
     facture_items,
+    facture_reports_solde,
     facture_qbo,
     facture_send,
     leave_requests,
@@ -451,6 +452,8 @@ api_router.include_router(factures_router, dependencies=DEP_CONSTRUCTION)
 # is matched before /factures/{id}/items (same prefix, different path).
 api_router.include_router(payments.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(facture_items.router, dependencies=DEP_CONSTRUCTION)
+# Petits soldes reportés sur la prochaine facture du client (2026-11-02).
+api_router.include_router(facture_reports_solde.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(facture_import.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(facture_send.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(facture_qbo.router, dependencies=DEP_CONSTRUCTION)

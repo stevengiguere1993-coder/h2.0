@@ -107,7 +107,8 @@ const KIND_LABELS: Record<string, string> = {
   materiaux: "Matériaux",
   extra: "Extra",
   rabais: "Rabais",
-  frais: "Frais"
+  frais: "Frais",
+  report: "Solde reporté"
 };
 
 const KIND_BADGE_CLASS: Record<string, string> = {
@@ -115,7 +116,8 @@ const KIND_BADGE_CLASS: Record<string, string> = {
   materiaux: "bg-violet-500/20 text-violet-300",
   extra: "bg-amber-500/20 text-amber-300",
   rabais: "bg-rose-500/20 text-rose-300",
-  frais: "bg-blue-500/20 text-blue-300"
+  frais: "bg-blue-500/20 text-blue-300",
+  report: "bg-sky-500/20 text-sky-300"
 };
 
 type Client = { id: number; name: string; email: string | null };
@@ -449,13 +451,23 @@ export default function FactureDetailPage() {
     };
   }, [id]);
 
+  // Les soldes reportés d'une facture précédente sont déjà TTC : ils ne
+  // sont pas taxés une 2e fois et s'ajoutent APRÈS les taxes.
   const subtotal = useMemo(
-    () => +items.reduce((sum, it) => sum + Number(it.total || 0), 0).toFixed(2),
+    () =>
+      +items
+        .filter((it) => it.kind !== "report")
+        .reduce((sum, it) => sum + Number(it.total || 0), 0)
+        .toFixed(2),
     [items]
   );
+  const reportLines = useMemo(() => items.filter((it) => it.kind === "report"), [items]);
+  const reportsTotal = +reportLines
+    .reduce((sum, it) => sum + Number(it.total || 0), 0)
+    .toFixed(2);
   const tps = +(subtotal * TPS_RATE).toFixed(2);
   const tvq = +(subtotal * TVQ_RATE).toFixed(2);
-  const total = +(subtotal + tps + tvq).toFixed(2);
+  const total = +(subtotal + tps + tvq + reportsTotal).toFixed(2);
 
   async function refreshFacture(): Promise<Facture | null> {
     const r = await authedFetch(`/api/v1/factures/${id}`);
@@ -2027,6 +2039,13 @@ export default function FactureDetailPage() {
                 <div className="divide-y divide-brand-800">
                   {items.map((it, idx) => (
                     <div key={it.id} id={`fitem-${it.id}`}>
+                      {it.kind === "report" ? (
+                        <ReportRow
+                          item={it}
+                          busy={itemBusy === it.id}
+                          onDelete={() => deleteItem(it.id)}
+                        />
+                      ) : (
                       <ItemRow
                         item={it}
                         busy={itemBusy === it.id}
@@ -2039,6 +2058,7 @@ export default function FactureDetailPage() {
                         onMoveDown={() => moveItem(it.id, 1)}
                         projectHasSoumission={!!project?.soumission_id}
                       />
+                      )}
                     </div>
                   ))}
                 </div>
@@ -2058,6 +2078,12 @@ export default function FactureDetailPage() {
                     <span>TVQ (9,975 %)</span>
                     <span>{fmtMoney(tvq)}</span>
                   </div>
+                  {reportLines.map((it) => (
+                    <div key={`rep-${it.id}`} className="flex justify-between gap-3">
+                      <span className="text-left">{it.description} (taxes incluses)</span>
+                      <span>{fmtMoney(it.total)}</span>
+                    </div>
+                  ))}
                   <div className="flex justify-between border-t border-brand-800 pt-1 text-base font-bold text-white">
                     <span>TOTAL CAD</span>
                     <span>{fmtMoney(total)}</span>
@@ -2070,6 +2096,7 @@ export default function FactureDetailPage() {
               <PaymentsPanel
                 factureId={Number(f.id)}
                 factureTotal={total}
+                refreshKey={`${f.status}`}
                 onStatusMayHaveChanged={async () => {
                   try {
                     const res = await authedFetch(`/api/v1/factures/${f.id}`);
@@ -2503,6 +2530,47 @@ export default function FactureDetailPage() {
         </div>
       ) : null}
     </>
+  );
+}
+
+/** Ligne « Solde reporté de la facture X » : petit solde impayé d'une
+ * facture précédente du client, déjà taxé là-bas. Son montant vient de la
+ * facture d'origine (non modifiable) ; la retirer la fait attendre la
+ * facture suivante du client. */
+function ReportRow({
+  item,
+  busy,
+  onDelete
+}: {
+  item: Item;
+  busy: boolean;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm">
+      <span
+        className={`rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${KIND_BADGE_CLASS.report}`}
+      >
+        {KIND_LABELS.report}
+      </span>
+      <span className="min-w-0 flex-1 text-white">{item.description}</span>
+      <span className="text-xs text-white/60">Hors taxes (déjà taxé)</span>
+      <span className="font-semibold text-white">{fmtMoney(item.total)}</span>
+      <button
+        type="button"
+        onClick={onDelete}
+        disabled={busy}
+        className="btn-xs inline-flex items-center justify-center gap-1 rounded-lg bg-rose-600 font-semibold text-neutral-50 transition hover:bg-rose-700 disabled:opacity-40"
+        aria-label="Retirer le solde reporté de cette facture"
+        title="Retirer la ligne : le solde attendra la prochaine facture du client"
+      >
+        {busy ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <Trash2 className="h-4 w-4" />
+        )}
+      </button>
+    </div>
   );
 }
 

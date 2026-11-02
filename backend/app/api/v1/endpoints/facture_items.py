@@ -43,10 +43,12 @@ async def _recompute_facture_totals(db, facture_id: int) -> None:
             select(FactureItem).where(FactureItem.facture_id == facture_id)
         )
     ).scalars().all()
-    subtotal = round(sum(float(it.total or 0) for it in items), 2)
-    tps = round(subtotal * TPS_RATE, 2)
-    tvq = round(subtotal * TVQ_RATE, 2)
-    total = round(subtotal + tps + tvq, 2)
+    # Les lignes « Solde reporté » (déjà TTC) s'ajoutent APRÈS les taxes
+    # et ne font pas partie du sous-total (revenu HT).
+    from app.services.facture_lignes import totaux_facture
+
+    _t = totaux_facture(items)
+    subtotal, tps, tvq, total = _t["subtotal"], _t["tps"], _t["tvq"], _t["total"]
 
     fac = (
         await db.execute(select(Facture).where(Facture.id == facture_id))
@@ -447,6 +449,20 @@ async def update_item(
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
     update = data.model_dump(exclude_unset=True)
+    from app.services.facture_lignes import est_report
+
+    if est_report(item.kind) and (
+        {"quantity", "unit_price", "kind", "hors_soumission"} & update.keys()
+    ):
+        # Le montant d'un solde reporté vient de la facture d'origine :
+        # pour le changer, on retire la ligne (le solde attend la facture
+        # suivante) ou on annule le report sur la facture d'origine.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Ligne de solde reporté : son montant vient de la facture "
+            "d'origine. Retire la ligne ou annule le report sur la facture "
+            "d'origine.",
+        )
     if update.get("hors_soumission") is None:
         update.pop("hors_soumission", None)  # colonne NOT NULL
     for field, value in update.items():
@@ -519,6 +535,13 @@ async def delete_item(
         .where(_Punch.facture_item_id == item_id)
         .values(invoiced_at=None, facture_item_id=None)
     )
+    from app.services.facture_lignes import est_report
+
+    if est_report(item.kind):
+        # Solde reporté retiré à la main : il attend la facture SUIVANTE.
+        from app.services.facture_report_solde import liberer_ligne
+
+        await liberer_ligne(db, item)
     await db.delete(item)
     await db.flush()
     await _recompute_facture_totals(db, facture_id)

@@ -47,6 +47,10 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     #: opérations elles-mêmes restent hors du connecteur, comme les
     #: coordonnées et les réglages.
     "paiements_operations",
+    #: Petits soldes impayés reportés sur la prochaine facture du client
+    #: (2026-11-02). Lecture IA : GET /reports-solde (liste par client /
+    #: statut) et GET /factures/{id}/reports-solde, via kratos_lire.
+    "facture_reports_solde",
     "utilisateurs_2fa",
     "user_access_overrides",
     "achats",

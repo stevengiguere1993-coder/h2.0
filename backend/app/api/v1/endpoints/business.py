@@ -709,6 +709,17 @@ def make_crud_router(
         if model is Facture:
             await _heal_facture_clients(db, [obj])
             await _heal_facture_devis_overrun(db, obj)
+            # Brouillon ouvert : il reçoit les petits soldes du client en
+            # attente de leur prochaine facture (ligne « Solde reporté de
+            # la facture X »), pour qu'on la voie avant l'envoi.
+            if (getattr(obj, "status", None) or "") == FactureStatus.DRAFT.value:
+                from app.services.facture_report_solde import (
+                    appliquer_reports_en_attente as _app_rep,
+                )
+
+                if await _app_rep(db, obj):
+                    await db.commit()
+                    await db.refresh(obj)
         return read_schema.model_validate(obj)
 
     @router.patch("/{item_id}")
@@ -1029,6 +1040,28 @@ def make_crud_router(
                 )
 
                 await _ensure_no(db, obj)
+            # Petits soldes reportés (2026-11-02). Brouillon qui sort de
+            # l'état brouillon à la main : il prend les soldes du client en
+            # attente de leur prochaine facture (comme à l'envoi). Facture
+            # classée « payée » alors qu'il reste un petit solde : le solde
+            # est reporté automatiquement sur la prochaine facture.
+            from app.services import facture_report_solde as _rep
+
+            if (
+                prev_status == FactureStatus.DRAFT.value
+                and new_status != FactureStatus.DRAFT.value
+            ):
+                await _rep.appliquer_reports_en_attente(
+                    db, obj, sortie_de_brouillon=True
+                )
+            _report_auto = None
+            if (
+                new_status == FactureStatus.PAID.value
+                and prev_status != FactureStatus.PAID.value
+            ):
+                _report_auto = await _rep.reporter_au_classement_paye(
+                    db, obj, user_id=getattr(user, "id", None)
+                )
             # Push LIVE : TOUTE modification enregistrée d'une facture
             # ÉMISE (envoyée/payée/en retard) est reflétée immédiatement
             # dans QB — montants, projet, échéance… — sans bouton. Les
@@ -1046,6 +1079,10 @@ def make_crud_router(
                 from app.services.qbo_auto_sync import lancer_push_facture
 
                 lancer_push_facture(int(obj.id))
+                if _report_auto is not None:
+                    # Après le push de la facture (même verrou) : le
+                    # Payment QB ferme le solde dans le compte de transit.
+                    _rep.lancer_push_reports(int(obj.id))
         # Bon de travail CLIENT : associer / changer le client APRÈS la
         # création déclenche la même garantie qu'à la création — projet
         # lié (« <ref BT> — <titre> ») + sous-client QB sous le client
@@ -1100,6 +1137,13 @@ def make_crud_router(
         if model is Facture:
             from sqlalchemy import select as _select, update as _update
             from app.models.facture_item import FactureItem as _FI
+            from app.services.facture_report_solde import (
+                facture_supprimee as _rep_supprimee,
+            )
+
+            # Soldes reportés : ceux posés sur cette facture attendent la
+            # prochaine ; ceux qu'elle avait reportés sont annulés.
+            await _rep_supprimee(db, item_id)
 
             item_ids = (
                 await db.execute(
