@@ -82,6 +82,7 @@ from app.services.api_capabilities import (
     POLE_LABELS,
     POLE_SLUGS,
     key_has_scope,
+    key_reads_everything,
     readable_poles,
 )
 
@@ -103,6 +104,35 @@ _ACTION_CHEMINS_INTERDITS = (
 )
 
 _ACTION_SCOPE = "api:actions:executer"
+
+#: Préfixes INTERDITS à l'outil de LECTURE complète ``kratos_lire`` : on
+#: garde fermés l'authentification, les clés, la config IA personnelle, le
+#: cron machine, le MCP lui-même, les liens publics (jetons) et les
+#: parcours OAuth (QuickBooks / Drive) et les paiements fournisseurs. Les
+#: utilisateurs restent LISIBLES (seules leurs écritures sont bloquées).
+_LIRE_CHEMINS_INTERDITS = (
+    "/api/v1/auth",
+    "/api/v1/api-keys",
+    "/api/v1/mon-ia",
+    "/api/v1/cron",
+    "/api/v1/mcp",
+    "/api/v1/public",
+    "/api/v1/qbo/connect",
+    "/api/v1/qbo/callback",
+    "/api/v1/drive/auth",
+    # Paiements fournisseurs : connecteur IA écarté (Steven 2026-10-04 —
+    # numéros de compte bancaire) ; les lots restent résumés via
+    # kratos_list_entities (« lots_paiement »).
+    "/api/v1/paiements/",
+)
+
+#: Segments de chemin interdits en lecture où qu'ils soient : révélation
+#: des secrets du coffre d'abonnements (mots de passe déchiffrés).
+_LIRE_SEGMENTS_INTERDITS = ("/secret",)
+
+#: Taille max (caractères JSON) d'une réponse de ``kratos_lire`` avant
+#: troncature — assez pour une liste complète, sans noyer le contexte.
+_LIRE_MAX_CHARS = 60000
 
 
 class _ScopeCtx:
@@ -126,7 +156,7 @@ DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 
 # Métadonnées du serveur renvoyées à l'`initialize`.
 SERVER_NAME = "kratos-activity"
-SERVER_VERSION = "1.3.0"
+SERVER_VERSION = "1.4.0"
 
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
@@ -179,6 +209,48 @@ _ACTION_TOOL: dict[str, Any] = {
             },
         },
         "required": ["methode", "chemin"],
+        "additionalProperties": False,
+    },
+}
+
+_LIRE_TOOL: dict[str, Any] = {
+    "name": "kratos_lire",
+    "description": (
+        "LIT N'IMPORTE QUELLE donnée de Kratos — tous les modules, pas "
+        "seulement les pôles des autres outils : projets et chantiers, "
+        "clients et contacts, employés, punchs et feuilles de temps, "
+        "factures et soumissions, achats et dépenses, immobilier "
+        "(immeubles, logements, baux, locataires, loyers, hypothèques), "
+        "entreprises, QuickBooks, agenda, "
+        "rencontres, inventaire, notifications… Appelle une route GET de "
+        "l'API REST au nom du propriétaire de la clé, avec SES "
+        "permissions. Trouve d'abord la route avec kratos_api_catalogue "
+        "(`methode`: \"GET\", `recherche`: « employes », « timesheets », "
+        "« factures », « immobilier »…), puis appelle avec `chemin` "
+        "(/api/v1/…, identifiants inclus) et `params` (paramètres de "
+        "requête : filtres, limit/offset, dates). Lecture seule : aucune "
+        "écriture possible par cet outil. Vérifie `statut` (200 = OK ; "
+        "404 = mauvais id ou route ; 422 = paramètre invalide)."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "chemin": {
+                "type": "string",
+                "description": (
+                    "Chemin GET complet, ex. /api/v1/employes, "
+                    "/api/v1/immobilier/immeubles/12, /api/v1/timesheets/team"
+                ),
+            },
+            "params": {
+                "type": "object",
+                "description": (
+                    "Paramètres de requête (query string), ex. "
+                    "{\"limit\": 100, \"offset\": 0, \"statut\": \"actif\"}"
+                ),
+            },
+        },
+        "required": ["chemin"],
         "additionalProperties": False,
     },
 }
@@ -874,6 +946,10 @@ def _tools_for_scopes(scopes: Optional[list[str]]) -> list[dict[str, Any]]:
     # complète » — indépendamment des pôles lisibles.
     if key_has_scope(scopes, _ACTION_SCOPE):
         tools.append(_ACTION_TOOL)
+    # Lecture complète de Kratos (toute route GET) : clés qui lisent tous
+    # les pôles, ou portant la capacité explicite (Steven 2026-11-02).
+    if key_reads_everything(scopes):
+        tools.append(_LIRE_TOOL)
     if readable_poles(scopes):
         tools.extend(_READ_TOOLS)
         tools.extend(_get_tools_for_scopes(scopes))
@@ -1103,13 +1179,19 @@ def _api_catalogue(arguments: dict[str, Any]) -> dict[str, Any]:
         chemin_complet = (
             chemin if chemin.startswith("/api/") else f"/api/v1{chemin}"
         )
-        if any(
+        action_interdite = any(
             chemin_complet.startswith(p) for p in _ACTION_CHEMINS_INTERDITS
-        ):
-            continue
+        )
+        lecture_ouverte = _chemin_lisible(chemin_complet)
         for methode, op in ops.items():
             m = methode.upper()
             if m not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+                continue
+            # GET : visible s'il est lisible par kratos_lire (utilisateurs
+            # inclus) ; écritures : règles de kratos_action.
+            if (m == "GET" and not lecture_ouverte) or (
+                m != "GET" and action_interdite
+            ):
                 continue
             if methode_f and m != methode_f:
                 continue
@@ -1130,15 +1212,151 @@ def _api_catalogue(arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _executer_action(user: User, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Proxy interne : exécute l'appel REST au nom du propriétaire de
-    la clé (JWT court), en passant par TOUTE la pile de l'app —
-    permissions par utilisateur, validations, journal automatique."""
+async def _appel_interne(
+    user: User,
+    methode: str,
+    chemin: str,
+    *,
+    corps: Any = None,
+    params: Optional[dict[str, Any]] = None,
+):
+    """Appel REST interne (ASGI, sans réseau) au nom de ``user`` via un
+    JWT court : passe par TOUTE la pile de l'app (permissions par
+    utilisateur, validations, journal automatique des écritures)."""
     import httpx
 
     from app.core.security import create_access_token
     from app.main import app as _app
 
+    jeton = create_access_token(
+        str(user.id), expires_delta=timedelta(minutes=5)
+    )
+    transport = httpx.ASGITransport(app=_app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://kratos.interne",
+        timeout=60.0,
+    ) as client:
+        return await client.request(
+            methode,
+            chemin,
+            json=corps if corps is not None else None,
+            params=params or None,
+            headers={"Authorization": f"Bearer {jeton}"},
+        )
+
+
+def _chemin_lisible(chemin: str) -> bool:
+    """Le chemin est-il ouvert à ``kratos_lire`` ?"""
+    if any(chemin.startswith(p) for p in _LIRE_CHEMINS_INTERDITS):
+        return False
+    base = chemin.split("?", 1)[0].rstrip("/")
+    return not any(
+        base.endswith(seg) or f"{seg}/" in base
+        for seg in _LIRE_SEGMENTS_INTERDITS
+    )
+
+
+async def _lire(user: User, arguments: dict[str, Any]) -> dict[str, Any]:
+    """``kratos_lire`` : GET sur n'importe quelle route de l'API (sauf
+    auth / clés / secrets / OAuth / liens publics), au nom du propriétaire
+    de la clé. Les réponses binaires (PDF, ZIP, images) sont décrites sans
+    être renvoyées ; les grosses réponses JSON sont tronquées."""
+    import json as _json
+
+    chemin = str(arguments.get("chemin") or "").strip()
+    params = arguments.get("params")
+
+    if not chemin.startswith("/api/v1/") or ".." in chemin:
+        raise ValueError("`chemin` doit commencer par /api/v1/…")
+    if not _chemin_lisible(chemin):
+        raise ValueError(
+            "Ce chemin est fermé à la lecture par le connecteur "
+            "(authentification, clés, secrets, OAuth ou liens publics)."
+        )
+    if params is not None and not isinstance(params, dict):
+        raise ValueError("`params` doit être un objet JSON.")
+    propres: dict[str, Any] = {}
+    for k, v in (params or {}).items():
+        if v is None:
+            continue
+        if isinstance(v, bool):
+            propres[str(k)] = "true" if v else "false"
+        elif isinstance(v, (list, tuple)):
+            propres[str(k)] = [str(x) for x in v]
+        else:
+            propres[str(k)] = str(v)
+
+    resp = await _appel_interne(user, "GET", chemin, params=propres)
+
+    type_contenu = (resp.headers.get("content-type") or "").lower()
+    if "json" in type_contenu:
+        try:
+            contenu: Any = resp.json()
+        except ValueError:
+            contenu = resp.text[:_LIRE_MAX_CHARS]
+    elif type_contenu.startswith("text/") or "csv" in type_contenu:
+        contenu = resp.text
+    else:
+        contenu = {
+            "_binaire": True,
+            "content_type": type_contenu or None,
+            "taille_octets": len(resp.content),
+            "note": (
+                "Fichier binaire (PDF, image, ZIP…) non renvoyé : lis "
+                "plutôt la route JSON équivalente."
+            ),
+        }
+
+    resultat: dict[str, Any] = {
+        "statut": resp.status_code,
+        "ok": 200 <= resp.status_code < 300,
+        "chemin": chemin,
+    }
+    if isinstance(contenu, str):
+        if len(contenu) > _LIRE_MAX_CHARS:
+            resultat["tronque"] = True
+            contenu = contenu[:_LIRE_MAX_CHARS] + "…"
+        resultat["reponse"] = contenu
+        return resultat
+
+    if isinstance(contenu, list):
+        resultat["nombre"] = len(contenu)
+    serialise = _json.dumps(contenu, ensure_ascii=False, default=str)
+    if len(serialise) <= _LIRE_MAX_CHARS:
+        resultat["reponse"] = contenu
+        return resultat
+
+    resultat["tronque"] = True
+    if isinstance(contenu, list):
+        # Garde des éléments ENTIERS plutôt qu'un JSON coupé au milieu.
+        garde: list[Any] = []
+        taille = 2
+        for item in contenu:
+            t = len(_json.dumps(item, ensure_ascii=False, default=str)) + 1
+            if taille + t > _LIRE_MAX_CHARS:
+                break
+            garde.append(item)
+            taille += t
+        resultat["reponse"] = garde
+        resultat["elements_renvoyes"] = len(garde)
+        resultat["note"] = (
+            f"{len(garde)} éléments sur {len(contenu)} renvoyés : "
+            "pagine (params limit/offset ou skip) ou filtre pour la suite."
+        )
+    else:
+        resultat["reponse"] = {"extrait": serialise[:_LIRE_MAX_CHARS] + "…"}
+        resultat["note"] = (
+            "Réponse trop volumineuse, extrait seulement : filtre ou "
+            "pagine (params), ou lis un élément par son id."
+        )
+    return resultat
+
+
+async def _executer_action(user: User, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Proxy interne : exécute l'appel REST au nom du propriétaire de
+    la clé (JWT court), en passant par TOUTE la pile de l'app —
+    permissions par utilisateur, validations, journal automatique."""
     methode = str(arguments.get("methode") or "").strip().upper()
     chemin = str(arguments.get("chemin") or "").strip()
     corps = arguments.get("corps")
@@ -1155,21 +1373,7 @@ async def _executer_action(user: User, arguments: dict[str, Any]) -> dict[str, A
     if corps is not None and not isinstance(corps, dict):
         raise ValueError("`corps` doit être un objet JSON.")
 
-    jeton = create_access_token(
-        str(user.id), expires_delta=timedelta(minutes=5)
-    )
-    transport = httpx.ASGITransport(app=_app)
-    async with httpx.AsyncClient(
-        transport=transport,
-        base_url="http://kratos.interne",
-        timeout=60.0,
-    ) as client:
-        resp = await client.request(
-            methode,
-            chemin,
-            json=corps if corps is not None else None,
-            headers={"Authorization": f"Bearer {jeton}"},
-        )
+    resp = await _appel_interne(user, methode, chemin, corps=corps)
 
     try:
         contenu: Any = resp.json()
@@ -1320,6 +1524,14 @@ async def _call_tool(
 
     if name == "kratos_api_catalogue":
         return _api_catalogue(arguments)
+
+    if name == "kratos_lire":
+        if not key_reads_everything(scopes):
+            raise ValueError(
+                "Cette clé n'a pas la capacité « Lire tout Kratos » — "
+                "active-la dans Paramètres → Clés API."
+            )
+        return await _lire(user, arguments)
 
     if name == "kratos_action":
         if not key_has_scope(scopes, _ACTION_SCOPE):
@@ -1561,6 +1773,13 @@ async def _handle_rpc(
                     "dates (fuseau America/Toronto) ; création, modification "
                     "et déplacement de tâches dans les pôles explicitement "
                     "autorisés (tâche assignable à n'importe quel membre)."
+                    + (
+                        " LECTURE COMPLÈTE de Kratos : kratos_lire lit toute "
+                        "donnée de la plateforme (tous modules) — trouve la "
+                        "route GET avec kratos_api_catalogue."
+                        if key_reads_everything(scopes)
+                        else ""
+                    )
                 ),
             },
         )

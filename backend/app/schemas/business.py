@@ -33,6 +33,8 @@ class EmployeCreate(BaseModel):
     cnesst_rate: Optional[float] = Field(default=None, ge=0, le=1)
     ccq_rate: Optional[float] = Field(default=None, ge=0, le=1)
     hourly_rate_ccq: Optional[float] = Field(default=None, ge=0)
+    #: % des heures coûtées au régime CCQ (0 à 100) ; vide = régime du punch.
+    pourcentage_ccq: Optional[float] = Field(default=None, ge=0, le=100)
     employeur_d_url: Optional[str] = Field(default=None, max_length=500)
     #: Case « dîner » : 30 min de dîner retirées des heures de punch quand
     #: la journée dépasse 5 h (à partir du jour où elle est cochée).
@@ -61,6 +63,8 @@ class EmployeUpdate(BaseModel):
     cnesst_rate: Optional[float] = Field(default=None, ge=0, le=1)
     ccq_rate: Optional[float] = Field(default=None, ge=0, le=1)
     hourly_rate_ccq: Optional[float] = Field(default=None, ge=0)
+    #: % des heures coûtées au régime CCQ (0 à 100) ; vide = régime du punch.
+    pourcentage_ccq: Optional[float] = Field(default=None, ge=0, le=100)
     employeur_d_url: Optional[str] = None
     #: Cocher pose ``diner_depuis`` à aujourd'hui (sauf date fournie) ;
     #: décocher l'efface. Les punchs déjà fermés ne changent pas.
@@ -88,6 +92,7 @@ class EmployeRead(_Base):
     cnesst_rate: Optional[float] = None
     ccq_rate: Optional[float] = None
     hourly_rate_ccq: Optional[float] = None
+    pourcentage_ccq: Optional[float] = None
     employeur_d_url: Optional[str] = None
     diner_auto: bool = False
     diner_depuis: Optional[date] = None

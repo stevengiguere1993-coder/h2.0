@@ -768,6 +768,18 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet sous-clients / changement de client échoué", exc_info=True)
 
+    # ── Petits soldes reportés pas encore fermés dans QB → Payment ──
+    # Le solde reporté sur une prochaine facture doit être fermé sur
+    # l'Invoice d'origine (dépôt dans le compte de transit « Soldes
+    # reportés ») : rattrape un refus passager ou une facture d'origine
+    # arrivée dans QuickBooks depuis le report.
+    try:
+        from app.services.facture_report_solde import filet_reports_qbo
+
+        out["reports_solde"] = await filet_reports_qbo()
+    except Exception:  # noqa: BLE001
+        log.warning("Filet soldes reportés échoué", exc_info=True)
+
     # ── Compteur de factures au-dessus de QuickBooks ──
     # Une facture créée directement dans QB (ou importée) doit faire
     # avancer le compteur de Kratos : prochain numéro = plus haut numéro

@@ -186,6 +186,11 @@ async def _preparer_l_envoi(db: AsyncSession, fa: Facture) -> bool:
     from app.services.facture_qbo import quickbooks_branche, sync_facture_to_qbo
     from app.services.qbo_auto_sync import verrou_facture
 
+    # Petits soldes du client en attente de leur prochaine facture : la
+    # ligne « Solde reporté de la facture X » part avec celle-ci.
+    from app.services.facture_report_solde import appliquer_reports_en_attente
+
+    await appliquer_reports_en_attente(db, fa)
     if not quickbooks_branche():
         await _numeroter_et_dater(db, fa)
         return False

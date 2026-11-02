@@ -1661,6 +1661,55 @@ class QuickBooksClient:
                 return rows[0]
         return None
 
+    async def ensure_account(
+        self, *, name: str, account_type: str, account_sub_type: str
+    ) -> Dict[str, Any]:
+        """Compte QB à ce nom, créé s'il n'existe pas (report des soldes,
+        2026-11-02 : compte de transit « Soldes reportés »)."""
+        found = await self.find_account_by_name(name)
+        if found:
+            return found
+        data = await self._request(
+            "POST",
+            "/account",
+            json_body={
+                "Name": name[:100],
+                "AccountType": account_type,
+                "AccountSubType": account_sub_type,
+            },
+            params={"minorversion": "70"},
+        )
+        return data.get("Account", data)
+
+    async def ensure_item_sur_compte(
+        self, *, name: str, account_id: str, description: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Produit / service QB relié à un compte PRÉCIS (pas le premier
+        compte de revenus) : ligne « Solde reporté » sur le compte de
+        transit, pour que le montant ne soit jamais compté en revenu."""
+        for row in await self._items_nommes(name):
+            if str(row.get("Type") or "") == "Category":
+                continue
+            ref = str((row.get("IncomeAccountRef") or {}).get("value") or "")
+            if ref and ref != str(account_id):
+                raise QuickBooksError(
+                    f"Le produit QuickBooks « {name} » existe déjà mais n'est "
+                    "pas relié au compte de transit des soldes reportés : "
+                    "relie-le à ce compte dans QuickBooks (ou renomme-le)."
+                )
+            return row
+        payload: Dict[str, Any] = {
+            "Name": self._clean_item_name(name) or "Solde reporte",
+            "Type": "Service",
+            "IncomeAccountRef": {"value": str(account_id)},
+        }
+        if description:
+            payload["Description"] = description[:4000]
+        data = await self._request(
+            "POST", "/item", json_body=payload, params={"minorversion": "70"}
+        )
+        return data.get("Item", data)
+
     # ------------------------------------------------------------------
     # Attachable upload — joint un fichier (image, PDF) à une entité QBO
     # (Bill, Purchase, Invoice, etc.) via /v3/company/{id}/upload.

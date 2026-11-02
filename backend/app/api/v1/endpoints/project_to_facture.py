@@ -952,6 +952,9 @@ async def etat_contrat(
         for fid, sid, kind, hors_soum, desc, tot in rows:
             m = round(float(tot or 0), 2)
             k = kind or "service"
+            if k == "report":
+                # Solde reporté d'une facture précédente : hors contrat.
+                continue
             if k == "acompte_applique":
                 acompte_applique += -m
             elif k == "acompte" or (
