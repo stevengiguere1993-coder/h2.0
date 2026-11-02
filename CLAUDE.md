@@ -234,6 +234,14 @@ la RENOMME jamais). Le filet horaire (`corriger_liens_autre_compagnie`)
 répare les fiches déjà reliées à une autre compagnie : projets repassés
 (sous-clients déplacés sous le bon client mère), sinon lien retiré, et
 notification aux admins.
+Conversion en projet QB (Steven, même jour : « je ne l'ai pas dans les
+projets à convertir ») : un sous-client DÉPLACÉ entre dans la liste « à
+convertir » comme un sous-client créé ou adopté. QuickBooks ne propose
+dans « Convertir depuis un sous-client » que les sous-clients cochés
+« Facturer avec le client parent » (`BillWithParent`) : le déplacement le
+coche (`move_subcustomer`, sauf projet QB) et le filet horaire
+`filet_facturer_avec_parent` (`qbo_projets_conversion`) le coche sur tout
+sous-client « à convertir » qui ne l'a pas.
 
 ## Part CCQ par employé — coût de chantier (2026-11-02)
 

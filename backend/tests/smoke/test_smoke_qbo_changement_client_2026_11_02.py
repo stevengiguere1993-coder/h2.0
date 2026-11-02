@@ -36,6 +36,7 @@ class _QbCompagnie(_FakeQbo):
         self.deplacements: List[tuple] = []
         self.refuser_deplacement = False
         self.reactivations: List[str] = []
+        self.coches_parent: List[str] = []
 
     def _ajouter(self, nom: str, parent: Optional[str] = None, **extra: Any) -> Dict[str, Any]:
         for r in self.customers.values():
@@ -75,6 +76,14 @@ class _QbCompagnie(_FakeQbo):
     async def deactivate_customer(self, cid: str) -> bool:
         self.customers[str(cid)]["Active"] = False
         return True
+
+    async def facturer_avec_parent(self, cid: str) -> Optional[Dict[str, Any]]:
+        row = self.customers.get(str(cid))
+        if row is None:
+            return None
+        self.coches_parent.append(str(cid))
+        row["BillWithParent"] = True
+        return dict(row)
 
     # Comme QuickBooks : les requêtes ne renvoient que les clients ACTIFS,
     # sauf « Active IN (true, false) ».
@@ -620,3 +629,130 @@ def test_filet_n_annonce_pas_une_correction_ratee(run, qb, monkeypatch):
     out = run(filet.corriger_liens_autre_compagnie(qb, {k: dict(v) for k, v in qb.customers.items()}))
     assert gid not in {c["client"] for c in out["corrigees"]}
     assert _lire(run, Client, gid).qbo_customer_id == meuser["Id"]
+
+
+# ── « Je ne l'ai pas dans les projets à convertir » (Steven, même jour) ──
+# Le sous-client déplacé n'entrait pas dans la liste de Kratos, et QB ne
+# propose dans « Convertir depuis un sous-client » que les sous-clients
+# « Facturer avec le client parent ».
+
+
+def test_sous_client_deplace_entre_dans_la_liste_a_convertir(run, qb):
+    x = _suffixe()
+    ids = _seed(
+        run, qb, adresse=f"1660 Rue Saint-Clément {x}, Montréal",
+        ancien=f"MGV Développement inc. {x}", nouveau=f"Groupe Clément {x} inc.",
+        courriel=f"c-{x}@example.com",
+    )
+    assert _lire(run, Project, ids["project_id"]).qbo_conversion_etat is None
+    assert _synchro(run, ids["project_id"])["action"] == "deplace"
+    assert _lire(run, Project, ids["project_id"]).qbo_conversion_etat == "a_convertir"
+
+
+def test_vrai_client_qb_deplacement_et_facturer_avec_parent(run):
+    """Le vrai ``QuickBooksClient`` : le déplacement coche « Facturer avec
+    le client parent » (sauf pour un projet QB) ; ``facturer_avec_parent``
+    ne touche qu'un sous-client pas encore coché."""
+    from app.integrations.quickbooks import QuickBooksClient
+
+    qbc = object.__new__(QuickBooksClient)
+    envoyes: List[Dict[str, Any]] = []
+    lignes: Dict[str, Dict[str, Any]] = {
+        "10": {"Id": "10", "SyncToken": "3", "Job": True, "ParentRef": {"value": "1"}},
+        "11": {"Id": "11", "SyncToken": "0", "Job": True, "IsProject": True, "ParentRef": {"value": "1"}},
+        "12": {"Id": "12", "SyncToken": "0", "Job": True, "BillWithParent": True, "ParentRef": {"value": "1"}},
+        "13": {"Id": "13", "SyncToken": "0"},
+    }
+
+    async def _get(cid):
+        return dict(lignes[str(cid)]) if str(cid) in lignes else None
+
+    async def _request(method, path, json_body=None, params=None):
+        envoyes.append(json_body)
+        return {"Customer": dict(json_body)}
+
+    qbc.get_customer = _get  # type: ignore[method-assign]
+    qbc._request = _request  # type: ignore[method-assign]
+
+    run(qbc.move_subcustomer("10", "2"))
+    assert envoyes[-1]["BillWithParent"] is True and envoyes[-1]["ParentRef"] == {"value": "2"}
+    run(qbc.move_subcustomer("11", "2"))
+    assert "BillWithParent" not in envoyes[-1]
+
+    envoyes.clear()
+    run(qbc.facturer_avec_parent("10"))
+    assert envoyes == [{
+        "Id": "10", "SyncToken": "3", "sparse": True, "Job": True,
+        "BillWithParent": True, "ParentRef": {"value": "1"},
+    }]
+    for deja in ("11", "12", "13", "99"):
+        run(qbc.facturer_avec_parent(deja))
+    assert len(envoyes) == 1
+
+
+def test_filet_coche_facturer_avec_parent_des_projets_a_convertir(run, qb):
+    from app.services.qbo_projets_conversion import filet_facturer_avec_parent
+
+    x = _suffixe()
+    mere = qb._ajouter(f"Groupe Facturation {x} inc.")
+    pas_coche = qb._ajouter(f"10 rue A {x}", mere["Id"], BillWithParent=False)
+    coche = qb._ajouter(f"12 rue B {x}", mere["Id"])
+    hors_liste = qb._ajouter(f"14 rue C {x}", mere["Id"], BillWithParent=False)
+
+    async def _seed() -> None:
+        async with TestSessionLocal() as s:
+            c = Client(name=f"Groupe Facturation {x} inc.", qbo_customer_id=mere["Id"])
+            s.add(c)
+            await s.flush()
+            for nom, row, etat in (
+                ("A", pas_coche, "a_convertir"),
+                ("B", coche, "a_convertir"),
+                ("C", hors_liste, None),
+            ):
+                s.add(Project(name=nom, address=row["DisplayName"], client_id=c.id,
+                              kind="construction", qbo_job_id=row["Id"],
+                              qbo_conversion_etat=etat))
+            await s.commit()
+
+    run(_seed())
+    out = run(filet_facturer_avec_parent())
+    assert pas_coche["Id"] in out["coches"]
+    assert coche["Id"] not in qb.coches_parent and hors_liste["Id"] not in qb.coches_parent
+    assert qb.customers[pas_coche["Id"]]["BillWithParent"] is True
+    assert pas_coche["Id"] not in run(filet_facturer_avec_parent()).get("coches", [])
+
+
+def test_conversion_1660_une_fois(run, qb):
+    from app.services import qbo_sous_clients_client_change as filet
+
+    x = _suffixe()
+    groupe = qb._ajouter(f"Groupe 1660 Saint-Clément inc. {x}")
+    sous = qb._ajouter(f"1660 Rue Saint-Clément {x}", groupe["Id"], BillWithParent=False)
+
+    async def _seed() -> int:
+        async with TestSessionLocal() as s:
+            c = Client(name=f"Groupe 1660 Saint-Clément inc. {x}", qbo_customer_id=groupe["Id"])
+            s.add(c)
+            await s.flush()
+            p = Project(name="1660", address=f"1660 Rue Saint-Clément {x}", client_id=c.id,
+                        kind="construction", qbo_job_id=sous["Id"])
+            s.add(p)
+            await s.execute(
+                text(
+                    "CREATE TABLE IF NOT EXISTS applied_backfills ("
+                    "key VARCHAR(120) PRIMARY KEY, "
+                    "applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+                )
+            )
+            await s.execute(
+                text("DELETE FROM applied_backfills WHERE key = :k"),
+                {"k": filet.CLE_CONVERSION_1660},
+            )
+            await s.commit()
+            return p.id
+
+    pid = run(_seed())
+    out = run(filet._conversion_1660(qb))
+    assert pid in out["ajoutes"]
+    assert _lire(run, Project, pid).qbo_conversion_etat == "a_convertir"
+    assert run(filet._conversion_1660(qb)) is None  # une seule fois

@@ -230,6 +230,62 @@ async def _reparation_1660(qbo: Any) -> Optional[Dict[str, Any]]:
     return bilan
 
 
+#: Une fois (Steven 2026-11-02, après la réparation) : le sous-client
+#: 1660 Saint-Clément, déplacé sous Groupe 1660, n'était pas dans la liste
+#: « à convertir » (projet d'avant cette liste, et un déplacement ne l'y
+#: mettait pas encore).
+CLE_CONVERSION_1660 = "qbo_conversion_1660_st_clement"
+
+
+async def _conversion_1660(qbo: Any) -> Optional[Dict[str, Any]]:
+    """Une fois : les projets de « Groupe 1660 Saint-Clément » dont le
+    sous-client QB n'est pas encore un projet entrent dans la liste « à
+    convertir » (le filet « Facturer avec le client parent » les rend
+    ensuite convertibles dans QuickBooks)."""
+    from app.db.session import AsyncSessionLocal
+    from app.models.client import Client
+    from app.models.project import Project
+    from app.services import qbo_projets_conversion as conversion
+    from app.services.qbo_project_resolve import _norm
+
+    async with AsyncSessionLocal() as db:
+        deja = (
+            await db.execute(
+                text("SELECT 1 FROM applied_backfills WHERE key = :k"),
+                {"k": CLE_CONVERSION_1660},
+            )
+        ).first()
+        if deja is not None:
+            return None
+        clients_qb = await _clients_qb(qbo)
+        rows = (
+            await db.execute(
+                select(Project, Client.name)
+                .join(Client, Client.id == Project.client_id)
+                .where(Project.qbo_job_id.is_not(None))
+            )
+        ).all()
+        ajoutes: List[int] = []
+        for proj, nom in rows:
+            if "1660 st clement" not in _norm(nom):
+                continue
+            row = clients_qb.get(str(proj.qbo_job_id))
+            if row is None or not _parent_de(row) or proj.qbo_conversion_etat is not None:
+                continue
+            conversion.demander(proj, row)
+            ajoutes.append(int(proj.id))
+        await db.execute(
+            text(
+                "INSERT INTO applied_backfills (key) VALUES (:k) "
+                "ON CONFLICT (key) DO NOTHING"
+            ),
+            {"k": CLE_CONVERSION_1660},
+        )
+        await db.commit()
+    log.warning("Conversion QB 1660 Saint-Clément : projets mis à convertir %s", ajoutes)
+    return {"ajoutes": ajoutes}
+
+
 #: Fiches corrigées au plus par passage (borne de sécurité).
 MAX_LIENS_PAR_PASSAGE = 30
 KIND_LIEN_CORRIGE = "qbo_lien_client_corrige"
@@ -354,6 +410,12 @@ async def filet_sous_clients_client_change() -> Dict[str, Any]:
     rep = await _reparation_1660(qbo)
     if rep is not None:
         out["reparation_1660"] = rep
+    try:
+        conv = await _conversion_1660(qbo)
+        if conv is not None:
+            out["conversion_1660"] = conv
+    except Exception:  # noqa: BLE001
+        log.warning("Mise à convertir du 1660 Saint-Clément échouée", exc_info=True)
     try:
         liens = await corriger_liens_autre_compagnie(qbo, await _clients_qb(qbo))
         if liens["fautives"]:
