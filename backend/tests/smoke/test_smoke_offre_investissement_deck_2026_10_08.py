@@ -14,28 +14,10 @@ import base64
 import io
 import json
 
-import pytest
-
 from app.models.lead_analysis import LeadAnalysis
 from app.services import offre_investissement_deck as deck
 
 from tests.smoke.conftest import TestSessionLocal
-
-class _DateFigee(deck.date):
-    """Jalons calculés depuis aujourd'hui : à partir de novembre 2026, le
-    calendrier par défaut tombait sur « Août 2027 », un texte du gabarit
-    que le test traque comme fuite. On fige la date hors des années du
-    gabarit (2026-2028)."""
-
-    @classmethod
-    def today(cls):  # type: ignore[override]
-        return cls(2031, 1, 15)
-
-
-@pytest.fixture(autouse=True)
-def _date_figee(monkeypatch):
-    monkeypatch.setattr(deck, "date", _DateFigee)
-
 
 _FUITES = (
     "Pie-IX", "Hochelaga", "1 800 000$", "1 000 984", "316  765", "2 834 515",

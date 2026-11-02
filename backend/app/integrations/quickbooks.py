@@ -754,51 +754,6 @@ class QuickBooksClient:
         )
         return data.get("Customer") or data
 
-    async def move_subcustomer(
-        self, customer_id: str, new_parent_id: str
-    ) -> Optional[Dict[str, Any]]:
-        """Déplace un sous-client (ou projet) sous un AUTRE client mère :
-        mise à jour sparse du ``ParentRef`` (``Job`` reste vrai). Ses
-        transactions le suivent : QuickBooks les rattache au sous-client,
-        pas au client mère. Retourne le client mis à jour, None s'il est
-        introuvable (Steven 2026-11-02 : le projet 1660 Saint-Clément,
-        passé de MGV Développement à Groupe 1660 Saint-Clément dans
-        Kratos, restait sous MGV dans QuickBooks)."""
-        cust = await self.get_customer(customer_id)
-        if not cust:
-            return None
-        body: Dict[str, Any] = {
-            "Id": str(cust.get("Id")),
-            "SyncToken": str(cust.get("SyncToken") or "0"),
-            "sparse": True,
-            "Job": True,
-            "ParentRef": {"value": str(new_parent_id)},
-        }
-        data = await self._request(
-            "POST", "/customer", json_body=body, params={"minorversion": "70"}
-        )
-        return data.get("Customer") or data
-
-    async def deactivate_customer(self, customer_id: str) -> bool:
-        """Rend un client INACTIF (QuickBooks ne supprime pas de client).
-        QuickBooks refuse si le solde n'est pas nul : on remonte alors
-        l'erreur à l'appelant."""
-        cust = await self.get_customer(customer_id)
-        if not cust:
-            return False
-        await self._request(
-            "POST",
-            "/customer",
-            json_body={
-                "Id": str(cust.get("Id")),
-                "SyncToken": str(cust.get("SyncToken") or "0"),
-                "sparse": True,
-                "Active": False,
-            },
-            params={"minorversion": "70"},
-        )
-        return True
-
     async def find_customer_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         safe = name.replace("'", "''")
         rows = await self.query(

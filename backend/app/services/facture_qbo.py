@@ -1042,9 +1042,12 @@ async def sync_facture_to_qbo(
     #: QB par une autre facture), une note lisible par changement.
     _renumerotations: list[str] = []
     try:
-        from app.services.qbo_client_mere import client_mere_qbo
-
-        customer = await client_mere_qbo(db, qbo, client)
+        customer = await qbo.ensure_customer(
+            display_name=client.name,
+            email=client.email,
+            phone=client.phone,
+            billing_address=client.address,
+        )
         customer_id = str(customer.get("Id") or "")
         if not customer_id:
             raise FactureSyncError("QBO customer creation did not return an Id.")
@@ -1472,9 +1475,12 @@ async def push_facture_payments_only(
     client = await _load_client(db, fa.client_id)
     if client is not None:
         try:
-            from app.services.qbo_client_mere import client_mere_qbo
-
-            cust = await client_mere_qbo(db, qbo, client)
+            cust = await qbo.ensure_customer(
+                display_name=client.name,
+                email=client.email,
+                phone=client.phone,
+                billing_address=client.address,
+            )
             customer_ref = str(cust.get("Id") or "")
         except QuickBooksError:
             customer_ref = ""

@@ -241,91 +241,6 @@ async def _lien_errone(
     return sib >= 2 and sib > mine
 
 
-async def _deplacer_si_client_change(
-    qbo,
-    db: AsyncSession,
-    project: Project,
-    jid: str,
-    row: dict,
-    parent_customer_id: str,
-    links: dict[str, tuple[int, list[str]]],
-    report: Optional[dict],
-) -> bool:
-    """Le client du projet a changé dans Kratos : son sous-client QB est
-    encore sous l'ANCIEN client mère → on le DÉPLACE sous le nouveau
-    (Steven 2026-11-02, 1660 Saint-Clément passé de MGV Développement à
-    Groupe 1660 Saint-Clément). Avant, le lien était oublié et Kratos
-    créait un second sous-client sous le nouveau client : l'ancien, avec
-    son historique, restait sous l'ancien client, et le nouveau prenait
-    un nom dérivé (le nom d'affichage est unique dans QuickBooks).
-
-    On ne déplace pas :
-    - un sous-client que porte aussi un AUTRE projet Kratos (il est à lui) ;
-    - si le nouveau client a déjà un sous-client au nom exact de ce projet
-      (créé à la main) : il est adopté par la suite normale.
-    - vers un client QB qui n'est pas celui relié à la fiche du client du
-      projet (le seul client mère reconnu : deux chemins qui ne
-      s'entendraient pas sur le parent ne se renverraient pas le
-      sous-client) ;
-    Un refus de QuickBooks (ex. projet QB qu'on ne peut pas déplacer)
-    retombe sur la suite normale. Vrai si le sous-client a été déplacé."""
-    old_parent = str((row.get("ParentRef") or {}).get("value") or "")
-    if not old_parent or old_parent == str(parent_customer_id):
-        return False
-    if jid in links:
-        return False
-    if not getattr(project, "client_id", None):
-        return False
-    from app.models.client import Client
-
-    try:
-        lien_client = (
-            await db.execute(
-                select(Client.qbo_customer_id).where(
-                    Client.id == project.client_id
-                )
-            )
-        ).scalar_one_or_none()
-    except Exception:  # noqa: BLE001
-        return False
-    if str(lien_client or "") != str(parent_customer_id):
-        return False
-    targets = _project_targets(project)
-    try:
-        subs = await qbo.find_subcustomers(parent_customer_id)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("find_subcustomers projet %s: %s", project.id, exc)
-        return False
-    for sub in subs:
-        sid = str(sub.get("Id") or "")
-        if not sid or sid == jid or sid in links:
-            continue
-        if _best_level(_norm(_local_name_of(sub)), targets) == 3:
-            return False
-    try:
-        moved = await qbo.move_subcustomer(jid, str(parent_customer_id))
-    except Exception as exc:  # noqa: BLE001
-        log.warning(
-            "Projet %s « %s » : déplacement du sous-client QB %s sous le "
-            "client %s refusé : %s", project.id, project.name, jid,
-            parent_customer_id, exc,
-        )
-        return False
-    if not moved:
-        return False
-    new_parent = str((moved.get("ParentRef") or {}).get("value") or "")
-    if new_parent and new_parent != str(parent_customer_id):
-        return False
-    log.info(
-        "Projet %s « %s » : sous-client QB %s déplacé du client %s au "
-        "client %s (client changé dans Kratos).",
-        project.id, project.name, jid, old_parent, parent_customer_id,
-    )
-    if report is not None:
-        report["ancien_parent"] = old_parent
-    return True
-
-
 def _local_name_of(row) -> str:
     fqn = row.get("FullyQualifiedName") or ""
     seg = fqn.split(":")[-1] if fqn else (row.get("DisplayName") or "")
@@ -347,8 +262,7 @@ async def resolve_project_customer_id(
     """Retourne l'Id QB à utiliser comme CustomerRef pour ce projet, en
     réparant `qbo_job_id` si le sous-client a été converti en projet QB.
     Repli : client parent. ``report`` (optionnel) reçoit ``action`` :
-    ``deja_lie`` | ``deplace`` (sous-client déplacé sous le nouveau
-    client du projet) | ``adopte`` | ``cree`` | ``parent``."""
+    ``deja_lie`` | ``adopte`` | ``cree`` | ``parent``."""
     def _note(action: str) -> None:
         if report is not None:
             report["action"] = action
@@ -373,11 +287,6 @@ async def resolve_project_customer_id(
             links=links, others=others,
         ):
             _note("deja_lie")
-            return jid
-        if row and await _deplacer_si_client_change(
-            qbo, db, project, jid, row, str(parent_customer_id), links, report,
-        ):
-            _note("deplace")
             return jid
         if row:
             log.warning(

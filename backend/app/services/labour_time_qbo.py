@@ -73,9 +73,12 @@ async def _resolve_project_customer(
         ).scalar_one_or_none()
         if client is not None:
             try:
-                from app.services.qbo_client_mere import client_mere_qbo
-
-                cust = await client_mere_qbo(db, qbo, client)
+                cust = await qbo.ensure_customer(
+                    display_name=client.name,
+                    email=client.email,
+                    phone=client.phone,
+                    billing_address=client.address,
+                )
                 parent_id = str(cust.get("Id") or "") or None
             except QuickBooksError as exc:
                 log.warning(

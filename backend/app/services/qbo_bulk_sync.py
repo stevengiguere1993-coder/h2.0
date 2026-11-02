@@ -202,9 +202,12 @@ async def run_migration(
         # 1) Customer (réutilise par email/nom via ensure_customer).
         try:
             if not c.qbo_customer_id:
-                from app.services.qbo_client_mere import client_mere_qbo
-
-                cust = await client_mere_qbo(db, qbo, c, memoriser=True)
+                cust = await qbo.ensure_customer(
+                    display_name=c.name,
+                    email=c.email,
+                    phone=c.phone,
+                    billing_address=c.address,
+                )
                 cid = str(cust.get("Id") or "")
                 if not cid:
                     raise QuickBooksError("Customer sans Id")

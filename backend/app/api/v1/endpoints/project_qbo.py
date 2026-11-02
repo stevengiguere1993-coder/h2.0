@@ -37,7 +37,7 @@ class ProjectQboSyncResult(BaseModel):
     parent_name: str
     #: Nom complet QB du sous-client (« Client:Projet »).
     job_name: str
-    #: deja_lie | deplace | adopte | cree
+    #: deja_lie | adopte | cree
     action: str
     #: Projet Kratos qui portait ce sous-client à tort (lien transféré).
     transfere_de: Optional[int] = None
@@ -77,9 +77,6 @@ async def sync_project_qbo(
     await db.commit()
     libelle = {
         "deja_lie": "Le projet était déjà lié à ce sous-client QuickBooks.",
-        "deplace": (
-            "Sous-client QuickBooks déplacé sous le nouveau client du projet."
-        ),
         "adopte": "Sous-client QuickBooks existant retrouvé et relié.",
         "cree": "Sous-client QuickBooks créé sous le client mère.",
     }.get(res["action"], "Projet lié à QuickBooks.")

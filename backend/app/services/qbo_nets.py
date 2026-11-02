@@ -753,21 +753,6 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet bons de travail → QB échoué", exc_info=True)
 
-    # ── Projet changé de client → sous-client QB sous le NOUVEAU client ──
-    # Le changement de client sur la fiche du projet déplace déjà le
-    # sous-client (en fond) ; ce filet rattrape un passage manqué et fait
-    # une fois la réparation du 1660 Saint-Clément (Steven 2026-11-02).
-    try:
-        from app.services.qbo_sous_clients_client_change import (
-            filet_sous_clients_client_change,
-        )
-
-        out["sous_clients_client_change"] = (
-            await filet_sous_clients_client_change()
-        )
-    except Exception:  # noqa: BLE001
-        log.warning("Filet sous-clients / changement de client échoué", exc_info=True)
-
     # ── Compteur de factures au-dessus de QuickBooks ──
     # Une facture créée directement dans QB (ou importée) doit faire
     # avancer le compteur de Kratos : prochain numéro = plus haut numéro
