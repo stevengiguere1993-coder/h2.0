@@ -859,14 +859,29 @@ class QuickBooksClient:
     ) -> Dict[str, Any]:
         """Find-or-create. Le NOM exact prime (le courriel est souvent
         partagé entre plusieurs fiches) ; repli sur le courriel seulement
-        s'il est unique côté QB."""
+        s'il est unique côté QB ET que le client trouvé porte un nom
+        compatible (``qbo_noms.noms_compatibles``) : les compagnies d'un
+        même propriétaire partagent son courriel (Steven 2026-11-02, la
+        fiche « Groupe 1660 Saint-Clément inc. » avait été reliée à une
+        autre de ses compagnies)."""
+        from app.integrations.qbo_noms import noms_compatibles
+
         existing = await self.find_customer_by_name(display_name)
         if existing:
             return existing
         if email:
             existing = await self.find_customer_by_email(email)
-            if existing:
+            if existing and noms_compatibles(
+                display_name, existing.get("DisplayName")
+            ):
                 return existing
+            if existing:
+                log.warning(
+                    "Client QB « %s » : le courriel mène à « %s » (%s), un "
+                    "autre nom — non repris, client créé.",
+                    display_name, existing.get("DisplayName"),
+                    existing.get("Id"),
+                )
         return await self.create_customer(
             display_name=display_name,
             email=email,

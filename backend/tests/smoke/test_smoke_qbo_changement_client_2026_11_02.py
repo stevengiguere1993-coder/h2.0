@@ -465,3 +465,158 @@ def test_facture_ne_cree_pas_de_second_sous_client(run, qb):
     assert run(_go()) == ids["sous"]
     assert len(qb.customers) == nb
     assert qb.deplacements == []
+
+
+# ── « Il faut éviter que cela se reproduise » : même courriel, même
+# personne contact entre plusieurs compagnies du même propriétaire. ──
+
+
+def test_noms_compatibles():
+    from app.integrations.qbo_noms import lien_acceptable, noms_compatibles
+
+    assert noms_compatibles("Groupe 1660 Saint-Clément inc.", "Groupe 1660 Saint-Clement inc")
+    assert noms_compatibles("Les Constructions ABC inc.", "Constructions ABC inc")
+    assert noms_compatibles("Jean Tremblay", "Tremblay, Jean")
+    assert not noms_compatibles("Groupe 1660 Saint-Clément inc.", "Immobilier Meuser 1 inc.")
+    assert not noms_compatibles("Groupe 1660 Saint-Clément inc.", "MGV Développement inc.")
+    assert not noms_compatibles("Immobilier Meuser 1 inc.", "Immobilier Meuser 2 inc.")
+    # Lien mémorisé : une personne renommée garde son client QB, jamais
+    # une compagnie au nom incompatible.
+    assert lien_acceptable("Jean Tremblay", "Jean Tremblya")
+    assert not lien_acceptable("Groupe 1660 Saint-Clément inc.", "Immobilier Meuser 1 inc.")
+    assert not lien_acceptable("Jean Tremblay", "Immobilier Meuser 1 inc.")
+
+
+def test_ensure_customer_ne_reprend_pas_une_autre_compagnie_par_courriel(run):
+    """Le vrai ``QuickBooksClient.ensure_customer`` (autopush d'une
+    nouvelle fiche, soumissions, contrats) : le courriel partagé ne mène
+    plus à une autre compagnie."""
+    from app.integrations.quickbooks import QuickBooksClient
+
+    qbc = object.__new__(QuickBooksClient)
+    meuser = {"Id": "179", "DisplayName": "Immobilier Meuser 1 inc."}
+    crees: List[str] = []
+
+    async def _par_nom(name):
+        return None
+
+    async def _par_courriel(email):
+        return dict(meuser)
+
+    async def _creer(*, display_name, **_):
+        crees.append(display_name)
+        return {"Id": "900", "DisplayName": display_name}
+
+    qbc.find_customer_by_name = _par_nom  # type: ignore[method-assign]
+    qbc.find_customer_by_email = _par_courriel  # type: ignore[method-assign]
+    qbc.create_customer = _creer  # type: ignore[method-assign]
+
+    res = run(qbc.ensure_customer(
+        display_name="Groupe 1660 Saint-Clément inc.", email="philippe@example.com",
+    ))
+    assert res["Id"] == "900" and crees == ["Groupe 1660 Saint-Clément inc."]
+
+    # Même personne, nom inversé : le courriel la retrouve.
+    tremblay = {"Id": "55", "DisplayName": "Tremblay Jean"}
+
+    async def _par_courriel2(email):
+        return dict(tremblay)
+
+    qbc.find_customer_by_email = _par_courriel2  # type: ignore[method-assign]
+    assert run(qbc.ensure_customer(display_name="Jean Tremblay", email="j@example.com"))["Id"] == "55"
+
+
+def test_mise_a_jour_de_fiche_ne_renomme_pas_une_autre_compagnie(run, qb, monkeypatch):
+    """Enregistrer la fiche du Groupe reliée par erreur à Meuser 1 ne doit
+    jamais renommer Meuser 1 au nom du Groupe dans QuickBooks."""
+    from app.services.qbo_auto_sync import push_client_update_qbo_now
+
+    x = _suffixe()
+    meuser = qb._ajouter(f"Immobilier Meuser {x} inc.", PrimaryEmailAddr={"Address": f"p-{x}@example.com"})
+    renommes: List[tuple] = []
+
+    async def _update_customer(cid, **kw):
+        renommes.append((cid, kw.get("display_name")))
+        return None
+
+    qb.update_customer = _update_customer  # type: ignore[attr-defined]
+
+    async def _seed() -> int:
+        async with TestSessionLocal() as s:
+            c = Client(name=f"Groupe {x} Saint-Clément inc.", email=f"p-{x}@example.com",
+                       qbo_customer_id=meuser["Id"])
+            s.add(c)
+            await s.commit()
+            return c.id
+
+    cid = run(_seed())
+    run(push_client_update_qbo_now(cid))
+    assert renommes == []
+    assert qb.customers[meuser["Id"]]["DisplayName"] == f"Immobilier Meuser {x} inc."
+
+
+def test_filet_corrige_les_fiches_reliees_a_une_autre_compagnie(run, qb):
+    from app.services import qbo_sous_clients_client_change as filet
+
+    x = _suffixe()
+    courriel = f"proprio-{x}@example.com"
+    meuser = qb._ajouter(f"Immobilier Meuser {x} inc.", PrimaryEmailAddr={"Address": courriel})
+    sous = qb._ajouter(f"55 rue Wolfe {x}", meuser["Id"])
+
+    async def _seed() -> Dict[str, int]:
+        async with TestSessionLocal() as s:
+            # Fiche avec un projet relié : sous-client sous la mauvaise compagnie.
+            g = Client(name=f"Groupe Wolfe {x} inc.", email=courriel, qbo_customer_id=meuser["Id"])
+            # Fiche sans projet : le lien est simplement retiré.
+            h = Client(name=f"Placements Hochelaga {x} inc.", email=courriel, qbo_customer_id=meuser["Id"])
+            # La vraie fiche de Meuser garde son lien.
+            m = Client(name=f"Immobilier Meuser {x} inc.", email=courriel, qbo_customer_id=meuser["Id"])
+            s.add_all([g, h, m])
+            await s.flush()
+            p = Project(name="Toiture", address=f"55 rue Wolfe {x}", client_id=g.id,
+                        kind="construction", qbo_job_id=sous["Id"])
+            s.add(p)
+            await s.commit()
+            return {"g": g.id, "h": h.id, "m": m.id, "p": p.id}
+
+    ids = run(_seed())
+    out = run(filet.corriger_liens_autre_compagnie(qb, {k: dict(v) for k, v in qb.customers.items()}))
+
+    assert {c["client"] for c in out["corrigees"]} >= {ids["g"], ids["h"]}
+    g = _lire(run, Client, ids["g"])
+    assert g.qbo_customer_id not in (None, meuser["Id"])
+    assert qb.customers[g.qbo_customer_id]["DisplayName"] == f"Groupe Wolfe {x} inc."
+    assert qb.customers[sous["Id"]]["ParentRef"]["value"] == g.qbo_customer_id
+    assert _lire(run, Client, ids["h"]).qbo_customer_id is None
+    assert _lire(run, Client, ids["m"]).qbo_customer_id == meuser["Id"]
+    assert qb.customers[meuser["Id"]]["DisplayName"] == f"Immobilier Meuser {x} inc."
+
+
+def test_filet_n_annonce_pas_une_correction_ratee(run, qb, monkeypatch):
+    """QB injoignable pendant la synchro du projet : le lien reste, rien
+    n'est annoncé, on réessaie au prochain passage."""
+    from app.services import qbo_sous_clients_client_change as filet
+
+    x = _suffixe()
+    meuser = qb._ajouter(f"Immobilier Meuser {x} inc.")
+    sous = qb._ajouter(f"77 rue Ontario {x}", meuser["Id"])
+
+    async def _rien(pid):
+        return None
+
+    monkeypatch.setattr(filet, "_repasser", _rien)
+
+    async def _seed() -> int:
+        async with TestSessionLocal() as s:
+            g = Client(name=f"Groupe Ontario {x} inc.", qbo_customer_id=meuser["Id"])
+            s.add(g)
+            await s.flush()
+            s.add(Project(name="Balcons", address=f"77 rue Ontario {x}", client_id=g.id,
+                          kind="construction", qbo_job_id=sous["Id"]))
+            await s.commit()
+            return g.id
+
+    gid = run(_seed())
+    out = run(filet.corriger_liens_autre_compagnie(qb, {k: dict(v) for k, v in qb.customers.items()}))
+    assert gid not in {c["client"] for c in out["corrigees"]}
+    assert _lire(run, Client, gid).qbo_customer_id == meuser["Id"]

@@ -221,6 +221,19 @@ synchro du projet (`ensure_project_qbo_job`, qui mémorise le client mère)
 déplace un sous-client ; une facture / un coût dont le client mère n'est
 pas celui de la fiche garde le sous-client existant. Filet horaire dans
 `qbo_nets` (`qbo_sous_clients_client_change`).
+Courriel / personne contact partagés (Steven, même jour : « plusieurs
+entreprises au même propriétaire ») : le courriel n'identifie JAMAIS une
+compagnie. Règle commune `app/integrations/qbo_noms.py` —
+`noms_compatibles` (même nom normalisé ou mêmes mots distinctifs ; les
+mots génériques inc / groupe / gestion / immobilier… ne comptent pas)
+pour tout client QB retrouvé par courriel, `lien_acceptable` pour un lien
+mémorisé. Appliquée dans `QuickBooksClient.ensure_customer` (nouvelles
+fiches, soumissions, contrats), `client_mere_qbo` et
+`push_client_update_qbo_now` (une fiche reliée à une autre compagnie ne
+la RENOMME jamais). Le filet horaire (`corriger_liens_autre_compagnie`)
+répare les fiches déjà reliées à une autre compagnie : projets repassés
+(sous-clients déplacés sous le bon client mère), sinon lien retiré, et
+notification aux admins.
 
 ## Part CCQ par employé — coût de chantier (2026-11-02)
 
