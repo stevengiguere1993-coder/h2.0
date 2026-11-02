@@ -230,6 +230,176 @@ async def _reparation_1660(qbo: Any) -> Optional[Dict[str, Any]]:
     return bilan
 
 
+#: Une fois (Steven 2026-11-02, après la réparation) : le sous-client
+#: 1660 Saint-Clément, déplacé sous Groupe 1660, n'était pas dans la liste
+#: « à convertir » (projet d'avant cette liste, et un déplacement ne l'y
+#: mettait pas encore).
+CLE_CONVERSION_1660 = "qbo_conversion_1660_st_clement"
+
+
+async def _conversion_1660(qbo: Any) -> Optional[Dict[str, Any]]:
+    """Une fois : les projets de « Groupe 1660 Saint-Clément » dont le
+    sous-client QB n'est pas encore un projet entrent dans la liste « à
+    convertir » (le filet « Facturer avec le client parent » les rend
+    ensuite convertibles dans QuickBooks)."""
+    from app.db.session import AsyncSessionLocal
+    from app.models.client import Client
+    from app.models.project import Project
+    from app.services import qbo_projets_conversion as conversion
+    from app.services.qbo_project_resolve import _norm
+
+    async with AsyncSessionLocal() as db:
+        deja = (
+            await db.execute(
+                text("SELECT 1 FROM applied_backfills WHERE key = :k"),
+                {"k": CLE_CONVERSION_1660},
+            )
+        ).first()
+        if deja is not None:
+            return None
+        clients_qb = await _clients_qb(qbo)
+        rows = (
+            await db.execute(
+                select(Project, Client.name)
+                .join(Client, Client.id == Project.client_id)
+                .where(Project.qbo_job_id.is_not(None))
+            )
+        ).all()
+        ajoutes: List[int] = []
+        for proj, nom in rows:
+            if "1660 st clement" not in _norm(nom):
+                continue
+            row = clients_qb.get(str(proj.qbo_job_id))
+            if row is None or not _parent_de(row) or proj.qbo_conversion_etat is not None:
+                continue
+            conversion.demander(proj, row)
+            ajoutes.append(int(proj.id))
+        await db.execute(
+            text(
+                "INSERT INTO applied_backfills (key) VALUES (:k) "
+                "ON CONFLICT (key) DO NOTHING"
+            ),
+            {"k": CLE_CONVERSION_1660},
+        )
+        await db.commit()
+    log.warning("Conversion QB 1660 Saint-Clément : projets mis à convertir %s", ajoutes)
+    return {"ajoutes": ajoutes}
+
+
+#: Fiches corrigées au plus par passage (borne de sécurité).
+MAX_LIENS_PAR_PASSAGE = 30
+KIND_LIEN_CORRIGE = "qbo_lien_client_corrige"
+
+
+async def corriger_liens_autre_compagnie(
+    qbo: Any, clients_qb: Dict[str, Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Fiches client reliées au client QB d'une AUTRE compagnie (nom
+    incompatible, ``qbo_noms.lien_acceptable``) — héritage du repli par
+    courriel, les compagnies d'un même propriétaire partageant courriel et
+    personne contact (Steven 2026-11-02 : « il faut éviter que cela se
+    reproduise »). Une fiche dont des projets ont un sous-client QB est
+    repassée par la synchro du projet (client mère au bon nom retrouvé,
+    réactivé ou créé ; sous-clients déplacés dessous) ; sans projet relié,
+    le lien est simplement retiré (le prochain envoi retrouvera le bon
+    client par son nom). Les admins sont prévenus dans la cloche."""
+    from app.db.session import AsyncSessionLocal
+    from app.integrations.qbo_noms import lien_acceptable
+    from app.models.client import Client
+    from app.models.project import Project
+    from app.services.notifications import notify_role
+
+    async with AsyncSessionLocal() as db:
+        fiches = (
+            await db.execute(
+                select(Client.id, Client.name, Client.qbo_customer_id).where(
+                    Client.qbo_customer_id.is_not(None)
+                )
+            )
+        ).all()
+    fautives = []
+    for cid, nom, lien in fiches:
+        row = clients_qb.get(str(lien or "").strip())
+        if row is None or _parent_de(row):
+            continue  # client QB inactif / disparu, ou sous-client : autre filet
+        if lien_acceptable(nom, row.get("DisplayName")):
+            continue
+        fautives.append((int(cid), nom, str(lien), row.get("DisplayName") or ""))
+    corrigees: List[Dict[str, Any]] = []
+    for cid, nom, lien, nom_qb in fautives[:MAX_LIENS_PAR_PASSAGE]:
+        async with AsyncSessionLocal() as db:
+            pids = [
+                int(p)
+                for (p,) in (
+                    await db.execute(
+                        select(Project.id).where(
+                            Project.client_id == cid,
+                            Project.qbo_job_id.is_not(None),
+                        )
+                    )
+                ).all()
+            ]
+            if not pids:
+                c = await db.get(Client, cid)
+                if c is not None and str(c.qbo_customer_id or "") == lien:
+                    c.qbo_customer_id = None
+                    await db.commit()
+        for pid in pids:
+            await _repasser(pid)
+        async with AsyncSessionLocal() as db:
+            c = await db.get(Client, cid)
+            apres = c.qbo_customer_id if c is not None else None
+        if str(apres or "") == lien:
+            # La synchro du projet a échoué (QB injoignable, refus) : on
+            # réessaiera au prochain passage, sans annoncer de correction.
+            log.warning(
+                "Fiche client %s « %s » toujours reliée au client QB %s « %s » "
+                "(autre compagnie) : correction à reprendre.",
+                cid, nom, lien, nom_qb,
+            )
+            continue
+        corrigees.append(
+            {"client": cid, "nom": nom, "ancien": lien, "ancien_nom": nom_qb,
+             "nouveau": apres, "projets": pids}
+        )
+        log.warning(
+            "Fiche client %s « %s » reliée au client QB %s « %s » (autre "
+            "compagnie) : lien corrigé → %s (projets repassés : %s).",
+            cid, nom, lien, nom_qb, apres, pids,
+        )
+    if corrigees:
+        try:
+            lignes = "; ".join(
+                f"« {c['nom']} » n'est plus reliée à « {c['ancien_nom']} »"
+                for c in corrigees[:5]
+            )
+            plus = f" (+{len(corrigees) - 5} autres)" if len(corrigees) > 5 else ""
+            async with AsyncSessionLocal() as db:
+                await notify_role(
+                    db,
+                    min_role="admin",
+                    kind=KIND_LIEN_CORRIGE,
+                    title=(
+                        f"QuickBooks : {len(corrigees)} fiche(s) client reliée(s) "
+                        "à une autre compagnie, corrigée(s)"
+                    ),
+                    body=(
+                        lignes + plus + ". Même courriel ou même contact ne veut "
+                        "pas dire même compagnie : chaque fiche a maintenant son "
+                        "propre client QuickBooks à son nom."
+                    ),
+                    href=(
+                        f"/app/clients/{corrigees[0]['client']}"
+                        if len(corrigees) == 1 else "/app/clients"
+                    ),
+                    push=False,
+                )
+                await db.commit()
+        except Exception:  # noqa: BLE001
+            log.warning("Notification des liens QB corrigés échouée", exc_info=True)
+    return {"fautives": len(fautives), "corrigees": corrigees}
+
+
 async def filet_sous_clients_client_change() -> Dict[str, Any]:
     """Passage horaire : replace sous le bon client mère les sous-clients
     des projets dont le client a changé dans Kratos."""
@@ -240,6 +410,18 @@ async def filet_sous_clients_client_change() -> Dict[str, Any]:
     rep = await _reparation_1660(qbo)
     if rep is not None:
         out["reparation_1660"] = rep
+    try:
+        conv = await _conversion_1660(qbo)
+        if conv is not None:
+            out["conversion_1660"] = conv
+    except Exception:  # noqa: BLE001
+        log.warning("Mise à convertir du 1660 Saint-Clément échouée", exc_info=True)
+    try:
+        liens = await corriger_liens_autre_compagnie(qbo, await _clients_qb(qbo))
+        if liens["fautives"]:
+            out["liens_autre_compagnie"] = liens
+    except Exception:  # noqa: BLE001
+        log.warning("Correction des liens QB vers une autre compagnie échouée", exc_info=True)
     ids = await projets_sous_le_mauvais_client(await _clients_qb(qbo))
     out["candidats"] = len(ids)
     actions: Dict[str, int] = {}
