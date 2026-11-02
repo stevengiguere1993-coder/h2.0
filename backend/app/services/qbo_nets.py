@@ -768,16 +768,6 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet sous-clients / changement de client échoué", exc_info=True)
 
-    # ── Sous-clients « à convertir » pas cochés « Facturer avec le parent » ──
-    # Sans ce drapeau, QuickBooks ne les propose pas dans « Convertir
-    # depuis un sous-client » (Steven 2026-11-02, 1660 Saint-Clément).
-    try:
-        from app.services.qbo_projets_conversion import filet_facturer_avec_parent
-
-        out["conversion_facturer_avec_parent"] = await filet_facturer_avec_parent()
-    except Exception:  # noqa: BLE001
-        log.warning("Filet « Facturer avec le client parent » échoué", exc_info=True)
-
     # ── Petits soldes reportés pas encore fermés dans QB → Payment ──
     # Le solde reporté sur une prochaine facture doit être fermé sur
     # l'Invoice d'origine (dépôt dans le compte de transit « Soldes

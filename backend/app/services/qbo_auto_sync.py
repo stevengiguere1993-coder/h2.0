@@ -218,17 +218,15 @@ async def push_client_update_qbo_now(
     `qbo_auto_sync`.
 
     Résolution du client QB, dans l'ordre : lien existant
-    (`qbo_customer_id`) s'il porte un nom compatible (jamais une autre
-    compagnie du même propriétaire : on la renommerait), sinon par nom
-    exact (nouveau puis ancien), sinon par COURRIEL au nom compatible,
-    sinon par l'ANCIEN nom
+    (`qbo_customer_id`), sinon adoption par COURRIEL (clé d'identité —
+    couvre la fiche renommée, ex. « Zalec Bruneau » → « Zimmo
+    immobilier »), sinon par nom exact, sinon par l'ANCIEN nom
     (`old_name` — correction d'une faute de frappe sur une fiche sans
     courriel ni lien). Introuvable → on ne crée rien ici (la création
     reste au flux bon/facture). Best-effort."""
     try:
         import asyncio
 
-        from app.integrations.qbo_noms import lien_acceptable, noms_compatibles
         from app.integrations.quickbooks import get_qbo
         from app.models.client import Client
 
@@ -272,37 +270,16 @@ async def push_client_update_qbo_now(
                     # courriel partagé) alors qu'un customer au nom exact
                     # de CETTE fiche existe → on répare le lien.
                     cust = by_name
-                elif linked is not None and any(
-                    lien_acceptable(n, linked.get("DisplayName"))
-                    for n in (_new, _old) if n
-                ):
+                else:
                     # Renommé côté QB sans passer par Kratos : le lien
-                    # mémorisé fait foi — s'il porte un nom compatible.
+                    # mémorisé fait foi.
                     cust = linked
-                elif linked is not None:
-                    # Lien vers une AUTRE compagnie (même propriétaire,
-                    # même courriel — Steven 2026-11-02) : surtout ne pas
-                    # la renommer au nom de cette fiche.
-                    log.warning(
-                        "Client %s « %s » : le client QB lié %s « %s » est une "
-                        "autre compagnie — rien n'est reflété.",
-                        client_id, _new, client.qbo_customer_id,
-                        linked.get("DisplayName"),
-                    )
-                    return
             if cust is None:
                 cust = by_name
             if cust is None and client.email:
                 # Dernier recours : courriel — seulement si UNIQUE côté QB
-                # (find_customer_by_email refuse les matchs ambigus) ET au
-                # nom compatible : les compagnies d'un même propriétaire
-                # partagent son courriel.
-                par_courriel = await qbo.find_customer_by_email(client.email)
-                if par_courriel is not None and any(
-                    noms_compatibles(n, par_courriel.get("DisplayName"))
-                    for n in (_new, _old) if n
-                ):
-                    cust = par_courriel
+                # (find_customer_by_email refuse les matchs ambigus).
+                cust = await qbo.find_customer_by_email(client.email)
             if cust is None:
                 return
             cid = str(cust.get("Id") or "")

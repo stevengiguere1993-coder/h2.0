@@ -290,64 +290,6 @@ async def verifier_pour_cron(db: AsyncSession) -> Dict[str, Any]:
         return {"skipped": exc.message}
 
 
-#: Sous-clients corrigés au plus par passage du filet (borne de sécurité).
-MAX_FACTURER_AVEC_PARENT = 30
-
-
-async def filet_facturer_avec_parent() -> Dict[str, Any]:
-    """Passage horaire (``qbo_nets``) : QuickBooks ne propose dans
-    « Convertir depuis un sous-client » que les sous-clients cochés
-    « Facturer avec le client parent » (``BillWithParent``). Kratos les
-    crée ainsi, mais un sous-client créé à la main, ou déplacé sous un
-    autre client mère, peut ne pas l'être (Steven 2026-11-02 : le 1660
-    Saint-Clément, déplacé sous Groupe 1660, absent de la liste de QB).
-    Pour chaque projet « à convertir », on coche le drapeau s'il manque.
-    Rien d'autre n'est modifié dans QuickBooks."""
-    from app.db.session import AsyncSessionLocal
-    from app.integrations.quickbooks import QuickBooksError
-
-    async with AsyncSessionLocal() as db:
-        jids = [
-            str(j).strip()
-            for (j,) in (
-                await db.execute(
-                    select(Project.qbo_job_id).where(
-                        Project.qbo_conversion_etat == A_CONVERTIR,
-                        Project.qbo_job_id.is_not(None),
-                    )
-                )
-            ).all()
-            if str(j or "").strip()
-        ]
-    if not jids:
-        return {"candidats": 0}
-    try:
-        qbo = await _qbo()
-        clients = await _clients_qb(qbo)
-    except ConversionErreur as exc:
-        return {"skipped": exc.message}
-    a_cocher = [
-        jid for jid in dict.fromkeys(jids)
-        if (row := clients.get(jid)) is not None
-        and (row.get("ParentRef") or {}).get("value")
-        and not row.get("IsProject")
-        and not row.get("BillWithParent")
-    ]
-    coches: List[str] = []
-    for jid in a_cocher[:MAX_FACTURER_AVEC_PARENT]:
-        try:
-            await qbo.facturer_avec_parent(jid)
-            coches.append(jid)
-        except QuickBooksError as exc:
-            log.warning("Sous-client QB %s : « Facturer avec le parent » refusé : %s", jid, exc)
-    if coches:
-        log.warning(
-            "Sous-clients QB cochés « Facturer avec le client parent » (à convertir) : %s",
-            coches,
-        )
-    return {"candidats": len(a_cocher), "coches": coches}
-
-
 async def ajouter_existants(db: AsyncSession) -> Dict[str, Any]:
     """Sur demande : met dans la liste les projets d'AVANT cette fonction
     (état vide) dont le sous-client QB n'est pas encore un projet ; ceux
