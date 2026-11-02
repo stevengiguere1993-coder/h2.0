@@ -10,10 +10,11 @@ ponctuation près).
 2. sinon le client QB à ce nom (``ensure_customer`` : nom exact, puis
    courriel unique, puis création) ;
 3. un client QB retrouvé par le lien ou le courriel mais qui porte un
-   AUTRE nom n'est gardé que si ce nom est celui d'une personne (fiche
-   renommée : « Tremblay Jean » → « Jean Tremblay ») et d'aucune autre
-   fiche Kratos. Un nom de compagnie différent est celui d'une autre
-   compagnie (même propriétaire, même courriel) : jamais repris ;
+   AUTRE nom n'est gardé que si les noms sont compatibles (mêmes mots
+   distinctifs, ``app/integrations/qbo_noms.py``) — ou, pour un lien
+   mémorisé, deux noms de personne (fiche renommée) — et ce nom n'est
+   celui d'aucune autre fiche Kratos. Les compagnies d'un même
+   propriétaire partagent courriel et personne contact : jamais reprises ;
 4. à défaut : le client QB à ce nom, même INACTIF (réactivé), sinon il
    est créé.
 
@@ -28,45 +29,20 @@ repli par courriel avait relié la fiche à une autre de ses compagnies.
 from __future__ import annotations
 
 import logging
-import re
-import unicodedata
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.integrations.qbo_noms import (
+    lien_acceptable,
+    meme_nom as _meme_nom,
+    nom_norm,
+    noms_compatibles,
+)
 from app.models.client import Client
 
 log = logging.getLogger(__name__)
-
-#: Mots qui font d'un nom celui d'une compagnie (forme normalisée).
-_MARQUES_COMPAGNIE = {
-    "inc", "ltee", "ltd", "limitee", "limited", "senc", "senrl", "enr",
-    "corp", "corporation", "cie", "groupe", "group", "gestion", "immobilier",
-    "immobiliere", "immobilieres", "holding", "holdings", "fiducie",
-    "construction", "constructions", "developpement", "developpements",
-    "investissement", "investissements", "societe", "entreprise",
-    "entreprises", "llc", "co", "services", "syndicat", "copropriete",
-}
-
-
-def nom_norm(value: Optional[str]) -> str:
-    """Nom comparable : minuscules, sans accents, ponctuation réduite à un
-    espace (« Saint-Clément inc. » ≡ « saint clement inc »)."""
-    text = unicodedata.normalize("NFKD", value or "")
-    text = "".join(ch for ch in text if not unicodedata.combining(ch))
-    return " ".join(re.sub(r"[^0-9a-z]+", " ", text.lower()).split())
-
-
-def _meme_nom(a: Optional[str], b: Optional[str]) -> bool:
-    return nom_norm(a) == nom_norm(b)
-
-
-def est_compagnie(nom: Optional[str]) -> bool:
-    mots = nom_norm(nom).split()
-    return any(m in _MARQUES_COMPAGNIE for m in mots) or any(
-        m.isdigit() and len(m) >= 4 for m in mots
-    )
 
 
 def _actif(row: Optional[Dict[str, Any]]) -> bool:
@@ -112,20 +88,26 @@ async def appartient_a_une_autre_fiche(
 async def _garde_autre_nom(
     db: AsyncSession, client: Client, row: Optional[Dict[str, Any]], *, origine: str
 ) -> bool:
-    """Un client QB au nom DIFFÉRENT de la fiche (retrouvé par le lien ou
-    le courriel) n'est gardé que s'il porte un nom de personne qui n'est
-    celui d'aucune autre fiche Kratos."""
+    """Un client QB au nom DIFFÉRENT de la fiche n'est gardé que si son nom
+    est compatible (``qbo_noms``) — pour un LIEN mémorisé, deux noms de
+    personne suffisent aussi (fiche renommée) — et n'est celui d'aucune
+    autre fiche Kratos. Le courriel seul n'identifie jamais une compagnie."""
     if not row:
         return False
-    if _meme_nom(row.get("DisplayName"), client.name):
+    nom_qb = row.get("DisplayName")
+    if _meme_nom(nom_qb, client.name):
         return True
-    if est_compagnie(row.get("DisplayName")) or await appartient_a_une_autre_fiche(
+    if origine == "courriel":
+        ok = noms_compatibles(client.name, nom_qb)
+    else:
+        ok = lien_acceptable(client.name, nom_qb)
+    if not ok or await appartient_a_une_autre_fiche(
         db, client, row, par_lien=(origine == "courriel")
     ):
         log.warning(
             "Client %s « %s » : le client QB %s « %s » (%s) porte un autre nom "
-            "de compagnie — ignoré.",
-            client.id, client.name, row.get("Id"), row.get("DisplayName"), origine,
+            "— ignoré.",
+            client.id, client.name, row.get("Id"), nom_qb, origine,
         )
         return False
     return True

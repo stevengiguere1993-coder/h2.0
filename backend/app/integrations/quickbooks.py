@@ -774,6 +774,37 @@ class QuickBooksClient:
             "Job": True,
             "ParentRef": {"value": str(new_parent_id)},
         }
+        if not cust.get("IsProject"):
+            # « Facturer avec le client parent » : sans ce drapeau, QB ne
+            # propose pas le sous-client dans « Convertir depuis un
+            # sous-client » (le 1660 Saint-Clément, déplacé, n'y était
+            # plus — Steven 2026-11-02).
+            body["BillWithParent"] = True
+        data = await self._request(
+            "POST", "/customer", json_body=body, params={"minorversion": "70"}
+        )
+        return data.get("Customer") or data
+
+    async def facturer_avec_parent(
+        self, customer_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Coche « Facturer avec le client parent » (``BillWithParent``)
+        sur un sous-client : c'est la condition pour que QuickBooks le
+        propose dans « Nouveau projet ▾ → Convertir depuis un sous-client ».
+        Rien à faire pour un projet QB, un client de premier niveau ou un
+        sous-client déjà coché. Retourne le client (à jour)."""
+        cust = await self.get_customer(customer_id)
+        parent = str(((cust or {}).get("ParentRef") or {}).get("value") or "")
+        if not cust or not parent or cust.get("IsProject") or cust.get("BillWithParent"):
+            return cust
+        body: Dict[str, Any] = {
+            "Id": str(cust.get("Id")),
+            "SyncToken": str(cust.get("SyncToken") or "0"),
+            "sparse": True,
+            "Job": True,
+            "BillWithParent": True,
+            "ParentRef": {"value": parent},
+        }
         data = await self._request(
             "POST", "/customer", json_body=body, params={"minorversion": "70"}
         )
@@ -859,14 +890,29 @@ class QuickBooksClient:
     ) -> Dict[str, Any]:
         """Find-or-create. Le NOM exact prime (le courriel est souvent
         partagé entre plusieurs fiches) ; repli sur le courriel seulement
-        s'il est unique côté QB."""
+        s'il est unique côté QB ET que le client trouvé porte un nom
+        compatible (``qbo_noms.noms_compatibles``) : les compagnies d'un
+        même propriétaire partagent son courriel (Steven 2026-11-02, la
+        fiche « Groupe 1660 Saint-Clément inc. » avait été reliée à une
+        autre de ses compagnies)."""
+        from app.integrations.qbo_noms import noms_compatibles
+
         existing = await self.find_customer_by_name(display_name)
         if existing:
             return existing
         if email:
             existing = await self.find_customer_by_email(email)
-            if existing:
+            if existing and noms_compatibles(
+                display_name, existing.get("DisplayName")
+            ):
                 return existing
+            if existing:
+                log.warning(
+                    "Client QB « %s » : le courriel mène à « %s » (%s), un "
+                    "autre nom — non repris, client créé.",
+                    display_name, existing.get("DisplayName"),
+                    existing.get("Id"),
+                )
         return await self.create_customer(
             display_name=display_name,
             email=email,
