@@ -196,3 +196,22 @@ daté (comme la fiche projet) ; achats datés de `invoice_date`, sinon
 = lignes `facture_payments` à leur `paid_at` (les paiements QB y sont
 reflétés). Le bloc QuickBooks (P&L, exercice) contient déjà les achats de
 Kratos : ne jamais l'additionner aux dépenses Kratos.
+
+## QuickBooks — projet qui change de client (2026-11-02)
+
+Steven : « le client du projet 1660 Saint-Clément a changé dans Kratos,
+il ne s'est pas changé dans QuickBooks ». Le sous-client QB d'un projet
+SUIT le client du projet : `resolve_project_customer_id` le DÉPLACE
+(`QuickBooksClient.move_subcustomer`, `ParentRef`) sous le nouveau client
+mère au lieu d'oublier le lien et d'en créer un second (le nom d'affichage
+étant unique dans QB, l'original restait sous l'ancien client et le
+nouveau prenait un nom dérivé). Pas de déplacement si le sous-client est
+porté par un autre projet, si le nouveau client a déjà un sous-client au
+nom exact (adopté), ou vers un parent autre que le client QB mémorisé sur
+la fiche ; un refus de QB (projet QB) retombe sur la création.
+Client mère : une seule règle, `app/services/qbo_client_mere.py` (lien de
+la fiche, nom exact, courriel unique, sinon création) — JAMAIS le client
+QB d'une AUTRE fiche Kratos retrouvé par un courriel partagé (deux
+compagnies du même proprio : le repli par courriel ramenait MGV
+Développement pour Groupe 1660 Saint-Clément). Filet horaire dans
+`qbo_nets` (`qbo_sous_clients_client_change`).
