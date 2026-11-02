@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
-import { capturerPositionPunch } from "@/lib/punch-geo";
+import { capturerPositionOuApprox } from "@/lib/punch-geo";
 
 type OpenPunch = {
   id: number;
@@ -121,9 +121,8 @@ export default function MobilePunch() {
     setError(null);
     try {
       // Position prise à chaque punch (entrée et sortie), seulement à
-      // cet instant ; le punch part sans elle si l'appareil la refuse.
-      const geo = await capturerPositionPunch();
-      const payload = geo ? { ...body, geolocation: geo } : body;
+      // cet instant ; GPS refusé → approximation par l'adresse internet.
+      const payload = { ...body, ...(await capturerPositionOuApprox()) };
       const res = await authedFetch("/api/v1/mobile/punch/start", {
         method: "POST",
         body: JSON.stringify(payload)
@@ -146,10 +145,10 @@ export default function MobilePunch() {
     setBusy(true);
     setError(null);
     try {
-      const geo = await capturerPositionPunch();
+      const position = await capturerPositionOuApprox();
       const res = await authedFetch("/api/v1/mobile/punch/stop", {
         method: "POST",
-        body: JSON.stringify(geo ? { geolocation: geo } : {})
+        body: JSON.stringify(position)
       });
       if (!res.ok) {
         const txt = await res.text();

@@ -1860,6 +1860,12 @@ class PunchStartIn(BaseModel):
     #: Position GPS ``"lat,lng"`` de l'appareil au moment du punch
     #: (Steven, 2026-10-26) ; absente si refusée ou indisponible.
     geolocation: Optional[str] = Field(default=None, max_length=128)
+    #: Position approximative que le téléphone a obtenue lui-même de son
+    #: adresse internet (GPS refusé) ; l'API la marque « ~ ».
+    geolocation_approx: Optional[str] = Field(default=None, max_length=128)
+    #: Adresse internet publique vue par le téléphone, pour que l'API
+    #: déduise une position même derrière le relais Next.js.
+    ip_publique: Optional[str] = Field(default=None, max_length=64)
 
 
 class PunchStopIn(BaseModel):
@@ -1869,6 +1875,12 @@ class PunchStopIn(BaseModel):
     user_id: Optional[int] = None
     #: Position GPS ``"lat,lng"`` de l'appareil à l'arrêt.
     geolocation: Optional[str] = Field(default=None, max_length=128)
+    #: Position approximative que le téléphone a obtenue lui-même de son
+    #: adresse internet (GPS refusé) ; l'API la marque « ~ ».
+    geolocation_approx: Optional[str] = Field(default=None, max_length=128)
+    #: Adresse internet publique vue par le téléphone, pour que l'API
+    #: déduise une position même derrière le relais Next.js.
+    ip_publique: Optional[str] = Field(default=None, max_length=64)
 
 
 class PunchStopOut(BaseModel):
@@ -2092,7 +2104,10 @@ async def punch_start(
         started_at=now,
         # GPS reçu, sinon position approximative par adresse internet.
         geolocation=await position_ou_approx(
-            normaliser_position(payload.geolocation), request
+            normaliser_position(payload.geolocation),
+            request,
+            payload.geolocation_approx,
+            payload.ip_publique,
         ),
     )
     db.add(p)
@@ -2146,7 +2161,10 @@ async def punch_stop(
         p.geolocation = ajouter_fin(
             p.geolocation,
             await position_ou_approx(
-                normaliser_position(payload.geolocation), request
+                normaliser_position(payload.geolocation),
+                request,
+                payload.geolocation_approx,
+                payload.ip_publique,
             ),
         )
     ajoutees = 0.0
