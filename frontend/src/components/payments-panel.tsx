@@ -133,10 +133,14 @@ export function PaymentsPanel({
 
   async function reporterSolde() {
     if (!reports) return;
-    const ok = await confirm(
-      `Reporter le solde de ${money(reports.solde_restant)} sur la prochaine facture de ce client ? ` +
-        "Cette facture sera classée payée et le solde sera fermé dans QuickBooks."
-    );
+    const ok = await confirm({
+      title: `Reporter le solde de ${money(reports.solde_restant)} sur la prochaine facture de ce client ?`,
+      description:
+        "Cette facture sera classée payée et le solde sera fermé dans QuickBooks.",
+      confirmLabel: "Approuver",
+      cancelLabel: "Annuler",
+      success: true
+    });
     if (!ok) return;
     setReportBusy(true);
     setError(null);
@@ -159,9 +163,12 @@ export function PaymentsPanel({
 
   async function annulerReport(r: ReportSolde) {
     if (
-      !(await confirm(
-        `Annuler le report de ${money(Number(r.montant))} ? La facture ${r.origine_reference ?? ""} redeviendra ouverte.`
-      ))
+      !(await confirm({
+        title: `Annuler le report de ${money(Number(r.montant))} ?`,
+        description: `La facture ${r.origine_reference ?? ""} redeviendra ouverte.`,
+        confirmLabel: "Annuler le report",
+        cancelLabel: "Garder le report"
+      }))
     )
       return;
     setReportBusy(true);
