@@ -299,7 +299,7 @@ async def _compute_finances(
     avg_rate = float((await db.execute(avg_rate_stmt)).scalar_one() or 35.0)
 
     # Taux CNESST global (Paramètres → Prime CNESST), daté.
-    from app.services.cnesst import charger_bareme_cnesst, taux_cnesst
+    from app.services.cnesst import charger_bareme_cnesst
 
     bareme_cnesst = await charger_bareme_cnesst(db)
 
@@ -307,12 +307,10 @@ async def _compute_finances(
         """Coût horaire réel = base × (1 + cnesst + ccq actif)."""
         if emp is None:
             return float(avg_rate)
-        base = float(emp.hourly_rate or avg_rate)
-        cnesst = taux_cnesst(
-            getattr(emp, "cnesst_actif", True), emp.cnesst_rate, bareme_cnesst, None
-        )
-        ccq = float(emp.ccq_rate or 0) if bool(emp.is_ccq) else 0.0
-        return round(base * (1.0 + cnesst + ccq), 2)
+        # Même calcul que les punchs (part CCQ de la fiche comprise).
+        from app.services.employe_rates import resolve_real_cost as _rrc
+
+        return _rrc([], None, emp, float(avg_rate), cnesst=bareme_cnesst)
 
     def _business_days(start, end) -> int:
         """Compte les jours lundi-vendredi inclus dans [start, end]."""

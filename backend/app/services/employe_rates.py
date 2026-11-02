@@ -206,7 +206,40 @@ def resolve_real_cost(
     décochée : taux personnalisé de la période / fiche, sinon le taux
     global de ``cnesst`` à `on_date` (``charger_bareme_cnesst`` ; None =
     aucun taux global).
+
+    ``Employe.pourcentage_ccq`` (2026-11-02) : posé, l'heure vaut
+    ``pct`` × coût CCQ + (1 − pct) × coût hors décret, quel que soit le
+    régime du punch (estimation du coût de chantier ; la paie suit
+    toujours le régime du punch).
     """
+    pct = pourcentage_ccq(emp)
+    if pct is not None:
+        # Part CCQ de la fiche (Steven, 2026-11-02) : le coût de chantier
+        # mélange les deux régimes, quel que soit celui du punch.
+        cout_ccq = _cout_regime(periods, on_date, emp, avg_rate, REGIME_CCQ, cnesst)
+        cout_hd = _cout_regime(periods, on_date, emp, avg_rate, REGIME_HORS_DECRET, cnesst)
+        return round(cout_ccq * pct + cout_hd * (1.0 - pct), 2)
+    return _cout_regime(periods, on_date, emp, avg_rate, regime, cnesst)
+
+
+def pourcentage_ccq(emp: Optional[Employe]) -> Optional[float]:
+    """Part CCQ de la fiche en FRACTION (0.5 = 50 %), bornée à [0, 1] ;
+    None si la case est vide (coût selon le régime du punch)."""
+    v = getattr(emp, "pourcentage_ccq", None) if emp is not None else None
+    if v is None:
+        return None
+    return min(max(float(v), 0.0), 100.0) / 100.0
+
+
+def _cout_regime(
+    periods: list[RatePeriod],
+    on_date: Optional[date],
+    emp: Optional[Employe],
+    avg_rate: float,
+    regime: Optional[str],
+    cnesst: Optional[BaremeCnesst],
+) -> float:
+    """Coût horaire réel pour un régime (voir ``resolve_real_cost``)."""
     reg = regime_effectif(periods, on_date, emp, regime)
     is_ccq = reg == REGIME_CCQ          # majoration CCQ (fiche ou punch)
     explicite_ccq = regime == REGIME_CCQ  # taux de base CCQ : punch explicite seulement
