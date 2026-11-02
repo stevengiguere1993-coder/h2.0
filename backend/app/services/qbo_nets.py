@@ -519,14 +519,17 @@ async def run_qbo_nets() -> Dict[str, Any]:
         from sqlalchemy import select
 
         from app.models.achat import KIND_INVENTAIRE, Achat
+        from app.services.achat_divise import premieres_parts
         from app.services.achat_qbo import sync_achat_to_qbo
 
         async with AsyncSessionLocal() as db:
-            ids = [
-                int(r[0])
+            # Reçu divisé : une seule part par groupe (pousser une part
+            # pousse toute la transaction).
+            ids = premieres_parts(
+                (int(r[0]), r[1])
                 for r in (
                     await db.execute(
-                        select(Achat.id).where(
+                        select(Achat.id, Achat.groupe_id).where(
                             # TOUT achat actif entré dans Kratos part vers QB,
                             # AVEC ou SANS projet/client (le Bill/Purchase QB
                             # se crée alors sans CustomerRef). L'ancien filtre
@@ -547,7 +550,7 @@ async def run_qbo_nets() -> Dict[str, Any]:
                         )
                     )
                 ).all()
-            ]
+            )
         pushed = failed = 0
         for aid in ids:
             try:
@@ -749,6 +752,21 @@ async def run_qbo_nets() -> Dict[str, Any]:
             out["bons_qb"] = {"candidates": len(bon_project_ids)}
     except Exception:  # noqa: BLE001
         log.warning("Filet bons de travail → QB échoué", exc_info=True)
+
+    # ── Projet changé de client → sous-client QB sous le NOUVEAU client ──
+    # Le changement de client sur la fiche du projet déplace déjà le
+    # sous-client (en fond) ; ce filet rattrape un passage manqué et fait
+    # une fois la réparation du 1660 Saint-Clément (Steven 2026-11-02).
+    try:
+        from app.services.qbo_sous_clients_client_change import (
+            filet_sous_clients_client_change,
+        )
+
+        out["sous_clients_client_change"] = (
+            await filet_sous_clients_client_change()
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("Filet sous-clients / changement de client échoué", exc_info=True)
 
     # ── Compteur de factures au-dessus de QuickBooks ──
     # Une facture créée directement dans QB (ou importée) doit faire

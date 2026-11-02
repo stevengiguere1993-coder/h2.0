@@ -91,25 +91,14 @@ async def push_client_to_qbo(
         # jamais créer un doublon. Avant : ensure_customer cherchait le
         # nom CORRIGÉ (introuvable, QB porte encore la faute) et créait
         # un nouveau customer à côté de l'original.
-        customer = None
-        # 1. Lien mémorisé — avec garde anti-lien-erroné : s'il pointe
-        #    un customer dont le nom ne correspond pas à la fiche alors
-        #    qu'un customer au nom exact existe, on répare le lien.
-        if client.qbo_customer_id:
-            customer = await qbo.get_customer(client.qbo_customer_id)
-            if customer is not None:
-                _dn = (customer.get("DisplayName") or "").strip().lower()
-                _kn = (client.name or "").strip().lower()
-                if _kn and _dn != _kn:
-                    _exact = await qbo.find_customer_by_name(client.name)
-                    if _exact is not None:
-                        customer = _exact
-        # 2. Nom exact, sinon courriel (UNIQUE seulement — souvent
-        #    partagé entre plusieurs compagnies du même proprio).
-        if customer is None:
-            customer = await qbo.find_customer_by_name(client.name)
-        if customer is None and client.email:
-            customer = await qbo.find_customer_by_email(client.email)
+        # Lien mémorisé (garde anti-lien-erroné), nom exact, courriel
+        # unique — jamais le client QB d'une AUTRE fiche Kratos : deux
+        # compagnies du même proprio partagent souvent le courriel, et
+        # « Re-synchroniser » aurait RENOMMÉ le client QB de l'autre
+        # (Steven 2026-11-02, Groupe 1660 Saint-Clément / MGV).
+        from app.services.qbo_client_mere import trouver_client_mere_qbo
+
+        customer = await trouver_client_mere_qbo(db, qbo, client)
 
         if customer is not None:
             updated = await qbo.update_customer(

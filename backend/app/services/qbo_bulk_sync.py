@@ -202,12 +202,9 @@ async def run_migration(
         # 1) Customer (réutilise par email/nom via ensure_customer).
         try:
             if not c.qbo_customer_id:
-                cust = await qbo.ensure_customer(
-                    display_name=c.name,
-                    email=c.email,
-                    phone=c.phone,
-                    billing_address=c.address,
-                )
+                from app.services.qbo_client_mere import client_mere_qbo
+
+                cust = await client_mere_qbo(db, qbo, c, memoriser=True)
                 cid = str(cust.get("Id") or "")
                 if not cid:
                     raise QuickBooksError("Customer sans Id")
@@ -350,15 +347,18 @@ async def run_migration(
         # empoisonner la transaction de la migration (cause du HTTP 500).
         from app.db.session import AsyncSessionLocal
         from app.models.achat import KIND_INVENTAIRE, Achat
+        from app.services.achat_divise import premieres_parts
         from app.services.achat_qbo import sync_achat_to_qbo
 
         proj_ids = [p.id for p in projects]
         if proj_ids:
-            achat_ids = [
-                r[0]
+            # Reçu divisé : une seule part par groupe (pousser une part
+            # pousse toute la transaction).
+            achat_ids = premieres_parts(
+                (int(r[0]), r[1])
                 for r in (
                     await db.execute(
-                        select(Achat.id).where(
+                        select(Achat.id, Achat.groupe_id).where(
                             Achat.project_id.in_(proj_ids),
                             Achat.status != "cancelled",
                             Achat.amount.is_not(None),
@@ -367,7 +367,7 @@ async def run_migration(
                         )
                     )
                 ).all()
-            ]
+            )
             for aid in achat_ids:
                 try:
                     async with AsyncSessionLocal() as adb:

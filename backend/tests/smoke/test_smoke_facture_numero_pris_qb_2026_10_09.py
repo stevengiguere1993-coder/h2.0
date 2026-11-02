@@ -117,6 +117,11 @@ class FauxQB:
     async def ensure_customer(self, **kw: Any) -> Dict[str, Any]:
         return {"Id": "C-KRATOS", "DisplayName": kw.get("display_name")}
 
+    async def get_customer(self, customer_id: str) -> Optional[Dict[str, Any]]:
+        # Client QB lié à la fiche inconnu de ce faux QB : la résolution
+        # retombe sur ensure_customer (nom exact / création).
+        return None
+
     async def ensure_item(self, name: str, description: Any = None) -> Dict[str, Any]:
         return {"Id": "IT-1"}
 
