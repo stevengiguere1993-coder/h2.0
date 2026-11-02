@@ -20,7 +20,7 @@ import {
 
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
-import { capturerPositionOuApprox } from "@/lib/punch-geo";
+import { capturerPositionPunch } from "@/lib/punch-geo";
 import { useZoneEmploye } from "./zone-employe-context";
 import { AccueilAutre } from "./_autre/accueil-autre";
 import { BlocNotesBanner } from "./bloc-notes-banner";
@@ -223,12 +223,12 @@ function MobileHomeConstruction() {
   async function punchStop() {
     setPunchBusy(true);
     try {
-      // Position de sortie, prise au moment du punch seulement ; GPS
-      // refusé → approximation par l'adresse internet. Jamais bloquant.
-      const position = await capturerPositionOuApprox();
+      // Position de sortie, prise au moment du punch seulement. Pas
+      // bloquant si l'appareil la refuse.
+      const geo = await capturerPositionPunch();
       const res = await authedFetch("/api/v1/mobile/punch/stop", {
         method: "POST",
-        body: JSON.stringify(position)
+        body: JSON.stringify(geo ? { geolocation: geo } : {})
       });
       if (!res.ok) throw new Error();
       await load();

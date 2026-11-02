@@ -38,20 +38,11 @@ def test_ip_publique_filtre_le_local_et_l_invalide():
     assert ip_geo.ip_publique(None) is None
 
 
-def test_ip_client_prend_la_premiere_adresse_publique():
+def test_ip_client_prend_le_premier_x_forwarded_for():
     assert ip_client(_requete(xff="24.1.2.3, 10.0.0.1")) == "24.1.2.3"
-    # Derrière le serveur Next.js, la première entrée peut être un relais
-    # interne : on saute jusqu'à la première adresse publique.
-    assert ip_client(_requete(xff="10.0.0.1, 24.1.2.3")) == "24.1.2.3"
     assert ip_client(_requete(host="24.1.2.3")) == "24.1.2.3"
-    assert ip_client(_requete(xff="10.0.0.1", host="10.0.0.2")) is None
     assert ip_client(_requete()) is None
     assert ip_client(None) is None
-    # L'adresse déclarée par l'app passe avant les en-têtes ; invalide → ignorée.
-    assert ip_client(_requete(xff="24.1.2.3"), "24.5.6.7") == "24.5.6.7"
-    assert ip_client(_requete(xff="24.1.2.3"), "n/a") == "24.1.2.3"
-    assert ip_geo.ip_publique("[2607:f8b0::1]:443") == "2607:f8b0::1"
-    assert ip_geo.ip_publique("24.1.2.3:51234") == "24.1.2.3"
 
 
 def test_approximative_et_refus_du_prefixe_venant_de_l_app():
@@ -97,15 +88,3 @@ async def test_position_ou_approx(monkeypatch):
     assert await position_ou_approx(None, req) == "~45.500000,-73.600000"
     # Adresse privée (tests, réseau local) : rien.
     assert await position_ou_approx(None, _requete(host="testclient")) is None
-    # L'approximation obtenue par le téléphone lui-même passe avant la
-    # recherche par l'API ; un « ~ » envoyé par l'app reste refusé.
-    assert (
-        await position_ou_approx(None, _requete(host="testclient"), "45.52,-73.58")
-        == "~45.520000,-73.580000"
-    )
-    assert await position_ou_approx(None, _requete(host="testclient"), "~45.52,-73.58") is None
-    # L'adresse déclarée par l'app sert même sans en-tête utilisable.
-    assert (
-        await position_ou_approx(None, _requete(host="testclient"), None, "24.1.2.3")
-        == "~45.500000,-73.600000"
-    )

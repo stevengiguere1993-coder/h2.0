@@ -17,7 +17,7 @@ import { useCurrentUser } from "@/hooks/use-current-user";
 import { authedFetch } from "@/lib/auth";
 import {
   NOTE_APPROX,
-  capturerPositionOuApprox,
+  capturerPositionPunch,
   parsePositionPunch,
   positionsPunch,
   texteCoordonnees
@@ -119,17 +119,9 @@ async function explainError(res: Response): Promise<string> {
   }
 }
 
-/** Position prise au moment du punch seulement : GPS (lat/lng), sinon
- *  approximation par l'adresse internet (champs envoyés tels quels). */
-async function getPosition(): Promise<{
-  pos: { lat: number; lng: number } | null;
-  approx: { geolocation_approx: string | null; ip_publique: string | null };
-}> {
-  const c = await capturerPositionOuApprox();
-  return {
-    pos: parsePositionPunch(c.geolocation),
-    approx: { geolocation_approx: c.geolocation_approx, ip_publique: c.ip_publique }
-  };
+/** Position prise au moment du punch seulement ; null si refusée. */
+async function getPosition(): Promise<{ lat: number; lng: number } | null> {
+  return parsePositionPunch(await capturerPositionPunch());
 }
 
 export default function PunchPage() {
@@ -234,8 +226,8 @@ export default function PunchPage() {
     setBusy(true);
     setError(null);
     try {
-      const { pos, approx } = await getPosition();
-      const payload: Record<string, unknown> = { ...approx };
+      const pos = await getPosition();
+      const payload: Record<string, unknown> = {};
       if (target.startsWith("p-")) {
         payload.project_id = Number(target.slice(2));
       } else if (target.startsWith("c-")) {
@@ -277,8 +269,8 @@ export default function PunchPage() {
     setBusy(true);
     setError(null);
     try {
-      const { pos, approx } = await getPosition();
-      const payload: Record<string, unknown> = { ...approx };
+      const pos = await getPosition();
+      const payload: Record<string, unknown> = {};
       if (pos) {
         payload.latitude = pos.lat;
         payload.longitude = pos.lng;

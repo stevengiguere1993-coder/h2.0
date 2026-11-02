@@ -15,7 +15,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2, Play, Square, Timer, X } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
-import { capturerPositionOuApprox } from "@/lib/punch-geo";
+import { capturerPositionPunch } from "@/lib/punch-geo";
 import { useConfirm } from "@/components/confirm-dialog";
 import {
   fmtDayShort,
@@ -233,9 +233,9 @@ export function PunchFeuille({
     setError(null);
     setInfo(null);
     try {
-      // Position prise au moment du punch seulement ; GPS refusé →
-      // approximation par l'adresse internet, jamais bloquant.
-      const position = await capturerPositionOuApprox();
+      // Position prise au moment du punch seulement ; le punch part
+      // sans elle si l'appareil la refuse.
+      const geolocation = await capturerPositionPunch();
       const res = await authedFetch("/api/v1/timesheets/punch/start", {
         method: "POST",
         body: JSON.stringify({
@@ -243,7 +243,7 @@ export function PunchFeuille({
           entreprise_tache_id:
             effectiveMode === "import" ? selected?.id ?? null : null,
           title: finalTitle,
-          ...position
+          geolocation
         })
       });
       if (!res.ok) {
@@ -283,10 +283,12 @@ export function PunchFeuille({
     setError(null);
     setInfo(null);
     try {
-      const position = await capturerPositionOuApprox();
+      const geolocation = await capturerPositionPunch();
       const res = await authedFetch("/api/v1/timesheets/punch/stop", {
         method: "POST",
-        body: JSON.stringify(finIso ? { fin: finIso, ...position } : position)
+        body: JSON.stringify(
+          finIso ? { fin: finIso, geolocation } : { geolocation }
+        )
       });
       if (!res.ok) {
         const msg = await readApiError(res, "Le punch n'a pas pu s'arrêter.");
