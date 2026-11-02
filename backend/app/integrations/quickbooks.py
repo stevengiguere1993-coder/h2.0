@@ -783,21 +783,44 @@ class QuickBooksClient:
         """Rend un client INACTIF (QuickBooks ne supprime pas de client).
         QuickBooks refuse si le solde n'est pas nul : on remonte alors
         l'erreur à l'appelant."""
-        cust = await self.get_customer(customer_id)
+        return await self.set_customer_active(customer_id, False) is not None
+
+    async def get_customer_any(self, customer_id: str) -> Optional[Dict[str, Any]]:
+        """Comme ``get_customer``, mais trouve aussi un client INACTIF
+        (les requêtes QBO ne renvoient que les actifs par défaut)."""
+        safe = str(customer_id).replace("'", "''")
+        rows = await self.query(
+            "SELECT * FROM Customer WHERE Active IN (true, false) "
+            f"AND Id = '{safe}' MAXRESULTS 1"
+        )
+        return rows[0] if rows else None
+
+    async def all_customers_any(self) -> List[Dict[str, Any]]:
+        """Tous les clients et sous-clients, actifs ET inactifs."""
+        return await self.query_all(
+            "SELECT * FROM Customer WHERE Active IN (true, false)"
+        )
+
+    async def set_customer_active(
+        self, customer_id: str, active: bool
+    ) -> Optional[Dict[str, Any]]:
+        """Rend un client actif / inactif (mise à jour sparse). Retourne le
+        client mis à jour, None s'il est introuvable."""
+        cust = await self.get_customer_any(customer_id)
         if not cust:
-            return False
-        await self._request(
+            return None
+        data = await self._request(
             "POST",
             "/customer",
             json_body={
                 "Id": str(cust.get("Id")),
                 "SyncToken": str(cust.get("SyncToken") or "0"),
                 "sparse": True,
-                "Active": False,
+                "Active": bool(active),
             },
             params={"minorversion": "70"},
         )
-        return True
+        return data.get("Customer") or data
 
     async def find_customer_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         safe = name.replace("'", "''")

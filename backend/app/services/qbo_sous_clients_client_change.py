@@ -36,7 +36,12 @@ log = logging.getLogger(__name__)
 #: Projets repassés au plus par passage (borne de sécurité).
 MAX_PAR_PASSAGE = 50
 
-CLE_REPARATION_1660 = "qbo_sous_client_1660_st_clement_v1"
+#: v2 (2026-11-02, après la mise en prod) : la v1 avait gardé le lien de
+#: la fiche du Groupe vers le client QB #179, qui n'est pas « Groupe 1660
+#: Saint-Clément inc. » (autre compagnie au même courriel). La v2 repasse
+#: avec la règle du nom (``qbo_client_mere``) : client mère retrouvé /
+#: réactivé / créé au bon nom, sous-client déplacé sous lui.
+CLE_REPARATION_1660 = "qbo_sous_client_1660_st_clement_v2"
 
 
 def _parent_de(row: Optional[Dict[str, Any]]) -> str:
