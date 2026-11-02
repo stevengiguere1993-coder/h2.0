@@ -62,10 +62,9 @@ type Bilan = { verifies: number; converties: number[]; restantes: number[] };
 
 //: Même zip que Prospection → Rôles fonciers ; version = manifest.json
 //: (tests/test_extension_zip.py). La conversion des sous-clients demande
-//: la 1.3.0 (content-qbo.js) ; la 1.3.2 ne cache plus les boutons de
-//: QuickBooks (Steven 2026-11-02 : la bulle cachait « Enregistrer »).
-const EXTENSION_VERSION = "1.3.2";
-const EXTENSION_MIN = "1.3.2";
+//: la 1.3.0 (content-qbo.js).
+const EXTENSION_VERSION = "1.3.1";
+const EXTENSION_MIN = "1.3.0";
 const EXTENSION_ZIP = "/telechargements/extension-horizon-h2.zip";
 
 const CARTE = { borderColor: "var(--qg-border)", backgroundColor: "var(--qg-card-bg)" };

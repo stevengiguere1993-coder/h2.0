@@ -9,12 +9,9 @@
 //
 //   1. demande à Kratos la liste des sous-clients à convertir
 //      (background.js → POST /api/v1/extension/qbo-conversions) ;
-//   2. affiche un panneau (ouvert sur la page Projets, replié en pastille
-//      ailleurs) : la liste, « Convertir maintenant » sur la page Projets
-//      (ou « Aller à Projets » ailleurs), la case « Automatique »
-//      (désactivée par défaut). 1.3.2 : il se pose dans un coin où il ne
-//      cache aucun bouton de QuickBooks, se ferme par × jusqu'au
-//      rechargement de la page ;
+//   2. affiche un panneau en bas à droite : la liste, « Convertir
+//      maintenant » sur la page Projets (ou « Aller à Projets » ailleurs),
+//      la case « Automatique » (désactivée par défaut) ;
 //   3. pilote l'écran : « Nouveau projet ▾ » → « Convertir depuis un
 //      sous-client » → coche EXACTEMENT les noms attendus (jamais « tout
 //      sélectionner ») → « Convertir » → confirmation ;
@@ -126,17 +123,7 @@
     enCours: false,
     message: null, // dernière ligne d'état (texte, ton)
     auto: false,
-    // 1.3.2 — replié d'office hors de la page Projets (la bulle ouverte
-    // cachait le bouton « Enregistrer » d'une fiche client, Steven
-    // 2026-11-02).
-    replie: !surPageProjets(),
-    // Fermé par × : plus rien jusqu'au rechargement de la page.
-    ferme: false,
-    // Ouvert à la demande sans place libre : se replie au premier clic
-    // ailleurs dans QuickBooks.
-    force: false,
-    // Pastille sans place libre : simple languette au bord droit.
-    languette: false,
+    replie: false,
     compagnieOk: null, // true / false / null (pas vérifiable)
   };
 
@@ -184,115 +171,48 @@
     "font:inherit;font-size:12px;border-radius:8px;padding:5px 9px;cursor:pointer;" +
     "border:1px solid #c9c4ba;background:#fff;color:#2a2a2a;";
 
-  const STYLE_BASE =
-    "position:fixed;z-index:2147483000;" +
-    "font:13px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;" +
-    "color:#1f1f1f;background:#fffdf8;border:1px solid #d9b26a;box-shadow:0 10px 30px rgba(0,0,0,.18);";
-
-  function deplier() {
-    etat.replie = false;
-    etat.languette = false;
-    etat.ouvertALaMain = true;
-    rendre();
-    etat.ouvertALaMain = false;
-  }
-
   function rendre() {
     let p = document.getElementById(PANNEAU_ID);
     const items = (etat.liste && etat.liste.items) || [];
-    const rien = !etat.erreur && !items.length && !etat.message && !etat.enCours;
-    if (rien || (etat.ferme && !etat.enCours)) {
+    if (!etat.erreur && !items.length && !etat.message && !etat.enCours) {
       if (p) p.remove();
       return;
     }
-    if (etat.enCours) {
-      // La conversion se regarde : panneau ouvert, jamais replié.
-      etat.replie = false;
-      etat.languette = false;
-    }
     if (!p) {
-      p = el("div", "");
+      p = el(
+        "div",
+        "position:fixed;right:16px;bottom:16px;z-index:2147483000;width:340px;max-width:calc(100vw - 32px);" +
+          "font:13px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;" +
+          "color:#1f1f1f;background:#fffdf8;border:1px solid #d9b26a;border-radius:12px;" +
+          "box-shadow:0 10px 30px rgba(0,0,0,.18);"
+      );
       p.id = PANNEAU_ID;
       document.documentElement.appendChild(p);
     }
     p.textContent = "";
-    const nbTexte = items.length ? `${items.length} à convertir` : "";
 
-    // Languette : aucune place libre pour la pastille (tout le bord est
-    // occupé par des boutons de QuickBooks) → un onglet étroit au bord
-    // droit, qui s'ouvre au clic.
-    if (etat.replie && etat.languette) {
-      p.setAttribute(
-        "style",
-        STYLE_BASE +
-          "right:0;top:38%;left:auto;bottom:auto;width:auto;padding:8px 5px;cursor:pointer;" +
-          "border-right:0;border-radius:10px 0 0 10px;writing-mode:vertical-rl;" +
-          "font-weight:700;font-size:12px;color:#5c4614;background:#f7efdd;"
-      );
-      p.title = "Horizon · projets QuickBooks" + (nbTexte ? " (" + nbTexte + ")" : "") + " — cliquer pour ouvrir";
-      p.textContent = "Horizon" + (items.length ? " · " + items.length : "");
-      p.onclick = deplier;
-      return;
-    }
-    p.onclick = null;
-    p.removeAttribute("title");
-    p.setAttribute(
-      "style",
-      STYLE_BASE +
-        (etat.replie
-          ? "width:auto;max-width:calc(100vw - 32px);border-radius:999px;"
-          : "width:340px;max-width:calc(100vw - 32px);border-radius:12px;")
-    );
-
-    // En-tête (seul visible quand c'est replié : la pastille)
+    // En-tête
     const tete = el(
       "div",
-      "display:flex;align-items:center;justify-content:space-between;gap:8px;" +
-        (etat.replie
-          ? "padding:5px 6px 5px 12px;background:#f7efdd;border-radius:999px;"
-          : "padding:10px 12px;border-bottom:1px solid #eadfc8;background:#f7efdd;border-radius:12px 12px 0 0;")
+      "display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;" +
+        "border-bottom:1px solid #eadfc8;background:#f7efdd;border-radius:12px 12px 0 0;"
     );
-    const titre = el(
-      "div",
-      "font-weight:700;font-size:13px;white-space:nowrap;",
-      etat.replie ? "Horizon" : "Horizon · projets QuickBooks"
+    const titre = el("div", "font-weight:700;font-size:13px;", "Horizon · projets QuickBooks");
+    const nb = el(
+      "span",
+      "margin-left:6px;font-weight:600;font-size:11px;color:#6b5a2e;",
+      items.length ? `${items.length} à convertir` : ""
     );
-    const nb = el("span", "margin-left:6px;font-weight:600;font-size:11px;color:#5c4614;", nbTexte);
     titre.appendChild(nb);
-    const boutons = el("div", "display:flex;align-items:center;gap:4px;");
     const replier = el("button", BOUTON_SEC, etat.replie ? "Afficher" : "Réduire");
     replier.onclick = () => {
-      if (etat.replie) {
-        deplier();
-      } else {
-        etat.replie = true;
-        etat.force = false;
-        rendre();
-      }
+      etat.replie = !etat.replie;
+      rendre();
     };
-    boutons.appendChild(replier);
-    if (!etat.enCours) {
-      const fermer = el(
-        "button",
-        BOUTON_SEC + "padding:5px 8px;font-weight:700;line-height:1;",
-        "×"
-      );
-      fermer.title = "Fermer jusqu'au rechargement de la page";
-      fermer.setAttribute("aria-label", "Fermer le panneau Horizon");
-      fermer.onclick = () => {
-        etat.ferme = true;
-        etat.force = false;
-        rendre();
-      };
-      boutons.appendChild(fermer);
-    }
     tete.appendChild(titre);
-    tete.appendChild(boutons);
+    tete.appendChild(replier);
     p.appendChild(tete);
-    if (etat.replie) {
-      placer(p);
-      return;
-    }
+    if (etat.replie) return;
 
     const corps = el("div", "padding:10px 12px;max-height:50vh;overflow:auto;");
     p.appendChild(corps);
@@ -431,140 +351,6 @@
       "Désactivé par défaut : regarde la première conversion se faire.";
     actions.appendChild(lab);
     corps.appendChild(actions);
-    placer(p);
-  }
-
-  // ── Placement hors des boutons de QuickBooks (1.3.2) ───────────────
-  //
-  // Steven 2026-11-02 : « l'extension ici m'empêche de sauvegarder » — la
-  // bulle, fixée en bas à droite, cachait le bouton « Enregistrer » du
-  // volet de modification d'une fiche client. La bulle se pose donc dans
-  // le premier coin où elle ne recouvre AUCUN élément cliquable de
-  // QuickBooks, et le vérifie de nouveau chaque seconde (un volet ou une
-  // fenêtre de QB peut s'ouvrir dessous). Sans place libre : la pastille
-  // devient une languette au bord droit ; le panneau ouvert se replie,
-  // sauf s'il vient d'être ouvert à la main — il se replie alors au
-  // premier clic ailleurs dans QuickBooks.
-
-  const MARGE = 16;
-  const COINS = ["bas-droite", "bas-gauche", "milieu-droite", "milieu-gauche"];
-  const INTERACTIFS =
-    'button, a[href], input:not([type="hidden"]), select, textarea, summary, ' +
-    '[role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="option"], ' +
-    '[role="checkbox"], [role="radio"], [role="combobox"], [role="switch"], [role="textbox"], ' +
-    '[contenteditable="true"]';
-
-  function rectCoin(coin, l, h) {
-    const W = document.documentElement.clientWidth || window.innerWidth;
-    const H = document.documentElement.clientHeight || window.innerHeight;
-    const droite = W - MARGE - l;
-    const milieu = Math.max(MARGE, Math.round((H - h) / 2));
-    switch (coin) {
-      case "bas-gauche":
-        return { left: MARGE, top: H - MARGE - h, width: l, height: h };
-      case "milieu-droite":
-        return { left: droite, top: milieu, width: l, height: h };
-      case "milieu-gauche":
-        return { left: MARGE, top: milieu, width: l, height: h };
-      default:
-        return { left: droite, top: H - MARGE - h, width: l, height: h };
-    }
-  }
-
-  // Un élément cliquable de QuickBooks sous ce rectangle ? (grille de
-  // points : document.elementsFromPoint renvoie toute la pile, la bulle
-  // comprise, qu'on ignore.)
-  function recouvreUnBouton(r, p) {
-    const W = document.documentElement.clientWidth || window.innerWidth;
-    const H = document.documentElement.clientHeight || window.innerHeight;
-    if (r.left < 0 || r.top < 0 || r.left + r.width > W || r.top + r.height > H) return true;
-    const xs = [0.03, 0.25, 0.5, 0.75, 0.97].map((f) => r.left + f * r.width);
-    const ys = [0.1, 0.5, 0.9].map((f) => r.top + f * r.height);
-    for (const x of xs) {
-      for (const y of ys) {
-        for (const e of document.elementsFromPoint(x, y)) {
-          if (p.contains(e)) continue;
-          const i = e.closest(INTERACTIFS);
-          if (i && !p.contains(i) && visible(i)) return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  function poser(p, r) {
-    p.style.left = Math.round(r.left) + "px";
-    p.style.top = Math.round(r.top) + "px";
-    p.style.right = "auto";
-    p.style.bottom = "auto";
-  }
-
-  function placer(p) {
-    if (!p || !document.contains(p) || (etat.replie && etat.languette)) return;
-    const taille = p.getBoundingClientRect();
-    const l = taille.width;
-    const h = taille.height;
-    if (etat.replie) etat.taillePastille = { l, h };
-    if (etat.enCours) {
-      poser(p, rectCoin("bas-droite", l, h));
-      return;
-    }
-    for (const coin of COINS) {
-      const r = rectCoin(coin, l, h);
-      if (!recouvreUnBouton(r, p)) {
-        poser(p, r);
-        return;
-      }
-    }
-    if (etat.replie) {
-      etat.languette = true;
-      rendre();
-    } else if (etat.force) {
-      poser(p, rectCoin("bas-droite", l, h));
-    } else if (etat.ouvertALaMain) {
-      // Ouvert à la main sans place libre : visible, mais il se replie au
-      // premier clic ailleurs (ex. « Modifier » d'une fiche).
-      etat.ouvertALaMain = false;
-      etat.force = true;
-      poser(p, rectCoin("bas-droite", l, h));
-    } else {
-      etat.replie = true;
-      rendre();
-    }
-  }
-
-  // Chaque seconde : un volet de QuickBooks a pu s'ouvrir sous la bulle,
-  // ou une place s'est libérée pour la pastille repliée en languette.
-  function surveillerPlacement() {
-    setInterval(() => {
-      const p = document.getElementById(PANNEAU_ID);
-      if (!p || etat.enCours) return;
-      if (etat.replie && etat.languette) {
-        // La languette redevient pastille dès qu'un coin se libère (à la
-        // taille mesurée de la pastille : pas de va-et-vient).
-        const t = etat.taillePastille || { l: 190, h: 38 };
-        if (COINS.some((c) => !recouvreUnBouton(rectCoin(c, t.l, t.h), p))) {
-          etat.languette = false;
-          rendre();
-        }
-        return;
-      }
-      placer(p);
-    }, 1000);
-    // Ouvert de force : le premier vrai clic ailleurs le replie (avant que
-    // QuickBooks n'ouvre son volet dessous).
-    document.addEventListener(
-      "mousedown",
-      (ev) => {
-        if (!ev.isTrusted || !etat.force || etat.enCours) return;
-        const p = document.getElementById(PANNEAU_ID);
-        if (p && p.contains(ev.target)) return;
-        etat.force = false;
-        etat.replie = true;
-        rendre();
-      },
-      true
-    );
   }
 
   function dire(texte_, ton) {
@@ -898,7 +684,6 @@
     await chargerListe();
     rendre();
     planifierAuto();
-    surveillerPlacement();
 
     // Application monopage : l'URL change sans rechargement.
     let derniereUrl = location.href;

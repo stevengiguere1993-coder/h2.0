@@ -103,16 +103,6 @@ par l'extension :
 5. Sans extension : les 4 étapes manuelles restent dans la page Kratos
    et dans le courriel envoyé à la technicienne.
 
-**1.3.2** (Steven 2026-11-02 : « l'extension ici m'empêche de
-sauvegarder ») : hors de la page Projets, le panneau est replié en
-pastille. Il se pose dans le premier coin (bas droite, bas gauche, milieu
-droite, milieu gauche) où il ne recouvre aucun bouton, lien ou champ de
-QuickBooks, et le revérifie chaque seconde (un volet de modification peut
-s'ouvrir dessous). Sans place libre, la pastille devient une languette au
-bord droit ; ouvert à la main sans place libre, le panneau se replie au
-premier clic ailleurs. Le bouton **×** le ferme jusqu'au rechargement de
-la page. Pendant une conversion, il reste ouvert en bas à droite.
-
 ## Côté serveur
 
 Set la variable d'environnement `EXTENSION_API_KEY` sur le backend
