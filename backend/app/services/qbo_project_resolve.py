@@ -274,21 +274,7 @@ async def _deplacer_si_client_change(
         return False
     if jid in links:
         return False
-    if not getattr(project, "client_id", None):
-        return False
-    from app.models.client import Client
-
-    try:
-        lien_client = (
-            await db.execute(
-                select(Client.qbo_customer_id).where(
-                    Client.id == project.client_id
-                )
-            )
-        ).scalar_one_or_none()
-    except Exception:  # noqa: BLE001
-        return False
-    if str(lien_client or "") != str(parent_customer_id):
+    if await _lien_client_qbo(db, project) != str(parent_customer_id):
         return False
     targets = _project_targets(project)
     try:
@@ -323,6 +309,53 @@ async def _deplacer_si_client_change(
     )
     if report is not None:
         report["ancien_parent"] = old_parent
+    return True
+
+
+async def _lien_client_qbo(db: AsyncSession, project: Project) -> str:
+    """Client QB mémorisé sur la fiche du client du projet ("" sinon)."""
+    if not getattr(project, "client_id", None):
+        return ""
+    from app.models.client import Client
+
+    try:
+        lien = (
+            await db.execute(
+                select(Client.qbo_customer_id).where(
+                    Client.id == project.client_id
+                )
+            )
+        ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001
+        return ""
+    return str(lien or "")
+
+
+async def _parent_non_canonique(
+    db: AsyncSession,
+    project: Project,
+    jid: str,
+    row: dict,
+    parent_customer_id: str,
+    links: dict[str, tuple[int, list[str]]],
+) -> bool:
+    """Le sous-client lié est sous un autre client mère que celui demandé,
+    mais ce client mère n'est PAS celui mémorisé sur la fiche client : seul
+    la synchro du projet (``ensure_project_qbo_job``, qui mémorise le
+    client mère) décide de le déplacer. Une facture, un coût ou des heures
+    gardent le sous-client existant au lieu d'en créer un second."""
+    parent_of_row = str((row.get("ParentRef") or {}).get("value") or "")
+    if not parent_of_row or parent_of_row == str(parent_customer_id):
+        return False
+    if jid in links:
+        return False
+    if await _lien_client_qbo(db, project) == str(parent_customer_id):
+        return False
+    log.info(
+        "Projet %s : sous-client QB %s gardé sous le client %s (client mère "
+        "%s non mémorisé sur la fiche).",
+        project.id, jid, parent_of_row, parent_customer_id,
+    )
     return True
 
 
@@ -378,6 +411,11 @@ async def resolve_project_customer_id(
             qbo, db, project, jid, row, str(parent_customer_id), links, report,
         ):
             _note("deplace")
+            return jid
+        if row and await _parent_non_canonique(
+            db, project, jid, row, str(parent_customer_id), links,
+        ):
+            _note("deja_lie")
             return jid
         if row:
             log.warning(
