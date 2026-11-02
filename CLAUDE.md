@@ -209,17 +209,11 @@ nouveau prenait un nom dérivé). Pas de déplacement si le sous-client est
 porté par un autre projet, si le nouveau client a déjà un sous-client au
 nom exact (adopté), ou vers un parent autre que le client QB mémorisé sur
 la fiche ; un refus de QB (projet QB) retombe sur la création.
-Client mère : une seule règle, `app/services/qbo_client_mere.py` — le
-client QB doit PORTER LE NOM de la fiche (accents / majuscules /
-ponctuation près) : lien de la fiche, nom exact, courriel unique ; un
-client QB au nom de COMPAGNIE différent (lien ou courriel) n'est jamais
-repris (les compagnies d'un même proprio partagent son courriel : la fiche
-du Groupe 1660 avait été reliée au client QB #179, une autre compagnie) ;
-seul un nom de personne différent est toléré (fiche renommée). À défaut :
-client au nom exact même INACTIF (réactivé), sinon création. Seule la
-synchro du projet (`ensure_project_qbo_job`, qui mémorise le client mère)
-déplace un sous-client ; une facture / un coût dont le client mère n'est
-pas celui de la fiche garde le sous-client existant. Filet horaire dans
+Client mère : une seule règle, `app/services/qbo_client_mere.py` (lien de
+la fiche, nom exact, courriel unique, sinon création) — JAMAIS le client
+QB d'une AUTRE fiche Kratos retrouvé par un courriel partagé (deux
+compagnies du même proprio : le repli par courriel ramenait MGV
+Développement pour Groupe 1660 Saint-Clément). Filet horaire dans
 `qbo_nets` (`qbo_sous_clients_client_change`).
 
 ## Part CCQ par employé — coût de chantier (2026-11-02)

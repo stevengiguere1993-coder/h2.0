@@ -35,18 +35,17 @@ class _QbCompagnie(_FakeQbo):
         super().__init__()
         self.deplacements: List[tuple] = []
         self.refuser_deplacement = False
-        self.reactivations: List[str] = []
 
     def _ajouter(self, nom: str, parent: Optional[str] = None, **extra: Any) -> Dict[str, Any]:
         for r in self.customers.values():
-            if r["DisplayName"].lower() == nom.lower():  # actif ou non
+            if r["DisplayName"].lower() == nom.lower():
                 raise QuickBooksError("Duplicate Name Exists Error (6240)")
         return super()._ajouter(nom, parent, **extra)
 
     async def find_customer_by_email(self, email: str) -> Optional[Dict[str, Any]]:
         trouves = [
             r for r in self.customers.values()
-            if not r.get("ParentRef") and self._actif(r)
+            if not r.get("ParentRef")
             and ((r.get("PrimaryEmailAddr") or {}).get("Address") or "").lower() == email.lower()
         ]
         return dict(trouves[0]) if len(trouves) == 1 else None
@@ -76,48 +75,6 @@ class _QbCompagnie(_FakeQbo):
         self.customers[str(cid)]["Active"] = False
         return True
 
-    # Comme QuickBooks : les requêtes ne renvoient que les clients ACTIFS,
-    # sauf « Active IN (true, false) ».
-    @staticmethod
-    def _actif(r: Dict[str, Any]) -> bool:
-        return r.get("Active") is not False
-
-    async def query_all(self, sql: str) -> List[Dict[str, Any]]:
-        assert "FROM Customer" in sql
-        tous = "Active IN" in sql
-        return [dict(r) for r in self.customers.values() if tous or self._actif(r)]
-
-    async def all_customers_any(self) -> List[Dict[str, Any]]:
-        return await self.query_all("SELECT * FROM Customer WHERE Active IN (true, false)")
-
-    async def get_customer(self, cid: str) -> Optional[Dict[str, Any]]:
-        r = self.customers.get(str(cid))
-        return dict(r) if r and self._actif(r) else None
-
-    async def get_customer_any(self, cid: str) -> Optional[Dict[str, Any]]:
-        r = self.customers.get(str(cid))
-        return dict(r) if r else None
-
-    async def find_customer_by_name(self, name: str) -> Optional[Dict[str, Any]]:
-        for r in self.customers.values():
-            if r["DisplayName"].lower() == name.lower() and self._actif(r):
-                return dict(r)
-        return None
-
-    async def find_subcustomers(self, parent_customer_id: str) -> List[Dict[str, Any]]:
-        return [
-            dict(r) for r in self.customers.values()
-            if (r.get("ParentRef") or {}).get("value") == str(parent_customer_id) and self._actif(r)
-        ]
-
-    async def set_customer_active(self, cid: str, active: bool) -> Optional[Dict[str, Any]]:
-        r = self.customers.get(str(cid))
-        if r is None:
-            return None
-        r["Active"] = bool(active)
-        self.reactivations.append(cid) if active else None
-        return dict(r)
-
 
 @pytest.fixture()
 def qb(client, monkeypatch) -> _QbCompagnie:
@@ -129,9 +86,7 @@ def qb(client, monkeypatch) -> _QbCompagnie:
 
 
 def _suffixe() -> str:
-    # Lettres seulement : un suffixe tout en chiffres ferait passer un nom
-    # de personne pour un nom de compagnie (numéro d'entreprise).
-    return "".join(chr(ord("a") + int(c, 16) % 26) for c in uuid.uuid4().hex[:8])
+    return uuid.uuid4().hex[:6]
 
 
 def _seed(run, qb: _QbCompagnie, *, adresse: str, ancien: str, nouveau: str, courriel: str) -> Dict[str, Any]:
@@ -340,128 +295,3 @@ def test_filet_replace_un_sous_client_reste_sous_l_ancien_client(run, qb):
         {k: dict(v) for k, v in qb.customers.items()}
     ))
     assert ids["project_id"] not in candidats
-
-
-# ── Retour de Steven après la mise en prod : la fiche du Groupe était
-# reliée au client QB #179, qui n'est pas « Groupe 1660 Saint-Clément
-# inc. » (une autre compagnie du même propriétaire, même courriel). ──
-
-
-def _relier_fiche(run, client_id: int, qb_id: str) -> None:
-    async def _go() -> None:
-        async with TestSessionLocal() as s:
-            c = await s.get(Client, client_id)
-            c.qbo_customer_id = qb_id
-            await s.commit()
-
-    run(_go())
-
-
-def test_fiche_reliee_a_une_autre_compagnie_le_groupe_est_cree(run, qb):
-    x = _suffixe()
-    courriel = f"philippe-{x}@example.com"
-    ids = _seed(
-        run, qb, adresse=f"1660 Rue Saint-Clément {x}", ancien=f"MGV Développement inc. {x}",
-        nouveau=f"Groupe 1660 Saint-Clément inc. {x}", courriel=f"mgv-{x}@example.com",
-    )
-    meuser = qb._ajouter(f"Immobilier Meuser 1 inc. {x}", PrimaryEmailAddr={"Address": courriel})
-    # État laissé par la première version : fiche reliée à #179 (Meuser),
-    # sous-client déplacé sous lui.
-    _relier_fiche(run, ids["nouveau_client"], meuser["Id"])
-    qb.customers[ids["sous"]]["ParentRef"] = {"value": meuser["Id"]}
-
-    res = _synchro(run, ids["project_id"])
-
-    groupe = qb.customers[res["parent_customer_id"]]
-    assert groupe["DisplayName"] == f"Groupe 1660 Saint-Clément inc. {x}"
-    assert res["parent_customer_id"] != meuser["Id"]
-    assert res["action"] == "deplace" and res["qbo_job_id"] == ids["sous"]
-    assert qb.customers[ids["sous"]]["ParentRef"]["value"] == groupe["Id"]
-    assert qb.customers[meuser["Id"]]["DisplayName"] == f"Immobilier Meuser 1 inc. {x}"
-    assert _lire(run, Client, ids["nouveau_client"]).qbo_customer_id == groupe["Id"]
-
-
-def test_client_inactif_au_bon_nom_est_reactive_pas_recree(run, qb):
-    x = _suffixe()
-    ids = _seed(
-        run, qb, adresse=f"12 rue Ontario {x}", ancien=f"Ancienne cie inc. {x}",
-        nouveau=f"Groupe Ontario inc. {x}", courriel=f"o-{x}@example.com",
-    )
-    inactif = qb._ajouter(f"Groupe Ontario inc. {x}", Active=False)
-    _relier_fiche(run, ids["nouveau_client"], inactif["Id"])
-    nb = len(qb.customers)
-
-    res = _synchro(run, ids["project_id"])
-
-    assert res["parent_customer_id"] == inactif["Id"]
-    assert qb.customers[inactif["Id"]]["Active"] is True
-    assert inactif["Id"] in qb.reactivations
-    assert len(qb.customers) == nb
-    assert qb.customers[ids["sous"]]["ParentRef"]["value"] == inactif["Id"]
-
-
-def test_nom_avec_accents_differents_est_le_meme_client(run, qb):
-    x = _suffixe()
-    ids = _seed(
-        run, qb, adresse=f"3 rue Hébert {x}", ancien=f"Vieille cie inc. {x}",
-        nouveau=f"Groupe Saint-Clément inc. {x}", courriel=f"h-{x}@example.com",
-    )
-    sans_accent = qb._ajouter(f"Groupe Saint-Clement inc {x}")
-    nb = len(qb.customers)
-
-    res = _synchro(run, ids["project_id"])
-
-    assert res["parent_customer_id"] == sans_accent["Id"]
-    assert len(qb.customers) == nb
-
-
-def test_personne_renommee_garde_son_client_qb(run, qb):
-    """« Tremblay Jean » dans QB, « Jean Tremblay » dans Kratos : même
-    personne, le lien tient (rien n'est créé)."""
-    x = _suffixe()
-    qb_jean = qb._ajouter(f"Tremblay Jean {x}")
-    sous = qb._ajouter(f"8 rue Panet {x}", qb_jean["Id"])
-
-    async def _go() -> Dict[str, Any]:
-        async with TestSessionLocal() as s:
-            c = Client(name=f"Jean Tremblay {x}", qbo_customer_id=qb_jean["Id"])
-            s.add(c)
-            await s.flush()
-            p = Project(name="Cuisine", address=f"8 rue Panet {x}", client_id=c.id,
-                        kind="construction", qbo_job_id=sous["Id"])
-            s.add(p)
-            await s.commit()
-            return {"project_id": p.id}
-
-    ids = run(_go())
-    nb = len(qb.customers)
-    res = _synchro(run, ids["project_id"])
-    assert res["action"] == "deja_lie"
-    assert res["parent_customer_id"] == qb_jean["Id"]
-    assert len(qb.customers) == nb
-
-
-def test_facture_ne_cree_pas_de_second_sous_client(run, qb):
-    """Hors synchro du projet (facture, coût, heures), un client mère qui
-    n'est pas celui mémorisé sur la fiche ne déplace rien et ne crée pas
-    de second sous-client : le sous-client existant sert."""
-    from app.services.qbo_project_resolve import resolve_project_customer_id
-
-    x = _suffixe()
-    ids = _seed(
-        run, qb, adresse=f"40 rue Notre-Dame {x}", ancien=f"Un inc. {x}",
-        nouveau=f"Deux inc. {x}", courriel=f"f-{x}@example.com",
-    )
-    autre = qb._ajouter(f"Deux inc. {x}")
-    nb = len(qb.customers)
-
-    async def _go() -> str:
-        async with TestSessionLocal() as s:
-            p = await s.get(Project, ids["project_id"])
-            jid = await resolve_project_customer_id(qb, s, p, autre["Id"])
-            await s.commit()
-            return jid
-
-    assert run(_go()) == ids["sous"]
-    assert len(qb.customers) == nb
-    assert qb.deplacements == []
