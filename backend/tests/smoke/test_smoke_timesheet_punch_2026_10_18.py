@@ -414,10 +414,11 @@ def test_punch_sans_gps_prend_une_position_approximative(client, auth_headers, v
         r = client.post(f"/api/v1/timesheets/{courante['id']}/reopen", headers=auth_headers)
         assert r.status_code == 200, r.text
 
-    # Sans GPS, derrière Render : adresse publique → approximation.
+    # Sans GPS, derrière le serveur Next.js et Render : la première
+    # adresse PUBLIQUE des relais → approximation.
     r = client.post(
         "/api/v1/timesheets/punch/start",
-        headers={**h, "X-Forwarded-For": "24.1.2.3, 10.0.0.1"},
+        headers={**h, "X-Forwarded-For": "10.0.0.1, 24.1.2.3"},
         json={"company_id": cie, "title": "Sans GPS"},
     )
     assert r.status_code == 201, r.text
@@ -442,3 +443,36 @@ def test_punch_sans_gps_prend_une_position_approximative(client, auth_headers, v
     assert r.json()["geolocation"] is None
     r = client.delete("/api/v1/timesheets/punch", headers=h)
     assert r.status_code == 200, r.text
+
+    # Le téléphone a obtenu lui-même son approximation : elle sert, même
+    # si l'API ne voit aucune adresse utilisable.
+    r = client.post(
+        "/api/v1/timesheets/punch/start",
+        headers=h,
+        json={"company_id": cie, "title": "Approx du téléphone", "geolocation_approx": "45.52,-73.58"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["geolocation"] == "~45.520000,-73.580000"
+    assert client.delete("/api/v1/timesheets/punch", headers=h).status_code == 200
+    # Sinon, l'adresse publique déclarée par le téléphone suffit.
+    r = client.post(
+        "/api/v1/timesheets/punch/start",
+        headers=h,
+        json={"company_id": cie, "title": "IP du téléphone", "ip_publique": "24.1.2.3"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["geolocation"] == "~45.500000,-73.600000"
+    assert client.delete("/api/v1/timesheets/punch", headers=h).status_code == 200
+
+    # Diagnostic admin : en-têtes vus, adresse retenue, fournisseurs.
+    async def faux_diag(ip):
+        return ((45.5, -73.6), ["faux: ok"]) if ip == "24.1.2.3" else (None, ["faux: inconnu"])
+
+    monkeypatch.setattr(ip_geo, "diagnostiquer", faux_diag)
+    r = client.get(
+        "/api/v1/punch/geo-debug",
+        headers={**auth_headers, "X-Forwarded-For": "10.0.0.1, 24.1.2.3"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ip_choisie"] == "24.1.2.3"
+    assert r.json()["position_approx"] == "45.500000,-73.600000"
