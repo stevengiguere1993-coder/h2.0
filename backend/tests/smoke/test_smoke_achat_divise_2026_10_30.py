@@ -502,18 +502,7 @@ def test_mark_paid_sur_une_part_paie_tout_le_groupe(
         json={"payment_method": "cc_steven", "paid_at": "2026-10-29T15:00:00Z"},
     )
     assert mp.status_code == 200, mp.text
-    # Le push du paiement est une tâche de fond : la BillPayment apparaît
-    # dans QB AVANT que son id soit écrit sur les parts et committé — on
-    # attend l'écriture, sinon la lecture tombe entre les deux (CI
-    # 2026-11-03 : [None, None]).
-    _attendre(
-        run,
-        lambda: len(faux_qb.bill_payments) >= 1
-        and all(
-            p.qbo_bill_payment_id
-            for p in _achats(run, [tete["id"], autre["id"]])
-        ),
-    )
+    _attendre(run, lambda: len(faux_qb.bill_payments) >= 1)
     parts = _achats(run, [tete["id"], autre["id"]])
     assert [p.status for p in parts] == ["paid", "paid"]
     assert [p.payment_method for p in parts] == ["cc_steven", "cc_steven"]

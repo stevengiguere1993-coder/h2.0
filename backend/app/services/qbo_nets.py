@@ -790,19 +790,6 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet soldes reportés échoué", exc_info=True)
 
-    # ── Classe « Construction » sur les reçus de chantier déjà dans QB ──
-    # Un reçu saisi directement dans QuickBooks puis importé garde la
-    # classe qu'on y a mise (souvent l'adresse du chantier) : on la
-    # remplace par « Construction », client et projet gardés (Steven
-    # 2026-11-03). Une fois pour tout l'historique, puis les achats
-    # récents à chaque heure. Cf. achat_qbo_classe.
-    try:
-        from app.services.achat_qbo_classe import reclasser_achats_lies
-
-        out["classe_construction"] = await reclasser_achats_lies()
-    except Exception:  # noqa: BLE001
-        log.warning("Filet classe Construction échoué", exc_info=True)
-
     # ── Compteur de factures au-dessus de QuickBooks ──
     # Une facture créée directement dans QB (ou importée) doit faire
     # avancer le compteur de Kratos : prochain numéro = plus haut numéro
