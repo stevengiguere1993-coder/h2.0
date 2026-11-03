@@ -928,3 +928,26 @@ def test_webhook_reflete_la_date_sur_toutes_les_parts(run, chantiers, faux_qb, c
     assert [a.invoice_date for a in _achats(run, [tete["id"], autre["id"]])] == [
         _date(2026, 10, 25), _date(2026, 10, 25),
     ]
+
+
+# ── Reçu « client seul » : classe « Construction » (Steven 2026-11-03) ──
+
+
+def test_recu_client_seul_porte_la_classe_construction(
+    client, auth_headers, run, chantiers, faux_qb
+):
+    """Un reçu rattaché à un client sans projet part dans QB avec le
+    client mère ET la classe « Construction » — « la classe doit être
+    Construction sur tous les reçus entrés par le volet construction »."""
+    ch = chantiers
+    corps = {**_simple(ch), "project_id": None, "client_id": ch["client"]}
+    corps["supplier_invoice_number"] = f"CS-{ch['tag']}"
+    res = client.post("/api/v1/achats", headers=auth_headers, json=corps)
+    assert res.status_code == 201, res.text
+    aid = res.json()["id"]
+    _attendre(run, lambda: len(faux_qb.creations) >= 1)
+    _kind, payload = faux_qb.creations[-1]
+    d = payload["Line"][0]["AccountBasedExpenseLineDetail"]
+    assert d["CustomerRef"]["value"] == ch["parent"]
+    assert d["ClassRef"] == {"value": "K-construction"}
+    _attendre(run, lambda: _achats(run, [aid])[0].qbo_bill_id is not None)

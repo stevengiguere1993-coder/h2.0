@@ -1057,8 +1057,8 @@ async def _sync_achat_sans_verrou(
             class_id = await _classe_achats_id(qbo, int(achat.id))
             noms_projets = project.name
     # Reçu SANS projet/BT mais rattaché à un CLIENT : la dépense QB porte
-    # le CustomerRef du client mère — le coût lui est attribué dans QB
-    # (sans classe chantier). Le projet, s'il existe, prime (sous-client).
+    # le CustomerRef du client mère — le coût lui est attribué dans QB.
+    # Le projet, s'il existe, prime (sous-client).
     if not groupe and customer_id is None and getattr(achat, "client_id", None):
         from app.models.client import Client as _ClientDirect
 
@@ -1080,6 +1080,18 @@ async def _sync_achat_sans_verrou(
                     "QBO: client direct introuvable (achat %s): %s",
                     achat.id, exc,
                 )
+
+    # Reçu SANS projet (client seul, ou sans rattachement) : la classe
+    # « Construction » quand même — « la classe doit être Construction sur
+    # tous les reçus entrés par le volet construction de Kratos » (Steven
+    # 2026-11-03). Le client mère reste le CustomerRef.
+    if (
+        not groupe
+        and not achat.project_id
+        and class_id is None
+        and not getattr(achat, "is_shop", False)
+    ):
+        class_id = await _classe_achats_id(qbo, int(achat.id))
 
     # SHOP (achat non relié à un projet) : classe « Construction », aucun
     # client — la dépense se range dans le volet construction de QB sans
