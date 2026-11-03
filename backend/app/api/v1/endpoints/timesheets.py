@@ -1737,9 +1737,11 @@ async def facturer_solde_qbo(
         else:
             customer = await qbo.ensure_customer(display_name=comp.label)
             customer_ref = str(customer["Id"])
-        item = await qbo.ensure_item(
-            "Heures", description="Heures de main-d'oeuvre refacturées"
-        )
+        # Produit/service réglé dans Gestion locative → Facturation →
+        # Réglages QuickBooks (« heures »), sinon le service historique.
+        from app.services.qbo_items_facturation import charger_reglages, item_pour_ligne
+
+        item = await item_pour_ligne(qbo, await charger_reglages(db), "heures")
 
         # Facture MENSUELLE ouverte : la ligne s'ajoute à LA facture du
         # mois du client (créée au premier clic, jamais envoyée par

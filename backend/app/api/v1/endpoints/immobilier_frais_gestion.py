@@ -27,7 +27,20 @@ from app.api.deps import CurrentUser, DBSession
 from app.integrations.quickbooks import QuickBooksError, get_qbo
 from app.services.locatif_demarrage import get_demarrage
 from app.services.permissions_service import user_has_capability
-from app.services.qbo_monthly_invoice import add_lines_to_monthly_invoice
+from app.services.qbo_items_facturation import (
+    LABELS as QBO_TYPES_LABELS,
+    MODES_FACTURE,
+    MODES_LABELS,
+    TYPES_LIGNE as QBO_TYPES_LIGNE,
+    charger_reglages as charger_reglages_qbo,
+    enregistrer_reglages as enregistrer_reglages_qbo,
+    item_pour_ligne,
+    resume_item,
+)
+from app.services.qbo_monthly_invoice import (
+    add_lines_to_monthly_invoice,
+    create_separate_invoice,
+)
 from app.models.automation_setting import AutomationSetting
 from app.models.immobilier import (
     Bail,
@@ -223,6 +236,8 @@ class HistoriqueOut(BaseModel):
     #: Relocation IGNORÉE (frais jugé non approprié — Phil 2026-10-08) :
     #: ligne à 0 $ qui empêche la facturation ; la poubelle la rétablit.
     ignoree: bool = False
+    #: Produit/service QuickBooks porté par la ligne (Réglages → QuickBooks).
+    qbo_item_name: Optional[str] = None
 
 
 class DefautsRelocation(BaseModel):
@@ -273,6 +288,26 @@ class FacturerOut(BaseModel):
     #: True = nouvelle facture mensuelle démarrée, False = ligne
     #: ajoutée à la facture du mois déjà ouverte.
     created: bool = True
+
+
+async def _qbo_locatif_pret():
+    """Client QuickBooks du locatif (connexion « immobilier », sinon celle
+    de l'entreprise — même compagnie chez Phil). 503 si rien n'est branché."""
+    qbo = get_qbo("immobilier")
+    await qbo._load_refresh_from_db()  # noqa: SLF001
+    if not qbo.ready:
+        qbo = get_qbo("entreprise")
+        await qbo._load_refresh_from_db()  # noqa: SLF001
+    if not qbo.ready:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Aucun QuickBooks connecté pour le locatif — va dans "
+                "Paramètres → Comptabilité → « QuickBooks — autres "
+                "pôles »."
+            ),
+        )
+    return qbo
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────
@@ -613,6 +648,7 @@ async def overview(
             created_at=(f.created_at.isoformat() if f.created_at else None),
             complement=bool(getattr(f, "est_complement", False)),
             type_ligne=getattr(f, "type_ligne", None) or "gestion",
+            qbo_item_name=getattr(f, "qbo_item_name", None),
             ignoree=(
                 (getattr(f, "type_ligne", None) or "gestion") == "relocation"
                 and float(f.montant or 0.0) <= 0.005
@@ -831,27 +867,11 @@ async def facturer(
         )
 
     # Connexion QBO : immobilier, sinon entreprise (même compagnie).
-    qbo = get_qbo("immobilier")
-    await qbo._load_refresh_from_db()  # noqa: SLF001
-    if not qbo.ready:
-        qbo = get_qbo("entreprise")
-        await qbo._load_refresh_from_db()  # noqa: SLF001
-    if not qbo.ready:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Aucun QuickBooks connecté pour le locatif — va dans "
-                "Paramètres → Comptabilité → « QuickBooks — autres "
-                "pôles »."
-            ),
-        )
+    qbo = await _qbo_locatif_pret()
 
     mois_label = f"{MOIS_FR[m.month - 1]} {m.year}"
     try:
-        item = await qbo.ensure_item(
-            "Frais de gestion",
-            description="Frais de gestion immobilière mensuels",
-        )
+        item = await item_pour_ligne(qbo, await charger_reglages_qbo(db), "gestion")
         # Facture MENSUELLE ouverte : la ligne s'ajoute à LA facture du
         # mois du client (créée au premier clic, jamais envoyée par
         # Kratos) — équivalent du « débit différé » voulu par Phil.
@@ -881,6 +901,8 @@ async def facturer(
                 "locative)"
             ),
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     except QuickBooksError as exc:
         raise HTTPException(
             status_code=502, detail=f"QuickBooks a refusé la facture : {exc}"
@@ -897,6 +919,7 @@ async def facturer(
             montant=montant,
             qbo_invoice_id=invoice_id,
             qbo_doc_number=doc_number,
+            qbo_item_name=(str(item.get("Name") or "")[:120] or None),
             created_by_user_id=user.id,
             created_at=datetime.now(timezone.utc),
         )
@@ -1004,6 +1027,11 @@ class LigneGroupeIn(BaseModel):
     frais_manuel_id: Optional[int] = None
     #: Montant FINAL de la ligne — modifiable à la main dans le panier.
     montant: float = Field(gt=0)
+    #: Produit/service QuickBooks de la ligne (vide = celui réglé pour ce
+    #: type de ligne dans Réglages → QuickBooks, 2026-11-03).
+    item_id: Optional[str] = Field(default=None, max_length=32)
+    #: Description QuickBooks de la ligne (vide = description automatique).
+    description: Optional[str] = Field(default=None, max_length=4000)
 
 
 class FacturerGroupeIn(BaseModel):
@@ -1143,6 +1171,8 @@ async def facturer_groupe(
             details.append(
                 {
                     "imm": imm,
+                    "item_id": ligne.item_id,
+                    "description_perso": (ligne.description or "").strip() or None,
                     "mois": (quand or premier_mois_courant).replace(day=1),
                     "montant": round(float(ligne.montant), 2),
                     "revenus": 0.0,
@@ -1196,6 +1226,8 @@ async def facturer_groupe(
             details.append(
                 {
                     "imm": imm,
+                    "item_id": ligne.item_id,
+                    "description_perso": (ligne.description or "").strip() or None,
                     "mois": premier_mois_courant,
                     "montant": round(float(ligne.montant), 2),
                     "revenus": 0.0,
@@ -1270,6 +1302,8 @@ async def facturer_groupe(
         details.append(
             {
                 "imm": imm,
+                "item_id": ligne.item_id,
+                "description_perso": (ligne.description or "").strip() or None,
                 "mois": m,
                 "montant": round(float(ligne.montant), 2),
                 "revenus": revenus_ligne,
@@ -1304,31 +1338,27 @@ async def facturer_groupe(
             ),
         )
 
-    qbo = get_qbo("immobilier")
-    await qbo._load_refresh_from_db()  # noqa: SLF001
-    if not qbo.ready:
-        qbo = get_qbo("entreprise")
-        await qbo._load_refresh_from_db()  # noqa: SLF001
-    if not qbo.ready:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Aucun QuickBooks connecté pour le locatif — va dans "
-                "Paramètres → Comptabilité → « QuickBooks — autres "
-                "pôles »."
-            ),
-        )
+    qbo = await _qbo_locatif_pret()
 
     total = round(sum(d["montant"] for d in details), 2)
     try:
-        item = await qbo.ensure_item(
-            "Frais de gestion",
-            description="Frais de gestion immobilière mensuels",
-        )
+        # Produit/service par ligne : choisi sur la ligne, sinon celui des
+        # Réglages pour ce type, sinon le service historique (2026-11-03).
+        reglages_qbo = await charger_reglages_qbo(db)
+        cache_items: Dict[str, Dict[str, Any]] = {}
+        items_lignes = [
+            await item_pour_ligne(qbo, reglages_qbo, d["type_ligne"], d.get("item_id"), cache=cache_items)
+            for d in details
+        ]
         # Facture MENSUELLE ouverte : les lignes du panier s'ajoutent à
         # LA facture du mois du client (créée au premier clic, jamais
         # envoyée par Kratos) — équivalent du « débit différé ».
-        result = await add_lines_to_monthly_invoice(
+        creer = (
+            create_separate_invoice
+            if reglages_qbo["mode_facture"] == "distincte"
+            else add_lines_to_monthly_invoice
+        )
+        result = await creer(
             db,
             qbo,
             scope=qbo.scope,
@@ -1337,21 +1367,23 @@ async def facturer_groupe(
                 {
                     "DetailType": "SalesItemLineDetail",
                     "Amount": d["montant"],
-                    "Description": _desc_ligne(d),
+                    "Description": d.get("description_perso") or _desc_ligne(d),
                     "SalesItemLineDetail": {
-                        "ItemRef": {"value": str(item["Id"])},
+                        "ItemRef": {"value": str(it["Id"])},
                         "Qty": 1,
                         "UnitPrice": d["montant"],
                         "TaxCodeRef": {"value": tax_code_id},
                     },
                 }
-                for d in details
+                for d, it in zip(details, items_lignes)
             ],
             private_note=(
                 "Créé par Kratos — facture mensuelle (frais de gestion "
                 "locative)"
             ),
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     except QuickBooksError as exc:
         raise HTTPException(
             status_code=502, detail=f"QuickBooks a refusé la facture : {exc}"
@@ -1360,7 +1392,7 @@ async def facturer_groupe(
     doc_number = result["doc_number"]
 
     now = datetime.now(timezone.utc)
-    for d in details:
+    for d, it in zip(details, items_lignes):
         db.add(
             FactureGestion(
                 immeuble_id=d["imm"].id,
@@ -1372,6 +1404,7 @@ async def facturer_groupe(
                 type_ligne=d["type_ligne"],
                 relocation_dossier_id=d["dossier_id"],
                 libelle=d["libelle"],
+                qbo_item_name=(str(it.get("Name") or "")[:120] or None),
                 qbo_invoice_id=invoice_id,
                 qbo_doc_number=doc_number,
                 created_by_user_id=user.id,
@@ -1412,3 +1445,121 @@ async def delete_facture(
     await db.delete(f)
     await db.commit()
     return {"ok": True}
+
+
+# ── Réglages QuickBooks : produits/services et type de facture ─────────
+# Phil 2026-11-02 : « le type de transaction et les détails de cette
+# facture, je ne peux rien changer dans Kratos… pour l'instant les factures
+# c'est des services non catégorisés ». Tout se règle ici, rien en dur.
+
+
+class QboReglagesIn(BaseModel):
+    #: type de ligne → {"id", "name"} du produit/service, ou null.
+    items: Dict[str, Optional[Dict[str, str]]] = Field(default_factory=dict)
+    mode_facture: str = "mensuelle"
+
+
+class QboItemIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    income_account_id: str = Field(min_length=1, max_length=32)
+    description: Optional[str] = Field(default=None, max_length=4000)
+    #: Si donné, le nouveau service devient celui de ce type de ligne.
+    type_ligne: Optional[str] = None
+
+
+def _reglages_sortie(reglages: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "reglages": reglages,
+        "types": [{"key": k, "label": QBO_TYPES_LABELS[k]} for k in QBO_TYPES_LIGNE],
+        "modes": [{"key": k, "label": MODES_LABELS[k]} for k in MODES_FACTURE],
+    }
+
+
+@router.get("/qbo-catalogue")
+async def qbo_catalogue(db: DBSession, user: CurrentUser) -> Dict[str, Any]:
+    """Produits/services et comptes de revenus du QuickBooks du locatif +
+    réglages actuels (item par type de ligne, type de facture)."""
+    if not await user_has_capability(db, user, "frais_gestion.facturer"):
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
+    base = _reglages_sortie(await charger_reglages_qbo(db))
+    try:
+        qbo = await _qbo_locatif_pret()
+    except HTTPException as exc:
+        return {**base, "connected": False, "error": exc.detail, "items": [], "income_accounts": []}
+    try:
+        items = [resume_item(i) for i in await qbo.list_items()]
+        comptes = [
+            {
+                "id": str(a.get("Id") or ""),
+                "name": str(a.get("FullyQualifiedName") or a.get("Name") or ""),
+                "type": str(a.get("AccountSubType") or a.get("AccountType") or ""),
+            }
+            for a in await qbo.list_income_accounts()
+            if a.get("Id")
+        ]
+    except QuickBooksError as exc:
+        return {**base, "connected": True, "error": str(exc), "items": [], "income_accounts": []}
+    items.sort(key=lambda i: i["name"].lower())
+    comptes.sort(key=lambda c: c["name"].lower())
+    return {**base, "connected": True, "error": None, "items": items, "income_accounts": comptes}
+
+
+@router.put("/qbo-reglages")
+async def qbo_reglages(payload: QboReglagesIn, db: DBSession, user: CurrentUser) -> Dict[str, Any]:
+    """Enregistre le produit/service de chaque type de ligne et le type de
+    facture. Journalisé."""
+    if not await user_has_capability(db, user, "frais_gestion.facturer"):
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
+    if payload.mode_facture not in MODES_FACTURE:
+        raise HTTPException(status_code=422, detail="Type de facture inconnu (mensuelle ou distincte).")
+    items: Dict[str, Any] = {}
+    for k, v in payload.items.items():
+        if k not in QBO_TYPES_LIGNE:
+            raise HTTPException(status_code=422, detail=f"Type de ligne inconnu : {k}.")
+        if v is None:
+            continue
+        if not str(v.get("id") or "").strip():
+            raise HTTPException(status_code=422, detail=f"Produit/service manquant pour « {QBO_TYPES_LABELS[k]} ».")
+        items[k] = {"id": str(v["id"]).strip(), "name": str(v.get("name") or "").strip()}
+    reglages = await enregistrer_reglages_qbo(db, items=items, mode_facture=payload.mode_facture)
+    from app.services.audit import log_action
+
+    await log_action(
+        db, user=user, action="frais_gestion.qbo_reglages", entity_type="automation_setting", entity_id=None,
+        details={"items": reglages["items"], "mode_facture": reglages["mode_facture"]},
+    )
+    await db.commit()
+    return _reglages_sortie(reglages)
+
+
+@router.post("/qbo-items", status_code=201)
+async def qbo_creer_item(payload: QboItemIn, db: DBSession, user: CurrentUser) -> Dict[str, Any]:
+    """Crée un SERVICE dans QuickBooks rattaché au compte de revenus choisi
+    (fini le « non catégorisé ») et, si demandé, l'affecte à un type de
+    ligne."""
+    if not await user_has_capability(db, user, "frais_gestion.facturer"):
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
+    if payload.type_ligne is not None and payload.type_ligne not in QBO_TYPES_LIGNE:
+        raise HTTPException(status_code=422, detail=f"Type de ligne inconnu : {payload.type_ligne}.")
+    qbo = await _qbo_locatif_pret()
+    try:
+        item = await qbo.create_item(
+            payload.name.strip(), description=(payload.description or "").strip() or None,
+            income_account_id=payload.income_account_id.strip(),
+        )
+    except QuickBooksError as exc:
+        raise HTTPException(status_code=502, detail=f"QuickBooks a refusé le produit/service : {exc}")
+    sortie = resume_item(item)
+    reglages = await charger_reglages_qbo(db)
+    if payload.type_ligne:
+        items = dict(reglages["items"])
+        items[payload.type_ligne] = {"id": sortie["id"], "name": sortie["name"]}
+        reglages = await enregistrer_reglages_qbo(db, items=items, mode_facture=reglages["mode_facture"])
+    from app.services.audit import log_action
+
+    await log_action(
+        db, user=user, action="frais_gestion.qbo_item_cree", entity_type="qbo_item", entity_id=None,
+        details={"item": sortie, "type_ligne": payload.type_ligne},
+    )
+    await db.commit()
+    return {"item": sortie, **_reglages_sortie(reglages)}

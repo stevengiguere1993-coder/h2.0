@@ -79,6 +79,8 @@ type Historique = {
   type_ligne?: string;
   //: Relocation ignorée (ligne à 0 $ — la poubelle la rétablit).
   ignoree?: boolean;
+  //: Produit/service QuickBooks porté par la ligne.
+  qbo_item_name?: string | null;
 };
 
 type Overview = {
@@ -93,6 +95,18 @@ type QboOptions = {
   error?: string | null;
   connected: boolean;
   customers: { id: string; name: string }[];
+};
+//: Produits/services et comptes de revenus du QuickBooks du locatif +
+//: réglages (item par type de ligne, type de facture) — 2026-11-03.
+type QboItem = { id: string; name: string; type: string; income_account_id: string | null; income_account: string | null; description: string | null };
+type QboCatalogue = {
+  connected: boolean;
+  error?: string | null;
+  items: QboItem[];
+  income_accounts: { id: string; name: string; type: string }[];
+  reglages: { items: Record<string, { id: string; name: string }>; mode_facture: string };
+  types: { key: string; label: string }[];
+  modes: { key: string; label: string }[];
 };
 
 type PanierLigne = {
@@ -109,6 +123,10 @@ type PanierLigne = {
   revenus: number;
   complement: boolean;
   montant: string; // éditable
+  //: Produit/service QuickBooks de la ligne (vide = celui des Réglages
+  //: pour ce type de ligne) et description (vide = automatique).
+  itemId: string;
+  description: string;
 };
 
 const MOIS_FR = [
@@ -145,6 +163,15 @@ export default function FacturationImmoPage() {
   const [data, setData] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
   const [qboOpts, setQboOpts] = useState<QboOptions | null>(null);
+  const [catalogue, setCatalogue] = useState<QboCatalogue | null>(null);
+  const chargerCatalogue = useCallback(async () => {
+    try {
+      const r = await authedFetch("/api/v1/immobilier/frais-gestion/qbo-catalogue");
+      if (r.ok) setCatalogue((await r.json()) as QboCatalogue);
+    } catch {
+      /* noop */
+    }
+  }, []);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [showConfig, setShowConfig] = useState(false);
 
@@ -193,6 +220,10 @@ export default function FacturationImmoPage() {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    void chargerCatalogue();
+  }, [chargerCatalogue]);
 
   const patchImmeuble = async (
     id: number,
@@ -295,7 +326,9 @@ export default function FacturationImmoPage() {
         label: tx.label,
         revenus: tx.revenus,
         complement: tx.type === "complement",
-        montant: String(tx.montant)
+        montant: String(tx.montant),
+        itemId: "",
+        description: ""
       }
     ]);
   };
@@ -388,6 +421,12 @@ export default function FacturationImmoPage() {
   };
 
   const totalPanier = panier.reduce((a, l) => a + num(l.montant), 0);
+  //: Ce que QuickBooks recevra si la ligne ne choisit rien : l'item des
+  //: Réglages pour ce type de ligne, sinon le service historique.
+  const libelleItemDefaut = (kind: PanierLigne["kind"]) => {
+    const regle = catalogue?.reglages.items[kind];
+    return regle ? `Par défaut : ${regle.name || `#${regle.id}`}` : "Par défaut : Frais de gestion (service historique)";
+  };
 
   const creerFacture = async () => {
     if (!panierClient || panier.length === 0) return;
@@ -422,7 +461,9 @@ export default function FacturationImmoPage() {
               libelle: l.kind === "manuel" ? l.libelle : undefined,
               frais_manuel_id:
                 l.kind === "manuel" ? l.manuelUid : undefined,
-              montant: num(l.montant)
+              montant: num(l.montant),
+              item_id: l.itemId || undefined,
+              description: l.description.trim() || undefined
             }))
           })
         }
@@ -675,6 +716,36 @@ export default function FacturationImmoPage() {
                         <X className="h-4 w-4" />
                       </button>
                     </span>
+                    <div className="flex w-full flex-wrap items-center gap-2 border-t border-brand-800/60 pt-2 text-xs">
+                      <label className="flex items-center gap-1.5 text-white/55">
+                        Produit/service
+                        <select
+                          value={l.itemId}
+                          onChange={(e) =>
+                            setPanier((prev) => prev.map((x) => (x.uid === l.uid ? { ...x, itemId: e.target.value } : x)))
+                          }
+                          title="Produit/service QuickBooks de la ligne — vide = celui des Réglages pour ce type de ligne"
+                          className="max-w-[320px] rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-xs text-white outline-none transition focus:border-accent-500"
+                        >
+                          <option value="">{libelleItemDefaut(l.kind)}</option>
+                          {(catalogue?.items || []).map((it) => (
+                            <option key={it.id} value={it.id}>
+                              {it.name}
+                              {it.income_account ? ` — ${it.income_account}` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <input
+                        value={l.description}
+                        onChange={(e) =>
+                          setPanier((prev) => prev.map((x) => (x.uid === l.uid ? { ...x, description: e.target.value } : x)))
+                        }
+                        placeholder={`Description QuickBooks — vide = automatique (${l.label} — ${l.immeuble_name})`}
+                        title="Description de la ligne telle qu'elle apparaîtra sur la facture QuickBooks"
+                        className="min-w-[260px] flex-1 rounded-lg border border-brand-800 bg-brand-950 px-2.5 py-1 text-xs text-white outline-none transition focus:border-accent-500"
+                      />
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1080,6 +1151,11 @@ export default function FacturationImmoPage() {
                           </td>
                           <td className="px-3 py-2.5 text-white/70">
                             {h.label}
+                            {h.qbo_item_name ? (
+                              <span className="ml-2 text-[11px] text-white/40" title="Produit/service QuickBooks de la ligne">
+                                · {h.qbo_item_name}
+                              </span>
+                            ) : null}
                             {h.complement && (
                               <span
                                 className="badge badge-neutral ml-2"
@@ -1159,6 +1235,7 @@ export default function FacturationImmoPage() {
                 </span>
               </button>
 
+              {showConfig ? <QboReglagesBloc catalogue={catalogue} onChanged={chargerCatalogue} /> : null}
               {showConfig && data && (
                 <div className="mt-4 flex flex-wrap items-end gap-3 rounded-xl border border-brand-800 bg-brand-950/40 px-3.5 py-3 text-xs">
                   <span className="font-semibold text-white/80">
@@ -1409,5 +1486,145 @@ export default function FacturationImmoPage() {
         )}
       </div>
     </>
+  );
+}
+
+// ─── Réglages QuickBooks : produits/services et type de facture ───────────
+// Phil 2026-11-02 : « pour l'instant les factures c'est des services non
+// catégorisés ». Chaque type de ligne porte le produit/service choisi ici
+// (donc son compte de revenus) ; chaque ligne du panier peut en choisir un
+// autre ; un service se crée sur le compte de revenus voulu.
+
+function QboReglagesBloc({ catalogue, onChanged }: { catalogue: QboCatalogue | null; onChanged: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [nouveau, setNouveau] = useState({ name: "", income_account_id: "", type_ligne: "" });
+  if (!catalogue) return null;
+  const reglages = catalogue.reglages;
+  const itemsParId = new Map(catalogue.items.map((i) => [i.id, i]));
+  const SELECT = "rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-xs text-white outline-none transition focus:border-accent-500 disabled:opacity-50";
+
+  async function enregistrer(items: Record<string, { id: string; name: string } | null>, mode: string) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authedFetch("/api/v1/immobilier/frais-gestion/qbo-reglages", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items, mode_facture: mode })
+      });
+      const d = await r.json().catch(() => null);
+      if (!r.ok) throw new Error((d && d.detail) || `Erreur ${r.status}`);
+      await onChanged();
+    } catch (e) {
+      setErr((e as Error).message || "Enregistrement impossible");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function choisir(typeKey: string, itemId: string) {
+    const items: Record<string, { id: string; name: string } | null> = { ...reglages.items };
+    if (!itemId) items[typeKey] = null;
+    else items[typeKey] = { id: itemId, name: itemsParId.get(itemId)?.name || "" };
+    void enregistrer(items, reglages.mode_facture);
+  }
+
+  async function creer() {
+    if (!nouveau.name.trim() || !nouveau.income_account_id) {
+      setErr("Nom du service et compte de revenus requis.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authedFetch("/api/v1/immobilier/frais-gestion/qbo-items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: nouveau.name.trim(), income_account_id: nouveau.income_account_id, type_ligne: nouveau.type_ligne || null })
+      });
+      const d = await r.json().catch(() => null);
+      if (!r.ok) throw new Error((d && d.detail) || `Erreur ${r.status}`);
+      setNouveau({ name: "", income_account_id: "", type_ligne: "" });
+      await onChanged();
+    } catch (e) {
+      setErr((e as Error).message || "Création impossible");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-xl border border-brand-800 bg-brand-950/40 px-3.5 py-3 text-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-semibold text-white/80">QuickBooks — produits/services et type de facture</span>
+        {catalogue.connected ? <span className="badge badge-emerald">connecté</span> : <span className="badge badge-amber">QuickBooks non connecté</span>}
+        {catalogue.error ? <span className="text-rose-300">{catalogue.error}</span> : null}
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin text-white/40" /> : null}
+      </div>
+      <p className="mt-1 text-white/45">
+        Chaque type de ligne part dans QuickBooks avec le produit/service choisi ici, donc avec son compte de revenus. Vide = le service historique
+        («&nbsp;Frais de gestion&nbsp;» ou «&nbsp;Heures&nbsp;»), créé au besoin sur le premier compte de revenus de QuickBooks — c&apos;est ce qui donnait
+        des «&nbsp;services non catégorisés&nbsp;». Chaque ligne du panier peut encore choisir un autre produit/service et sa description.
+      </p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {catalogue.types.map((t) => {
+          const cur = reglages.items[t.key];
+          const it = cur ? itemsParId.get(cur.id) : undefined;
+          return (
+            <label key={t.key} className="flex flex-col gap-1 text-white/70">
+              <span>{t.label}</span>
+              <select value={cur?.id || ""} disabled={busy || !catalogue.connected} onChange={(e) => choisir(t.key, e.target.value)} className={SELECT}>
+                <option value="">Service historique (non réglé)</option>
+                {catalogue.items.map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.name}
+                    {i.income_account ? ` — ${i.income_account}` : ""}
+                  </option>
+                ))}
+                {cur && !itemsParId.has(cur.id) ? <option value={cur.id}>{cur.name || `#${cur.id}`} (introuvable dans QuickBooks)</option> : null}
+              </select>
+              {it?.income_account ? <span className="text-[11px] text-white/40">Compte de revenus : {it.income_account}</span> : null}
+            </label>
+          );
+        })}
+      </div>
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <label className="flex flex-col gap-1 text-white/70">
+          <span>Type de facture</span>
+          <select value={reglages.mode_facture} disabled={busy} onChange={(e) => void enregistrer(reglages.items, e.target.value)} className={SELECT}>
+            {catalogue.modes.map((m) => (
+              <option key={m.key} value={m.key}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-brand-800/60 pt-3">
+        <span className="w-full font-semibold text-white/70">Nouveau service dans QuickBooks (sur le compte de revenus de ton choix)</span>
+        <input value={nouveau.name} onChange={(e) => setNouveau({ ...nouveau, name: e.target.value })} placeholder="Nom (ex. Frais de gestion immobilière)" className={`${SELECT} min-w-[220px]`} />
+        <select value={nouveau.income_account_id} onChange={(e) => setNouveau({ ...nouveau, income_account_id: e.target.value })} className={SELECT}>
+          <option value="">Compte de revenus…</option>
+          {catalogue.income_accounts.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name}
+            </option>
+          ))}
+        </select>
+        <select value={nouveau.type_ligne} onChange={(e) => setNouveau({ ...nouveau, type_ligne: e.target.value })} className={SELECT}>
+          <option value="">Ne pas affecter à un type de ligne</option>
+          {catalogue.types.map((t) => (
+            <option key={t.key} value={t.key}>
+              Affecter à : {t.label}
+            </option>
+          ))}
+        </select>
+        <button className="btn-secondary btn-xs" disabled={busy || !catalogue.connected} onClick={() => void creer()}>
+          Créer dans QuickBooks
+        </button>
+      </div>
+      {err ? <p className="mt-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-rose-200">{err}</p> : null}
+    </div>
   );
 }
