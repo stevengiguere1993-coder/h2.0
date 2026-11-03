@@ -19,7 +19,10 @@ Couvre (QuickBooks simulé en mémoire, aucun appel réseau) :
 7. QB injoignable → rien, sans erreur ;
 8. filet : rattrapage de tout l'historique une seule fois (une écriture
    par transaction même si plusieurs achats la partagent), puis les
-   achats récents.
+   achats récents ;
+9. reçu « client seul » (sans projet) : la ligne du client mère prend
+   « Construction », le client est posé s'il manque, un reçu shop n'est
+   pas relu.
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ import app.services.achat_qbo_classe as classe
 from app.core.config import settings
 from app.integrations.quickbooks import QuickBooksError
 from app.models.achat import Achat
+from app.models.client import Client
 from app.models.fournisseur import Fournisseur
 from app.models.project import Project
 from tests.smoke.conftest import TestSessionLocal
@@ -119,7 +123,9 @@ def faux_qb(monkeypatch, run, db_setup):
     faux = FauxQB()
     monkeypatch.setattr(classe, "get_qbo", lambda *a, **k: faux)
     monkeypatch.setattr(settings, "qbo_achat_class_name", "Construction")
-    crees: Dict[str, list[int]] = {"achats": [], "projets": [], "fournisseurs": []}
+    crees: Dict[str, list[int]] = {
+        "achats": [], "projets": [], "fournisseurs": [], "clients": [],
+    }
     faux.crees = crees  # type: ignore[attr-defined]
 
     async def _table() -> None:
@@ -150,6 +156,8 @@ def faux_qb(monkeypatch, run, db_setup):
                 await s.execute(
                     delete(Fournisseur).where(Fournisseur.id.in_(crees["fournisseurs"]))
                 )
+            if crees["clients"]:
+                await s.execute(delete(Client).where(Client.id.in_(crees["clients"])))
             await s.execute(
                 text("DELETE FROM applied_backfills WHERE key = :k"),
                 {"k": classe.CLE_RATTRAPAGE},
@@ -190,6 +198,44 @@ def _seed(
             faux.crees["projets"].append(p.id)  # type: ignore[attr-defined]
             faux.crees["achats"].append(a.id)  # type: ignore[attr-defined]
             return int(p.id), int(a.id)
+
+    return run(_go())
+
+
+def _seed_client(
+    run, faux: FauxQB, *, qbo_customer_id: Optional[str] = "C-55",
+    qbo_purchase_id: Optional[str] = "5300", is_shop: bool = False,
+) -> tuple[Optional[int], int]:
+    """(client_id, achat_id) : un reçu « client seul » (sans projet) déjà
+    dans QB — ou un reçu shop (ni client ni projet) si ``is_shop``."""
+
+    async def _go() -> tuple[Optional[int], int]:
+        async with TestSessionLocal() as s:
+            f = Fournisseur(name=f"Rona {uuid.uuid4().hex[:6]}")
+            s.add(f)
+            await s.flush()
+            cl: Optional[Client] = None
+            if not is_shop:
+                cl = Client(
+                    name=f"Jean-Francois Croteau {uuid.uuid4().hex[:6]}",
+                    qbo_customer_id=qbo_customer_id,
+                )
+                s.add(cl)
+                await s.flush()
+            a = Achat(
+                fournisseur_id=f.id, client_id=(cl.id if cl else None),
+                is_shop=is_shop, kind="material", description="Fournitures",
+                amount=250.0, status="paid", payment_method="cc_steven",
+                supplier_invoice_number="9001", qbo_doc_number="9001",
+                qbo_purchase_id=qbo_purchase_id,
+            )
+            s.add(a)
+            await s.commit()
+            faux.crees["fournisseurs"].append(f.id)  # type: ignore[attr-defined]
+            if cl:
+                faux.crees["clients"].append(cl.id)  # type: ignore[attr-defined]
+            faux.crees["achats"].append(a.id)  # type: ignore[attr-defined]
+            return (int(cl.id) if cl else None), int(a.id)
 
     return run(_go())
 
@@ -392,3 +438,75 @@ def test_filet_rattrape_une_fois_puis_les_recents(faux_qb, run):
     assert res2["rattrapage"] is False
     assert res2["modifies"] == 0 and res2["inchanges"] >= 1
     assert len(faux_qb.ecritures) == 1
+
+
+# ── 9. Reçu « client seul » (sans projet) ─────────────────────────────
+
+
+def test_recu_client_seul_prend_construction_client_garde(faux_qb, run):
+    """La ligne du client mère prend « Construction » ; la ligne d'un
+    autre client n'est pas touchée."""
+    _cid, aid = _seed_client(run, faux_qb)
+    mienne = _ligne(montant=250.0, client="C-55", classe_id=None, description="Fournitures")
+    autre = _ligne(montant=80.0, client="C-AUTRE", classe_id="4", classe_nom="Divers")
+    autre["Id"] = "2"
+    faux_qb.purchases["5300"] = _purchase("5300", [mienne, autre])
+
+    res = _reclasser(run, aid)
+
+    assert res == {"ok": True, "kind": "purchase", "qbo_id": "5300", "lignes": 1}
+    _kind, envoye = faux_qb.ecritures[0]
+    assert _detail(envoye, 0)["ClassRef"] == {"value": CONSTRUCTION, "name": "Construction"}
+    assert _detail(envoye, 0)["CustomerRef"]["value"] == "C-55"
+    assert _detail(envoye, 1)["ClassRef"] == {"value": "4", "name": "Divers"}
+    assert _detail(envoye, 1)["CustomerRef"]["value"] == "C-AUTRE"
+
+
+def test_recu_client_seul_une_ligne_sans_client_recoit_le_client(faux_qb, run):
+    _cid, aid = _seed_client(run, faux_qb)
+    ligne = _ligne(montant=250.0, client=None, classe_id=None)
+    del ligne["AccountBasedExpenseLineDetail"]["BillableStatus"]
+    faux_qb.purchases["5300"] = _purchase("5300", [ligne])
+
+    res = _reclasser(run, aid)
+
+    assert res["lignes"] == 1
+    d = _detail(faux_qb.ecritures[0][1])
+    assert d["ClassRef"]["value"] == CONSTRUCTION
+    assert d["CustomerRef"] == {"value": "C-55"}
+    assert d["BillableStatus"] == "NotBillable"
+
+
+def test_recu_client_seul_deux_lignes_etrangeres_intactes(faux_qb, run):
+    """Deux lignes d'autres clients : on ne devine pas."""
+    _cid, aid = _seed_client(run, faux_qb)
+    l1 = _ligne(client="X-1", classe_id=None)
+    l2 = _ligne(client="X-2", classe_id=None)
+    l2["Id"] = "2"
+    faux_qb.purchases["5300"] = _purchase("5300", [l1, l2])
+
+    assert _reclasser(run, aid)["unchanged"] is True
+    assert faux_qb.ecritures == []
+
+
+def test_recu_shop_non_relu(faux_qb, run):
+    """Ni client ni projet : pas relu (un reçu QB sans client peut venir
+    d'un autre volet)."""
+    _cid, aid = _seed_client(run, faux_qb, is_shop=True)
+    faux_qb.purchases["5300"] = _purchase("5300", [_ligne(client=None, classe_id=None)])
+
+    assert _reclasser(run, aid) == {"skipped": "sans_projet_ni_client"}
+    assert faux_qb.lectures == [] and faux_qb.ecritures == []
+
+
+def test_candidats_incluent_les_recus_client_seul(faux_qb, run):
+    _cid, aid = _seed_client(run, faux_qb)
+    _cid2, aid_shop = _seed_client(run, faux_qb, is_shop=True, qbo_purchase_id="5301")
+
+    async def _go() -> list:
+        async with TestSessionLocal() as s:
+            return await classe.candidats(s, tous=True)
+
+    liste = run(_go())
+    assert (aid, "5300") in liste
+    assert all(a != aid_shop for a, _ in liste)
