@@ -23,7 +23,12 @@ par la comptabilité :
   sous-client du projet est posé (on garde « le client et le projet ») ;
 - une ligne d'un autre client / d'un autre volet n'est pas touchée ;
 - une transaction à une seule ligne prend le projet de l'achat Kratos
-  qui la porte, même si QB ne l'identifie pas.
+  qui la porte, même si QB ne l'identifie pas ;
+- un reçu « client seul » (rattaché à un client, sans projet) : la ligne
+  de ce client mère (ou la seule ligne de la transaction) reçoit la
+  classe « Construction », le client est posé s'il manque. Les achats shop
+  (ni client ni projet) ne sont pas relus : un reçu QB sans client peut
+  venir d'un autre volet (reçus « Kratos » de la comptabilité).
 
 Rattrapage : une fois pour tous les achats liés à QB (one-shot
 `achats_classe_construction_v1`, filet horaire), puis chaque heure pour
@@ -42,6 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.integrations.quickbooks import QuickBooksError, get_qbo
 from app.models.achat import Achat
+from app.models.client import Client
 from app.models.project import Project
 
 log = logging.getLogger(__name__)
@@ -102,26 +108,39 @@ async def reclasser_lignes(
     class_name: str,
     projet_par_defaut: Optional[Project] = None,
     par_sous_client: Optional[Dict[str, Project]] = None,
+    client_par_defaut: Optional[Client] = None,
 ) -> int:
     """Pose la classe « Construction » (``class_id``) sur les lignes des
-    projets Kratos de la transaction, en place. Renvoie le nombre de
-    lignes modifiées (0 = rien à envoyer à QB)."""
+    projets Kratos de la transaction (ou du client d'un reçu « client
+    seul »), en place. Renvoie le nombre de lignes modifiées (0 = rien à
+    envoyer à QB)."""
     if par_sous_client is None:
         par_sous_client = await projets_par_sous_client(db)
     cache: Dict[str, Optional[Project]] = {}
     lignes = _lignes_detail(txn)
     modifiees = 0
     for d in lignes:
+        cref = str((d.get("CustomerRef") or {}).get("value") or "")
         projet = await _projet_de_la_ligne(db, d, par_sous_client, cache)
         if projet is None and projet_par_defaut is not None and len(lignes) == 1:
             projet = projet_par_defaut
-        if projet is None:
+        # Client à poser si la ligne n'en a pas : le sous-client du projet,
+        # ou le client mère d'un reçu « client seul ».
+        client_qb: Optional[str] = None
+        if projet is not None:
+            client_qb = str(projet.qbo_job_id or "") or None
+        elif client_par_defaut is not None:
+            client_qb = str(client_par_defaut.qbo_customer_id or "") or None
+            # La ligne de ce client mère, ou la seule ligne de la transaction.
+            if not ((client_qb and cref == client_qb) or len(lignes) == 1):
+                continue
+        else:
             continue
         if str((d.get("ClassRef") or {}).get("value") or "") == str(class_id):
             continue
         d["ClassRef"] = {"value": str(class_id), "name": class_name}
-        if not (d.get("CustomerRef") or {}).get("value") and projet.qbo_job_id:
-            d["CustomerRef"] = {"value": str(projet.qbo_job_id)}
+        if not cref and client_qb:
+            d["CustomerRef"] = {"value": client_qb}
             d.setdefault("BillableStatus", "NotBillable")
         modifiees += 1
     return modifiees
@@ -148,6 +167,7 @@ async def reclasser_transaction(
     class_id: str,
     projet_par_defaut: Optional[Project] = None,
     par_sous_client: Optional[Dict[str, Project]] = None,
+    client_par_defaut: Optional[Client] = None,
 ) -> Dict[str, Any]:
     """Relit la transaction QB, corrige la classe de ses lignes de projet
     et la renvoie telle quelle autrement (mise à jour de l'objet relu,
@@ -160,6 +180,7 @@ async def reclasser_transaction(
         class_name=(settings.qbo_achat_class_name or "").strip(),
         projet_par_defaut=projet_par_defaut,
         par_sous_client=par_sous_client,
+        client_par_defaut=client_par_defaut,
     )
     if n == 0:
         return {"ok": True, "unchanged": True, "kind": kind, "qbo_id": qbo_id}
@@ -192,15 +213,20 @@ async def reclasser_classe_qb_achat(
     qbo_id = str(achat.qbo_purchase_id or achat.qbo_bill_id or "")
     if not qbo_id:
         return {"skipped": "aucun_lien_qb"}
-    if not achat.project_id:
-        return {"skipped": "sans_projet"}
-    projet = await db.get(Project, achat.project_id)
+    projet = await db.get(Project, achat.project_id) if achat.project_id else None
+    client: Optional[Client] = None
+    if not achat.project_id and getattr(achat, "client_id", None):
+        client = await db.get(Client, achat.client_id)
+    if not achat.project_id and client is None:
+        # Shop ou sans rattachement : pas relu (voir l'en-tête du module).
+        return {"skipped": "sans_projet_ni_client"}
     class_id = await _classe_achats_id(qbo, int(achat.id))
     if not class_id:
         return {"skipped": "classe_indisponible"}
     try:
         return await reclasser_transaction(
-            db, qbo, qbo_id=qbo_id, class_id=class_id, projet_par_defaut=projet
+            db, qbo, qbo_id=qbo_id, class_id=class_id,
+            projet_par_defaut=projet, client_par_defaut=client,
         )
     except QuickBooksError as exc:
         # Lien périmé (610 Object Not Found) ou refus QB : on note, on
@@ -232,13 +258,14 @@ async def _marquer_rattrapage(db: AsyncSession) -> None:
 
 
 async def candidats(db: AsyncSession, *, tous: bool) -> List[Tuple[int, str]]:
-    """(achat_id, id QB) des achats de chantier liés à QB — tous (rattrapage)
-    ou créés récemment (imports). Une seule entrée par transaction QB (un
-    reçu fractionné ou divisé a plusieurs achats sur la même)."""
+    """(achat_id, id QB) des achats de chantier ou de client liés à QB —
+    tous (rattrapage) ou créés récemment (imports). Une seule entrée par
+    transaction QB (un reçu fractionné ou divisé a plusieurs achats sur la
+    même)."""
     stmt = (
         select(Achat.id, Achat.qbo_purchase_id, Achat.qbo_bill_id)
         .where(
-            Achat.project_id.is_not(None),
+            Achat.project_id.is_not(None) | Achat.client_id.is_not(None),
             Achat.qbo_purchase_id.is_not(None) | Achat.qbo_bill_id.is_not(None),
         )
         .order_by(Achat.id)
