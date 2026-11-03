@@ -423,6 +423,7 @@ async def ensure_critical_columns() -> None:
         ),
         ("imm_factures_gestion", "relocation_dossier_id", "INTEGER"),
         ("imm_factures_gestion", "libelle", "VARCHAR(255)"),
+        ("imm_factures_gestion", "qbo_item_name", "VARCHAR(120)"),
         # Finances immobilier 2026-07 : composition des intérêts d'une
         # hypothèque ('semi'|'mensuelle'), évaluation de référence pour
         # l'équité, dépenses en % des loyers + taxables (TPS/TVQ).

@@ -1655,6 +1655,9 @@ class FactureGestion(Base):
     #: Description de la ligne (relocation : unité reloué ; manuel :
     #: texte saisi par le gestionnaire).
     libelle: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    #: Produit/service QuickBooks porté par la ligne (Réglages → QuickBooks,
+    #: 2026-11-03). Nouvelle colonne → ensure_critical_columns.
+    qbo_item_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     qbo_invoice_id: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
     )

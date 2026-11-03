@@ -122,6 +122,26 @@ async def _append_lines(
     return inv.get("Invoice") or inv
 
 
+async def create_separate_invoice(
+    db,
+    qbo: QuickBooksClient,
+    *,
+    scope: str,
+    customer_id: str,
+    lines: List[Dict[str, Any]],
+    private_note: str,
+) -> Dict[str, Any]:
+    """Mode « facture distincte » (Réglages Facturation, 2026-11-03) : UNE
+    nouvelle facture par envoi, jamais greffée sur celle du mois. Même
+    signature que ``add_lines_to_monthly_invoice`` (db/scope ignorés)."""
+    invoice = await _create_monthly(qbo, customer_id, lines, private_note)
+    return {
+        "invoice_id": str(invoice.get("Id") or ""),
+        "doc_number": str(invoice.get("DocNumber") or "") or None,
+        "created": True,
+    }
+
+
 async def add_lines_to_monthly_invoice(
     db,
     qbo: QuickBooksClient,

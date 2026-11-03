@@ -1252,9 +1252,17 @@ class QuickBooksClient:
         return None
 
     async def create_item(
-        self, name: str, description: Optional[str] = None
+        self, name: str, description: Optional[str] = None,
+        income_account_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        income = await self.first_income_account()
+        """Crée un Item de type Service. ``income_account_id`` = compte de
+        revenus CHOISI (Réglages Facturation, 2026-11-03) ; sinon le premier
+        compte de revenus de la compagnie (comportement historique, souvent
+        « non catégorisé »)."""
+        if income_account_id:
+            income: Optional[Dict[str, Any]] = {"Id": str(income_account_id)}
+        else:
+            income = await self.first_income_account()
         if not income:
             raise QuickBooksError(
                 "No QBO Income account available to link the new Item."
@@ -1292,6 +1300,28 @@ class QuickBooksClient:
             if existing:
                 return existing
         return await self.create_item(name, description=description)
+
+    async def get_item(self, item_id: str) -> Optional[Dict[str, Any]]:
+        """Lit un Item par Id (None si absent)."""
+        try:
+            data = await self._request("GET", f"/item/{item_id}", params={"minorversion": "70"})
+            return data.get("Item") or data
+        except QuickBooksError:
+            return None
+
+    async def list_items(self) -> List[Dict[str, Any]]:
+        """Produits et services ACTIFS utilisables sur une ligne (les
+        catégories sont écartées)."""
+        rows = await self.query("SELECT * FROM Item WHERE Active = true MAXRESULTS 1000")
+        return [r for r in rows if str(r.get("Type") or "") != "Category"]
+
+    async def list_income_accounts(self) -> List[Dict[str, Any]]:
+        """Comptes de revenus actifs (pour créer un service bien classé)."""
+        rows = await self.query(
+            "SELECT * FROM Account WHERE AccountType IN ('Income', 'Other Income') "
+            "AND Active = true MAXRESULTS 500"
+        )
+        return rows
 
     # ------------------------------------------------------------------
     # Estimates
