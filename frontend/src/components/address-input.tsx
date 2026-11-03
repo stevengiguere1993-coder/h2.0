@@ -7,7 +7,6 @@ import {
   decomposerCivique,
   SUFFIXE_CIVIQUE_MAX
 } from "@/lib/adresse-civique";
-import { authedFetch } from "@/lib/auth";
 
 // Controlled address input with Photon (OpenStreetMap, no API key)
 // autocomplete biased to the Greater Montreal area. Canadian results
@@ -21,14 +20,6 @@ import { authedFetch } from "@/lib/auth";
 // bug 12 du 2026-10-05 : « pouvoir mettre des suffixes quand on crée une
 // adresse ». Pas d'étape à part ni de fenêtre : la case fait partie du
 // formulaire et l'adresse se recompose à mesure.
-//
-// Avec `connues`, le champ propose aussi, dès le focus (même vide), les
-// adresses déjà saisies dans Kratos (immeubles, projets, clients — route
-// `GET /adresses/connues`), filtrées à mesure qu'on tape ; les
-// suggestions OpenStreetMap suivent pour une adresse neuve. Steven,
-// 2026-11-03 : « il doit y avoir un choix d'adresse parmi les adresses
-// existantes ». Réservé au portail connecté (le site public n'a pas de
-// jeton).
 
 type PhotonProps = {
   name?: string;
@@ -80,73 +71,6 @@ function versAdresseChoisie(p: PhotonProps): AdresseChoisie {
   };
 }
 
-/** Adresse déjà présente dans Kratos (réponse de `/adresses/connues`). */
-export type AdresseConnue = {
-  adresse: string;
-  source: "immeuble" | "projet" | "client" | string;
-  nom?: string | null;
-};
-
-const SOURCE_LIBELLE: Record<string, string> = {
-  immeuble: "Immeuble",
-  projet: "Projet",
-  client: "Client"
-};
-
-/** Sans accents, minuscules, ponctuation repliée — même clé que le
- *  backend (`cle_adresse`). */
-export function cleAdresse(texte: string): string {
-  return texte
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-/** Garde les adresses contenant chaque mot tapé. */
-export function filtrerAdressesConnues(
-  adresses: AdresseConnue[],
-  q: string,
-  max = 8
-): AdresseConnue[] {
-  const mots = cleAdresse(q).split(" ").filter(Boolean);
-  const out: AdresseConnue[] = [];
-  for (const a of adresses) {
-    const cle = cleAdresse(`${a.adresse} ${a.nom || ""}`);
-    if (mots.every((m) => cle.includes(m))) {
-      out.push(a);
-      if (out.length >= max) break;
-    }
-  }
-  return out;
-}
-
-// Une seule lecture par page, partagée entre tous les champs d'adresse
-// (le formulaire projet en a deux). Relue après `DUREE_CACHE_MS`.
-const DUREE_CACHE_MS = 60_000;
-let cacheConnues: { quand: number; promesse: Promise<AdresseConnue[]> } | null =
-  null;
-
-function chargerAdressesConnues(): Promise<AdresseConnue[]> {
-  const maintenant = Date.now();
-  if (cacheConnues && maintenant - cacheConnues.quand < DUREE_CACHE_MS) {
-    return cacheConnues.promesse;
-  }
-  const promesse = (async () => {
-    try {
-      const res = await authedFetch("/api/v1/adresses/connues?limit=1000");
-      if (!res.ok) return [];
-      const data = (await res.json()) as AdresseConnue[];
-      return Array.isArray(data) ? data : [];
-    } catch {
-      return [];
-    }
-  })();
-  cacheConnues = { quand: maintenant, promesse };
-  return promesse;
-}
-
 /** Classes du champ principal, sans celles de largeur, pour la case
  *  « Suffixe » (qui impose la sienne). */
 function classesSuffixe(className: string): string {
@@ -163,7 +87,6 @@ export function AddressInput({
   onPick,
   format: formatChoisi = "complete",
   suffixe = true,
-  connues = false,
   placeholder,
   className = "input",
   locale = "fr",
@@ -182,9 +105,6 @@ export function AddressInput({
   format?: "complete" | "rue";
   /** Case « Suffixe » du numéro civique (défaut : oui). */
   suffixe?: boolean;
-  /** Propose aussi les adresses déjà connues dans Kratos (immeubles,
-   *  projets, clients) dès le focus. Portail connecté seulement. */
-  connues?: boolean;
   placeholder?: string;
   className?: string;
   locale?: "fr" | "en";
@@ -193,7 +113,6 @@ export function AddressInput({
   const [suggestions, setSuggestions] = useState<PhotonProps[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [adressesConnues, setAdressesConnues] = useState<AdresseConnue[]>([]);
   const wrapRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -212,32 +131,15 @@ export function AddressInput({
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
-  useEffect(() => {
-    if (!connues) return;
-    let cancelled = false;
-    chargerAdressesConnues().then((xs) => {
-      if (!cancelled) setAdressesConnues(xs);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [connues]);
-
-  // Adresses connues qui correspondent à ce qui est tapé (toutes si vide).
-  const connuesFiltrees = connues
-    ? filtrerAdressesConnues(adressesConnues, value)
-    : [];
-
   function handleChange(v: string) {
     onChange(v);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (abortRef.current) abortRef.current.abort();
     if (v.trim().length < 3) {
       setSuggestions([]);
-      setOpen(connues && filtrerAdressesConnues(adressesConnues, v).length > 0);
+      setOpen(false);
       return;
     }
-    if (connues) setOpen(true);
     debounceRef.current = setTimeout(async () => {
       setLoading(true);
       const controller = new AbortController();
@@ -261,7 +163,7 @@ export function AddressInput({
           if (canadian.length >= 5) break;
         }
         setSuggestions(canadian);
-        setOpen(canadian.length > 0 || (connues && connuesFiltrees.length > 0));
+        setOpen(canadian.length > 0);
       } catch {
         /* aborted or network error — ignore */
       } finally {
@@ -280,17 +182,6 @@ export function AddressInput({
     setOpen(false);
   }
 
-  function choisirConnue(a: AdresseConnue) {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (abortRef.current) abortRef.current.abort();
-    onChange(a.adresse);
-    setSuggestions([]);
-    setOpen(false);
-  }
-
-  const menuOuvert =
-    open && (connuesFiltrees.length > 0 || suggestions.length > 0);
-
   return (
     <div ref={wrapRef} className="relative">
       <div className="flex gap-2">
@@ -299,11 +190,7 @@ export function AddressInput({
           type="text"
           value={value}
           onChange={(e) => handleChange(e.target.value)}
-          onFocus={() =>
-            ((value.length >= 3 && suggestions.length > 0) ||
-              connuesFiltrees.length > 0) &&
-            setOpen(true)
-          }
+          onFocus={() => value.length >= 3 && suggestions.length > 0 && setOpen(true)}
           placeholder={placeholder}
           autoComplete="off"
           required={required}
@@ -324,36 +211,8 @@ export function AddressInput({
           />
         ) : null}
       </div>
-      {menuOuvert ? (
+      {open && suggestions.length > 0 ? (
         <ul className="absolute left-0 right-0 top-full z-[70] mt-1 max-h-72 overflow-auto rounded-lg border border-brand-800 bg-brand-950 shadow-2xl">
-          {connuesFiltrees.length > 0 ? (
-            <li className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-white/50">
-              Adresses dans Kratos
-            </li>
-          ) : null}
-          {connuesFiltrees.map((a) => (
-            <li key={`connue:${a.source}:${a.adresse}`}>
-              <button
-                type="button"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  choisirConnue(a);
-                }}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-white/90 hover:bg-brand-800 active:bg-accent-500/20"
-              >
-                <span className="min-w-0 flex-1 truncate">{a.adresse}</span>
-                <span className="shrink-0 truncate text-[11px] text-white/50">
-                  {SOURCE_LIBELLE[a.source] || a.source}
-                  {a.nom ? ` · ${a.nom}` : ""}
-                </span>
-              </button>
-            </li>
-          ))}
-          {connuesFiltrees.length > 0 && suggestions.length > 0 ? (
-            <li className="mt-1 border-t border-brand-800 px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-white/50">
-              Nouvelle adresse
-            </li>
-          ) : null}
           {suggestions.map((p) => {
             const s = format(p);
             return (

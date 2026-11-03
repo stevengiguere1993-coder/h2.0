@@ -504,7 +504,6 @@ function ClientTabs({
                 <label htmlFor="c_address" className="label">Adresse</label>
                 <AddressInput
                   id="c_address"
-                  connues
                   value={address}
                   onChange={setAddress}
                 />

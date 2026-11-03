@@ -1282,7 +1282,6 @@ function SummaryTab(props: {
             </div>
             <AddressInput
               id="p_address"
-              connues
               value={props.address}
               onChange={props.onAddress}
             />
