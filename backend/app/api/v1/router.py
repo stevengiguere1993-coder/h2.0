@@ -27,6 +27,7 @@ from app.api.v1.endpoints import (
     webhooks_meta,
     activity,
     ai,
+    adresses,
     api_keys,
     assistant,
     mon_ia,
@@ -248,6 +249,10 @@ api_router.include_router(assistant.router)
 # volet : chacun gère SA connexion.
 api_router.include_router(mon_ia.router)
 api_router.include_router(clients.router)
+# Adresses déjà connues (immeubles, projets, clients) pour le champ
+# d'adresse partagé — Steven 2026-11-03. Transverse, garde JWT standard ;
+# la visibilité employé est filtrée dans la route.
+api_router.include_router(adresses.router)
 # Le pôle Dev Logiciel est restreint à admin/owner (Phil + Steven).
 # La garde est appliquée à TOUS les routers internes du pôle ; seuls
 # les routers publics (signature contrat sans login, formulaire de

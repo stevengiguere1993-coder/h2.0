@@ -155,6 +155,7 @@ export default function NewClientPage() {
             <label htmlFor="address" className="label">Adresse</label>
             <AddressInput
               id="address"
+              connues
               value={address}
               onChange={setAddress}
               placeholder="Ex. 1234 rue des Chantiers, Montréal"
