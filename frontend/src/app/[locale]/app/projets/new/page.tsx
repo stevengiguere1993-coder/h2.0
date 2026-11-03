@@ -225,6 +225,7 @@ export default function NewProjectPage() {
             <label htmlFor="address" className="label">Adresse du chantier</label>
             <AddressInput
               id="address"
+              connues
               value={address}
               onChange={setAddress}
               placeholder="Ex. 1234 rue des Chantiers, Montréal"
@@ -365,14 +366,17 @@ export default function NewProjectPage() {
                   <label htmlFor="nc_address" className="label">
                     Adresse
                   </label>
-                  <input
+                  <AddressInput
                     id="nc_address"
-                    type="text"
+                    connues
                     value={ncAddress}
-                    onChange={(e) => setNcAddress(e.target.value)}
+                    onChange={setNcAddress}
                     placeholder="Ex. 1234 rue Principale, Montréal"
-                    className="input"
                   />
+                  <p className="mt-1 text-[11px] text-white/50">
+                    Choisir une adresse déjà connue (immeuble, projet,
+                    client) ou en saisir une nouvelle.
+                  </p>
                 </div>
                 {ncError ? (
                   <p className="text-sm text-rose-400">{ncError}</p>
