@@ -470,8 +470,12 @@ function UsersTab({ canEdit }: { canEdit: boolean }) {
     };
   }, []);
 
-  const loadDetail = useCallback(async (userId: number) => {
-    setLoadingDetail(true);
+  // `silencieux` : rafraîchissement après un clic (pôle, exception). On
+  // garde le détail affiché au lieu de le remplacer par le spinner — sinon
+  // la page rétrécit d'un coup et le navigateur remonte tout en haut
+  // (retour Steven 2026-11-04 : « la page reload et me retourne en haut »).
+  const loadDetail = useCallback(async (userId: number, silencieux = false) => {
+    if (!silencieux) setLoadingDetail(true);
     setError(null);
     try {
       const [aRes, oRes] = await Promise.all([
@@ -506,7 +510,7 @@ function UsersTab({ canEdit }: { canEdit: boolean }) {
         { method: "PATCH", body: JSON.stringify({ volets: next }) }
       );
       if (!res.ok) throw new Error();
-      await loadDetail(detail.user_id);
+      await loadDetail(detail.user_id, true);
     } catch {
       setError("Modification des pôles impossible.");
     } finally {
@@ -532,7 +536,7 @@ function UsersTab({ canEdit }: { canEdit: boolean }) {
       }
       if (!res.ok) throw new Error();
       setOverrides((await res.json()) as Override[]);
-      await loadDetail(detail.user_id);
+      await loadDetail(detail.user_id, true);
     } catch {
       setError("Modification impossible.");
     } finally {
