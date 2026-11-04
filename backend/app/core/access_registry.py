@@ -231,6 +231,10 @@ PAGES: list[PageEntry] = [
     # ── Gestion d'entreprise (comportement actuel : owner/admin + volet) ──
     _p("entreprises.accueil", "Entreprises", "entreprises", "admin",
        "/entreprises"),
+    # Revenus et dépenses de la société de gestion — simulation du fonds
+    # (Phil 2026-11-04) : admins seulement.
+    _p("entreprises.revenus_depenses", "Revenus et dépenses", "entreprises",
+       "admin", "/entreprises/revenus-depenses"),
     _p("entreprises.dashboards", "Tableaux de bord", "entreprises", "admin",
        "/entreprises/dashboards"),
     # Vue d'ensemble des dépenses de la construction et coût à l'heure

@@ -274,6 +274,9 @@ export default function EntreprisesLayout({
   const NAVIGATION: NavItem[] = [
     { href: "/entreprises", label: "Entreprises", icon: Briefcase },
     { href: "/entreprises/dashboards", label: "Tableaux de bord", icon: LayoutGrid },
+    // Revenus et dépenses de la société de gestion — simulation du fonds
+    // (Phil 2026-11-04), admins seulement (registre d'accès).
+    { href: "/entreprises/revenus-depenses", label: "Revenus et dépenses", icon: Calculator },
     // Coût à l'heure contre les entrées de fonds (Steven 2026-10-03, bug 14).
     // En développement (Steven 2026-10-23) → propriétaires seulement, titre
     // en rouge.
