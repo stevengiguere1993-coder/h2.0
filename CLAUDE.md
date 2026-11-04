@@ -316,3 +316,11 @@ réponse liste ``sous_clients_desactives``) ou que Kratos utilise
 refusé sauf ``forcer``. Un projet QB n'a pas de sous-clients ; retirer
 un client mère (revenir au premier niveau) n'existe pas dans l'API ;
 QuickBooks non connecté → 503 avec où reconnecter.
+Rapport « TransactionList » (``/{id}/transactions``) : dans la compagnie
+d'Horizon (QuickBooks en français) ``ColType`` porte le TYPE de donnée
+(Date / String / Money), pas la clé de colonne, et les titres sont en
+français — toutes les lignes sortaient à null (fiche 270, 2026-11-04).
+Les colonnes se reconnaissent par ``MetaData`` ColKey, puis ``ColType``
+s'il est une clé connue, puis le titre (``_cle_colonne``) ; montants
+« 1 350,00 $ » et « (45,00 $) » acceptés ; ``colonnes_rapport`` dans la
+réponse montre le format réellement reçu.

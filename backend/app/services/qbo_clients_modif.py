@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from datetime import date, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -325,14 +326,115 @@ async def lire(
 # ── Inventaire des transactions ─────────────────────────────────────
 
 
+#: Clés de colonnes du rapport « TransactionList » (le « ColKey » de
+#: QuickBooks). Selon la compagnie, ``ColType`` porte cette clé OU le type
+#: de donnée (« Date », « String », « Money ») et les titres sont en
+#: français : voir ``_cle_colonne``.
+CLES_RAPPORT: Set[str] = {
+    "tx_date", "txn_type", "doc_num", "is_no_post", "name", "memo",
+    "account_name", "other_account", "subt_nat_amount", "subt_amount",
+    "subt_nat_home_amount", "amount", "debit_amt", "credit_amt",
+    "klass_name", "dept_name", "pmt_mthd", "due_date", "cust_msg",
+    "create_date", "last_mod_date", "term_name", "item_name", "quantity",
+    "rate", "tax_amount", "net_amount", "home_amount",
+}
+
+
+def _norm_titre(s: str) -> str:
+    """minuscules, sans accents, ponctuation → espace, espaces aplatis."""
+    s = "".join(
+        c
+        for c in unicodedata.normalize("NFD", (s or "").lower())
+        if unicodedata.category(c) != "Mn"
+    )
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", s).split())
+
+
+def _cle_colonne(col: Dict[str, Any]) -> str:
+    """Clé d'une colonne du rapport : ``MetaData`` ColKey quand il est
+    là, sinon ``ColType`` quand il porte une clé connue (et non un type
+    de donnée), sinon le titre reconnu (français ou anglais), sinon le
+    titre normalisé. Le rapport réel d'Horizon (compagnie en français)
+    n'a pas « tx_date » dans ``ColType`` : sans ce repli, toutes les
+    lignes sortaient à null (constat du 2026-11-04 sur la fiche 270)."""
+    for m in col.get("MetaData") or []:
+        if isinstance(m, dict) and str(m.get("Name") or "").lower() == "colkey":
+            v = str(m.get("Value") or "").strip().lower()
+            if v:
+                return v
+    ctype = str(col.get("ColType") or "").strip().lower()
+    if ctype in CLES_RAPPORT:
+        return ctype
+    titre = _norm_titre(str(col.get("ColTitle") or ""))
+    if "date" in titre:
+        return "tx_date"
+    if "type" in titre:
+        return "txn_type"
+    if titre in ("nom", "name", "client", "customer", "nom du client", "customer name"):
+        return "name"
+    if "memo" in titre or "description" in titre or titre in ("note", "notes"):
+        return "memo"
+    if "montant" in titre or "amount" in titre or titre == "total":
+        return "subt_nat_amount"
+    if titre == "debit":
+        return "debit_amt"
+    if titre == "credit":
+        return "credit_amt"
+    if "compte" in titre or "account" in titre:
+        return "account_name"
+    if titre in ("no", "n", "num", "numero", "number", "ref") or titre.startswith("num"):
+        return "doc_num"
+    return titre or ctype
+
+
+def _montant(raw: Any) -> Optional[float]:
+    """Montant d'une cellule de rapport, dans les deux locales que
+    QuickBooks sert : « 1,350.00 » et « 1 350,00 $ » (espace, souvent
+    insécable, pour les milliers ; virgule décimale), négatifs entre
+    parenthèses. ``None`` quand la cellule n'est pas un nombre."""
+    s = str(raw if raw is not None else "").strip()
+    if not s:
+        return None
+    negatif = s.startswith("(") and s.endswith(")")
+    if negatif:
+        s = s[1:-1]
+    s = s.replace("$", "")
+    for espace in (" ", "\u00a0", "\u202f"):
+        s = s.replace(espace, "")
+    if "," in s and "." in s:
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    elif "," in s:
+        s = s.replace(",", ".") if re.search(r",\d{1,2}$", s) else s.replace(",", "")
+    try:
+        v = float(s)
+    except ValueError:
+        return None
+    return -v if negatif else v
+
+
+def colonnes_rapport(rapport: Dict[str, Any]) -> List[str]:
+    """Le format RÉEL des colonnes reçues (« titre|ColType|clé retenue »),
+    renvoyé avec l'inventaire pour comprendre un rapport mal lu sans
+    accès aux réponses de QuickBooks."""
+    return [
+        f"{c.get('ColTitle') or ''}|{c.get('ColType') or ''}|{_cle_colonne(c)}"
+        for c in ((rapport.get("Columns") or {}).get("Column") or [])
+        if isinstance(c, dict)
+    ]
+
+
 def lignes_rapport(rapport: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Lignes de données d'un rapport QuickBooks « TransactionList »
-    (colonnes repérées par leur ``ColType``, id de la transaction porté
-    par la colonne du type ; sections imbriquées parcourues, lignes de
+    (colonnes repérées par ``_cle_colonne`` ; id de la transaction porté
+    par la cellule du type ; sections imbriquées parcourues, lignes de
     total ignorées)."""
     colonnes = [
-        ((c.get("ColType") or "").strip(), (c.get("ColTitle") or "").strip())
+        _cle_colonne(c)
         for c in ((rapport.get("Columns") or {}).get("Column") or [])
+        if isinstance(c, dict)
     ]
     brutes: List[List[Dict[str, Any]]] = []
 
@@ -352,19 +454,24 @@ def lignes_rapport(rapport: Dict[str, Any]) -> List[Dict[str, Any]]:
     for cellules in brutes:
         d: Dict[str, Any] = {}
         txn_id: Optional[str] = None
-        for (ctype, ctitre), cellule in zip(colonnes, cellules):
+        for cle, cellule in zip(colonnes, cellules):
             if not isinstance(cellule, dict):
                 continue
-            val = cellule.get("value")
-            d[ctype or ctitre.lower()] = val
-            if ctype == "txn_type" and cellule.get("id"):
+            d.setdefault(cle, cellule.get("value"))
+            if cle == "txn_type" and cellule.get("id"):
+                txn_id = str(cellule["id"])
+            elif cle == "doc_num" and cellule.get("id") and not txn_id:
                 txn_id = str(cellule["id"])
         montant: Optional[float] = None
         for k in ("subt_nat_amount", "subt_amount", "subt_nat_home_amount", "amount"):
             if d.get(k) not in (None, ""):
-                montant = _num(d[k])
+                montant = _montant(d[k])
                 if montant is not None:
                     break
+        if montant is None and (d.get("debit_amt") or d.get("credit_amt")):
+            montant = (_montant(d.get("debit_amt")) or 0.0) - (
+                _montant(d.get("credit_amt")) or 0.0
+            )
         lignes.append(
             {
                 "date": d.get("tx_date"),
@@ -409,6 +516,7 @@ async def inventaire(
             notes.append(f"{libelle} : comptage refusé ({_motif(exc)})")
 
     lignes: List[Dict[str, Any]] = []
+    colonnes: List[str] = []
     try:
         rapport = await qbo.report(
             "TransactionList",
@@ -416,6 +524,7 @@ async def inventaire(
             start_date="2000-01-01",
             end_date=(date.today() + timedelta(days=366)).isoformat(),
         )
+        colonnes = colonnes_rapport(rapport)
         lignes = lignes_rapport(rapport)
     except _ERREURS_QB as exc:  # noqa: BLE001
         notes.append(f"rapport TransactionList refusé ({_motif(exc)})")
@@ -436,6 +545,7 @@ async def inventaire(
         "transactions_par_type": comptes,
         "nb_transactions": len(lignes),
         "transactions": lignes,
+        "colonnes_rapport": colonnes,
         "vide": vide,
         "notes": notes,
     }
