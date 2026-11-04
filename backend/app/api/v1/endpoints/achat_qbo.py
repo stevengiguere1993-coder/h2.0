@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import or_, select
 
@@ -35,6 +35,10 @@ class AchatQboSyncResult(BaseModel):
     qbo_bill_id: str
     qbo_doc_number: str
     qbo_vendor_id: str
+    #: Le reçu a été joint à la transaction QB pendant CE push (sinon il
+    #: y était déjà, ou l'achat n'en a pas).
+    receipt_attached: bool = False
+    receipt_error: Optional[str] = None
 
 
 @router.post(
@@ -58,6 +62,54 @@ async def push_achat_to_qbo(
             detail=f"QBO sync failed: {exc}",
         )
     return AchatQboSyncResult(**result)
+
+
+@router.post(
+    "/qbo/pieces/rattraper",
+    summary=(
+        "Joindre à QuickBooks les reçus d'achats qui n'y sont pas encore "
+        "(rattrapage, même travail que le filet horaire)"
+    ),
+)
+async def rattraper_pieces_qbo_maintenant(
+    db: DBSession,
+    user: CurrentUser,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict:
+    if not await user_has_capability(db, user, "qbo.push"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permissions insuffisantes pour cette action.",
+        )
+    from app.services.achat_piece_qbo import rattraper_pieces_qbo
+
+    return await rattraper_pieces_qbo(limit=limit)
+
+
+@router.post(
+    "/{achat_id}/qbo/piece",
+    summary="Joindre maintenant le reçu de cet achat à sa transaction QuickBooks",
+)
+async def joindre_piece_qbo_maintenant(
+    achat_id: int, db: DBSession, user: CurrentUser
+) -> dict:
+    if not await user_has_capability(db, user, "qbo.push"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permissions insuffisantes pour cette action.",
+        )
+    from app.services.achat_piece_qbo import joindre_maintenant
+
+    try:
+        res = await joindre_maintenant(db, achat_id)
+    except AchatSyncError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"QBO sync failed: {exc}",
+        )
+    if res["statut"] == "introuvable":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Achat not found")
+    return res
 
 
 async def autopush_achat(achat_id: int) -> None:
@@ -109,7 +161,13 @@ class AchatPartsRead(BaseModel):
 
     qbo_id: Optional[str] = None
     qbo_doc_number: Optional[str] = None
-    #: Total TTC de la transaction QB, quand l'import l'a noté.
+    #: « kratos » : reçu DIVISÉ dans Kratos entre plusieurs projets
+    #: (groupe_id), poussé comme une seule transaction QB ; « quickbooks » :
+    #: facture fractionnée dans QB et importée par parts.
+    origine: str = "quickbooks"
+    groupe_id: Optional[int] = None
+    #: Total TTC de la transaction QB, quand l'import l'a noté (ou la somme
+    #: des parts d'un reçu divisé dans Kratos).
     qbo_total: Optional[float] = None
     #: Somme TTC des parts présentes dans Kratos.
     total_kratos: float = 0.0
@@ -140,7 +198,13 @@ async def achat_parts(
     # OU Purchase) ; un achat importé par le pull des coûts le garde dans
     # qbo_purchase_id → on cherche sur les deux colonnes.
     qids = {str(q) for q in (ach.qbo_bill_id, ach.qbo_purchase_id) if q}
-    if qids:
+    if ach.groupe_id:
+        # Reçu DIVISÉ dans Kratos : les parts partagent groupe_id (avant
+        # même le push QB).
+        from app.services.achat_divise import parts_du_groupe
+
+        rows = await parts_du_groupe(db, ach, actives_seulement=False)
+    elif qids:
         rows = list(
             (
                 await db.execute(
@@ -173,11 +237,15 @@ async def achat_parts(
         )
         for a in rows
     ]
-    total_kratos = round(sum(p.total for p in parts), 2)
+    total_kratos = round(
+        sum(p.total for p in parts if p.status != "cancelled"), 2
+    )
     totaux_qb = [
         float(a.qbo_txn_total) for a in rows if a.qbo_txn_total is not None
     ]
     qbo_total = round(max(totaux_qb), 2) if totaux_qb else None
+    if ach.groupe_id and qbo_total is None:
+        qbo_total = total_kratos
     reste = (
         round(qbo_total - total_kratos, 2)
         if qbo_total is not None and qbo_total - total_kratos > 0.01
@@ -186,6 +254,8 @@ async def achat_parts(
     return AchatPartsRead(
         qbo_id=next(iter(sorted(qids)), None),
         qbo_doc_number=ach.qbo_doc_number,
+        origine="kratos" if ach.groupe_id else "quickbooks",
+        groupe_id=ach.groupe_id,
         qbo_total=qbo_total,
         total_kratos=total_kratos,
         reste_qb=reste,

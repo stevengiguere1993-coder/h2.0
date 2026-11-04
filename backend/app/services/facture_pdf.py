@@ -199,9 +199,24 @@ async def _load_contract_summary(
         )
     ).all()
     sibling_ids = [r[0] for r in sibling_rows]
-    billed_to_date = round(
-        sum(float(t or 0) for _, t in sibling_rows), 2
-    )
+    billed_to_date = sum(float(t or 0) for _, t in sibling_rows)
+    # Soldes reportés d'une facture précédente : déjà comptés sur leur
+    # facture d'origine (2026-11-02).
+    if sibling_ids:
+        from sqlalchemy import func as _func_rep
+
+        billed_to_date -= float(
+            (
+                await db.execute(
+                    select(_func_rep.coalesce(_func_rep.sum(FactureItem.total), 0)).where(
+                        FactureItem.facture_id.in_(sibling_ids),
+                        FactureItem.kind == "report",
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+    billed_to_date = round(billed_to_date, 2)
 
     # Total des paiements sur ces factures.
     paid_to_date = 0.0
@@ -414,6 +429,40 @@ async def _build_statement(
                 detail=" · ".join(x for x in detail_parts if x),
             )
         )
+    # Petits soldes REPORTÉS sur une prochaine facture (2026-11-02) : ils
+    # ferment la facture d'origine sans être de l'argent reçu ; la ligne
+    # « Solde reporté de la facture X » de la facture suivante les refacture.
+    from app.models.facture_report_solde import (
+        REPORT_ANNULE as _REP_ANNULE,
+        FactureReportSolde as _Rep,
+    )
+
+    reportes_total = 0.0
+    if factures:
+        _refs = {f.id: f.reference for f in factures}
+        for _r in (
+            await db.execute(
+                select(_Rep).where(
+                    _Rep.origine_facture_id.in_(list(_refs)),
+                    _Rep.statut != _REP_ANNULE,
+                )
+            )
+        ).scalars().all():
+            reportes_total += float(_r.montant or 0)
+            _ref_o = _refs.get(_r.origine_facture_id)
+            lines.append(
+                StatementLine(
+                    kind="payment",
+                    when=(_r.created_at.date() if _r.created_at else date.today()),
+                    label=(
+                        f"Balance carried to next invoice — Invoice {_ref_o}"
+                        if is_en
+                        else f"Solde reporté sur la prochaine facture — Facture {_ref_o}"
+                    ),
+                    amount=float(_r.montant or 0),
+                    detail="",
+                )
+            )
     # Tri chronologique global, factures avant paiements le même jour.
     lines.sort(key=lambda x: (x.when, 0 if x.kind == "facture" else 1))
 
@@ -441,6 +490,8 @@ async def _build_statement(
         ).all()
         extra_ht_by_fac: dict[int, float] = {}
         for _fid, _it_total, _it_kind, _it_hors in item_rows:
+            if (_it_kind or "") == "report":
+                continue  # solde reporté : ni contrat, ni extra
             if est_hors_soumission(_it_kind, _it_hors):
                 extra_ht_by_fac[_fid] = extra_ht_by_fac.get(_fid, 0.0) + float(
                     _it_total or 0
@@ -457,7 +508,7 @@ async def _build_statement(
     # Solde réel = ce qui a été FACTURÉ (contrat + extras) moins le payé.
     # Avant on calculait contrat − payé, ce qui affichait un faux
     # « trop-payé » dès qu'il y avait des extras sur les factures.
-    remaining = round(billed_to_date - paid_to_date, 2)
+    remaining = round(billed_to_date - paid_to_date - reportes_total, 2)
 
     # Lieu des travaux — même résolution que la facture PDF : adresse
     # du projet, repli sur l'adresse du bon de travail rattaché.
@@ -658,7 +709,19 @@ def _render_bytes(
     # Items
     data = [["Description", "Qté", "Unité", "Prix unit.", "Total"]]
     subtotal = 0.0
+    # Soldes reportés d'une facture précédente : déjà TTC → affichés sous
+    # les taxes, ajoutés au total sans être taxés une 2e fois.
+    reports_pdf: list[tuple[str, float]] = []
     for it in items:
+        if (getattr(it, "kind", None) or "") == "report":
+            reports_pdf.append(
+                (
+                    it.description,
+                    float(it.total) if it.total is not None
+                    else round(float(it.quantity) * float(it.unit_price), 2),
+                )
+            )
+            continue
         q = float(it.quantity)
         up = float(it.unit_price)
         line_total = float(it.total) if it.total is not None else round(q * up, 2)
@@ -705,15 +768,19 @@ def _render_bytes(
     subtotal = round(subtotal, 2)
     tps = round(subtotal * 0.05, 2)
     tvq = round(subtotal * 0.09975, 2)
-    total = round(subtotal + tps + tvq, 2)
+    total = round(subtotal + tps + tvq + sum(m for _, m in reports_pdf), 2)
     balance = float(fa.balance) if fa.balance is not None else total
 
     totals_rows = [
         ["Sous-total", _money(subtotal)],
         ["TPS (5 %)", _money(tps)],
         ["TVQ (9,975 %)", _money(tvq)],
-        ["TOTAL CAD", _money(total)],
     ]
+    for _lib, _m in reports_pdf:
+        totals_rows.append(
+            [Paragraph(f"{_lib} (taxes incluses)", s["small"]), _money(_m)]
+        )
+    totals_rows.append(["TOTAL CAD", _money(total)])
     if balance != total:
         totals_rows.append(["Solde dû", _money(balance)])
 

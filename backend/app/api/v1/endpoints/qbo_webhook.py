@@ -175,6 +175,9 @@ async def qbo_webhook(request: Request) -> Response:
         _garder_tache(asyncio.create_task(_suivre_fusions_clients(fusions)))
 
     changed: List[Tuple[str, str]] = []
+    # Dépenses / factures fournisseurs SUPPRIMÉES dans QuickBooks → les
+    # achats Kratos liés disparaissent aussi (Steven 2026-11-04).
+    supprimees: List[Tuple[str, str]] = []
     pull_needed = False
     for note in payload.get("eventNotifications") or []:
         rid = str(note.get("realmId") or "")
@@ -187,7 +190,11 @@ async def qbo_webhook(request: Request) -> Response:
             name = str(ent.get("name") or "")
             eid = str(ent.get("id") or "")
             op = str(ent.get("operation") or "")
-            if op in ("Delete", "Merge"):
+            if op == "Delete":
+                if eid and name in ("Purchase", "Bill"):
+                    supprimees.append((name, eid))
+                continue
+            if op == "Merge":
                 continue
             # Tout événement « coût » déclenche un import complet LIVE
             # (nouveaux coûts, fournisseurs, paiements, reçus) — pas
@@ -204,7 +211,7 @@ async def qbo_webhook(request: Request) -> Response:
                 continue
             changed.append((name, eid))
 
-    if not changed and not pull_needed:
+    if not changed and not pull_needed and not supprimees:
         return Response(status_code=status.HTTP_200_OK)
 
     qbo = get_qbo()
@@ -222,6 +229,19 @@ async def qbo_webhook(request: Request) -> Response:
                     "reverse-sync QBO %s %s échoué: %s", name, eid, exc
                 )
         await db.commit()
+
+    if supprimees:
+        from app.services.achat_suppression_qbo import supprimer_depuis_qb
+
+        for name, eid in supprimees:
+            try:
+                async with AsyncSessionLocal() as db:
+                    await supprimer_depuis_qb(db, qbo, type_qb=name, id_qb=eid)
+                    await db.commit()
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "suppression QBO %s %s → Kratos échouée: %s", name, eid, exc
+                )
 
     # Import complet QB → Kratos en ARRIÈRE-PLAN (même logique que le pull
     # horaire : nouveaux coûts, création des fournisseurs, paiements,
@@ -321,12 +341,19 @@ async def _apply_reverse_sync(
     """Met à jour l'achat Kratos lié à la dépense QBO ``eid`` (mode de
     paiement + date) d'après l'état actuel de QBO. No-op si aucun achat
     n'est lié à cette transaction."""
-    achat = (
-        await db.execute(
-            select(Achat).where(Achat.qbo_bill_id == str(eid))
-        )
-    ).scalar_one_or_none()
-    if achat is None:
+    # Plusieurs achats peuvent porter le même Id : les parts d'un reçu
+    # DIVISÉ entre projets (une transaction QB, une ligne par part) — la
+    # date et le mode de paiement valent pour toutes.
+    achats = list(
+        (
+            await db.execute(
+                select(Achat)
+                .where(Achat.qbo_bill_id == str(eid))
+                .order_by(Achat.id)
+            )
+        ).scalars().all()
+    )
+    if not achats:
         return  # pas une dépense qu'on suit
 
     obj = (
@@ -337,15 +364,10 @@ async def _apply_reverse_sync(
     if not obj:
         return
 
-    changed_fields: List[str] = []
-
     # Date : TxnDate QBO → invoice_date Kratos.
     txn_date = _parse_txn_date(obj.get("TxnDate"))
-    if txn_date and txn_date != achat.invoice_date:
-        achat.invoice_date = txn_date
-        changed_fields.append("date")
-
     # Mode de paiement : compte de paiement QBO (Purchase) → payment_method.
+    method: Optional[str] = None
     if name == "Purchase":
         acct_ref = obj.get("AccountRef") or {}
         acct_name = acct_ref.get("name")
@@ -353,20 +375,25 @@ async def _apply_reverse_sync(
             acct = await qbo.get_account(str(acct_ref["value"]))
             acct_name = (acct or {}).get("Name")
         method = _reverse_payment_method(account_map, acct_name)
+    tok = obj.get("SyncToken")
+
+    for achat in achats:
+        changed_fields: List[str] = []
+        if txn_date and txn_date != achat.invoice_date:
+            achat.invoice_date = txn_date
+            changed_fields.append("date")
         if method and method != (achat.payment_method or ""):
             achat.payment_method = method
             changed_fields.append("mode de paiement")
-
-    # Rafraîchit le SyncToken pour éviter un « stale token » au prochain push.
-    tok = obj.get("SyncToken")
-    if tok is not None:
-        achat.qbo_sync_token = str(tok)
-
-    if changed_fields:
-        log.info(
-            "Reverse-sync QBO → achat %s : %s mis à jour depuis %s %s",
-            achat.id,
-            ", ".join(changed_fields),
-            name,
-            eid,
-        )
+        # Rafraîchit le SyncToken pour éviter un « stale token » au
+        # prochain push.
+        if tok is not None:
+            achat.qbo_sync_token = str(tok)
+        if changed_fields:
+            log.info(
+                "Reverse-sync QBO → achat %s : %s mis à jour depuis %s %s",
+                achat.id,
+                ", ".join(changed_fields),
+                name,
+                eid,
+            )

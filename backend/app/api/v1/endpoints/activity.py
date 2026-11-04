@@ -56,7 +56,7 @@ from app.models.immobilier import (
     ImmeubleCode,
 )
 from app.models.tal_bail import TalTransmission
-from app.models.financement import Financement
+from app.models.revenus_depenses import RdScenario
 from app.models.project import Project
 from app.models.inventaire import InventaireArticle, InventaireMouvement
 from app.models.materiau import Materiau
@@ -67,6 +67,7 @@ from app.models.prospection_deal import ProspectionDeal
 from app.models.prospection_deal_task import ProspectionDealTask
 from app.models.sales_task import SalesTask, sales_task_assignees
 from app.models.user import User
+from app.models.voice import VoiceRoutingRule, VoiceUserCallHours
 from app.services.api_capabilities import POLE_LABELS, readable_poles
 from app.services.audit import log_action
 from app.services.entity_serializers import serialize_entity
@@ -1593,6 +1594,10 @@ _DETAIL_ENTITIES: dict[str, tuple] = {
     "entreprise": (
         Entreprise, "entreprise", "entreprise", "entreprise:read",
     ),
+    # Scénario « Revenus et dépenses » de la société de gestion (2026-11-04).
+    "rd_scenario": (
+        RdScenario, "entreprise", "rd_scenario", "entreprise:read",
+    ),
     "lead_analysis": (
         LeadAnalysis, "prospection", "lead_analysis",
         "prospection:analyses:read",
@@ -1646,11 +1651,6 @@ _DETAIL_ENTITIES: dict[str, tuple] = {
     # 53000BAIL demandé au TAL pour un bail (statut, ShortGuid, PDF).
     "tal_transmission": (
         TalTransmission, "immobilier", "tal_transmission",
-        "immobilier:tal_dossiers:read",
-    ),
-    # Financement d'un immeuble (2026-10-16).
-    "financement": (
-        Financement, "immobilier", "imm_financement",
         "immobilier:tal_dossiers:read",
     ),
     # Codes d'accès d'un immeuble (porte, lock box, garage…, 2026-10-18).
@@ -1937,6 +1937,13 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         entity_type="devlog_project", list_cap="devlog:projects:list",
         order_attr="updated_at", stage_attr="status", supports_active=False,
     ),
+    # Gestion d'entreprise (2026-11-04) : scénarios de simulation des revenus
+    # et dépenses de la société de gestion du fonds.
+    "simulations_revenus_depenses": _ListSpec(
+        model=RdScenario, pole="entreprise",
+        entity_type="rd_scenario", list_cap="entreprise:list",
+        order_attr="updated_at", stage_attr=None, supports_active=False,
+    ),
     "entreprises": _ListSpec(
         model=Entreprise, pole="entreprise",
         entity_type="entreprise", list_cap="entreprise:list",
@@ -2021,13 +2028,23 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         list_cap="immobilier:tal_dossiers:list",
         order_attr="updated_at", stage_attr="statut", supports_active=False,
     ),
-    # Immobilier (2026-10-16) : dossiers de financement ; `stage` filtre le
-    # statut (preparation | envoye | en_analyse | approuve | refuse | clos).
-    "financements": _ListSpec(
-        model=Financement, pole="immobilier",
-        entity_type="imm_financement",
-        list_cap="immobilier:tal_dossiers:list",
-        order_attr="updated_at", stage_attr="statut", supports_active=False,
+    # Téléphonie (bug 19, 2026-10-18) : règles d'acheminement des appels —
+    # sujet (suivi_projet | nouveau_client | urgence_locataire |
+    # demande_locataire | general), chantier optionnel, liste ordonnée des
+    # personnes à appeler. `stage` filtre le sujet. Rattaché au pôle
+    # Construction (c'est le chantier qui dicte qui répond).
+    "regles_acheminement": _ListSpec(
+        model=VoiceRoutingRule, pole="construction",
+        entity_type="voice_routing_rule",
+        list_cap="construction:projects:list",
+        order_attr="updated_at", stage_attr="subject", supports_active=False,
+    ),
+    # Heures d'appel personnelles des utilisateurs (une ligne par plage).
+    "heures_appel": _ListSpec(
+        model=VoiceUserCallHours, pole="construction",
+        entity_type="voice_user_call_hours",
+        list_cap="construction:projects:list",
+        order_attr="id", stage_attr=None, supports_active=False,
     ),
     # Zone employés (2026-10-18) : bloc-notes — notes / petites tâches par
     # employé (destinataire_user_id), écrites par lui ou envoyées par un
@@ -2059,6 +2076,9 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
 #: Alias supplémentaires (noms « complets ») vers les mêmes specs, pour que
 #: l'API accepte aussi bien « deals » que « prospection_deal ».
 _LIST_ALIASES: dict[str, str] = {
+    "revenus_depenses": "simulations_revenus_depenses",
+    "rd_scenarios": "simulations_revenus_depenses",
+    "scenarios_revenus_depenses": "simulations_revenus_depenses",
     "prospection_deal": "deals",
     "prospection_deals": "deals",
     "lead_analysis": "analyses",
@@ -2089,9 +2109,6 @@ _LIST_ALIASES: dict[str, str] = {
     "prospection_courtiers": "courtiers",
     "registre_courtiers": "courtiers",
     "tal_transmission": "tal_transmissions",
-    "financement": "financements",
-    "imm_financement": "financements",
-    "dossiers_financement": "financements",
     "immeuble_code": "immeuble_codes",
     "imm_immeuble_code": "immeuble_codes",
     "codes_immeuble": "immeuble_codes",
@@ -2100,6 +2117,11 @@ _LIST_ALIASES: dict[str, str] = {
     "imm_hypotheque": "hypotheques",
     "baux_tal": "tal_transmissions",
     "bail_tal": "tal_transmissions",
+    "voice_routing_rule": "regles_acheminement",
+    "routing_rules": "regles_acheminement",
+    "acheminement": "regles_acheminement",
+    "voice_user_call_hours": "heures_appel",
+    "call_hours": "heures_appel",
     "bloc_note": "bloc_notes",
     "bloc-notes": "bloc_notes",
     "notes_employes": "bloc_notes",

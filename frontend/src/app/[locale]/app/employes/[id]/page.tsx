@@ -36,6 +36,8 @@ type Employe = {
   ccq_rate: number | string | null;
   // Taux horaire de base sous régime CCQ (null = même que hourly_rate).
   hourly_rate_ccq: number | string | null;
+  // Part des heures coûtées au régime CCQ, en % (null = régime du punch).
+  pourcentage_ccq: number | string | null;
   employeur_d_url: string | null;
   // Case « dîner » : 30 min retirées des heures de punch quand la journée
   // dépasse 5 h, à partir de `diner_depuis` (jour où elle a été cochée).
@@ -131,6 +133,9 @@ export default function EmployeDetailPage() {
   const [cnesstGlobal, setCnesstGlobal] = useState<number | null>(null);
   const [ccqRate, setCcqRate] = useState("");
   const [hourlyRateCcq, setHourlyRateCcq] = useState("");
+  const [pourcentageCcq, setPourcentageCcq] = useState("");
+  // Aide de saisie (non enregistrée) : coût complet CCQ connu → charges %.
+  const [coutCompletCcq, setCoutCompletCcq] = useState("");
   const [employeurDUrl, setEmployeurDUrl] = useState("");
   const [dinerAuto, setDinerAuto] = useState(false);
 
@@ -178,6 +183,7 @@ export default function EmployeDetailPage() {
         setCnesstRate(pctFromDecimal(data.cnesst_rate));
         setCcqRate(pctFromDecimal(data.ccq_rate));
         setHourlyRateCcq(data.hourly_rate_ccq != null ? String(data.hourly_rate_ccq) : "");
+        setPourcentageCcq(data.pourcentage_ccq != null ? String(Number(data.pourcentage_ccq)) : "");
         setEmployeurDUrl(data.employeur_d_url || "");
         setDinerAuto(Boolean(data.diner_auto));
         const histRes = await authedFetch(
@@ -247,6 +253,7 @@ export default function EmployeDetailPage() {
       cnesstRate !== pctFromDecimal(emp.cnesst_rate) ||
       ccqRate !== pctFromDecimal(emp.ccq_rate) ||
       hourlyRateCcq !== (emp.hourly_rate_ccq != null ? String(emp.hourly_rate_ccq) : "") ||
+      pourcentageCcq !== (emp.pourcentage_ccq != null ? String(Number(emp.pourcentage_ccq)) : "") ||
       employeurDUrl !== (emp.employeur_d_url || "") ||
       dinerAuto !== Boolean(emp.diner_auto)
     );
@@ -270,6 +277,7 @@ export default function EmployeDetailPage() {
     cnesstRate,
     ccqRate,
     hourlyRateCcq,
+    pourcentageCcq,
     employeurDUrl,
     dinerAuto
   ]);
@@ -282,18 +290,22 @@ export default function EmployeDetailPage() {
     return cnesstGlobal != null ? Math.round(cnesstGlobal * 100 * 1e6) / 1e6 : 0;
   }, [cnesstActif, cnesstRate, cnesstGlobal]);
 
-  // Salaire coûtant calculé : taux horaire de base + primes CNESST et
-  // CCQ. La CNESST est un % du salaire imposable (souvent 1-7 %), la
-  // CCQ ajoute typiquement 18-28 % selon le métier (assurance, fonds
-  // formation, vacances, RVER…).
-  const realCost = useMemo(() => {
+  // Coût horaire par régime (comme le serveur) et coût mixte quand une
+  // part CCQ est saisie (coût de chantier).
+  const coutsRegimes = useMemo(() => {
     const base = Number(hourlyRate || 0);
     if (base <= 0) return null;
-    // cnesstPct / ccqRate sont en POURCENTAGE → /100.
-    const cnesst = cnesstPct / 100;
-    const ccq = isCcq ? (Number(ccqRate || 0)) / 100 : 0;
-    return +(base * (1 + cnesst + ccq)).toFixed(2);
-  }, [hourlyRate, cnesstPct, isCcq, ccqRate]);
+    const baseCcq = Number(hourlyRateCcq) || base;
+    const hd = base * (1 + cnesstPct / 100);
+    const ccq = baseCcq * (1 + cnesstPct / 100 + (Number(ccqRate) || 0) / 100);
+    const pctBrut = pourcentageCcq === "" ? null : Number(pourcentageCcq);
+    const pct =
+      pctBrut == null || Number.isNaN(pctBrut)
+        ? null
+        : Math.min(Math.max(pctBrut, 0), 100);
+    const mixte = pct == null ? null : (ccq * pct + hd * (100 - pct)) / 100;
+    return { hd, ccq, pct, mixte };
+  }, [hourlyRate, hourlyRateCcq, cnesstPct, ccqRate, pourcentageCcq]);
 
   async function saveAll() {
     if (!emp) return;
@@ -319,6 +331,7 @@ export default function EmployeDetailPage() {
         cnesst_rate: cnesstActif ? decimalFromPct(cnesstRate) : null,
         ccq_rate: decimalFromPct(ccqRate),
         hourly_rate_ccq: hourlyRateCcq ? Number(hourlyRateCcq) : null,
+        pourcentage_ccq: pourcentageCcq !== "" ? Number(pourcentageCcq) : null,
         employeur_d_url: employeurDUrl.trim() || null,
         diner_auto: dinerAuto
       };
@@ -335,6 +348,9 @@ export default function EmployeDetailPage() {
       // Case décochée → le serveur efface le taux personnalisé.
       setCnesstActif(updated.cnesst_actif !== false);
       setCnesstRate(pctFromDecimal(updated.cnesst_rate));
+      setPourcentageCcq(
+        updated.pourcentage_ccq != null ? String(Number(updated.pourcentage_ccq)) : ""
+      );
       // Un changement de prime CNESST s'applique aussi au palier en vigueur.
       void reloadRateHistory();
     } catch (err) {
@@ -638,6 +654,154 @@ export default function EmployeDetailPage() {
                       coûtant.
                     </p>
                   </div>
+                  <div className="sm:col-span-2 rounded-lg border border-brand-800 bg-brand-950/40 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-white/70">
+                      Heures CCQ
+                    </p>
+                    <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label htmlFor="e_rate_ccq" className="label">
+                          Taux de salaire CCQ (CAD)
+                        </label>
+                        <input
+                          id="e_rate_ccq"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={hourlyRateCcq}
+                          onChange={(e) => setHourlyRateCcq(e.target.value)}
+                          placeholder="Vide = même taux que hors décret"
+                          className="input"
+                        />
+                        <p className="mt-1 text-xs text-white/60">
+                          Le taux du décret payé à l&apos;employé, sans vacances
+                          ni avantages (ex. 45,76). Sert aussi à la paie des
+                          heures CCQ.
+                        </p>
+                      </div>
+                      <div>
+                        <label htmlFor="e_ccq" className="label">
+                          Charges CCQ (% du salaire)
+                        </label>
+                        <input
+                          id="e_ccq"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max="100"
+                          value={ccqRate}
+                          onChange={(e) => {
+                            setCcqRate(e.target.value);
+                            setCoutCompletCcq("");
+                          }}
+                          placeholder="Ex. 51,4"
+                          className="input"
+                        />
+                        <p className="mt-1 text-xs text-white/60">
+                          Tout ce qui s&apos;ajoute au salaire sous le décret :
+                          vacances 13 %, avantages sociaux, AE, RQAP, RRQ, FSS,
+                          cotisations CCQ, équipement. La CNESST est comptée à
+                          part, une seule fois.
+                        </p>
+                      </div>
+                      <div>
+                        <label htmlFor="e_cout_ccq" className="label">
+                          Ou : coût complet CCQ connu ($/h)
+                        </label>
+                        <input
+                          id="e_cout_ccq"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={coutCompletCcq}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setCoutCompletCcq(v);
+                            const salaire = Number(hourlyRateCcq) || Number(hourlyRate);
+                            const cout = Number(v);
+                            if (salaire > 0 && cout > 0) {
+                              const charges = (cout / salaire - 1 - cnesstPct / 100) * 100;
+                              setCcqRate(String(Math.max(0, Math.round(charges * 100) / 100)));
+                            }
+                          }}
+                          placeholder="Ex. 70,27"
+                          className="input"
+                        />
+                        <p className="mt-1 text-xs text-white/60">
+                          Entre ici le coût total d&apos;une heure CCQ (salaire,
+                          charges et CNESST compris) : les charges CCQ se
+                          calculent toutes seules à partir du taux de salaire.
+                        </p>
+                      </div>
+                      <div>
+                        <label htmlFor="e_pct_ccq" className="label">
+                          Part des heures en CCQ (%)
+                        </label>
+                        <input
+                          id="e_pct_ccq"
+                          type="number"
+                          step="1"
+                          min="0"
+                          max="100"
+                          value={pourcentageCcq}
+                          onChange={(e) => setPourcentageCcq(e.target.value)}
+                          placeholder="Vide = selon le régime de chaque punch"
+                          className="input"
+                        />
+                        <p className="mt-1 text-xs text-white/60">
+                          Pour le coût des chantiers seulement : à 50 %, chaque
+                          heure est coûtée moitié au coût CCQ, moitié au coût
+                          hors décret, peu importe le régime du punch. La paie ne
+                          change pas.
+                        </p>
+                      </div>
+                    </div>
+                    {coutsRegimes ? (
+                      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-lg border border-brand-800 p-3">
+                          <p className="text-xs uppercase tracking-wider text-white/70">
+                            Heure hors décret
+                          </p>
+                          <p className="mt-1 text-xl font-bold text-white">
+                            {coutsRegimes.hd.toFixed(2)} $/h
+                          </p>
+                          <p className="mt-0.5 text-xs text-white/70">
+                            {Number(hourlyRate).toFixed(2)} $ + CNESST{" "}
+                            {cnesstPct.toFixed(2)} %
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-brand-800 p-3">
+                          <p className="text-xs uppercase tracking-wider text-white/70">
+                            Heure CCQ
+                          </p>
+                          <p className="mt-1 text-xl font-bold text-white">
+                            {coutsRegimes.ccq.toFixed(2)} $/h
+                          </p>
+                          <p className="mt-0.5 text-xs text-white/70">
+                            {(Number(hourlyRateCcq) || Number(hourlyRate)).toFixed(2)} $
+                            {" + charges "}
+                            {(Number(ccqRate) || 0).toFixed(2)} % + CNESST{" "}
+                            {cnesstPct.toFixed(2)} %
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-brand-800 p-3">
+                          <p className="text-xs uppercase tracking-wider text-white/70">
+                            Coût de chantier
+                          </p>
+                          <p className="mt-1 text-xl font-bold text-white">
+                            {coutsRegimes.mixte != null
+                              ? `${coutsRegimes.mixte.toFixed(2)} $/h`
+                              : "Selon le punch"}
+                          </p>
+                          <p className="mt-0.5 text-xs text-white/70">
+                            {coutsRegimes.mixte != null
+                              ? `${coutsRegimes.pct} % CCQ, ${100 - (coutsRegimes.pct ?? 0)} % hors décret`
+                              : "Chaque punch coûte selon son régime (CCQ ou hors décret)."}
+                          </p>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
                   <label className="flex items-center gap-2 pt-6 text-sm text-white/80">
                     <input
                       type="checkbox"
@@ -729,76 +893,6 @@ export default function EmployeDetailPage() {
                       )}
                     </p>
                   </div>
-                  <div>
-                      <label htmlFor="e_ccq" className="label">
-                        Prime CCQ (% — ex. 22 pour 22 %)
-                      </label>
-                      <input
-                        id="e_ccq"
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        max="100"
-                        value={ccqRate}
-                        onChange={(e) => setCcqRate(e.target.value)}
-                        placeholder="Ex. 22"
-                        className="input"
-                      />
-                      <p className="mt-1 text-xs text-white/60">
-                        S&apos;applique aux heures marquées CCQ, même si
-                        l&apos;employé est hors décret par défaut.
-                      </p>
-                    </div>
-                  <div>
-                    <label htmlFor="e_rate_ccq" className="label">
-                      Taux horaire CCQ — coûtant (CAD)
-                    </label>
-                    <input
-                      id="e_rate_ccq"
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={hourlyRateCcq}
-                      onChange={(e) => setHourlyRateCcq(e.target.value)}
-                      placeholder="Vide = même taux que hors décret"
-                      className="input"
-                    />
-                    <p className="mt-1 text-xs text-white/60">
-                      Taux payé sur les heures marquées CCQ par l&apos;admin
-                      (gestion des punchs). La majoration CCQ s&apos;ajoute
-                      seulement à ces heures ; le taux facturable au client ne
-                      change pas.
-                    </p>
-                  </div>
-                  {realCost !== null ? (
-                    <div className="sm:col-span-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
-                      <p className="text-xs uppercase tracking-wider text-amber-300">
-                        Coût horaire réel (avec primes)
-                      </p>
-                      <p className="mt-1 text-2xl font-bold text-amber-200">
-                        {realCost.toFixed(2)} $/h
-                      </p>
-                      <p className="mt-0.5 text-[11px] text-amber-100/70">
-                        Base {Number(hourlyRate).toFixed(2)} $ + CNESST{" "}
-                        {cnesstPct.toFixed(2)} %
-                        {isCcq
-                          ? ` + CCQ ${(Number(ccqRate) || 0).toFixed(2)} %`
-                          : ""}
-                        . Utilisé pour les heures d&apos;avant la règle des
-                        régimes ; depuis, chaque punch coûte selon son régime :
-                        hors décret = {Number(hourlyRate).toFixed(2)} $ × (1 +
-                        CNESST) = {(
-                          Number(hourlyRate) * (1 + cnesstPct / 100)
-                        ).toFixed(2)} $/h ; CCQ ={" "}
-                        {(Number(hourlyRateCcq) || Number(hourlyRate)).toFixed(2)} $ × (1 +
-                        CNESST + CCQ {(Number(ccqRate) || 0).toFixed(2)} %) ={" "}
-                        {(
-                          (Number(hourlyRateCcq) || Number(hourlyRate)) *
-                          (1 + cnesstPct / 100 + (Number(ccqRate) || 0) / 100)
-                        ).toFixed(2)} $/h.
-                      </p>
-                    </div>
-                  ) : null}
                 </div>
               </section>
 

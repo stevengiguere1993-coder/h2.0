@@ -16,6 +16,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
+import { ImmeubleFiltre } from "@/components/immobilier/immeuble-filtre";
 
 type ImmeubleListItem = {
   id: number;
@@ -646,25 +647,20 @@ export default function BonsTravailPage() {
         {/* ── Filtre immeuble (dashboard + kanban) ──────────────────── */}
         {bons && bons.length > 0 ? (
           <div className="mt-6 flex flex-wrap items-center gap-2">
-            <select
+            <ImmeubleFiltre
               value={
                 filterImmeubleId === "all" ? "all" : String(filterImmeubleId)
               }
-              onChange={(e) =>
-                setFilterImmeubleId(
-                  e.target.value === "all" ? "all" : Number(e.target.value)
-                )
+              onChange={(v) =>
+                setFilterImmeubleId(v === "all" ? "all" : Number(v))
               }
+              allValue="all"
+              options={(immeubles || []).map((i) => ({
+                value: String(i.id),
+                label: i.city ? `${i.name} — ${i.city}` : i.name
+              }))}
               className="input w-auto max-w-[240px] text-sm"
-            >
-              <option value="all">Tous les immeubles</option>
-              {(immeubles || []).map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.name}
-                  {i.city ? ` — ${i.city}` : ""}
-                </option>
-              ))}
-            </select>
+            />
             <span className="text-xs text-white/50">
               {/* « 15 / 15 » sans filtre était cryptique (retour Phil) :
                   on n'affiche le ratio que quand un immeuble est filtré. */}

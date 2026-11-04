@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { ImmeubleFiltre } from "@/components/immobilier/immeuble-filtre";
 
 export type ValidationBail = {
   bail_id: number;
@@ -671,19 +672,18 @@ function FilBancaireModal({
             Fil bancaire (QuickBooks) — 90 derniers jours
           </h2>
           <div className="ml-auto flex items-center gap-2">
-            <select
+            <ImmeubleFiltre
               value={immeuble}
-              onChange={(e) => setImmeuble(e.target.value)}
+              onChange={(v) => setImmeuble(v)}
+              allValue=""
+              options={(data?.immeubles ?? []).map((i) => ({
+                value: String(i.id),
+                label: i.name
+              }))}
               className="rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
-              aria-label="Filtrer par immeuble"
-            >
-              <option value="">Tous les immeubles</option>
-              {(data?.immeubles ?? []).map((i) => (
-                <option key={i.id} value={String(i.id)}>
-                  {i.name}
-                </option>
-              ))}
-            </select>
+              ariaLabel="Filtrer par immeuble"
+              align="right"
+            />
             <select
               value={statut}
               onChange={(e) => setStatut(e.target.value)}

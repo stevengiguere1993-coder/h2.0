@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, or_, select
 
@@ -26,6 +26,8 @@ from app.models.contact_request import ContactRequest, ContactRequestStatus
 from app.models.employe import Employe
 from app.models.project import Project, ProjectStatus
 from app.models.punch import Punch
+from app.services.punch_geo import ajouter_fin, position_ou_approx
+from app.services.punch_geo import normaliser as normaliser_position
 
 
 router = APIRouter(prefix="/mobile", tags=["mobile"])
@@ -123,6 +125,12 @@ class PunchStartBody(BaseModel):
     # Free-form task label, e.g. "Admin", "Déplacement", "Formation".
     task: Optional[str] = Field(default=None, max_length=255)
     geolocation: Optional[str] = Field(default=None, max_length=128)
+    #: Position approximative que le téléphone a obtenue lui-même de son
+    #: adresse internet (GPS refusé) ; l'API la marque « ~ ».
+    geolocation_approx: Optional[str] = Field(default=None, max_length=128)
+    #: Adresse internet publique vue par le téléphone, pour que l'API
+    #: déduise une position même derrière le relais Next.js.
+    ip_publique: Optional[str] = Field(default=None, max_length=64)
 
 
 class LeaveRequestBody(BaseModel):
@@ -272,6 +280,7 @@ async def me(db: DBSession, user: CurrentUser) -> MobileMe:
 @router.post("/punch/start", response_model=OpenPunch)
 async def punch_start(
     body: PunchStartBody,
+    request: Request,
     db: DBSession,
     user: CurrentUser,
 ) -> OpenPunch:
@@ -315,7 +324,13 @@ async def punch_start(
         bon_travail_id=body.bon_travail_id,
         started_at=now,
         task=body.task,
-        geolocation=body.geolocation,
+        # GPS reçu, sinon position approximative par adresse internet.
+        geolocation=await position_ou_approx(
+            normaliser_position(body.geolocation),
+            request,
+            body.geolocation_approx,
+            body.ip_publique,
+        ),
         # Hors décret par défaut ; le régime CCQ se pose à l'approbation
         # par un admin+ (retour Phil 2026-09-26).
         regime="hors_decret",
@@ -348,10 +363,17 @@ async def punch_start(
 
 class PunchStopBody(BaseModel):
     geolocation: Optional[str] = Field(default=None, max_length=128)
+    #: Position approximative que le téléphone a obtenue lui-même de son
+    #: adresse internet (GPS refusé) ; l'API la marque « ~ ».
+    geolocation_approx: Optional[str] = Field(default=None, max_length=128)
+    #: Adresse internet publique vue par le téléphone, pour que l'API
+    #: déduise une position même derrière le relais Next.js.
+    ip_publique: Optional[str] = Field(default=None, max_length=64)
 
 
 @router.post("/punch/stop", response_model=OpenPunch)
 async def punch_stop(
+    request: Request,
     db: DBSession,
     user: CurrentUser,
     body: Optional[PunchStopBody] = None,
@@ -380,14 +402,17 @@ async def punch_stop(
         started = started.replace(tzinfo=timezone.utc)
     delta = (now - started).total_seconds() / 3600.0
     p.hours = round(delta, 2)
-    # Concatène le geolocation de fin si fourni — séparateur '|' pour
-    # qu'on puisse distinguer début et fin dans l'historique admin.
-    if body and body.geolocation:
-        end_geo = body.geolocation.strip()
-        if p.geolocation:
-            p.geolocation = f"{p.geolocation}|{end_geo}"[:128]
-        else:
-            p.geolocation = end_geo[:128]
+    # Position de sortie ajoutée à celle d'entrée (« début|fin ») pour
+    # distinguer début et fin dans l'historique admin.
+    p.geolocation = ajouter_fin(
+        p.geolocation,
+        await position_ou_approx(
+            normaliser_position(body.geolocation if body else None),
+            request,
+            body.geolocation_approx if body else None,
+            body.ip_publique if body else None,
+        ),
+    )
     await db.flush()
     # Case « dîner » de la fiche : 30 min retirées si la journée dépasse 5 h.
     from app.services.punch_diner import appliquer_diner_auto

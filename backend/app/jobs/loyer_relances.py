@@ -18,12 +18,13 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.db.session import AsyncSessionLocal
 from app.models.immobilier import (
     Bail,
     BailStatus,
+    FraisLocatif,
     Immeuble,
     Logement,
     PaiementLoyer,
@@ -79,10 +80,26 @@ async def _run() -> None:
                 )
             ).all()
         }
+        # Lignes du mois (frais, crédits, rabais) : un crédit qui couvre
+        # tout le loyer ne laisse rien à percevoir, donc rien en retard.
+        frais_mois = {
+            bid: float(total or 0)
+            for bid, total in (
+                await db.execute(
+                    select(FraisLocatif.bail_id, func.sum(FraisLocatif.montant))
+                    .where(
+                        FraisLocatif.bail_id.in_(bail_ids),
+                        FraisLocatif.mois_couvert == month_start,
+                    )
+                    .group_by(FraisLocatif.bail_id)
+                )
+            ).all()
+        }
         retards = [
             b
             for b in baux
             if b.id not in paid
+            and float(b.loyer_mensuel or 0) + frais_mois.get(b.id, 0.0) > 0.005
             and today > seuil_retard(month_start, b.jour_echeance)
         ]
         if not retards:

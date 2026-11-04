@@ -33,6 +33,8 @@ class EmployeCreate(BaseModel):
     cnesst_rate: Optional[float] = Field(default=None, ge=0, le=1)
     ccq_rate: Optional[float] = Field(default=None, ge=0, le=1)
     hourly_rate_ccq: Optional[float] = Field(default=None, ge=0)
+    #: % des heures coûtées au régime CCQ (0 à 100) ; vide = régime du punch.
+    pourcentage_ccq: Optional[float] = Field(default=None, ge=0, le=100)
     employeur_d_url: Optional[str] = Field(default=None, max_length=500)
     #: Case « dîner » : 30 min de dîner retirées des heures de punch quand
     #: la journée dépasse 5 h (à partir du jour où elle est cochée).
@@ -61,6 +63,8 @@ class EmployeUpdate(BaseModel):
     cnesst_rate: Optional[float] = Field(default=None, ge=0, le=1)
     ccq_rate: Optional[float] = Field(default=None, ge=0, le=1)
     hourly_rate_ccq: Optional[float] = Field(default=None, ge=0)
+    #: % des heures coûtées au régime CCQ (0 à 100) ; vide = régime du punch.
+    pourcentage_ccq: Optional[float] = Field(default=None, ge=0, le=100)
     employeur_d_url: Optional[str] = None
     #: Cocher pose ``diner_depuis`` à aujourd'hui (sauf date fournie) ;
     #: décocher l'efface. Les punchs déjà fermés ne changent pas.
@@ -88,6 +92,7 @@ class EmployeRead(_Base):
     cnesst_rate: Optional[float] = None
     ccq_rate: Optional[float] = None
     hourly_rate_ccq: Optional[float] = None
+    pourcentage_ccq: Optional[float] = None
     employeur_d_url: Optional[str] = None
     diner_auto: bool = False
     diner_depuis: Optional[date] = None
@@ -596,6 +601,52 @@ class AchatCreate(BaseModel):
     hours: Optional[float] = Field(default=None, ge=0)
 
 
+class AchatPartIn(BaseModel):
+    """Une part d'un reçu divisé : le projet et le montant TTC qui lui
+    revient (ce que l'utilisateur lit ou décide sur le reçu). Les
+    contraintes (part > 0, ≥ 2 projets distincts, somme = total) sont
+    vérifiées par le service, en français."""
+
+    project_id: int
+    total: float
+    #: Fourni = choix manuel pour CETTE part ; absent = défaut du projet
+    #: (contrat / bon de travail → refacturable), sauf choix global.
+    is_billable: Optional[bool] = None
+
+
+class AchatDiviseCreate(BaseModel):
+    """Reçu DIVISÉ entre plusieurs projets (Steven 2026-10-30) : les champs
+    communs d'un achat + une part par projet. Crée un achat par part (HT et
+    taxes au prorata du TTC de la part), tous liés par ``groupe_id`` ; le
+    push QuickBooks en fait UNE transaction à une ligne par projet."""
+
+    reference: Optional[str] = Field(default=None, max_length=32)
+    purchase_order_id: Optional[int] = None
+    fournisseur_id: Optional[int] = None
+    description: Optional[str] = None
+    #: Montant HT TOTAL du reçu (toutes parts confondues).
+    amount: float
+    #: Taxes TOTALES du reçu (TPS + TVQ), 0 ou absent si exonéré.
+    amount_taxes: Optional[float] = Field(default=None, ge=0)
+    amount_tps: Optional[float] = Field(default=None, ge=0)
+    amount_tvq: Optional[float] = Field(default=None, ge=0)
+    supplier_invoice_number: Optional[str] = Field(default=None, max_length=64)
+    invoice_date: Optional[date] = None
+    payment_method: Optional[str] = Field(default=None, max_length=32)
+    notes: Optional[str] = None
+    status: Optional[str] = Field(default=None, max_length=32)
+    #: Fourni = choix manuel appliqué à toutes les parts ; absent = défaut
+    #: par projet (contrat / bon de travail → refacturable).
+    is_billable: Optional[bool] = None
+    markup_percent: Optional[float] = Field(default=None, ge=0, le=500)
+    sous_traitant_id: Optional[int] = None
+    kind: Optional[str] = Field(default=None, max_length=16)
+    hours: Optional[float] = Field(default=None, ge=0)
+    #: Au moins deux projets distincts ; la somme des ``total`` doit
+    #: retomber sur amount + amount_taxes (± 0,02 $).
+    parts: list[AchatPartIn] = Field(default_factory=list)
+
+
 class AchatUpdate(BaseModel):
     purchase_order_id: Optional[int] = None
     description: Optional[str] = None
@@ -653,6 +704,13 @@ class AchatRead(_Base):
     #: montant de l'achat, la facture est fractionnée dans QB et l'achat
     #: n'en porte que la part de son projet.
     qbo_txn_total: Optional[float] = None
+    #: Pièce jointe QuickBooks qui porte le reçu de l'achat ; NULL = le
+    #: reçu n'est pas (encore) dans QB.
+    qbo_attachable_id: Optional[str] = None
+    #: Reçu DIVISÉ entre plusieurs projets dans Kratos : id de la première
+    #: part, commun à toutes les parts (une par projet) ; NULL = achat
+    #: simple. Les parts partagent la même transaction QuickBooks.
+    groupe_id: Optional[int] = None
     notes: Optional[str]
     is_billable: bool = True
     #: Choix MANUEL de la case « à refacturer » (verrou contre les

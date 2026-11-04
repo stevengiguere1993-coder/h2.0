@@ -222,10 +222,6 @@ PAGES: list[PageEntry] = [
        "manager", "/immobilier/bons-travail"),
     _p("immobilier.frais_gestion", "Facturation", "immobilier",
        "manager", "/immobilier/frais-gestion"),
-    # Financement (2026-10-16) : dossiers de financement par immeuble, rent
-    # roll, paquet de pièces, baux parallèles — gestionnaires.
-    _p("immobilier.financement", "Financement", "immobilier",
-       "manager", "/immobilier/financement"),
     # ⚠️ Gestion des accès aux immeubles → admin (héritait de la racine
     # employé avant l'audit permissions v2).
     _p("immobilier.utilisateurs", "Utilisateurs (immobilier)", "immobilier",
@@ -235,12 +231,22 @@ PAGES: list[PageEntry] = [
     # ── Gestion d'entreprise (comportement actuel : owner/admin + volet) ──
     _p("entreprises.accueil", "Entreprises", "entreprises", "admin",
        "/entreprises"),
+    # Revenus et dépenses de la société de gestion — simulation du fonds
+    # (Phil 2026-11-04) : admins seulement.
+    _p("entreprises.revenus_depenses", "Revenus et dépenses", "entreprises",
+       "admin", "/entreprises/revenus-depenses"),
     _p("entreprises.dashboards", "Tableaux de bord", "entreprises", "admin",
        "/entreprises/dashboards"),
     # Vue d'ensemble des dépenses de la construction et coût à l'heure
-    # contre les entrées de fonds (Steven 2026-10-03, bug 14).
-    _p("entreprises.depenses_construction", "Dépenses construction",
-       "entreprises", "admin", "/entreprises/depenses-construction"),
+    # contre les entrées de fonds (Steven 2026-10-03, bug 14). EN
+    # DÉVELOPPEMENT (Steven 2026-10-23 : « en rouge dans side menu et juste
+    # permettre au dev de voir ») → propriétaires seulement par défaut,
+    # comme Comptabilité. Clé neuve exprès : l'ancienne
+    # (`entreprises.depenses_construction`) a été semée à « admin » et le
+    # seed ne réécrit jamais un seuil déjà semé.
+    _p("entreprises.depenses_construction_dev",
+       "Dépenses construction (en développement)", "entreprises", "owner",
+       "/entreprises/depenses-construction"),
     _p("entreprises.kratos", "Kratos · Cerveau", "entreprises", "admin",
        "/entreprises/kratos"),
     _p("entreprises.rencontres", "Rencontres", "entreprises", "admin",

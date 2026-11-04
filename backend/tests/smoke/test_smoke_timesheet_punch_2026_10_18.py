@@ -326,3 +326,153 @@ def test_punch_oublie_annulation_et_gestionnaire(client, auth_headers, employee_
     # Arrêté : l'approbation passe.
     r = client.post(f"/api/v1/timesheets/{feuille['id']}/approve", headers=auth_headers)
     assert r.status_code == 200, r.text
+
+
+def test_punch_garde_la_position(client, auth_headers, video, run):
+    """Position GPS prise à chaque punch (Steven, 2026-10-26) : au début
+    et à l'arrêt, « début|fin » ; le gestionnaire qui ferme un punch
+    oublié n'ajoute pas la sienne ; sans position, le punch part quand
+    même."""
+    h = video["headers"]
+    cie = _compagnie(client, video)
+    # Le test précédent a approuvé la feuille de la période courante : on
+    # la rouvre, sinon aucun punch ne peut commencer.
+    courante = client.get("/api/v1/timesheets/resolve", headers=h).json()
+    if courante["status"] == "approuve":
+        r = client.post(f"/api/v1/timesheets/{courante['id']}/reopen", headers=auth_headers)
+        assert r.status_code == 200, r.text
+
+    r = client.post(
+        "/api/v1/timesheets/punch/start",
+        headers=h,
+        json={"company_id": cie, "title": "Tournage", "geolocation": "45.5016889,-73.567256"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["geolocation"] == "45.501689,-73.567256"
+    # Le gestionnaire voit où le punch a commencé.
+    r = client.get("/api/v1/entreprises/employes", headers=auth_headers)
+    moi = next(e for e in r.json() if e["id"] == video["id"])
+    assert moi["punch_en_cours"]["geolocation"] == "45.501689,-73.567256"
+
+    _deplacer_debut(run, video["id"], T1)
+    r = client.post(
+        "/api/v1/timesheets/punch/stop",
+        headers=h,
+        json={"fin": (T1 + timedelta(hours=1)).isoformat(), "geolocation": "45.52,-73.58"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["punch"]["geolocation"] == "45.501689,-73.567256|45.520000,-73.580000"
+
+    # Position refusée au début, reçue à la fin : la fin reste à droite.
+    r = client.post(
+        "/api/v1/timesheets/punch/start", headers=h, json={"company_id": cie, "title": "Sans GPS"}
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["geolocation"] is None
+    _deplacer_debut(run, video["id"], T1 + timedelta(hours=2))
+    r = client.post(
+        "/api/v1/timesheets/punch/stop",
+        headers=h,
+        json={"fin": (T1 + timedelta(hours=3)).isoformat(), "geolocation": "45.52,-73.58"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["punch"]["geolocation"] == "|45.520000,-73.580000"
+
+    # Texte invalide : ignoré, le punch part quand même.
+    r = client.post(
+        "/api/v1/timesheets/punch/start",
+        headers=h,
+        json={"company_id": cie, "title": "Oubli", "geolocation": "n/a"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["geolocation"] is None
+    # Le gestionnaire ferme l'oubli : sa position n'est pas celle de l'employé.
+    _deplacer_debut(run, video["id"], T1 + timedelta(hours=4))
+    r = client.post(
+        "/api/v1/timesheets/punch/stop",
+        headers=auth_headers,
+        json={"user_id": video["id"], "geolocation": "46.8,-71.2"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["punch"]["geolocation"] is None
+
+
+def test_punch_sans_gps_prend_une_position_approximative(client, auth_headers, video, run, monkeypatch):
+    """GPS refusé → position déduite de l'adresse internet, marquée « ~ »
+    (Steven, 2026-10-29). Le GPS reçu garde la priorité."""
+    from app.integrations import ip_geo
+
+    async def faux(ip):
+        return (45.5, -73.6) if ip == "24.1.2.3" else None
+
+    monkeypatch.setattr(ip_geo, "_interroger", faux)
+    ip_geo.vider_cache()
+    h = video["headers"]
+    cie = _compagnie(client, video)
+    courante = client.get("/api/v1/timesheets/resolve", headers=h).json()
+    if courante["status"] == "approuve":
+        r = client.post(f"/api/v1/timesheets/{courante['id']}/reopen", headers=auth_headers)
+        assert r.status_code == 200, r.text
+
+    # Sans GPS, derrière le serveur Next.js et Render : la première
+    # adresse PUBLIQUE des relais → approximation.
+    r = client.post(
+        "/api/v1/timesheets/punch/start",
+        headers={**h, "X-Forwarded-For": "10.0.0.1, 24.1.2.3"},
+        json={"company_id": cie, "title": "Sans GPS"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["geolocation"] == "~45.500000,-73.600000"
+    # À l'arrêt, le GPS reçu garde la priorité sur l'adresse.
+    _deplacer_debut(run, video["id"], T1 + timedelta(hours=6))
+    r = client.post(
+        "/api/v1/timesheets/punch/stop",
+        headers={**h, "X-Forwarded-For": "24.1.2.3"},
+        json={"fin": (T1 + timedelta(hours=7)).isoformat(), "geolocation": "45.52,-73.58"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["punch"]["geolocation"] == "~45.500000,-73.600000|45.520000,-73.580000"
+
+    # Adresse inconnue du service : le punch part sans position.
+    r = client.post(
+        "/api/v1/timesheets/punch/start",
+        headers={**h, "X-Forwarded-For": "24.9.9.9"},
+        json={"company_id": cie, "title": "Sans rien"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["geolocation"] is None
+    r = client.delete("/api/v1/timesheets/punch", headers=h)
+    assert r.status_code == 200, r.text
+
+    # Le téléphone a obtenu lui-même son approximation : elle sert, même
+    # si l'API ne voit aucune adresse utilisable.
+    r = client.post(
+        "/api/v1/timesheets/punch/start",
+        headers=h,
+        json={"company_id": cie, "title": "Approx du téléphone", "geolocation_approx": "45.52,-73.58"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["geolocation"] == "~45.520000,-73.580000"
+    assert client.delete("/api/v1/timesheets/punch", headers=h).status_code == 200
+    # Sinon, l'adresse publique déclarée par le téléphone suffit.
+    r = client.post(
+        "/api/v1/timesheets/punch/start",
+        headers=h,
+        json={"company_id": cie, "title": "IP du téléphone", "ip_publique": "24.1.2.3"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["geolocation"] == "~45.500000,-73.600000"
+    assert client.delete("/api/v1/timesheets/punch", headers=h).status_code == 200
+
+    # Diagnostic admin : en-têtes vus, adresse retenue, fournisseurs.
+    async def faux_diag(ip):
+        return ((45.5, -73.6), ["faux: ok"]) if ip == "24.1.2.3" else (None, ["faux: inconnu"])
+
+    monkeypatch.setattr(ip_geo, "diagnostiquer", faux_diag)
+    r = client.get(
+        "/api/v1/punch/geo-debug",
+        headers={**auth_headers, "X-Forwarded-For": "10.0.0.1, 24.1.2.3"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ip_choisie"] == "24.1.2.3"
+    assert r.json()["position_approx"] == "45.500000,-73.600000"

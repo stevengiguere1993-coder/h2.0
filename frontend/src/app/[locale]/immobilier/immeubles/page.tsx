@@ -24,6 +24,7 @@ type ImmeubleListItem = {
   id: number;
   name: string;
   address: string;
+  address_secondaire?: string | null;
   city?: string | null;
   type: string;
   nb_logements?: number | null;
@@ -242,6 +243,9 @@ export default function ImmeublesListPage() {
                           </div>
                           <div className="truncate text-[11px] text-white/50">
                             {imm.address}
+                            {imm.address_secondaire
+                              ? ` · ${imm.address_secondaire}`
+                              : ""}
                             {imm.city ? `, ${imm.city}` : ""}
                           </div>
                         </div>

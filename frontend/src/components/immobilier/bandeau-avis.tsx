@@ -12,10 +12,14 @@
  * (à envoyer / en retard). Les « à venir » (ligne verte « rien à
  * faire ») sortent de la liste — seul le compteur de l'en-tête les
  * mentionne. Aucune action → pas de bandeau du tout.
+ *
+ * Retour client 2026-10-30 : cliquer une ligne ouvre directement la
+ * fiche « Préparer » de ce bail dans Suivis annuels (?bail_id=X).
  */
 
 import { useEffect, useState } from "react";
 
+import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 
 type Echeance = {
@@ -107,9 +111,13 @@ export function BandeauAvisRenouvellement({
         {actionnables.map((r) => {
           const t = TONE[r.statut] || TONE.a_envoyer;
           return (
-            <div
+            <Link
               key={r.bail_id}
-              className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm ${t.box}`}
+              href={
+                `/immobilier/renouvellements?bail_id=${r.bail_id}` as never
+              }
+              title="Préparer et envoyer l'avis de renouvellement"
+              className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm transition hover:brightness-125 ${t.box}`}
             >
               <div className="min-w-0">
                 <span className="font-medium">{r.locataire}</span>
@@ -125,7 +133,7 @@ export function BandeauAvisRenouvellement({
                 </span>
                 <span className={`badge ${t.chip}`}>{t.txt}</span>
               </div>
-            </div>
+            </Link>
           );
         })}
       </div>

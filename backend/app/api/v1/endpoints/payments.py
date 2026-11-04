@@ -162,7 +162,13 @@ async def _recompute_facture_status(db, facture: Facture) -> None:
     ).scalar_one()
     total = float(facture.total or 0)
     paid = float(paid_sum or 0)
-    if total > 0 and paid >= total:
+    # Petit solde REPORTÉ sur une prochaine facture (2026-11-02) : la
+    # facture d'origine est soldée par « paiements + reports ». Un report
+    # n'est pas un paiement (ni de l'argent reçu) ; il ferme le solde.
+    from app.services.facture_report_solde import montant_reporte
+
+    reporte = await montant_reporte(db, facture.id)
+    if total > 0 and paid + reporte >= total - 0.005:
         # Fully paid
         last_paid_at = (
             await db.execute(

@@ -15,6 +15,7 @@
   POST   /api/v1/rencontres/{id}/summarize        résumé global
   POST   /api/v1/rencontres/importer               import unifié (hub v2)
   POST   /api/v1/rencontres/{id}/actions-vers-taches
+  POST   /api/v1/rencontres/{id}/envoyer          rapport par courriel
 """
 
 from __future__ import annotations
@@ -99,6 +100,7 @@ class RencontreRead(BaseModel):
     status: str
     source: Optional[str] = None
     drive_links_json: Optional[str] = None
+    envois_json: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     sections: List[SectionRead] = Field(default_factory=list)
@@ -755,3 +757,87 @@ async def actions_vers_taches(
         ids.append(t.id)
     await db.commit()
     return ActionsVersTachesOut(created=len(ids), tache_ids=ids)
+
+
+# ── Envoi du rapport par courriel ────────────────────────────────
+
+
+class EnvoyerRapportIn(BaseModel):
+    to: List[str] = Field(..., min_length=1, max_length=50)
+    cc: List[str] = Field(default_factory=list, max_length=50)
+    sujet: Optional[str] = Field(default=None, max_length=255)
+    message: Optional[str] = Field(default=None, max_length=5000)
+
+
+class EnvoyerRapportOut(BaseModel):
+    ok: bool
+    de: str
+    a: List[str]
+    cc: List[str]
+    sujet: str
+    envois_json: Optional[str] = None
+
+
+@router.post(
+    "/{rencontre_id}/envoyer",
+    response_model=EnvoyerRapportOut,
+    summary=(
+        "Envoie le rapport de la rencontre par courriel, depuis la boîte "
+        "Microsoft 365 de l'utilisateur connecté."
+    ),
+)
+async def envoyer_rapport_endpoint(
+    rencontre_id: int,
+    data: EnvoyerRapportIn,
+    db: DBSession,
+    user: CurrentUser,
+) -> EnvoyerRapportOut:
+    from app.models.entreprise import Entreprise
+    from app.services.audit import log_action
+    from app.services.rencontre_envoi import EnvoiRapportErreur, envoyer_rapport
+
+    r = await _get_rencontre_or_404(db, rencontre_id)
+    sections = (
+        await db.execute(
+            select(RencontreSection)
+            .where(RencontreSection.rencontre_id == rencontre_id)
+            .order_by(RencontreSection.position.asc(), RencontreSection.id.asc())
+        )
+    ).scalars().all()
+    ent_ids: List[int] = []
+    if r.entreprise_ids_json:
+        try:
+            ent_ids = [int(x) for x in json.loads(r.entreprise_ids_json) or []]
+        except Exception:  # noqa: BLE001
+            ent_ids = []
+    noms: List[str] = []
+    if ent_ids:
+        rows = (
+            await db.execute(select(Entreprise).where(Entreprise.id.in_(ent_ids)))
+        ).scalars().all()
+        par_id = {e.id: e.name for e in rows}
+        noms = [par_id[i] for i in ent_ids if par_id.get(i)]
+    try:
+        envoi = await envoyer_rapport(
+            user=user,
+            r=r,
+            sections=list(sections),
+            entreprises=noms,
+            to=data.to,
+            cc=data.cc,
+            sujet=data.sujet,
+            message=data.message,
+        )
+    except EnvoiRapportErreur as exc:
+        raise HTTPException(exc.status, exc.message) from exc
+    await log_action(
+        db, user=user, action="rencontre.rapport_envoye",
+        entity_type="rencontre", entity_id=r.id,
+        details={"de": envoi["de"], "a": envoi["a"], "cc": envoi["cc"],
+                 "sujet": envoi["sujet"]},
+    )
+    await db.commit()
+    return EnvoyerRapportOut(
+        ok=True, de=envoi["de"], a=envoi["a"], cc=envoi["cc"],
+        sujet=envoi["sujet"], envois_json=r.envois_json,
+    )

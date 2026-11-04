@@ -22,6 +22,10 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     # Tables enregistrées via les endpoints (hors app/models/__init__)
     # — existantes au moment du cliquet.
     "construction_bon_defaults",
+    #: Scénarios « Revenus et dépenses » de la société de gestion (Gestion
+    #: d'entreprise, 2026-11-04). Lecture IA : liste simulations_revenus_depenses
+    #: + détail rd_scenario ; routes /entreprises/revenus-depenses.
+    "rd_scenarios",
     "qbo_connections",
     "qbo_recus_drive",
     #: Reçus saisis dans Kratos et envoyés à QuickBooks (pôle Entreprises,
@@ -47,6 +51,10 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     #: opérations elles-mêmes restent hors du connecteur, comme les
     #: coordonnées et les réglages.
     "paiements_operations",
+    #: Petits soldes impayés reportés sur la prochaine facture du client
+    #: (2026-11-02). Lecture IA : GET /reports-solde (liste par client /
+    #: statut) et GET /factures/{id}/reports-solde, via kratos_lire.
+    "facture_reports_solde",
     "utilisateurs_2fa",
     "user_access_overrides",
     "achats",
@@ -83,13 +91,6 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "tal_schemas",
     "tal_connexion",
     "tal_transmissions",
-    #: Financement d'un immeuble (Gestion locative → Financement, 2026-10-16) :
-    #: dossiers (prêteur, montant, statut), checklist des pièces, journal.
-    #: Lecture IA : kratos_list_entities(financements) + détail financement ;
-    #: routes /immobilier/financement (rent roll, paquet PDF, baux parallèles).
-    "imm_financements",
-    "imm_financement_pieces",
-    "imm_financement_journal",
     "client_documents",
     "clients",
     "contact_hides",
@@ -340,6 +341,14 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "user_immeubles",
     "users",
     "voice_business_hours",
+    #: Téléphonie (bug 19, 2026-10-18) : heures d'appel personnelles des
+    #: utilisateurs et règles d'acheminement (sujet / chantier → liste
+    #: ordonnée de personnes à appeler). Lecture IA : listes
+    #: « regles_acheminement » et « heures_appel » (activity.py, pôle
+    #: Construction) ; écritures via /api/v1/voice/routing-rules et
+    #: /api/v1/voice/call-hours (catalogue API).
+    "voice_routing_rules",
+    "voice_user_call_hours",
     "voice_call_routes",
     "voice_call_transcripts",
     "voice_call_turns",

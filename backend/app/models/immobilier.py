@@ -122,6 +122,13 @@ class Immeuble(Base, TimestampUpdateMixin):
     address: Mapped[str] = mapped_column(String(500), nullable=False)
     city: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     postal_code: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    #: Deuxième adresse civique du MÊME bâtiment (12 logements sur deux
+    #: entrées : 710 Legendre + 9085 Millen — retour Steven 2026-10-29).
+    #: Remplie par la fusion de deux fiches ou à la main ; affichée sous
+    #: l'adresse principale. Plusieurs adresses : séparées par « · ».
+    address_secondaire: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True
+    )
 
     type: Mapped[str] = mapped_column(
         String(32), nullable=False,
@@ -313,6 +320,10 @@ class Logement(Base, TimestampUpdateMixin):
         nullable=False, index=True,
     )
     numero: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: Adresse civique propre au logement quand elle diffère de celle de
+    #: l'immeuble (après une fusion de fiches : les logements du 9085
+    #: Millen gardent leur adresse sous la fiche du 710 Legendre).
+    adresse: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     # Caractéristiques (nb pièces FR : 3½, 4½, 5½…)
     nb_pieces_decimal: Mapped[Optional[float]] = mapped_column(
@@ -1644,6 +1655,9 @@ class FactureGestion(Base):
     #: Description de la ligne (relocation : unité reloué ; manuel :
     #: texte saisi par le gestionnaire).
     libelle: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    #: Produit/service QuickBooks porté par la ligne (Réglages → QuickBooks,
+    #: 2026-11-03). Nouvelle colonne → ensure_critical_columns.
+    qbo_item_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     qbo_invoice_id: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
     )

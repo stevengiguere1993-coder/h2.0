@@ -236,6 +236,9 @@ class PunchEnCoursOut(BaseModel):
     started_at: datetime
     title: str
     company_label: str = ""
+    #: Position GPS prise au début du punch (« lat,lng »), si l'appareil
+    #: l'a donnée.
+    geolocation: Optional[str] = None
 
 
 class EmployeZoneOut(BaseModel):
@@ -407,7 +410,10 @@ async def lister_equipe(
     ).all()
     for p, label in rows_punch:
         punchs[p.user_id] = PunchEnCoursOut(
-            started_at=_aware(p.started_at), title=p.title, company_label=label or ""
+            started_at=_aware(p.started_at),
+            title=p.title,
+            company_label=label or "",
+            geolocation=p.geolocation,
         )
 
     out: List[EmployeZoneOut] = []

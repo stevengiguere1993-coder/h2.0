@@ -16,6 +16,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { motifRefusQbo } from "@/components/qbo-connexion-expiree";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
+import { useColonnesRepliees } from "@/lib/ui-prefs";
 import { fetchAllPages } from "@/lib/fetch-all";
 import { Link } from "@/i18n/navigation";
 
@@ -93,6 +94,8 @@ function fmtDate(iso: string | null, timeZone?: string): string {
   });
 }
 
+const FACTURATION_REPLIEES_DEFAUT = ["paid", "void", "a_refacturer"];
+
 export default function FacturationPage() {
   const { onOpenSidebar } = useAppLayout();
   const [items, setItems] = useState<Facture[]>([]);
@@ -116,9 +119,11 @@ export default function FacturationPage() {
   const [hoverCol, setHoverCol] = useState<string | null>(null);
   // Colonnes repliées (fermées) par défaut : « Payées » et « Annulées ».
   // « Brouillons », « Envoyées » et « En retard » restent dépliées.
-  // Cliquer l'en-tête d'une colonne bascule son état.
-  const [collapsed, setCollapsed] = useState<Set<string>>(
-    () => new Set(["paid", "void", "a_refacturer"])
+  // Cliquer l'en-tête d'une colonne bascule son état, mémorisé par
+  // utilisateur côté serveur (Steven, 2026-10-30).
+  const [collapsed, toggleCollapsed] = useColonnesRepliees(
+    "kanban.facturation",
+    FACTURATION_REPLIEES_DEFAUT
   );
   // Colonne « À refacturer » (après « Annulées », repliée par défaut) :
   // achats reçus après la facture finale ou restés sur un BT fermé. Son
@@ -142,13 +147,6 @@ export default function FacturationPage() {
       cancelled = true;
     };
   }, []);
-  const toggleCollapsed = (id: string) =>
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
 
   useEffect(() => {
     let cancelled = false;

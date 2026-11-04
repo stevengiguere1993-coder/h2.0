@@ -816,6 +816,142 @@ class QuickBooksClient:
         )
         return data.get("Customer") or data
 
+    async def move_subcustomer(
+        self, customer_id: str, new_parent_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Déplace un sous-client (ou projet) sous un AUTRE client mère :
+        mise à jour sparse du ``ParentRef`` (``Job`` reste vrai). Ses
+        transactions le suivent : QuickBooks les rattache au sous-client,
+        pas au client mère. Retourne le client mis à jour, None s'il est
+        introuvable (Steven 2026-11-02 : le projet 1660 Saint-Clément,
+        passé de MGV Développement à Groupe 1660 Saint-Clément dans
+        Kratos, restait sous MGV dans QuickBooks)."""
+        cust = await self.get_customer(customer_id)
+        if not cust:
+            return None
+        body: Dict[str, Any] = {
+            "Id": str(cust.get("Id")),
+            "SyncToken": str(cust.get("SyncToken") or "0"),
+            "sparse": True,
+            "Job": True,
+            "ParentRef": {"value": str(new_parent_id)},
+        }
+        # « Facturer avec le client parent » : sans ce drapeau, QB ne
+        # propose pas le sous-client dans « Convertir depuis un
+        # sous-client » (le 1660 Saint-Clément, déplacé, n'y était
+        # plus — Steven 2026-11-02) et REFUSE de déplacer un projet
+        # (« Un projet doit être un client rattaché facturé à son compte
+        # principal », projet 108 → 209, 2026-11-04) : envoyé pour les
+        # deux, un projet étant toujours facturé avec son parent.
+        body["BillWithParent"] = True
+        data = await self._request(
+            "POST", "/customer", json_body=body, params={"minorversion": "70"}
+        )
+        return data.get("Customer") or data
+
+    async def facturer_avec_parent(
+        self, customer_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Coche « Facturer avec le client parent » (``BillWithParent``)
+        sur un sous-client : c'est la condition pour que QuickBooks le
+        propose dans « Nouveau projet ▾ → Convertir depuis un sous-client ».
+        Rien à faire pour un projet QB, un client de premier niveau ou un
+        sous-client déjà coché. Retourne le client (à jour)."""
+        cust = await self.get_customer(customer_id)
+        parent = str(((cust or {}).get("ParentRef") or {}).get("value") or "")
+        if not cust or not parent or cust.get("IsProject") or cust.get("BillWithParent"):
+            return cust
+        body: Dict[str, Any] = {
+            "Id": str(cust.get("Id")),
+            "SyncToken": str(cust.get("SyncToken") or "0"),
+            "sparse": True,
+            "Job": True,
+            "BillWithParent": True,
+            "ParentRef": {"value": parent},
+        }
+        data = await self._request(
+            "POST", "/customer", json_body=body, params={"minorversion": "70"}
+        )
+        return data.get("Customer") or data
+
+    async def deactivate_customer(self, customer_id: str) -> bool:
+        """Rend un client INACTIF (QuickBooks ne supprime pas de client).
+        QuickBooks refuse si le solde n'est pas nul : on remonte alors
+        l'erreur à l'appelant."""
+        return await self.set_customer_active(customer_id, False) is not None
+
+    async def get_customer_any(self, customer_id: str) -> Optional[Dict[str, Any]]:
+        """Comme ``get_customer``, mais trouve aussi un client INACTIF
+        (les requêtes QBO ne renvoient que les actifs par défaut)."""
+        safe = str(customer_id).replace("'", "''")
+        rows = await self.query(
+            "SELECT * FROM Customer WHERE Active IN (true, false) "
+            f"AND Id = '{safe}' MAXRESULTS 1"
+        )
+        return rows[0] if rows else None
+
+    async def all_customers_any(self) -> List[Dict[str, Any]]:
+        """Tous les clients et sous-clients, actifs ET inactifs."""
+        return await self.query_all(
+            "SELECT * FROM Customer WHERE Active IN (true, false)"
+        )
+
+    async def set_customer_active(
+        self, customer_id: str, active: bool
+    ) -> Optional[Dict[str, Any]]:
+        """Rend un client actif / inactif (mise à jour sparse). Retourne le
+        client mis à jour, None s'il est introuvable."""
+        cust = await self.get_customer_any(customer_id)
+        if not cust:
+            return None
+        data = await self._request(
+            "POST",
+            "/customer",
+            json_body={
+                "Id": str(cust.get("Id")),
+                "SyncToken": str(cust.get("SyncToken") or "0"),
+                "sparse": True,
+                "Active": bool(active),
+            },
+            params={"minorversion": "70"},
+        )
+        return data.get("Customer") or data
+
+    async def count(self, sql: str) -> int:
+        """``SELECT COUNT(*) FROM …`` : le nombre d'objets
+        (``QueryResponse.totalCount``, absent quand il n'y en a aucun)."""
+        data = await self._request(
+            "GET",
+            "/query",
+            params={"query": sql, "minorversion": "70"},
+        )
+        return int((data.get("QueryResponse") or {}).get("totalCount") or 0)
+
+    async def update_customer_fields(
+        self, customer_id: str, **champs: Any
+    ) -> Dict[str, Any]:
+        """Mise à jour SPARSE d'un client (actif ou inactif) avec les
+        champs QuickBooks donnés tels quels (``DisplayName``, ``Active``,
+        ``ParentRef`` + ``Job``, ``BillWithParent``…), sur le SyncToken
+        relu juste avant (exigé par QuickBooks). Une seule requête pour
+        tous les champs. Lève QuickBooksError si la fiche est introuvable
+        ou si QuickBooks refuse (nom déjà pris, solde non nul…)."""
+        cust = await self.get_customer_any(customer_id)
+        if not cust:
+            raise QuickBooksError(
+                f"Client QuickBooks {customer_id} introuvable."
+            )
+        body: Dict[str, Any] = {
+            "Id": str(cust.get("Id")),
+            "SyncToken": str(cust.get("SyncToken") or "0"),
+            "sparse": True,
+        }
+        body.update({k: v for k, v in champs.items() if v is not None})
+        data = await self._request(
+            "POST", "/customer", json_body=body, params={"minorversion": "70"}
+        )
+        return data.get("Customer") or data
+
     async def find_customer_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         safe = name.replace("'", "''")
         rows = await self.query(
@@ -853,14 +989,29 @@ class QuickBooksClient:
     ) -> Dict[str, Any]:
         """Find-or-create. Le NOM exact prime (le courriel est souvent
         partagé entre plusieurs fiches) ; repli sur le courriel seulement
-        s'il est unique côté QB."""
+        s'il est unique côté QB ET que le client trouvé porte un nom
+        compatible (``qbo_noms.noms_compatibles``) : les compagnies d'un
+        même propriétaire partagent son courriel (Steven 2026-11-02, la
+        fiche « Groupe 1660 Saint-Clément inc. » avait été reliée à une
+        autre de ses compagnies)."""
+        from app.integrations.qbo_noms import noms_compatibles
+
         existing = await self.find_customer_by_name(display_name)
         if existing:
             return existing
         if email:
             existing = await self.find_customer_by_email(email)
-            if existing:
+            if existing and noms_compatibles(
+                display_name, existing.get("DisplayName")
+            ):
                 return existing
+            if existing:
+                log.warning(
+                    "Client QB « %s » : le courriel mène à « %s » (%s), un "
+                    "autre nom — non repris, client créé.",
+                    display_name, existing.get("DisplayName"),
+                    existing.get("Id"),
+                )
         return await self.create_customer(
             display_name=display_name,
             email=email,
@@ -1200,9 +1351,17 @@ class QuickBooksClient:
         return None
 
     async def create_item(
-        self, name: str, description: Optional[str] = None
+        self, name: str, description: Optional[str] = None,
+        income_account_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        income = await self.first_income_account()
+        """Crée un Item de type Service. ``income_account_id`` = compte de
+        revenus CHOISI (Réglages Facturation, 2026-11-03) ; sinon le premier
+        compte de revenus de la compagnie (comportement historique, souvent
+        « non catégorisé »)."""
+        if income_account_id:
+            income: Optional[Dict[str, Any]] = {"Id": str(income_account_id)}
+        else:
+            income = await self.first_income_account()
         if not income:
             raise QuickBooksError(
                 "No QBO Income account available to link the new Item."
@@ -1240,6 +1399,28 @@ class QuickBooksClient:
             if existing:
                 return existing
         return await self.create_item(name, description=description)
+
+    async def get_item(self, item_id: str) -> Optional[Dict[str, Any]]:
+        """Lit un Item par Id (None si absent)."""
+        try:
+            data = await self._request("GET", f"/item/{item_id}", params={"minorversion": "70"})
+            return data.get("Item") or data
+        except QuickBooksError:
+            return None
+
+    async def list_items(self) -> List[Dict[str, Any]]:
+        """Produits et services ACTIFS utilisables sur une ligne (les
+        catégories sont écartées)."""
+        rows = await self.query("SELECT * FROM Item WHERE Active = true MAXRESULTS 1000")
+        return [r for r in rows if str(r.get("Type") or "") != "Category"]
+
+    async def list_income_accounts(self) -> List[Dict[str, Any]]:
+        """Comptes de revenus actifs (pour créer un service bien classé)."""
+        rows = await self.query(
+            "SELECT * FROM Account WHERE AccountType IN ('Income', 'Other Income') "
+            "AND Active = true MAXRESULTS 500"
+        )
+        return rows
 
     # ------------------------------------------------------------------
     # Estimates
@@ -1677,6 +1858,79 @@ class QuickBooksClient:
             if rows:
                 return rows[0]
         return None
+
+    async def ensure_account(
+        self, *, name: str, account_type: str, account_sub_type: str
+    ) -> Dict[str, Any]:
+        """Compte QB à ce nom, créé s'il n'existe pas (report des soldes,
+        2026-11-02 : compte de transit « Soldes reportés »)."""
+        found = await self.find_account_by_name(name)
+        if found:
+            return found
+        data = await self._request(
+            "POST",
+            "/account",
+            json_body={
+                "Name": name[:100],
+                "AccountType": account_type,
+                "AccountSubType": account_sub_type,
+            },
+            params={"minorversion": "70"},
+        )
+        return data.get("Account", data)
+
+    async def ensure_item_sur_compte(
+        self, *, name: str, account_id: str, description: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Produit / service QB relié à un compte PRÉCIS (pas le premier
+        compte de revenus) : ligne « Solde reporté » sur le compte de
+        transit, pour que le montant ne soit jamais compté en revenu."""
+        for row in await self._items_nommes(name):
+            if str(row.get("Type") or "") == "Category":
+                continue
+            ref = str((row.get("IncomeAccountRef") or {}).get("value") or "")
+            if ref and ref != str(account_id):
+                raise QuickBooksError(
+                    f"Le produit QuickBooks « {name} » existe déjà mais n'est "
+                    "pas relié au compte de transit des soldes reportés : "
+                    "relie-le à ce compte dans QuickBooks (ou renomme-le)."
+                )
+            return row
+        payload: Dict[str, Any] = {
+            "Name": self._clean_item_name(name) or "Solde reporte",
+            "Type": "Service",
+            "IncomeAccountRef": {"value": str(account_id)},
+        }
+        if description:
+            payload["Description"] = description[:4000]
+        data = await self._request(
+            "POST", "/item", json_body=payload, params={"minorversion": "70"}
+        )
+        return data.get("Item", data)
+
+    async def get_attachable(self, attachable_id: str) -> Dict[str, Any]:
+        data = await self._request("GET", f"/attachable/{attachable_id}")
+        return data.get("Attachable") or data
+
+    async def delete_attachable(self, attachable_id: str) -> bool:
+        """Retire une pièce jointe QB (best-effort) — quand le reçu est
+        remplacé ou supprimé dans Kratos. Renvoie False sans lever si
+        l'objet n'existe plus."""
+        try:
+            cur = await self.get_attachable(str(attachable_id))
+            tok = str(cur.get("SyncToken") or "0")
+        except Exception:  # noqa: BLE001
+            return False
+        try:
+            await self._request(
+                "POST",
+                "/attachable",
+                json_body={"Id": str(attachable_id), "SyncToken": tok},
+                params={"operation": "delete", "minorversion": "70"},
+            )
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     # ------------------------------------------------------------------
     # Attachable upload — joint un fichier (image, PDF) à une entité QBO

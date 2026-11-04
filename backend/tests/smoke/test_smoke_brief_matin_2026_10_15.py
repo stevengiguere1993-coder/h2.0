@@ -57,12 +57,19 @@ def test_sujet_et_html():
     assert "<li>Gestion locative : 22 en retard &lt;test&gt;</li>" in html
     assert "lead.update lead_analysis#73" in html
     assert "#73 1660 Saint-Clément" in html
-    # Bloc JSON extractible entre les balises, HTML déséchappé.
-    debut = html.index(brief_matin.JSON_DEBUT) + len(brief_matin.JSON_DEBUT)
-    fin = html.index(brief_matin.JSON_FIN)
-    brut = html[debut:fin].strip().replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
-    data = json.loads(brut)
+    # Bloc JSON extractible entre les balises APRÈS déséchappement HTML (ce que
+    # fait Outlook en rendant le texte). Régression 2026-10-22 : les balises
+    # brutes « <<<KRATOS_JSON » dans le HTML étaient lues comme une balise par
+    # Exchange, qui avalait tout le bloc → courriel reçu avec « <<>> ».
+    assert brief_matin.JSON_DEBUT not in html and brief_matin.JSON_FIN not in html
+    assert "&lt;&lt;&lt;KRATOS_JSON" in html and "KRATOS_JSON&gt;&gt;&gt;" in html
+    assert "<KRATOS_JSON" not in html  # jamais une pseudo-balise
+    texte = html.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    debut = texte.index(brief_matin.JSON_DEBUT) + len(brief_matin.JSON_DEBUT)
+    fin = texte.index(brief_matin.JSON_FIN)
+    data = json.loads(texte[debut:fin].strip())
     assert data["analyses"][0]["id"] == 73 and data["periode"]["debut"].startswith("2026-10-14T05:00")
+    assert data["digest"] == donnees["digest"]  # aller-retour exact, chevrons compris
 
 
 def test_periode_debut():
@@ -125,7 +132,7 @@ def test_destinataires_et_envoi(run, db_setup, seeded_users, fake_mailer, monkey
     assert len(fake_mailer.sent) == 1 and fake_mailer.sent[0]["to"] == [admin_email]
     assert fake_mailer.sent[0]["subject"] == "Kratos — brief du jeudi 15 octobre 2026"
     assert "Test pour" in fake_mailer.sent[0]["html"]
-    assert brief_matin.JSON_DEBUT in fake_mailer.sent[0]["html"]
+    assert "&lt;&lt;&lt;KRATOS_JSON" in fake_mailer.sent[0]["html"] and brief_matin.JSON_DEBUT not in fake_mailer.sent[0]["html"]
     assert "Analyses de leads en cours" in fake_mailer.sent[0]["html"]
 
 

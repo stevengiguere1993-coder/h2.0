@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, or_, select
 
@@ -23,6 +23,8 @@ from app.integrations.quickbooks import QuickBooksError, get_qbo
 from app.services.qbo_monthly_invoice import add_lines_to_monthly_invoice
 from app.models.automation_setting import AutomationSetting
 from app.services.permissions_service import user_has_capability
+from app.services.punch_geo import ajouter_fin, position_ou_approx
+from app.services.punch_geo import normaliser as normaliser_position
 from app.models.timesheet import (
     TIMESHEET_DAYS,
     Timesheet,
@@ -1735,9 +1737,11 @@ async def facturer_solde_qbo(
         else:
             customer = await qbo.ensure_customer(display_name=comp.label)
             customer_ref = str(customer["Id"])
-        item = await qbo.ensure_item(
-            "Heures", description="Heures de main-d'oeuvre refacturées"
-        )
+        # Produit/service réglé dans Gestion locative → Facturation →
+        # Réglages QuickBooks (« heures »), sinon le service historique.
+        from app.services.qbo_items_facturation import charger_reglages, item_pour_ligne
+
+        item = await item_pour_ligne(qbo, await charger_reglages(db), "heures")
 
         # Facture MENSUELLE ouverte : la ligne s'ajoute à LA facture du
         # mois du client (créée au premier clic, jamais envoyée par
@@ -1840,6 +1844,9 @@ class PunchOut(BaseModel):
     started_at: datetime
     ended_at: Optional[datetime] = None
     hours: Optional[float] = None
+    #: Position GPS « début|fin » prise au punch (None si l'appareil ne
+    #: l'a pas donnée).
+    geolocation: Optional[str] = None
 
 
 class PunchEtatOut(BaseModel):
@@ -1852,6 +1859,15 @@ class PunchStartIn(BaseModel):
     entreprise_tache_id: Optional[int] = None
     #: Tâche saisie à la main ; par défaut, le titre de la tâche importée.
     title: Optional[str] = Field(default=None, max_length=255)
+    #: Position GPS ``"lat,lng"`` de l'appareil au moment du punch
+    #: (Steven, 2026-10-26) ; absente si refusée ou indisponible.
+    geolocation: Optional[str] = Field(default=None, max_length=128)
+    #: Position approximative que le téléphone a obtenue lui-même de son
+    #: adresse internet (GPS refusé) ; l'API la marque « ~ ».
+    geolocation_approx: Optional[str] = Field(default=None, max_length=128)
+    #: Adresse internet publique vue par le téléphone, pour que l'API
+    #: déduise une position même derrière le relais Next.js.
+    ip_publique: Optional[str] = Field(default=None, max_length=64)
 
 
 class PunchStopIn(BaseModel):
@@ -1859,6 +1875,14 @@ class PunchStopIn(BaseModel):
     fin: Optional[datetime] = None
     #: Gestionnaire : arrêter le punch d'un employé (oubli).
     user_id: Optional[int] = None
+    #: Position GPS ``"lat,lng"`` de l'appareil à l'arrêt.
+    geolocation: Optional[str] = Field(default=None, max_length=128)
+    #: Position approximative que le téléphone a obtenue lui-même de son
+    #: adresse internet (GPS refusé) ; l'API la marque « ~ ».
+    geolocation_approx: Optional[str] = Field(default=None, max_length=128)
+    #: Adresse internet publique vue par le téléphone, pour que l'API
+    #: déduise une position même derrière le relais Next.js.
+    ip_publique: Optional[str] = Field(default=None, max_length=64)
 
 
 class PunchStopOut(BaseModel):
@@ -1920,6 +1944,7 @@ async def _punch_out(db, p: TimesheetPunch) -> PunchOut:
         started_at=_utc(p.started_at),
         ended_at=_utc(p.ended_at) if p.ended_at else None,
         hours=p.hours,
+        geolocation=p.geolocation,
     )
 
 
@@ -2043,7 +2068,7 @@ async def punch_etat(
     status_code=status.HTTP_201_CREATED,
 )
 async def punch_start(
-    payload: PunchStartIn, db: DBSession, user: CurrentUser
+    payload: PunchStartIn, request: Request, db: DBSession, user: CurrentUser
 ) -> PunchOut:
     """Démarre le punch sur une compagnie de SA feuille et une tâche
     (l'une de ses tâches assignées, ou saisie à la main). La feuille de la
@@ -2079,6 +2104,13 @@ async def punch_start(
         entreprise_tache_id=tache_id,
         title=titre[:255],
         started_at=now,
+        # GPS reçu, sinon position approximative par adresse internet.
+        geolocation=await position_ou_approx(
+            normaliser_position(payload.geolocation),
+            request,
+            payload.geolocation_approx,
+            payload.ip_publique,
+        ),
     )
     db.add(p)
     await db.commit()
@@ -2088,6 +2120,7 @@ async def punch_start(
 
 @router.post("/punch/stop", response_model=PunchStopOut)
 async def punch_stop(
+    request: Request,
     db: DBSession,
     user: CurrentUser,
     payload: Optional[PunchStopIn] = None,
@@ -2124,6 +2157,18 @@ async def punch_stop(
     p.timesheet_id = ts.id
     p.day_index = (jour - ts.period_start).days
     p.stopped_by_user_id = user.id
+    # Position de sortie : celle de l'appareil qui arrête le punch. Un
+    # gestionnaire qui ferme un punch oublié n'en envoie pas.
+    if payload.user_id is None or payload.user_id == user.id:
+        p.geolocation = ajouter_fin(
+            p.geolocation,
+            await position_ou_approx(
+                normaliser_position(payload.geolocation),
+                request,
+                payload.geolocation_approx,
+                payload.ip_publique,
+            ),
+        )
     ajoutees = 0.0
     message: Optional[str] = None
     if ts.status == "approuve":

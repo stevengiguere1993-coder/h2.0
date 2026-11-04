@@ -15,6 +15,13 @@ import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { authedFetch } from "@/lib/auth";
+import {
+  NOTE_APPROX,
+  capturerPositionOuApprox,
+  parsePositionPunch,
+  positionsPunch,
+  texteCoordonnees
+} from "@/lib/punch-geo";
 import { useConfirm } from "@/components/confirm-dialog";
 
 type Employe = { id: number; full_name: string; email: string | null };
@@ -112,15 +119,17 @@ async function explainError(res: Response): Promise<string> {
   }
 }
 
-async function getPosition(): Promise<GeolocationPosition | null> {
-  if (!("geolocation" in navigator)) return null;
-  return new Promise((resolve) => {
-    navigator.geolocation.getCurrentPosition(
-      (pos) => resolve(pos),
-      () => resolve(null),
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 30_000 }
-    );
-  });
+/** Position prise au moment du punch seulement : GPS (lat/lng), sinon
+ *  approximation par l'adresse internet (champs envoyés tels quels). */
+async function getPosition(): Promise<{
+  pos: { lat: number; lng: number } | null;
+  approx: { geolocation_approx: string | null; ip_publique: string | null };
+}> {
+  const c = await capturerPositionOuApprox();
+  return {
+    pos: parsePositionPunch(c.geolocation),
+    approx: { geolocation_approx: c.geolocation_approx, ip_publique: c.ip_publique }
+  };
 }
 
 export default function PunchPage() {
@@ -225,8 +234,8 @@ export default function PunchPage() {
     setBusy(true);
     setError(null);
     try {
-      const pos = await getPosition();
-      const payload: Record<string, unknown> = {};
+      const { pos, approx } = await getPosition();
+      const payload: Record<string, unknown> = { ...approx };
       if (target.startsWith("p-")) {
         payload.project_id = Number(target.slice(2));
       } else if (target.startsWith("c-")) {
@@ -236,8 +245,8 @@ export default function PunchPage() {
       }
       if (task.trim()) payload.task = task.trim();
       if (pos) {
-        payload.latitude = pos.coords.latitude;
-        payload.longitude = pos.coords.longitude;
+        payload.latitude = pos.lat;
+        payload.longitude = pos.lng;
       }
       const res = await authedFetch("/api/v1/punch/clock-in", {
         method: "POST",
@@ -268,11 +277,11 @@ export default function PunchPage() {
     setBusy(true);
     setError(null);
     try {
-      const pos = await getPosition();
-      const payload: Record<string, unknown> = {};
+      const { pos, approx } = await getPosition();
+      const payload: Record<string, unknown> = { ...approx };
       if (pos) {
-        payload.latitude = pos.coords.latitude;
-        payload.longitude = pos.coords.longitude;
+        payload.latitude = pos.lat;
+        payload.longitude = pos.lng;
       }
       if (notes.trim()) payload.notes = notes.trim();
       const res = await authedFetch("/api/v1/punch/clock-out", {
@@ -546,8 +555,7 @@ function ActivePunchCard({
   onStop: () => void;
   busy: boolean;
 }) {
-  const lat = geolocation?.split("|")[0]?.split(",")[0];
-  const lng = geolocation?.split("|")[0]?.split(",")[1];
+  const position = positionsPunch(geolocation).debut;
   return (
     <section className="rounded-2xl border border-accent-500/40 bg-accent-500/5 p-6">
       <div className="flex items-center gap-2 text-sm text-accent-300">
@@ -564,12 +572,16 @@ function ActivePunchCard({
       <dl className="mt-5 space-y-2 text-sm text-white/80">
         <Row label="Affecté à" value={targetLabel} />
         {task ? <Row label="Tâche" value={task} /> : null}
-        {lat && lng ? (
+        {position ? (
           <Row
             label="Position"
             value={
-              <span className="inline-flex items-center gap-1 text-xs text-white/70">
-                <MapPin className="h-3 w-3" /> {lat}, {lng}
+              <span
+                className="inline-flex items-center gap-1 text-xs text-white/70"
+                title={position.approx ? NOTE_APPROX : undefined}
+              >
+                <MapPin className="h-3 w-3" /> {texteCoordonnees(position)}
+                {position.approx ? " (approx.)" : ""}
               </span>
             }
           />

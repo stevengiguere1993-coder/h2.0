@@ -70,6 +70,14 @@ class Employe(Base, TimestampUpdateMixin):
     hourly_rate_ccq: Mapped[Optional[float]] = mapped_column(
         Numeric(10, 2), nullable=True
     )
+    #: Part des heures payées au régime CCQ, en % (0 à 100) — Steven,
+    #: 2026-11-02. Sert au COÛT DE CHANTIER seulement : posée, chaque
+    #: heure est coûtée ``pct`` au coût CCQ et le reste au coût hors
+    #: décret, quel que soit le régime du punch. NULL = comme avant (le
+    #: régime du punch, sinon la fiche). La paie ne change pas.
+    pourcentage_ccq: Mapped[Optional[float]] = mapped_column(
+        Numeric(5, 2), nullable=True
+    )
 
     # URL personnel chez Employeur D (espace employé pour les talons de
     # paie). On stocke l'URL complète plutôt que de deviner — chaque

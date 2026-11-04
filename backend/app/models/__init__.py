@@ -25,11 +25,7 @@ from app.models.prospection_courtier import (  # noqa: F401
     ProspectionCourtierAnnonce,
     ProspectionCourtierContact,
 )
-from app.models.financement import (  # noqa: F401
-    Financement,
-    FinancementJournal,
-    FinancementPiece,
-)
+from app.models.revenus_depenses import RdScenario  # noqa: F401
 from app.models.tal_bail import (  # noqa: F401
     TalConnexion,
     TalSchema,
@@ -157,6 +153,7 @@ from app.models.qg_strategic import (  # noqa: F401
 )
 from app.models.facture import Facture
 from app.models.facture_item import FactureItem
+from app.models.facture_report_solde import FactureReportSolde  # noqa: F401
 from app.models.follow_up import FollowUp
 from app.models.fournisseur import Fournisseur
 from app.models.help_request import HelpRequest

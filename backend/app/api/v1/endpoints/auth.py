@@ -4,7 +4,8 @@ Authentication endpoints.
 Handles user login, registration, and profile retrieval.
 """
 
-from typing import Annotated, Optional
+import json
+from typing import Annotated, Any, Optional
 
 from fastapi import (
     APIRouter,
@@ -12,6 +13,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Path,
     Request,
     Response,
     UploadFile,
@@ -260,6 +262,81 @@ async def update_my_theme(
     await db.flush()
     await db.refresh(u)
     return UserRead.model_validate(u)
+
+
+# ---------- États d'interface mémorisés (par utilisateur) ----------
+
+#: Clé d'un état d'interface : ``kanban.crm``, ``kanban.soumissions``…
+UI_PREF_KEY_PATTERN = r"^[a-z0-9][a-z0-9_.-]{0,63}$"
+#: Plafond du JSON stocké (toutes clés confondues), pour qu'un client
+#: fautif ne gonfle pas la ligne ``users``.
+UI_PREFS_MAX_BYTES = 32_000
+
+
+class UiPrefUpdate(BaseModel):
+    """Valeur JSON libre d'un état d'interface (ex. liste des colonnes
+    repliées d'un kanban)."""
+
+    value: Any = None
+
+
+def _ui_prefs(u: User) -> dict[str, Any]:
+    if not u.ui_prefs_json:
+        return {}
+    try:
+        parsed = json.loads(u.ui_prefs_json)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+@router.get(
+    "/me/ui-prefs/{cle}",
+    summary="Lit un état d'interface mémorisé de l'utilisateur courant",
+)
+async def get_my_ui_pref(
+    db: DBSession,
+    current_user: CurrentUser,
+    cle: str = Path(..., pattern=UI_PREF_KEY_PATTERN),
+) -> dict[str, Any]:
+    u = (
+        await db.execute(select(User).where(User.id == current_user.id))
+    ).scalar_one()
+    prefs = _ui_prefs(u)
+    # ``found`` distingue « jamais enregistré » (le client applique ses
+    # défauts) de « enregistré vide » (toutes les colonnes ouvertes).
+    return {"key": cle, "found": cle in prefs, "value": prefs.get(cle)}
+
+
+@router.put(
+    "/me/ui-prefs/{cle}",
+    summary="Mémorise un état d'interface de l'utilisateur courant",
+)
+async def put_my_ui_pref(
+    body: UiPrefUpdate,
+    db: DBSession,
+    current_user: CurrentUser,
+    cle: str = Path(..., pattern=UI_PREF_KEY_PATTERN),
+) -> dict[str, Any]:
+    u = (
+        await db.execute(
+            select(User).where(User.id == current_user.id).with_for_update()
+        )
+    ).scalar_one()
+    prefs = _ui_prefs(u)
+    if body.value is None:
+        prefs.pop(cle, None)
+    else:
+        prefs[cle] = body.value
+    raw = json.dumps(prefs, ensure_ascii=False, separators=(",", ":"))
+    if len(raw.encode("utf-8")) > UI_PREFS_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="États d'interface trop volumineux.",
+        )
+    u.ui_prefs_json = raw
+    await db.flush()
+    return {"key": cle, "found": cle in prefs, "value": prefs.get(cle)}
 
 
 # ---------- Profil utilisateur (Prénom / Nom / Photo) ----------

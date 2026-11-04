@@ -185,7 +185,9 @@ court-circuité, pas un délai réseau par offre).
 
 Steven (bug 14) : « vue d'ensemble des dépenses construction général et
 calculer coût à l'heure vs entrée de fonds ». Page Entreprises → Dépenses
-construction (`page:entreprises.depenses_construction`, admins), calculs
+construction (`page:entreprises.depenses_construction_dev`), en
+développement depuis le 2026-10-23 : titre rouge dans le menu,
+propriétaires seulement (« juste permettre au dev de voir »), calculs
 dans `app/services/depenses_construction.py`. Tout est HORS TAXES. Heures
 = punchs fermés, au jour de Montréal ; main-d'œuvre = `resolve_real_cost`
 daté (comme la fiche projet) ; achats datés de `invoice_date`, sinon
@@ -194,3 +196,151 @@ daté (comme la fiche projet) ; achats datés de `invoice_date`, sinon
 = lignes `facture_payments` à leur `paid_at` (les paiements QB y sont
 reflétés). Le bloc QuickBooks (P&L, exercice) contient déjà les achats de
 Kratos : ne jamais l'additionner aux dépenses Kratos.
+
+## QuickBooks — projet qui change de client (2026-11-02)
+
+Steven : « le client du projet 1660 Saint-Clément a changé dans Kratos,
+il ne s'est pas changé dans QuickBooks ». Le sous-client QB d'un projet
+SUIT le client du projet : `resolve_project_customer_id` le DÉPLACE
+(`QuickBooksClient.move_subcustomer`, `ParentRef`) sous le nouveau client
+mère au lieu d'oublier le lien et d'en créer un second (le nom d'affichage
+étant unique dans QB, l'original restait sous l'ancien client et le
+nouveau prenait un nom dérivé). Pas de déplacement si le sous-client est
+porté par un autre projet, si le nouveau client a déjà un sous-client au
+nom exact (adopté), ou vers un parent autre que le client QB mémorisé sur
+la fiche ; un refus de QB retombe sur la création. Un projet QB SE DÉPLACE à
+condition que le corps redise `BillWithParent: true` (sinon « Un projet
+doit être un client rattaché facturé à son compte principal », projet
+108 → 209, 2026-11-04) : `move_subcustomer` et `POST
+/qbo/customers/{id}/modifier` l'envoient d'office pour un projet ou un
+sous-client déjà coché ; « facturer_avec_parent: true » sur un projet
+ne change rien, « false » est refusé (422).
+Client mère : une seule règle, `app/services/qbo_client_mere.py` — le
+client QB doit PORTER LE NOM de la fiche (accents / majuscules /
+ponctuation près) : lien de la fiche, nom exact, courriel unique ; un
+client QB au nom de COMPAGNIE différent (lien ou courriel) n'est jamais
+repris (les compagnies d'un même proprio partagent son courriel : la fiche
+du Groupe 1660 avait été reliée au client QB #179, une autre compagnie) ;
+seul un nom de personne différent est toléré (fiche renommée). À défaut :
+client au nom exact même INACTIF (réactivé), sinon création. Seule la
+synchro du projet (`ensure_project_qbo_job`, qui mémorise le client mère)
+déplace un sous-client ; une facture / un coût dont le client mère n'est
+pas celui de la fiche garde le sous-client existant. Filet horaire dans
+`qbo_nets` (`qbo_sous_clients_client_change`).
+Courriel / personne contact partagés (Steven, même jour : « plusieurs
+entreprises au même propriétaire ») : le courriel n'identifie JAMAIS une
+compagnie. Règle commune `app/integrations/qbo_noms.py` —
+`noms_compatibles` (même nom normalisé ou mêmes mots distinctifs ; les
+mots génériques inc / groupe / gestion / immobilier… ne comptent pas)
+pour tout client QB retrouvé par courriel, `lien_acceptable` pour un lien
+mémorisé. Appliquée dans `QuickBooksClient.ensure_customer` (nouvelles
+fiches, soumissions, contrats), `client_mere_qbo` et
+`push_client_update_qbo_now` (une fiche reliée à une autre compagnie ne
+la RENOMME jamais). Le filet horaire (`corriger_liens_autre_compagnie`)
+répare les fiches déjà reliées à une autre compagnie : projets repassés
+(sous-clients déplacés sous le bon client mère), sinon lien retiré, et
+notification aux admins.
+Conversion en projet QB (Steven, même jour : « je ne l'ai pas dans les
+projets à convertir ») : un sous-client DÉPLACÉ entre dans la liste « à
+convertir » comme un sous-client créé ou adopté. QuickBooks ne propose
+dans « Convertir depuis un sous-client » que les sous-clients cochés
+« Facturer avec le client parent » (`BillWithParent`) : le déplacement le
+coche (`move_subcustomer`, sauf projet QB) et le filet horaire
+`filet_facturer_avec_parent` (`qbo_projets_conversion`) le coche sur tout
+sous-client « à convertir » qui ne l'a pas.
+
+## Part CCQ par employé — coût de chantier (2026-11-02)
+
+Steven : « si je mets 50 % CCQ sur un employé, calculer 50 % des heures en
+CCQ et l'autre 50 % hors décret pour se rapprocher du coût d'un chantier ».
+Champ `Employe.pourcentage_ccq` (0 à 100, NULL = comme avant) sur la fiche
+employé. Posé, `resolve_real_cost` coûte chaque heure
+`pct × coût CCQ + (1 − pct) × coût hors décret`, QUEL QUE SOIT le régime
+du punch (fiche projet, dépenses construction, main-d'œuvre poussée à QB,
+projection de main-d'œuvre). La paie (`resolve_base_rate`) ne change pas :
+elle suit toujours le régime du punch.
+
+## Factures — petits soldes reportés (2026-11-02)
+
+Steven : « 15 $ oubliés sur une facture de 18 000 $ […] pour que tout
+balance dans QuickBooks et qu'on n'ait pas une facture en retard pour
+rien », puis « lorsque nous classons la facture dans payé, le report
+devrait se faire automatiquement ». Service
+`app/services/facture_report_solde.py`, table `facture_reports_solde`.
+Le solde (≤ `facture_report_plafond`, 100 $) est FERMÉ sur la facture
+d'origine par un Payment QB imputé à l'Invoice et déposé dans le compte de
+transit « Soldes reportés » (actif à court terme, créé au besoin), puis
+AJOUTÉ sur la prochaine facture du client en ligne `kind="report"` :
+déjà TTC, donc HORS TAXES (code QB exonéré / hors champ, cherché par nom
+ou `QBO_REPORT_TAX_CODE`), produit « Solde reporté » relié au même compte
+de transit → le compte revient à 0, ni revenu ni taxe en double. Pas de
+note de crédit : QB peut l'appliquer d'office à une autre facture ouverte.
+Un report n'est PAS un paiement Kratos : jamais dans `facture_payments`
+(entrées de fonds, finances projet, profit) ; la facture d'origine est
+soldée par « paiements + reports » (`_recompute_facture_status`). Totaux :
+`facture_lignes.totaux_facture` (sous-total = base taxable ; reports après
+les taxes) partout où on recalcule. Automatique au passage à « payée »
+s'il y a au moins un paiement et un reste ≤ plafond ; bouton sur la fiche
+sinon. Le report attend un brouillon du client (ajouté à son ouverture, à
+l'envoi, à la sortie de brouillon) ; ligne retirée = attend la suivante.
+Le rapatriement QB ignore ces Payments ; filet horaire dans `qbo_nets`.
+Fiche employé (retour Steven, même jour) : bloc « Heures CCQ » sous le
+taux horaire. `hourly_rate_ccq` = taux de SALAIRE du décret (sert à la
+paie), `ccq_rate` = charges CCQ en % du salaire (vacances, avantages, AE,
+RQAP, RRQ, FSS, cotisations, équipement) SANS la CNESST, comptée à part une
+seule fois. Aide de saisie : « coût complet CCQ connu » → charges calculées
+(`coût / salaire − 1 − CNESST`). Ne jamais saisir un coût complet dans le
+taux de salaire : CNESST et charges s'y ajouteraient en double.
+
+## QuickBooks — fiches clients par l'API, clients en double (2026-11-04)
+
+Steven : clients en double dans le QuickBooks d'Horizon, factures
+réparties entre les doublons, « passe par le lien Kratos » pour les
+corriger. Routes ``/api/v1/qbo/customers`` (admin / propriétaire,
+``app/services/qbo_clients_modif.py``) : liste (actifs ET inactifs),
+fiche ``/{id}`` (même inactive, sous-clients, ``liens_kratos`` : fiches
+clients, projets, immeubles, compagnies de la feuille de temps,
+factures mensuelles reliés à ce client QB), inventaire
+``/{id}/transactions`` (comptages ``COUNT`` par type + rapport
+« TransactionList » filtré sur le client ; ``vide`` vrai / faux / null
+quand l'inventaire est incomplet), et ``POST /{id}/modifier`` (nom,
+``parent_id``, ``actif``, ``facturer_avec_parent``, ``simuler``,
+``forcer`` ; champ inconnu → 422) : UNE mise à jour sparse sur le
+SyncToken relu, fiche avant / après et avertissements dans la réponse,
+journal automatique, ``detail`` d'erreur toujours un objet
+``{"message", …}``. Actionnable par ``kratos_action`` (capacité
+« Exécuter toute action »). **L'API Intuit ne fusionne pas deux
+clients** : un nom déjà porté (fiche active ou inactive, fournisseur
+ou employé — nom unique entre les trois) est refusé (6240), d'où le
+409 avant l'envoi ; la fusion se fait dans l'écran de QuickBooks en
+renommant le doublon au nom EXACT de la fiche gardée (QuickBooks la
+propose alors). Réactiver une fiche « (supprimé) » lui rend son nom :
+même 409 si ce nom est pris. Rendre inactive une fiche à solde, avec
+des sous-clients actifs (QuickBooks les désactive avec le parent, la
+réponse liste ``sous_clients_desactives``) ou que Kratos utilise
+(``ensure_customer`` la réactiverait ou en créerait une autre) est
+refusé sauf ``forcer``. Un projet QB n'a pas de sous-clients ; retirer
+un client mère (revenir au premier niveau) n'existe pas dans l'API ;
+QuickBooks non connecté → 503 avec où reconnecter.
+Rapport « TransactionList » (``/{id}/transactions``) : dans la compagnie
+d'Horizon (QuickBooks en français) ``ColType`` porte le TYPE de donnée
+(Date / String / Money), pas la clé de colonne, et les titres sont en
+français — toutes les lignes sortaient à null (fiche 270, 2026-11-04).
+Les colonnes se reconnaissent par ``MetaData`` ColKey, puis ``ColType``
+s'il est une clé connue, puis le titre (``_cle_colonne``) ; montants
+« 1 350,00 $ » et « (45,00 $) » acceptés ; ``colonnes_rapport`` dans la
+réponse montre le format réellement reçu.
+
+## QuickBooks — conversion en projet : pas d'API, alerte d'attente (2026-11-04)
+
+Steven : « convertir un sous-client en projet sans cliquer ni passer par
+l'extension ». Impossible par l'API : l'API comptable v3 ne fait que LIRE
+`Customer.IsProject`, et l'API Projets (GraphQL, palier Silver+, refusé)
+CRÉE un projet mais ne CONVERTIT pas un sous-client. Choix de Steven :
+l'extension en mode « Automatique ». Kratos met le sous-client dans la
+liste dès sa création (soumission acceptée → projet), date l'entrée
+(`qbo_conversion_le`, aussi pour « à convertir » ; `en_attente_depuis`
+dans la liste) et le cron quotidien (`verifier_pour_cron` →
+`alerter_attente`) envoie aux admins une notification
+`qbo_conversion_en_attente` quand un sous-client attend depuis plus de
+3 jours : au plus une fois par 7 jours, sauf nouveau retard.

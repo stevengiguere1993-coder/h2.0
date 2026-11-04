@@ -1111,41 +1111,51 @@ def serialize_tal_transmission(obj: Any, level: str = "summary") -> dict:
     return _drop_none(data)
 
 
-def serialize_imm_financement(obj: Any, level: str = "summary") -> dict:
-    """Dossier de financement d'un immeuble (Gestion locative → Financement,
-    2026-10-16) : prêteur, montant, statut, dates. Pas la projection ni les
-    pièces (détail métier dans l'API)."""
-    statut = _str(_get(obj, "statut"))
+
+def serialize_voice_routing_rule(obj: Any, level: str = "summary") -> dict:
+    """Règle d'acheminement d'un appel (téléphonie, bug 19) : sujet,
+    chantier optionnel, mode de sonnerie et liste ordonnée des cibles."""
+    from app.integrations.voice.call_routing_rules import (
+        SUBJECT_LABELS,
+        TARGET_KIND_LABELS,
+        loads_targets,
+    )
+
+    subject = _str(_get(obj, "subject"))
+    targets = loads_targets(_get(obj, "targets_json"))
+    label = _str(_get(obj, "label")) or SUBJECT_LABELS.get(subject or "", subject)
     data: dict[str, Any] = {
-        "entity_type": "imm_financement",
-        "type": "imm_financement",
-        "id": _get(obj, "id"),
-        "label": f"{_str(_get(obj, 'titre')) or 'Financement'} ({statut or ''})".strip(),
-        "pole": "immobilier",
-        "titre": _str(_get(obj, "titre")),
-        "type_dossier": _str(_get(obj, "type")),
-        "statut": statut,
-        "status": statut,
-        "immeuble_id": _get(obj, "immeuble_id"),
-        "hypotheque_id": _get(obj, "hypotheque_id"),
-        "preteur": _str(_get(obj, "preteur")),
-        "courtier": _str(_get(obj, "courtier")),
-        "montant_demande": _num(_get(obj, "montant_demande")),
-        "taux_pct": _num(_get(obj, "taux_pct")),
-        "terme_mois": _get(obj, "terme_mois"),
-        "date_depot": _iso(_get(obj, "date_depot")),
-        "date_reponse": _iso(_get(obj, "date_reponse")),
-        "date_echeance": _iso(_get(obj, "date_echeance")),
-        "updated_at": _iso(_get(obj, "updated_at")),
+        "entity_type": "voice_routing_rule",
+        "id": getattr(obj, "id", None),
+        "label": label,
+        "pole": "construction",
+        "subject": subject,
+        "subject_label": SUBJECT_LABELS.get(subject or "", subject),
+        "project_id": _get(obj, "project_id"),
+        "mode": _str(_get(obj, "mode")),
+        "respect_hours": _get(obj, "respect_hours"),
+        "active": _get(obj, "active"),
+        "targets": [
+            {
+                "kind": t.get("kind"),
+                "kind_label": TARGET_KIND_LABELS.get(str(t.get("kind")), t.get("kind")),
+                "user_id": t.get("user_id"),
+                "e164": t.get("e164"),
+                "label": t.get("label"),
+            }
+            for t in targets
+        ],
     }
-    if level in ("detail", "full"):
-        data.update({
-            "amortissement_mois": _get(obj, "amortissement_mois"),
-            "inclure_paralleles": _get(obj, "inclure_paralleles"),
-            "notes": _str(_get(obj, "notes")),
-            "created_by_email": _str(_get(obj, "created_by_email")),
-            "created_at": _iso(_get(obj, "created_at")),
-        })
+    if level == "full":
+        data.update(
+            {
+                "phone_number_id": _get(obj, "phone_number_id"),
+                "step_timeout_sec": _get(obj, "step_timeout_sec"),
+                "priority": _get(obj, "priority"),
+                "created_at": _iso(_get(obj, "created_at")),
+                "updated_at": _iso(_get(obj, "updated_at")),
+            }
+        )
     return _drop_none(data)
 
 
@@ -1180,6 +1190,28 @@ def serialize_bloc_note(obj: Any, level: str = "summary") -> dict:
                 "created_at": _iso(_get(obj, "created_at")),
             }
         )
+    return _drop_none(data)
+
+
+def serialize_voice_user_call_hours(obj: Any, level: str = "summary") -> dict:
+    """Une plage d'heures d'appel personnelle d'un utilisateur."""
+    jours = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+    dow = _get(obj, "day_of_week")
+    open_t = _get(obj, "open_time")
+    close_t = _get(obj, "close_time")
+    fmt = lambda t: t.strftime("%H:%M") if hasattr(t, "strftime") else _str(t)  # noqa: E731
+    jour = jours[int(dow)] if isinstance(dow, int) and 0 <= dow <= 6 else _str(dow)
+    data: dict[str, Any] = {
+        "entity_type": "voice_user_call_hours",
+        "id": getattr(obj, "id", None),
+        "label": f"{jour} {fmt(open_t)}–{fmt(close_t)}",
+        "pole": "construction",
+        "user_id": _get(obj, "user_id"),
+        "day_of_week": dow,
+        "open_time": fmt(open_t),
+        "close_time": fmt(close_t),
+        "timezone": _str(_get(obj, "timezone")),
+    }
     return _drop_none(data)
 
 
@@ -1251,7 +1283,44 @@ def serialize_imm_hypotheque(obj: Any, level: str = "summary") -> dict:
     return _drop_none(data)
 
 
+def serialize_rd_scenario(obj: Any, level: str = "summary") -> dict:
+    """Scénario « Revenus et dépenses » de la société de gestion (Gestion
+    d'entreprise, 2026-11-04) : nom + résumé des résultats (revenus, dépenses,
+    bénéfice, marge, dividendes, VAN nécessaire). Hypothèses complètes en détail."""
+    import json as _json
+
+    try:
+        res = _json.loads(_get(obj, "resume_json") or "{}") or {}
+    except Exception:  # noqa: BLE001
+        res = {}
+    data: dict[str, Any] = {
+        "entity_type": "rd_scenario",
+        "type": "rd_scenario",
+        "id": _get(obj, "id"),
+        "label": f"Simulation revenus/dépenses — {_str(_get(obj, 'nom')) or 'scénario'}",
+        "pole": "entreprise",
+        "nom": _str(_get(obj, "nom")),
+        "is_default": bool(_get(obj, "is_default")),
+        "revenus_annuels": _num(res.get("revenus")),
+        "depenses_annuelles": _num(res.get("depenses")),
+        "benefice": _num(res.get("benefice")),
+        "marge_pct": _num(res.get("marge_pct")),
+        "dividendes": _num(res.get("dividendes")),
+        "van_necessaire": _num(res.get("van_necessaire")),
+        "updated_at": _iso(_get(obj, "updated_at")),
+    }
+    if level in ("detail", "full"):
+        try:
+            data["hypotheses"] = _json.loads(_get(obj, "data_json") or "{}")
+        except Exception:  # noqa: BLE001
+            data["hypotheses"] = None
+        data["created_by_email"] = _str(_get(obj, "created_by_email"))
+    return _drop_none(data)
+
+
 SERIALIZERS: dict[str, Callable[..., dict]] = {
+    "voice_routing_rule": serialize_voice_routing_rule,
+    "voice_user_call_hours": serialize_voice_user_call_hours,
     "bloc_note": serialize_bloc_note,
     "devlog_soumission": serialize_devlog_soumission,
     "devlog_project_task": serialize_devlog_project_task,
@@ -1268,11 +1337,11 @@ SERIALIZERS: dict[str, Callable[..., dict]] = {
     "inventaire_article": serialize_inventaire_article,
     "inventaire_mouvement": serialize_inventaire_mouvement,
     "entreprise": serialize_entreprise,
+    "rd_scenario": serialize_rd_scenario,
     "imm_tal_dossier": serialize_imm_tal_dossier,
     "imm_locataire_contact": serialize_imm_locataire_contact,
     "lot_paiement": serialize_lot_paiement,
     "tal_transmission": serialize_tal_transmission,
-    "imm_financement": serialize_imm_financement,
     "imm_immeuble_code": serialize_imm_immeuble_code,
     "imm_hypotheque": serialize_imm_hypotheque,
     "prospection_courtier": serialize_prospection_courtier,

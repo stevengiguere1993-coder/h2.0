@@ -25,6 +25,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Integer,
     LargeBinary,
     Numeric,
     String,
@@ -246,6 +247,27 @@ class Achat(Base, TimestampUpdateMixin):
     # importés avant 2026-10-18. Colonne → ensure_critical_columns.
     qbo_txn_total: Mapped[Optional[float]] = mapped_column(
         Numeric(12, 2), nullable=True
+    )
+    # Pièce jointe QuickBooks (Attachable) qui porte le reçu de cet achat
+    # sur sa transaction QB (2026-11-04, services/achat_piece_qbo.py).
+    # NULL = reçu pas (encore) dans QB. Posé à la synchro, à l'arrivée du
+    # reçu dans Kratos, par le filet horaire, ou à l'import d'un reçu
+    # déposé dans QB. Partagé par les parts d'un reçu divisé. Colonne →
+    # ensure_critical_columns.
+    qbo_attachable_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+
+    # REÇU DIVISÉ ENTRE PLUSIEURS PROJETS (Steven 2026-10-30) : un reçu
+    # saisi dans Kratos peut être réparti entre plusieurs projets → un
+    # achat PAR projet (sa part du HT et des taxes), tous liés par ce
+    # groupe = id de la PREMIÈRE part (la « tête », qui porte son propre
+    # id). Le push QuickBooks envoie UNE transaction (Bill ou Purchase) à
+    # une ligne par part (CustomerRef = projet de la part), dont l'Id est
+    # recopié sur toutes les parts ; le paiement et le reçu valent pour le
+    # groupe. NULL = achat simple. Colonne → ensure_critical_columns.
+    groupe_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, index=True
     )
 
     # ---- Refacturation client ----

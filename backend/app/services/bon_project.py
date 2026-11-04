@@ -107,37 +107,17 @@ async def ensure_project_qbo_job(db: AsyncSession, proj: Project) -> dict:
     if client is None:
         raise ProjectQboJobError("Client du projet introuvable.")
 
-    # Client mère QB : d'abord le lien mémorisé sur la fiche — mais si
-    # ce lien pointe un customer dont le nom ne correspond pas ALORS
-    # qu'un customer au nom exact de la fiche existe, le lien est
-    # erroné (ex. adoption par un courriel partagé entre compagnies) →
-    # on le répare. Sinon find-or-create (nom exact d'abord, courriel
-    # unique en repli).
-    cust = None
-    if client.qbo_customer_id:
-        cust = await qbo.get_customer(client.qbo_customer_id)
-        if cust is not None:
-            _dn = (cust.get("DisplayName") or "").strip().lower()
-            _kn = (client.name or "").strip().lower()
-            if _kn and _dn != _kn:
-                _exact = await qbo.find_customer_by_name(client.name)
-                if _exact is not None:
-                    cust = _exact
-    if cust is None:
-        cust = await qbo.ensure_customer(
-            display_name=client.name,
-            email=client.email,
-            phone=client.phone,
-            billing_address=client.address,
-        )
+    # Client mère QB : règle commune (lien de la fiche, nom exact,
+    # courriel unique — jamais le client QB d'une AUTRE fiche Kratos —,
+    # sinon création), lien mémorisé sur la fiche.
+    from app.services.qbo_client_mere import client_mere_qbo
+
+    cust = await client_mere_qbo(db, qbo, client, memoriser=True)
     parent_id = str(cust.get("Id") or "") if cust else ""
     if not parent_id:
         raise ProjectQboJobError(
             f"QuickBooks n'a pas retourné de client pour « {client.name} »."
         )
-    if client.qbo_customer_id != parent_id:
-        client.qbo_customer_id = parent_id
-        await db.flush()
 
     report: dict = {}
     job_id = await resolve_project_customer_id(
@@ -163,10 +143,12 @@ async def ensure_project_qbo_job(db: AsyncSession, proj: Project) -> dict:
         )
     except Exception:  # noqa: BLE001
         job_name = ""
-    # Sous-client qui vient d'être créé / adopté → à convertir en PROJET
-    # dans QB (Steven 2026-10-14 : Comptabilité → Projets QB, extension
-    # Chrome). Un lien déjà en place n'y entre que s'il y était déjà.
-    if action in ("cree", "adopte") or proj.qbo_conversion_etat is not None:
+    # Sous-client qui vient d'être créé / adopté / déplacé sous un autre
+    # client mère → à convertir en PROJET dans QB (Steven 2026-10-14 :
+    # Comptabilité → Projets QB, extension Chrome ; 2026-11-02 : le 1660
+    # Saint-Clément, déplacé sous Groupe 1660, n'était pas dans la liste).
+    # Un lien déjà en place n'y entre que s'il y était déjà.
+    if action in ("cree", "adopte", "deplace") or proj.qbo_conversion_etat is not None:
         from app.services import qbo_projets_conversion as conversion
 
         conversion.demander(proj, row if isinstance(row, dict) else None)

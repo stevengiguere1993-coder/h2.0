@@ -519,14 +519,17 @@ async def run_qbo_nets() -> Dict[str, Any]:
         from sqlalchemy import select
 
         from app.models.achat import KIND_INVENTAIRE, Achat
+        from app.services.achat_divise import premieres_parts
         from app.services.achat_qbo import sync_achat_to_qbo
 
         async with AsyncSessionLocal() as db:
-            ids = [
-                int(r[0])
+            # Reçu divisé : une seule part par groupe (pousser une part
+            # pousse toute la transaction).
+            ids = premieres_parts(
+                (int(r[0]), r[1])
                 for r in (
                     await db.execute(
-                        select(Achat.id).where(
+                        select(Achat.id, Achat.groupe_id).where(
                             # TOUT achat actif entré dans Kratos part vers QB,
                             # AVEC ou SANS projet/client (le Bill/Purchase QB
                             # se crée alors sans CustomerRef). L'ancien filtre
@@ -547,7 +550,7 @@ async def run_qbo_nets() -> Dict[str, Any]:
                         )
                     )
                 ).all()
-            ]
+            )
         pushed = failed = 0
         for aid in ids:
             try:
@@ -565,6 +568,18 @@ async def run_qbo_nets() -> Dict[str, Any]:
         }
     except Exception:  # noqa: BLE001
         log.warning("Filet achats échoué", exc_info=True)
+
+    # ── Reçus d'achats jamais joints à leur transaction QB (2026-11-04) ──
+    # Le PDF arrive après l'auto-push (A-520, A-462), ou l'achat date
+    # d'avant la pièce automatique : chaque heure on relie (QB l'a déjà)
+    # ou on téléverse. Anti-doublon : qbo_attachable_id + relecture des
+    # Attachables QB (services/achat_piece_qbo.py).
+    try:
+        from app.services.achat_piece_qbo import rattraper_pieces_qbo
+
+        out["pieces_achats"] = await rattraper_pieces_qbo(limit=100)
+    except Exception:  # noqa: BLE001
+        log.warning("Filet pièces jointes d'achats échoué", exc_info=True)
 
     # ── Paiements d'achats jamais parvenus à QB → BillPayment ──
     # « Marquer payé » pousse la BillPayment UNE seule fois, en fond : si
@@ -749,6 +764,56 @@ async def run_qbo_nets() -> Dict[str, Any]:
             out["bons_qb"] = {"candidates": len(bon_project_ids)}
     except Exception:  # noqa: BLE001
         log.warning("Filet bons de travail → QB échoué", exc_info=True)
+
+    # ── Projet changé de client → sous-client QB sous le NOUVEAU client ──
+    # Le changement de client sur la fiche du projet déplace déjà le
+    # sous-client (en fond) ; ce filet rattrape un passage manqué et fait
+    # une fois la réparation du 1660 Saint-Clément (Steven 2026-11-02).
+    try:
+        from app.services.qbo_sous_clients_client_change import (
+            filet_sous_clients_client_change,
+        )
+
+        out["sous_clients_client_change"] = (
+            await filet_sous_clients_client_change()
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("Filet sous-clients / changement de client échoué", exc_info=True)
+
+    # ── Sous-clients « à convertir » pas cochés « Facturer avec le parent » ──
+    # Sans ce drapeau, QuickBooks ne les propose pas dans « Convertir
+    # depuis un sous-client » (Steven 2026-11-02, 1660 Saint-Clément).
+    try:
+        from app.services.qbo_projets_conversion import filet_facturer_avec_parent
+
+        out["conversion_facturer_avec_parent"] = await filet_facturer_avec_parent()
+    except Exception:  # noqa: BLE001
+        log.warning("Filet « Facturer avec le client parent » échoué", exc_info=True)
+
+    # ── Petits soldes reportés pas encore fermés dans QB → Payment ──
+    # Le solde reporté sur une prochaine facture doit être fermé sur
+    # l'Invoice d'origine (dépôt dans le compte de transit « Soldes
+    # reportés ») : rattrape un refus passager ou une facture d'origine
+    # arrivée dans QuickBooks depuis le report.
+    try:
+        from app.services.facture_report_solde import filet_reports_qbo
+
+        out["reports_solde"] = await filet_reports_qbo()
+    except Exception:  # noqa: BLE001
+        log.warning("Filet soldes reportés échoué", exc_info=True)
+
+    # ── Classe « Construction » sur les reçus de chantier déjà dans QB ──
+    # Un reçu saisi directement dans QuickBooks puis importé garde la
+    # classe qu'on y a mise (souvent l'adresse du chantier) : on la
+    # remplace par « Construction », client et projet gardés (Steven
+    # 2026-11-03). Une fois pour tout l'historique, puis les achats
+    # récents à chaque heure. Cf. achat_qbo_classe.
+    try:
+        from app.services.achat_qbo_classe import reclasser_achats_lies
+
+        out["classe_construction"] = await reclasser_achats_lies()
+    except Exception:  # noqa: BLE001
+        log.warning("Filet classe Construction échoué", exc_info=True)
 
     # ── Compteur de factures au-dessus de QuickBooks ──
     # Une facture créée directement dans QB (ou importée) doit faire

@@ -786,6 +786,17 @@ def construire_formulaire(schema: SchemaTal, ctx: ContexteBail, config: dict[str
         poser("precisionAutresServicesConditionsRestriction", "Internet inclus dans le loyer.")
     else:
         defaut("possedeAutresServicesConditionsRestriction", "false")
+    # Bail PRINCIPAL d'un locataire qui sous-loue les chambres : la clause
+    # est écrite au bail (pré-remplie, à confirmer avant transmission).
+    if (getattr(bail, "categorie", None) or "standard") == "parallele" and getattr(bail, "parallele_type", None) == "bail_principal":
+        poser("possedeAutresServicesConditionsRestriction", "true")
+        clause = (
+            "Le locataire peut sous-louer les chambres du logement ; la gestion des "
+            "sous-locations est confiée au gestionnaire du locateur."
+        )
+        existant = str(form.get("precisionAutresServicesConditionsRestriction") or "").strip()
+        defaut("precisionAutresServicesConditionsRestriction", f"{existant} {clause}".strip() if existant else clause,
+               "clause de sous-location pré-remplie : vérifier le libellé")
     defaut("possedeDocumentsJoindreBail", "false")
     defaut("possedeServicesAdditionnelsBail", "false")
     annee = getattr(im, "annee_construction", None) if im is not None else None

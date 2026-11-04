@@ -398,6 +398,14 @@ async def _build_lines(
                 Decimal("0.01"), rounding=ROUND_HALF_UP
             )
         )
+        if (it.kind or "") == "report":
+            # Solde reporté d'une facture précédente : déjà TTC, produit
+            # relié au compte de transit « Soldes reportés », code de taxe
+            # exonéré — ni revenu ni taxe (2026-11-02).
+            from app.services.facture_report_solde import ligne_qbo_report
+
+            lines.append(await ligne_qbo_report(qbo, it, amount))
+            continue
         if qty > 0:
             unit_price = float(
                 (Decimal(str(amount)) / Decimal(str(qty))).quantize(
@@ -478,6 +486,9 @@ def _build_invoice_payload(
     # coûts) pour que le suivi par classe / l'onglet Projets QB attribue le
     # revenu au bon projet, quel que soit le réglage « une classe par
     # opération / par ligne » de la compagnie.
+    # Lignes de solde reporté : marqueur interne retiré (jamais envoyé à
+    # QuickBooks), exclues de la base taxable du calcul manuel ci-dessous.
+    lignes_report = [bool(line.pop("_kratos_report", False)) for line in lines]
     if class_id:
         for line in lines:
             detail = line.get("SalesItemLineDetail")
@@ -515,7 +526,9 @@ def _build_invoice_payload(
     else:
         # Taxe MANUELLE (compagnies sans AST) : on fournit le total.
         subtotal = 0.0
-        for line in lines:
+        for line, _est_report in zip(lines, lignes_report):
+            if _est_report:
+                continue
             try:
                 subtotal += float(line.get("Amount") or 0)
             except (TypeError, ValueError):
@@ -1042,12 +1055,9 @@ async def sync_facture_to_qbo(
     #: QB par une autre facture), une note lisible par changement.
     _renumerotations: list[str] = []
     try:
-        customer = await qbo.ensure_customer(
-            display_name=client.name,
-            email=client.email,
-            phone=client.phone,
-            billing_address=client.address,
-        )
+        from app.services.qbo_client_mere import client_mere_qbo
+
+        customer = await client_mere_qbo(db, qbo, client)
         customer_id = str(customer.get("Id") or "")
         if not customer_id:
             raise FactureSyncError("QBO customer creation did not return an Id.")
@@ -1475,12 +1485,9 @@ async def push_facture_payments_only(
     client = await _load_client(db, fa.client_id)
     if client is not None:
         try:
-            cust = await qbo.ensure_customer(
-                display_name=client.name,
-                email=client.email,
-                phone=client.phone,
-                billing_address=client.address,
-            )
+            from app.services.qbo_client_mere import client_mere_qbo
+
+            cust = await client_mere_qbo(db, qbo, client)
             customer_ref = str(cust.get("Id") or "")
         except QuickBooksError:
             customer_ref = ""
@@ -1632,14 +1639,21 @@ async def factures_en_retard_dans_qb(qbo, db: AsyncSession) -> list[Dict[str, An
     atteint QuickBooks. Les factures sans lignes (importées de QB) et les
     Invoices annulées dans QB sont laissées de côté. « miroir » dit si
     l'Invoice peut être remise à jour sans demander."""
-    from sqlalchemy import func
+    from sqlalchemy import case, func
 
     rows = (
         await db.execute(
             select(
                 Facture.id,
                 Facture.qbo_invoice_id,
-                func.sum(FactureItem.total),
+                # Base taxable seulement : les soldes reportés (déjà TTC)
+                # s'ajoutent après les taxes.
+                func.sum(
+                    case((FactureItem.kind == "report", 0), else_=FactureItem.total)
+                ),
+                func.sum(
+                    case((FactureItem.kind == "report", FactureItem.total), else_=0)
+                ),
             )
             .join(FactureItem, FactureItem.facture_id == Facture.id)
             .where(
@@ -1653,10 +1667,10 @@ async def factures_en_retard_dans_qb(qbo, db: AsyncSession) -> list[Dict[str, An
     par_invoice = {
         str(qid): (
             int(fid),
-            _total_attendu(float(sub or 0)),
+            round(_total_attendu(float(sub or 0)) + float(rep or 0), 2),
             round(float(sub or 0), 2),
         )
-        for fid, qid, sub in rows
+        for fid, qid, sub, rep in rows
         if qid
     }
     ids = sorted(par_invoice)

@@ -94,6 +94,18 @@ class Settings(BaseSettings):
     # (erreur 6000 « toutes vos opérations comprennent un taux de TPS/TVH »).
     # Récupère l'Id via « Lister codes de taxe » (ex. TPS/TVQ QC).
     qbo_sales_tax_code: Optional[str] = None
+    #: Report des petits soldes (2026-11-02) : Id du code de taxe QBO
+    #: « exonéré / hors champ » de la ligne « Solde reporté » (déjà TTC).
+    #: Vide → Kratos le cherche par son nom dans QuickBooks.
+    qbo_report_tax_code: Optional[str] = None
+    #: Compte de transit (actif à court terme) qui reçoit le solde fermé
+    #: sur la facture d'origine puis repris sur la prochaine facture.
+    qbo_report_compte: str = "Soldes reportés"
+    #: Produit / service QB de la ligne « Solde reporté », relié au compte
+    #: de transit.
+    qbo_report_produit: str = "Solde reporté"
+    #: Montant maximum (TTC) qu'on peut reporter sur une prochaine facture.
+    facture_report_plafond: float = 100.0
     #: Classe QB des achats « Shop » (non reliés à un projet).
     qbo_shop_class_name: str = "Construction"
     #: Classe QB de TOUT achat/reçu poussé depuis Kratos vers QB, projet ou

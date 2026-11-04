@@ -496,40 +496,16 @@ def make_crud_router(
             if getattr(data, "is_billable", None) is not None:
                 obj.billable_manual = True
             if getattr(data, "is_billable", None) is None and obj.project_id:
-                from sqlalchemy import select as _sel_bill
+                from app.services.achat_refacturable import (
+                    refacturable_par_defaut,
+                )
 
-                from app.models.project import Project as _ProjBill
-                from app.models.soumission import Soumission as _SoumBill
-
-                _proj_row = (
-                    await db.execute(
-                        _sel_bill(
-                            _ProjBill.soumission_id, _ProjBill.kind
-                        ).where(_ProjBill.id == obj.project_id)
-                    )
-                ).first()
-                _soum_id = _proj_row[0] if _proj_row else None
                 # Mini-projet d'un BON DE TRAVAIL : matériaux refacturés en
                 # temps & matériel → refacturables par défaut (retour
-                # 2026-09-18), quel que soit le devis.
-                _is_bon_proj = bool(
-                    _proj_row and (_proj_row[1] or "") == "bon_travail"
-                )
-                _kind = (
-                    (
-                        await db.execute(
-                            _sel_bill(_SoumBill.kind).where(
-                                _SoumBill.id == _soum_id
-                            )
-                        )
-                    ).scalar_one_or_none()
-                    if _soum_id
-                    else None
-                )
-                if (
-                    _kind != "contract"
-                    and not _is_bon_proj
-                    and obj.is_billable
+                # 2026-09-18), quel que soit le devis. Règle partagée avec
+                # le reçu divisé (services/achat_refacturable.py).
+                if obj.is_billable and not await refacturable_par_defaut(
+                    db, obj.project_id
                 ):
                     obj.is_billable = False
             await db.flush()
@@ -733,6 +709,17 @@ def make_crud_router(
         if model is Facture:
             await _heal_facture_clients(db, [obj])
             await _heal_facture_devis_overrun(db, obj)
+            # Brouillon ouvert : il reçoit les petits soldes du client en
+            # attente de leur prochaine facture (ligne « Solde reporté de
+            # la facture X »), pour qu'on la voie avant l'envoi.
+            if (getattr(obj, "status", None) or "") == FactureStatus.DRAFT.value:
+                from app.services.facture_report_solde import (
+                    appliquer_reports_en_attente as _app_rep,
+                )
+
+                if await _app_rep(db, obj):
+                    await db.commit()
+                    await db.refresh(obj)
         return read_schema.model_validate(obj)
 
     @router.patch("/{item_id}")
@@ -890,6 +877,45 @@ def make_crud_router(
                 )
         if model is Achat:
             new_status = getattr(obj, "status", None)
+            # Reçu DIVISÉ entre plusieurs projets : les champs qui décrivent
+            # la facture (fournisseur, n°, date, mode de paiement, nature,
+            # PO) valent pour toutes les parts → recopiés sur les sœurs,
+            # comme le statut de paiement (une facture se paie en entier).
+            # Une part ne peut pas prendre le projet d'une sœur (409). Une
+            # part ANNULÉE perd sa ligne dans QB tout de suite (réécriture
+            # de la transaction dans la requête ; refus QB → 409, rien
+            # n'est annulé). Le re-push live ci-dessous reconstruit la
+            # transaction QB du groupe (une ligne par part) — après COMMIT,
+            # puisqu'il lit la base dans sa propre session.
+            if getattr(obj, "groupe_id", None):
+                from app.services.achat_divise import (
+                    DivisionErreur,
+                    propager_champs_communs,
+                    propager_statut_paiement,
+                    retirer_part_annulee,
+                    verifier_projet_unique,
+                )
+                from app.services.achat_qbo import (
+                    AchatSyncError as _AchatSyncError,
+                )
+
+                try:
+                    await verifier_projet_unique(db, obj)
+                except DivisionErreur as exc:
+                    raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+                await propager_champs_communs(db, obj)
+                if new_status != prev_status:
+                    await propager_statut_paiement(db, obj)
+                if new_status == "cancelled" and prev_status != "cancelled":
+                    try:
+                        await retirer_part_annulee(db, obj)
+                    except _AchatSyncError as exc:
+                        raise HTTPException(
+                            status.HTTP_409_CONFLICT,
+                            "Part non annulée : QuickBooks n'a pas pu "
+                            f"retirer sa ligne de la facture — {exc}",
+                        )
+                await db.commit()
             # Push LIVE : TOUTE modification enregistrée d'un achat actif
             # (reçu/payé) est reflétée immédiatement dans QB — montants,
             # taxes, projet, mode de paiement, description, date… — sans
@@ -920,10 +946,14 @@ def make_crud_router(
             # effectif seulement si pas déjà refacturé (invoiced_at NULL) ;
             # décoché ⇒ NotBillable ⇒ l'« imputation de dépense
             # facturable » en attente disparaît côté QB.
+            # Reçu divisé : pas de flip ciblé (il forcerait TOUTES les
+            # lignes au statut de cette part) — le re-push live du groupe
+            # ci-dessus pose le statut de chaque part sur sa ligne.
             new_billable = bool(getattr(obj, "is_billable", False))
             if (
                 prev_is_billable is not None
                 and new_billable != prev_is_billable
+                and not getattr(obj, "groupe_id", None)
                 and (
                     getattr(obj, "qbo_bill_id", None)
                     or getattr(obj, "qbo_purchase_id", None)
@@ -1010,6 +1040,28 @@ def make_crud_router(
                 )
 
                 await _ensure_no(db, obj)
+            # Petits soldes reportés (2026-11-02). Brouillon qui sort de
+            # l'état brouillon à la main : il prend les soldes du client en
+            # attente de leur prochaine facture (comme à l'envoi). Facture
+            # classée « payée » alors qu'il reste un petit solde : le solde
+            # est reporté automatiquement sur la prochaine facture.
+            from app.services import facture_report_solde as _rep
+
+            if (
+                prev_status == FactureStatus.DRAFT.value
+                and new_status != FactureStatus.DRAFT.value
+            ):
+                await _rep.appliquer_reports_en_attente(
+                    db, obj, sortie_de_brouillon=True
+                )
+            _report_auto = None
+            if (
+                new_status == FactureStatus.PAID.value
+                and prev_status != FactureStatus.PAID.value
+            ):
+                _report_auto = await _rep.reporter_au_classement_paye(
+                    db, obj, user_id=getattr(user, "id", None)
+                )
             # Push LIVE : TOUTE modification enregistrée d'une facture
             # ÉMISE (envoyée/payée/en retard) est reflétée immédiatement
             # dans QB — montants, projet, échéance… — sans bouton. Les
@@ -1027,6 +1079,10 @@ def make_crud_router(
                 from app.services.qbo_auto_sync import lancer_push_facture
 
                 lancer_push_facture(int(obj.id))
+                if _report_auto is not None:
+                    # Après le push de la facture (même verrou) : le
+                    # Payment QB ferme le solde dans le compte de transit.
+                    _rep.lancer_push_reports(int(obj.id))
         # Bon de travail CLIENT : associer / changer le client APRÈS la
         # création déclenche la même garantie qu'à la création — projet
         # lié (« <ref BT> — <titre> ») + sous-client QB sous le client
@@ -1081,6 +1137,13 @@ def make_crud_router(
         if model is Facture:
             from sqlalchemy import select as _select, update as _update
             from app.models.facture_item import FactureItem as _FI
+            from app.services.facture_report_solde import (
+                facture_supprimee as _rep_supprimee,
+            )
+
+            # Soldes reportés : ceux posés sur cette facture attendent la
+            # prochaine ; ceux qu'elle avait reportés sont annulés.
+            await _rep_supprimee(db, item_id)
 
             item_ids = (
                 await db.execute(
@@ -1114,6 +1177,28 @@ def make_crud_router(
             if model is Facture
             else ""
         )
+        # Reçu DIVISÉ : si d'autres parts restent, la transaction QB du
+        # groupe perd la ligne de la part supprimée — réécrite AVANT la
+        # suppression, dans la requête (la part est d'abord marquée
+        # annulée pour sortir des lignes). Un refus QB (facture payée,
+        # rapprochée…) → 409 et rien n'est supprimé : Kratos ne diverge
+        # jamais de QuickBooks en silence.
+        if model is Achat and getattr(obj, "groupe_id", None):
+            from app.services.achat_divise import retirer_part_annulee
+            from app.services.achat_qbo import (
+                AchatSyncError as _AchatSyncError,
+            )
+
+            obj.status = "cancelled"
+            await db.flush()
+            try:
+                await retirer_part_annulee(db, obj)
+            except _AchatSyncError as exc:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "Part non supprimée : QuickBooks n'a pas pu retirer sa "
+                    f"ligne de la facture — {exc}",
+                )
         # Sortie de l'inventaire interne supprimée depuis les achats : la
         # marchandise revient en stock (refusé si déjà refacturée).
         if model is Achat:
@@ -1126,6 +1211,25 @@ def make_crud_router(
                 await remettre_en_stock_achat(db, obj)
             except InventaireErreur as exc:
                 raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+        # Achat supprimé dans Kratos → sa transaction QuickBooks (dépense
+        # ou facture fournisseur), son paiement et sa pièce jointe
+        # disparaissent aussi (Steven 2026-11-04). Reçu divisé : seulement
+        # quand la dernière part s'en va (sinon la transaction vient d'être
+        # réécrite). Refus QB → 409, rien n'est supprimé.
+        if model is Achat:
+            from app.services.achat_qbo import AchatSyncError as _ErrQB
+            from app.services.achat_suppression_qbo import (
+                supprimer_miroir_qb,
+            )
+
+            try:
+                await supprimer_miroir_qb(db, obj)
+            except _ErrQB as exc:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "Achat non supprimé : QuickBooks n'a pas pu supprimer "
+                    f"sa transaction — {exc}",
+                )
         await crud.delete(obj)
         if _punch_ta_id:
             import asyncio as _asyncio

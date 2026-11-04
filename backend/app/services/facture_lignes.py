@@ -30,6 +30,11 @@ log = logging.getLogger(__name__)
 KIND_SERVICE = "service"
 KIND_MATERIAUX = "materiaux"
 KIND_EXTRA = "extra"
+#: « Solde reporté de la facture X » (2026-11-02) : petit solde impayé
+#: d'une facture précédente du client, reporté ici. Montant TTC (les taxes
+#: ont été facturées sur la facture d'origine) → la ligne est HORS TAXES,
+#: hors soumission et hors revenus. Voir app.services.facture_report_solde.
+KIND_REPORT = "report"
 
 #: Marqueur one-shot (table applied_backfills) du reclassement des
 #: brouillons existants.
@@ -107,6 +112,48 @@ def ajouter_au_montant(ligne: FactureItem, montant: float) -> None:
     ligne.total = round(float(ligne.total or 0) + float(montant), 2)
     ligne.quantity = 1
     ligne.unit_price = ligne.total
+
+
+def est_report(kind: Optional[str]) -> bool:
+    """Vrai pour une ligne « Solde reporté » : ni revenu, ni taxable, ni
+    avancement de soumission (le montant a déjà été facturé ailleurs)."""
+    return (kind or "") == KIND_REPORT
+
+
+def totaux_facture(items) -> dict:
+    """Totaux d'une facture depuis ses lignes : TPS / TVQ sur les lignes
+    taxables seulement, les soldes reportés (déjà TTC) ajoutés APRÈS les
+    taxes. ``subtotal`` = base taxable HT (revenu), ``reports`` = soldes
+    reportés, ``total`` = ce que le client doit."""
+    from app.core.taxes import TPS_RATE, TVQ_RATE
+
+    base = 0.0
+    reports = 0.0
+    for it in items:
+        if isinstance(it, (tuple, list)):
+            kind, montant = it[0], it[1]
+        else:
+            kind = getattr(it, "kind", None)
+            montant = getattr(it, "total", None)
+            if montant is None:
+                montant = float(getattr(it, "quantity", 0) or 0) * float(
+                    getattr(it, "unit_price", 0) or 0
+                )
+        if est_report(kind):
+            reports += float(montant or 0)
+        else:
+            base += float(montant or 0)
+    subtotal = round(base, 2)
+    tps = round(subtotal * TPS_RATE, 2)
+    tvq = round(subtotal * TVQ_RATE, 2)
+    reports = round(reports, 2)
+    return {
+        "subtotal": subtotal,
+        "tps": tps,
+        "tvq": tvq,
+        "reports": reports,
+        "total": round(subtotal + tps + tvq + reports, 2),
+    }
 
 
 def est_hors_soumission(

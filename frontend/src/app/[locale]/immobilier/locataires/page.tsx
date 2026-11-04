@@ -14,6 +14,7 @@ import { authedFetch } from "@/lib/auth";
 import { BoutonExport } from "@/components/immobilier/bouton-export";
 import { CreateLocataireModal } from "@/components/immobilier/create-locataire-modal";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
+import { ImmeubleFiltre } from "@/components/immobilier/immeuble-filtre";
 
 type Locataire = {
   id: number;
@@ -216,23 +217,21 @@ export default function LocatairesPage() {
               className="input w-full pl-9"
             />
           </div>
-          <select
+          <ImmeubleFiltre
             value={immeubleFilter === "all" ? "all" : String(immeubleFilter)}
-            onChange={(e) =>
+            onChange={(v) =>
               setImmeubleFilter(
-                e.target.value === "all" ? "all" : Number(e.target.value)
+                v === "all" ? "all" : Number(v)
               )
             }
+            allValue="all"
+            options={immeubles.map((imm) => ({
+              value: String(imm.id),
+              label: imm.name
+            }))}
             className="input w-auto max-w-[220px] text-sm"
-            aria-label="Filtrer par immeuble"
-          >
-            <option value="all">Tous les immeubles</option>
-            {immeubles.map((imm) => (
-              <option key={imm.id} value={imm.id}>
-                {imm.name}
-              </option>
-            ))}
-          </select>
+            ariaLabel="Filtrer par immeuble"
+          />
           {loadingImmeuble ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin text-white/40" />
           ) : null}

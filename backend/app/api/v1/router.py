@@ -27,6 +27,7 @@ from app.api.v1.endpoints import (
     webhooks_meta,
     activity,
     ai,
+    adresses,
     api_keys,
     assistant,
     mon_ia,
@@ -66,8 +67,9 @@ from app.api.v1.endpoints import (
     immobilier_exports,
     immobilier_tal_garants,
     immobilier_tal_bail,
-    immobilier_financement,
     immobilier_codes,
+    entreprises_revenus_depenses,
+    immobilier_fusion,
     immobilier_extras,
     immobilier_import_excel,
     immobilier_locations,
@@ -95,6 +97,7 @@ from app.api.v1.endpoints import (
     timesheets,
     achat_receipt,
     achat_mobile,
+    achat_divise,
     bon_items,
     bon_tasks,
     bon_photos,
@@ -102,6 +105,7 @@ from app.api.v1.endpoints import (
     bons_refs,
     facture_import,
     facture_items,
+    facture_reports_solde,
     facture_qbo,
     facture_send,
     leave_requests,
@@ -172,6 +176,7 @@ from app.api.v1.endpoints import (
     numbering,
     qbo_account_map,
     qbo_bulk,
+    qbo_clients,
     qbo_conversions,
     qbo_doublons,
     qbo_oauth,
@@ -246,6 +251,10 @@ api_router.include_router(assistant.router)
 # volet : chacun gère SA connexion.
 api_router.include_router(mon_ia.router)
 api_router.include_router(clients.router)
+# Adresses déjà connues (immeubles, projets, clients) pour le champ
+# d'adresse partagé — Steven 2026-11-03. Transverse, garde JWT standard ;
+# la visibilité employé est filtrée dans la route.
+api_router.include_router(adresses.router)
 # Le pôle Dev Logiciel est restreint à admin/owner (Phil + Steven).
 # La garde est appliquée à TOUS les routers internes du pôle ; seuls
 # les routers publics (signature contrat sans login, formulaire de
@@ -347,6 +356,8 @@ api_router.include_router(ndas.router, dependencies=DEP_PROSPECTION_INVEST)
 api_router.include_router(public_nda.router)
 api_router.include_router(qbo_token.router)
 api_router.include_router(qbo_bulk.router)
+# Liste des Customers QuickBooks (lecture, connecteur IA — 2026-11-03).
+api_router.include_router(qbo_clients.router)
 api_router.include_router(qbo_oauth.router)
 # Drive OAuth Phase 1 (juin 2026) — connexion Google par utilisateur,
 # tokens chiffrés en BDD. Pré-requis pour les Phases 2-7 (wrapper Drive
@@ -451,6 +462,8 @@ api_router.include_router(factures_router, dependencies=DEP_CONSTRUCTION)
 # is matched before /factures/{id}/items (same prefix, different path).
 api_router.include_router(payments.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(facture_items.router, dependencies=DEP_CONSTRUCTION)
+# Petits soldes reportés sur la prochaine facture du client (2026-11-02).
+api_router.include_router(facture_reports_solde.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(facture_import.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(facture_send.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(facture_qbo.router, dependencies=DEP_CONSTRUCTION)
@@ -461,6 +474,9 @@ api_router.include_router(project_to_facture.router, dependencies=DEP_CONSTRUCTI
 api_router.include_router(achat_receipt.router, dependencies=DEP_CONSTRUCTION_IMMO)
 # Idem : /achats/mobile/mon-dernier avant le CRUD générique.
 api_router.include_router(achat_mobile.router, dependencies=DEP_CONSTRUCTION_IMMO)
+# Idem : POST /achats/divise (reçu divisé entre plusieurs projets) avant
+# le CRUD générique.
+api_router.include_router(achat_divise.router, dependencies=DEP_CONSTRUCTION_IMMO)
 api_router.include_router(achats_router, dependencies=DEP_CONSTRUCTION_IMMO)
 api_router.include_router(purchase_orders_router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(purchase_order_items.router, dependencies=DEP_CONSTRUCTION)
@@ -518,6 +534,8 @@ api_router.include_router(recus_qbo.router, dependencies=DEP_ENTREPRISES)
 api_router.include_router(paiements.router, dependencies=DEP_ENTREPRISES)
 # Dépenses construction et coût à l'heure vs entrées de fonds (bug 14, 2026-10-18).
 api_router.include_router(depenses_construction.router, dependencies=DEP_ENTREPRISES)
+# Revenus et dépenses de la société de gestion — simulation (2026-11-04), admins.
+api_router.include_router(entreprises_revenus_depenses.router, dependencies=DEP_ENTREPRISES)
 # Sous-clients QB à convertir en projet (Comptabilité → Projets QB, 2026-10-14).
 api_router.include_router(qbo_conversions.router, dependencies=DEP_ENTREPRISES)
 # Clients en double dans QuickBooks (Comptabilité → Clients en double, 2026-10-18).
@@ -569,12 +587,10 @@ api_router.include_router(
 api_router.include_router(
     immobilier_tal_bail.router, dependencies=DEP_IMMOBILIER
 )
-# Financement d'un immeuble : rent roll, pièces, baux parallèles (2026-10-16).
-api_router.include_router(
-    immobilier_financement.router, dependencies=DEP_IMMOBILIER
-)
 # Codes d'accès d'un immeuble : porte, lock box, garage… (2026-10-18).
 api_router.include_router(immobilier_codes.router, dependencies=DEP_IMMOBILIER)
+# Fusion de deux fiches d'immeuble — 12 logements sur deux adresses (2026-10-29).
+api_router.include_router(immobilier_fusion.router, dependencies=DEP_IMMOBILIER)
 # Page Communications — envois courriel sans signature + audit.
 api_router.include_router(
     immobilier_communications.router, dependencies=DEP_IMMOBILIER

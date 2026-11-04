@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Download,
   Loader2,
+  MapPin,
   Plus,
   Search,
   Trash2,
@@ -20,6 +21,13 @@ import { SearchSelect } from "@/components/search-select";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch, hasMinRole } from "@/lib/auth";
+import {
+  NOTE_APPROX,
+  lienCarte,
+  positionsPunch,
+  texteCoordonnees,
+  type PositionPunch
+} from "@/lib/punch-geo";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { projectLabel } from "@/lib/project";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -229,6 +237,26 @@ function fmtHm(h: number): string {
   const hh = Math.floor(totalMin / 60);
   const mm = totalMin % 60;
   return `${hh} h ${String(mm).padStart(2, "0")}`;
+}
+
+// Les mêmes heures en décimal (ex. 178.05 → « 178,05 h ») — c'est le
+// format des taux horaires, de la paie et de la facturation.
+function fmtDec(h: number): string {
+  return `${(h || 0).toLocaleString("fr-CA", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })} h`;
+}
+
+// « 37 h 53 (37,88 h) » : le h min se lit d'un coup d'œil, le décimal
+// sert à la paie (Steven, 2026-10-20).
+function HmEtDecimal({ h }: { h: number }) {
+  return (
+    <>
+      {fmtHm(h)}{" "}
+      <span className="font-normal text-white/60">({fmtDec(h)})</span>
+    </>
+  );
 }
 
 // Recherche insensible aux accents et à la casse (« eric » trouve « Éric »).
@@ -864,13 +892,7 @@ export default function PunchGestionPage() {
             </span>{" "}
             {/* Décimal à côté du h min — c'est le format des taux
                 horaires et de la facturation. */}
-            <span className="text-white/60">
-              ({totalHours.toLocaleString("fr-CA", {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2
-              })}{" "}
-              h)
-            </span>
+            <span className="text-white/60">({fmtDec(totalHours)})</span>
             {totalDiner > 0 ? (
               <span
                 className="ml-2 text-xs text-amber-300"
@@ -986,10 +1008,18 @@ export default function PunchGestionPage() {
                       </td>
                       <td className="px-4 py-3 text-white/70">{target}</td>
                       <td className="px-4 py-3 text-white/70">
-                        {fmtDateTime(p.started_at)}
+                        <span className="inline-flex items-center gap-1">
+                          {fmtDateTime(p.started_at)}
+                          <PositionPin raw={p.geolocation} quoi="debut" />
+                        </span>
                       </td>
                       <td className="px-4 py-3 text-white/70">
-                        {p.ended_at ? fmtDateTime(p.ended_at) : (
+                        {p.ended_at ? (
+                          <span className="inline-flex items-center gap-1">
+                            {fmtDateTime(p.ended_at)}
+                            <PositionPin raw={p.geolocation} quoi="fin" />
+                          </span>
+                        ) : (
                           <span className="text-accent-500">EN COURS</span>
                         )}
                       </td>
@@ -1534,20 +1564,54 @@ function PunchModal({
 // ---------------------------------------------------------------------------
 
 function GeolocationDisplay({ raw }: { raw: string }) {
-  const parts = raw.split("|");
-  const start = parseLatLng(parts[0]);
-  const end = parts.length > 1 ? parseLatLng(parts[1]) : null;
-  if (!start) return null;
+  // « début|fin » ; l'un ou l'autre peut manquer (appareil qui n'a pas
+  // donné la position à ce punch-là).
+  const { debut: start, fin: end } = positionsPunch(raw);
+  if (!start && !end) return null;
   return (
     <div className="rounded-md border border-brand-800 bg-brand-900 px-3 py-2 text-sm">
       <p className="text-xs uppercase tracking-wider text-white/50">
         📍 Lieu du punch
       </p>
       <div className="mt-1 space-y-2">
-        <GeoLine label="Début" geo={start} />
+        {start ? (
+          <GeoLine label="Début" geo={start} />
+        ) : (
+          <p className="text-xs text-white/50">Début : position non reçue</p>
+        )}
         {end ? <GeoLine label="Fin" geo={end} /> : null}
       </div>
     </div>
+  );
+}
+
+/** Épingle dans la liste : position reçue à ce punch (lien Maps). */
+function PositionPin({
+  raw,
+  quoi
+}: {
+  raw: string | null;
+  quoi: "debut" | "fin";
+}) {
+  const pos = positionsPunch(raw);
+  const geo = quoi === "debut" ? pos.debut : pos.fin;
+  if (!geo) return null;
+  return (
+    <a
+      href={lienCarte(geo)}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      className={
+        geo.approx
+          ? "text-amber-300 hover:text-amber-200"
+          : "text-accent-300 hover:text-accent-200"
+      }
+      title={`Position ${geo.approx ? "approximative (adresse internet) " : ""}au ${quoi === "debut" ? "début" : "fin"} : ${texteCoordonnees(geo)} (ouvrir dans Google Maps)`}
+      aria-label={geo.approx ? "Position approximative du punch" : "Position du punch"}
+    >
+      <MapPin className="h-3.5 w-3.5" />
+    </a>
   );
 }
 
@@ -1556,7 +1620,7 @@ function GeoLine({
   geo
 }: {
   label: string;
-  geo: { lat: number; lng: number };
+  geo: PositionPunch;
 }) {
   const [address, setAddress] = useState<string | null>(null);
   const [loadingAddr, setLoadingAddr] = useState(true);
@@ -1644,19 +1708,15 @@ function GeoLine({
               {geo.lat.toFixed(5)}, {geo.lng.toFixed(5)}
             </span>
           </p>
+          {geo.approx ? (
+            <p className="text-[11px] font-medium text-amber-300" title={NOTE_APPROX}>
+              ≈ Approximatif (adresse internet, GPS refusé)
+            </p>
+          ) : null}
         </div>
       </div>
     </div>
   );
-}
-
-function parseLatLng(s: string): { lat: number; lng: number } | null {
-  if (!s) return null;
-  const [latStr, lngStr] = s.split(",");
-  const lat = Number(latStr);
-  const lng = Number(lngStr);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-  return { lat, lng };
 }
 
 
@@ -2133,7 +2193,9 @@ function ResumeParEmploye({
                     <td className={`${cellule} text-white/70`}>{fmtHm(l.sem2)}</td>
                   </>
                 ) : null}
-                <td className={`${cellule} text-white/70`}>{fmtHm(l.punchees)}</td>
+                <td className={`${cellule} text-white/70`}>
+                  <HmEtDecimal h={l.punchees} />
+                </td>
                 <td
                   className={`${cellule} ${l.diners > 0 ? "text-amber-300" : ""}`}
                   title="Dîners non payés retirés des heures punchées (nombre de dîners entre parenthèses)"
@@ -2141,7 +2203,7 @@ function ResumeParEmploye({
                   {l.diners > 0 ? `−${fmtHm(l.diner)} (${l.diners})` : tiret}
                 </td>
                 <td className={`${cellule} font-bold text-white`}>
-                  {fmtHm(l.payees)}
+                  <HmEtDecimal h={l.payees} />
                 </td>
                 <td className={`${cellule} text-emerald-300`}>
                   {l.approuvees > 0 ? fmtHm(l.approuvees) : tiret}
@@ -2165,11 +2227,15 @@ function ResumeParEmploye({
                   <td className={`${cellule} text-white/70`}>{fmtHm(total.sem2)}</td>
                 </>
               ) : null}
-              <td className={`${cellule} text-white/70`}>{fmtHm(total.punchees)}</td>
+              <td className={`${cellule} text-white/70`}>
+                <HmEtDecimal h={total.punchees} />
+              </td>
               <td className={`${cellule} text-amber-300`}>
                 {total.diners > 0 ? `−${fmtHm(total.diner)} (${total.diners})` : tiret}
               </td>
-              <td className={`${cellule} font-bold text-white`}>{fmtHm(total.payees)}</td>
+              <td className={`${cellule} font-bold text-white`}>
+                <HmEtDecimal h={total.payees} />
+              </td>
               <td className={`${cellule} text-emerald-300`}>
                 {total.approuvees > 0 ? fmtHm(total.approuvees) : tiret}
               </td>

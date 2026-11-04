@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { capturerPositionOuApprox } from "@/lib/punch-geo";
 
 type OpenPunch = {
   id: number;
@@ -115,36 +116,13 @@ export default function MobilePunch() {
     return () => clearInterval(t);
   }, [data?.open_punch]);
 
-  // Capture la position GPS de l'utilisateur — best-effort. Si l'API
-  // n'est pas dispo (HTTP, navigateur old, refusé), on retourne null
-  // et le punch part sans coordonnées (pas bloquant).
-  async function captureGeo(): Promise<string | null> {
-    if (typeof navigator === "undefined" || !navigator.geolocation) {
-      return null;
-    }
-    return new Promise<string | null>((resolve) => {
-      const timeoutId = setTimeout(() => resolve(null), 6000);
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          clearTimeout(timeoutId);
-          const { latitude, longitude } = pos.coords;
-          resolve(`${latitude.toFixed(6)},${longitude.toFixed(6)}`);
-        },
-        () => {
-          clearTimeout(timeoutId);
-          resolve(null);
-        },
-        { enableHighAccuracy: true, timeout: 5000, maximumAge: 30000 }
-      );
-    });
-  }
-
   async function start(body: Record<string, unknown>) {
     setBusy(true);
     setError(null);
     try {
-      const geo = await captureGeo();
-      const payload = geo ? { ...body, geolocation: geo } : body;
+      // Position prise à chaque punch (entrée et sortie), seulement à
+      // cet instant ; GPS refusé → approximation par l'adresse internet.
+      const payload = { ...body, ...(await capturerPositionOuApprox()) };
       const res = await authedFetch("/api/v1/mobile/punch/start", {
         method: "POST",
         body: JSON.stringify(payload)
@@ -167,10 +145,10 @@ export default function MobilePunch() {
     setBusy(true);
     setError(null);
     try {
-      const geo = await captureGeo();
+      const position = await capturerPositionOuApprox();
       const res = await authedFetch("/api/v1/mobile/punch/stop", {
         method: "POST",
-        body: JSON.stringify(geo ? { geolocation: geo } : {})
+        body: JSON.stringify(position)
       });
       if (!res.ok) {
         const txt = await res.text();

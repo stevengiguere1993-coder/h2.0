@@ -10,6 +10,7 @@ import {
   Loader2,
   Mic,
   Plus,
+  Send,
   Sparkles,
   Trash2,
   Upload,
@@ -21,6 +22,8 @@ import { useConfirm } from "@/components/confirm-dialog";
 import { Link, useRouter } from "@/i18n/navigation";
 import { QGTopbar, useEntreprisesLayout } from "../../layout";
 import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
+import { RencontreEnvoiModal } from "@/components/entreprises/rencontre-envoi-modal";
+import { useCurrentUser } from "@/hooks/use-current-user";
 
 /**
  * Page détail d'une rencontre. Liste les sections (= topics), permet
@@ -51,10 +54,36 @@ type Rencontre = {
   status: string;
   source: string | null;
   drive_links_json: string | null;
+  envois_json?: string | null;
   created_at: string;
   updated_at: string;
   sections: Section[];
 };
+
+type EnvoiRapport = {
+  le: string;
+  par: string;
+  de: string;
+  a: string[];
+  cc: string[];
+  sujet: string;
+};
+
+function parseEnvois(json: string | null | undefined): EnvoiRapport[] {
+  if (!json) return [];
+  try {
+    const v = JSON.parse(json);
+    return Array.isArray(v) ? v.filter((x) => x && Array.isArray(x.a)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function sujetParDefaut(r: Rencontre): string {
+  return `Rapport de rencontre — ${r.title}${
+    r.meeting_date ? ` (${r.meeting_date})` : ""
+  }`;
+}
 
 type DriveLink = { name: string; link: string | null };
 
@@ -123,6 +152,9 @@ export default function RencontreDetailPage() {
   const [importing, setImporting] = useState(false);
   const importFileRef = useRef<HTMLInputElement | null>(null);
   const [deletingRencontre, setDeletingRencontre] = useState(false);
+  const { user: moi } = useCurrentUser();
+  const [envoiOuvert, setEnvoiOuvert] = useState(false);
+  const [envoiOk, setEnvoiOk] = useState<string | null>(null);
   // ID de la section fraîchement créée par « Lancer un enregistrement ».
   // Sert à mettre en valeur son bouton « Dicter » (pulse) pendant
   // quelques secondes — l'utilisateur doit cliquer manuellement pour
@@ -421,23 +453,51 @@ export default function RencontreDetailPage() {
         }
         rightSlot={
           data ? (
-            <button
-              type="button"
-              onClick={() => void deleteRencontre()}
-              disabled={deletingRencontre}
-              className="btn-outline-rose btn-sm disabled:opacity-50"
-              title="Supprimer cette rencontre"
-            >
-              {deletingRencontre ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Trash2 className="h-3.5 w-3.5" />
-              )}
-              Supprimer
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setEnvoiOk(null);
+                  setEnvoiOuvert(true);
+                }}
+                className="btn-accent btn-sm inline-flex items-center gap-1.5"
+                title="Envoyer le rapport de la rencontre par courriel"
+              >
+                <Send className="h-3.5 w-3.5" />
+                Envoyer rapport
+              </button>
+              <button
+                type="button"
+                onClick={() => void deleteRencontre()}
+                disabled={deletingRencontre}
+                className="btn-outline-rose btn-sm disabled:opacity-50"
+                title="Supprimer cette rencontre"
+              >
+                {deletingRencontre ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5" />
+                )}
+                Supprimer
+              </button>
+            </div>
           ) : undefined
         }
       />
+
+      {envoiOuvert && data ? (
+        <RencontreEnvoiModal
+          rencontreId={data.id}
+          sujetParDefaut={sujetParDefaut(data)}
+          expediteur={moi?.email ?? null}
+          onClose={() => setEnvoiOuvert(false)}
+          onSent={(res) => {
+            setEnvoiOuvert(false);
+            setEnvoiOk(`Rapport envoyé à ${[...res.a, ...res.cc].join(", ")}.`);
+            setData((d) => (d ? { ...d, envois_json: res.envois_json } : d));
+          }}
+        />
+      ) : null}
 
       <div className="p-4 lg:p-6">
         {loading ? (
@@ -450,6 +510,11 @@ export default function RencontreDetailPage() {
           </p>
         ) : !data ? null : (
           <div className="space-y-5">
+            {envoiOk ? (
+              <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+                {envoiOk}
+              </p>
+            ) : null}
             {autoResuming ? (
               <div
                 className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"
@@ -799,6 +864,24 @@ export default function RencontreDetailPage() {
                   les sections sont résumées.
                 </p>
               )}
+              {parseEnvois(data.envois_json).length > 0 ? (
+                <div className="mt-3 space-y-1">
+                  {parseEnvois(data.envois_json)
+                    .slice(-5)
+                    .reverse()
+                    .map((e, i) => (
+                      <p
+                        key={`${e.le}-${i}`}
+                        className="text-xs"
+                        style={{ color: "var(--qg-text-muted)" }}
+                      >
+                        <Send className="mr-1 inline h-3 w-3" />
+                        Envoyé le {new Date(e.le).toLocaleString("fr-CA")} par {e.par} à{" "}
+                        {[...e.a, ...e.cc].join(", ")}
+                      </p>
+                    ))}
+                </div>
+              ) : null}
             </section>
           </div>
         )}

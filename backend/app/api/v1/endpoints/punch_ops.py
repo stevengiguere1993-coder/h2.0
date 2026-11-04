@@ -12,7 +12,7 @@ The current user is matched to an Employe record by email.
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
@@ -29,6 +29,13 @@ from app.services.employe_rates import (
 )
 from app.services.project_auto_status import bump_to_in_progress_if_needed
 from app.services.punch_diner import appliquer_diner_auto, heures_brutes, heures_nettes
+from app.services.punch_geo import (
+    ajouter_fin,
+    candidats_ip,
+    ip_client,
+    position as position_punch,
+    position_ou_approx,
+)
 
 
 router = APIRouter(prefix="/punch", tags=["punch"])
@@ -77,12 +84,24 @@ class ClockInRequest(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     notes: Optional[str] = None
+    #: Position approximative que le téléphone a obtenue lui-même de son
+    #: adresse internet (GPS refusé) ; l'API la marque « ~ ».
+    geolocation_approx: Optional[str] = Field(default=None, max_length=128)
+    #: Adresse internet publique vue par le téléphone, pour que l'API
+    #: déduise une position même derrière le relais Next.js.
+    ip_publique: Optional[str] = Field(default=None, max_length=64)
 
 
 class ClockOutRequest(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     notes: Optional[str] = None
+    #: Position approximative que le téléphone a obtenue lui-même de son
+    #: adresse internet (GPS refusé) ; l'API la marque « ~ ».
+    geolocation_approx: Optional[str] = Field(default=None, max_length=128)
+    #: Adresse internet publique vue par le téléphone, pour que l'API
+    #: déduise une position même derrière le relais Next.js.
+    ip_publique: Optional[str] = Field(default=None, max_length=64)
 
 
 class WeeklyEntry(BaseModel):
@@ -142,9 +161,7 @@ async def _active_punch(db, employe_id: int) -> Optional[Punch]:
 
 
 def _geo_str(lat: Optional[float], lng: Optional[float]) -> Optional[str]:
-    if lat is None or lng is None:
-        return None
-    return f"{lat:.6f},{lng:.6f}"
+    return position_punch(lat, lng)
 
 
 # ---------- Endpoints ----------
@@ -191,6 +208,41 @@ async def punch_debug(db: DBSession, admin: RequireAdminRole):
     }
 
 
+
+@router.get(
+    "/geo-debug",
+    summary="Diagnostic de la position approximative par adresse internet (admin)",
+)
+async def punch_geo_debug(
+    request: Request,
+    admin: RequireAdminRole,
+    ip: Optional[str] = Query(default=None, description="Adresse à tester (sinon celle de la requête)"),
+):
+    """Ce que l'API voit de l'adresse du téléphone (en-têtes des relais),
+    l'adresse retenue et la réponse de chaque fournisseur. Sert à comprendre
+    un punch sans position approximative (retour Steven, 2026-11-02)."""
+    from app.integrations.ip_geo import diagnostiquer
+
+    choisie = ip_client(request, ip)
+    position = None
+    comptes = ["aucune adresse publique parmi les candidates"]
+    if choisie:
+        coords, comptes = await diagnostiquer(choisie)
+        if coords:
+            position = f"{coords[0]:.6f},{coords[1]:.6f}"
+    return {
+        "entetes": {
+            nom: request.headers.get(nom)
+            for nom in ("x-forwarded-for", "true-client-ip", "cf-connecting-ip", "x-real-ip")
+        },
+        "connexion": request.client.host if request.client else None,
+        "ip_declaree": ip,
+        "candidates": candidats_ip(request, ip),
+        "ip_choisie": choisie,
+        "position_approx": position,
+        "fournisseurs": comptes,
+    }
+
 @router.post(
     "/clock-in",
     response_model=PunchRead,
@@ -198,7 +250,7 @@ async def punch_debug(db: DBSession, admin: RequireAdminRole):
     summary="Start a punch (clock-in)",
 )
 async def clock_in(
-    data: ClockInRequest, db: DBSession, user: CurrentUser
+    data: ClockInRequest, request: Request, db: DBSession, user: CurrentUser
 ) -> PunchRead:
     emp = await _find_employe_for_user(db, user.email)
     if emp is None:
@@ -223,7 +275,13 @@ async def clock_in(
         bon_travail_id=data.bon_travail_id,
         started_at=datetime.now(timezone.utc),
         task=(data.task.strip() if data.task else None),
-        geolocation=_geo_str(data.latitude, data.longitude),
+        # GPS reçu, sinon position approximative par adresse internet.
+        geolocation=await position_ou_approx(
+            _geo_str(data.latitude, data.longitude),
+            request,
+            data.geolocation_approx,
+            data.ip_publique,
+        ),
         notes=(data.notes.strip() if data.notes else None),
         # Hors décret par défaut : le régime CCQ est posé par un admin+
         # à l'approbation (retour Phil 2026-09-26).
@@ -258,7 +316,7 @@ async def clock_in(
     summary="Close the active punch (clock-out)",
 )
 async def clock_out(
-    data: ClockOutRequest, db: DBSession, user: CurrentUser
+    data: ClockOutRequest, request: Request, db: DBSession, user: CurrentUser
 ) -> PunchRead:
     emp = await _find_employe_for_user(db, user.email)
     if emp is None:
@@ -291,13 +349,16 @@ async def clock_out(
             open_punch.notes = (
                 f"{open_punch.notes}\n{extra}" if open_punch.notes else extra
             )
-    # End-location can be appended to geolocation for audit.
-    end_geo = _geo_str(data.latitude, data.longitude)
-    if end_geo:
-        if open_punch.geolocation:
-            open_punch.geolocation = f"{open_punch.geolocation}|{end_geo}"
-        else:
-            open_punch.geolocation = end_geo
+    # Position de sortie ajoutée à celle d'entrée (« début|fin »).
+    open_punch.geolocation = ajouter_fin(
+        open_punch.geolocation,
+        await position_ou_approx(
+            _geo_str(data.latitude, data.longitude),
+            request,
+            data.geolocation_approx,
+            data.ip_publique,
+        ),
+    )
     await db.flush()
     # Case « dîner » de la fiche : 30 min retirées si la journée dépasse 5 h.
     await appliquer_diner_auto(db, open_punch, emp)

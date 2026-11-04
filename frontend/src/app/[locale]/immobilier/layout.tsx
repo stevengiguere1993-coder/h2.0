@@ -19,7 +19,6 @@ import {
   DoorOpen,
   Hammer,
   KeyRound,
-  Landmark,
   Loader2,
   Mail,
   Menu,
@@ -66,7 +65,7 @@ const NAV: NavItem[] = [
   { href: "/immobilier/depots", label: "Dépôts de garantie", icon: ShieldCheck },
   { href: "/immobilier/bons-travail", label: "Bons de travail", icon: Hammer },
   { href: "/immobilier/frais-gestion", label: "Facturation", icon: CircleDollarSign },
-  { href: "/immobilier/financement", label: "Financement", icon: Landmark }
+
   // Paramètres → via le footer unifié (SidebarFooter).
 ];
 

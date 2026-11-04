@@ -374,6 +374,12 @@ async def ensure_critical_columns() -> None:
         # Total TTC de la transaction QB d'origine d'un achat importé
         # (facture fractionnée : part du projet vs facture entière).
         ("achats", "qbo_txn_total", "NUMERIC(12, 2)"),
+        # Pièce jointe QB (Attachable) portant le reçu de l'achat
+        # (2026-11-04) : garde anti-doublon de l'envoi du reçu à QB.
+        ("achats", "qbo_attachable_id", "VARCHAR(64)"),
+        # Reçu divisé entre plusieurs projets (2026-10-30) : id de la
+        # première part, commun à toutes les parts du même reçu.
+        ("achats", "groupe_id", "INTEGER"),
         # Gestion externe d'un immeuble (compagnie tierce) : sans ces
         # colonnes, tout SELECT sur imm_immeubles plante → 500 sur tout
         # le volet immobilier. Table préexistante → create_all ne les
@@ -420,6 +426,7 @@ async def ensure_critical_columns() -> None:
         ),
         ("imm_factures_gestion", "relocation_dossier_id", "INTEGER"),
         ("imm_factures_gestion", "libelle", "VARCHAR(255)"),
+        ("imm_factures_gestion", "qbo_item_name", "VARCHAR(120)"),
         # Finances immobilier 2026-07 : composition des intérêts d'une
         # hypothèque ('semi'|'mensuelle'), évaluation de référence pour
         # l'équité, dépenses en % des loyers + taxables (TPS/TVQ).
@@ -450,6 +457,8 @@ async def ensure_critical_columns() -> None:
         # Hub Rencontres v2 : source d'import + fichiers archives Drive.
         ("rencontres", "source", "VARCHAR(16)"),
         ("rencontres", "drive_links_json", "TEXT"),
+        # Envoi du rapport de rencontre par courriel (historique).
+        ("rencontres", "envois_json", "TEXT"),
         # Optimisation v2 : type d'entente de la négo locataire.
         ("optimisation_negos", "type_entente", "VARCHAR(24)"),
         # Optimisation v5 : objectifs annuels, financement/comptant par
@@ -2023,6 +2032,9 @@ async def init_db() -> None:
                 "BOOLEAN NOT NULL DEFAULT FALSE",
             ),
             ("users", "agenda_invite_token", "VARCHAR(64)"),
+            # États d'interface par utilisateur (colonnes de kanban
+            # repliées, 2026-10-30).
+            ("users", "ui_prefs_json", "TEXT"),
             # Réinitialisation de mot de passe en libre-service
             # (2026-08-27) : jeton haché + échéance.
             # Ventilation du coûtant des lignes de soumission
