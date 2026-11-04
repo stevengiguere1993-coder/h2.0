@@ -14,7 +14,7 @@ aligné sur « Le Fonds MGV d'investissements » (doc de travail, nov. 2026).
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from app.services import revenus_depenses as svc
 from tests.smoke.conftest import TestSessionLocal
@@ -36,7 +36,7 @@ def _scenario_test() -> dict:
              travaux_initiaux=500_000, frais_connexes=100_000, valeur_future=6_100_000, mois_prevus=24, mois_ecoules=6,
              dette=3_000_000),
         _imm(id="b", nom="B", nb_logements=10, nb_chambres=4, loyers_bruts_mensuels=12_000, phase="stabilise",
-             valeur_rapport=3_000_000, annee_rapport=2025, taux_cap_pct=5, dette=2_000_000),
+             valeur_rapport=3_000_000, annee_rapport=2025, taux_cap_pct=0, dette=2_000_000),
         _imm(id="c", nom="C (sous-traité)", gestion_interne=False, nb_logements=30, loyers_bruts_mensuels=40_000,
              phase="stabilise", valeur_rapport=5_000_000, taux_cap_pct=5, revenus_nets_annuels=300_000,
              acquisition_cette_annee=True, prix_acquisition=12_000_000, prospecte_par_nous=False, dette=4_000_000),
@@ -204,6 +204,54 @@ def test_moteur_prorata_date_acquisition():
     assert n["annee"] == svc.annee_defaut() and n["immeubles"][0]["date_acquisition"] is None and n["immeubles"][0]["notes_import"] == ["a", "5"]
 
 
+def test_moteur_revenus_nets_schl_et_taux_de_cap():
+    """Phil 2026-11-04 : « les calculs de revenus SCHL, tu peux les faire
+    automatiquement… la valeur nette va être ajustée selon le cap rate » :
+    revenus nets = loyers bruts − dépenses normalisées du moteur de Prospection
+    (barème SCHL), valeur stabilisée = revenus nets ÷ taux de cap."""
+    i = _imm(phase="stabilise", nb_logements=10, loyers_bruts_mensuels=10_000, taxes_municipales=12_000, taxes_scolaires=1_500,
+             assurances=4_000, energie=3_000, valeur_rapport=1_500_000, annee_rapport=2025, taux_cap_pct=5)
+    v = svc.valeur_immeuble(i)
+    d = v["depenses_schl"]
+    assert d["revenus_bruts_annuels"] == 120_000 and d["inoccupation"] == 3_600 and d["concierge"] == 2_150 and d["entretien"] == 6_100
+    assert d["gestion"] == 5_100 and d["autres_normalisations"] == 1_200 and d["total"] == 38_650
+    assert v["revenus_nets"] == 81_350 and v["source_revenus_nets"] == "schl" and v["valeur"] == 1_627_000
+    assert "SCHL" in v["methode"]
+    # 12 logements et plus : barème grand immeuble (365 $ par logement, gestion 5 %).
+    v12 = svc.valeur_immeuble(_imm(phase="stabilise", nb_logements=12, loyers_bruts_mensuels=10_000, taux_cap_pct=5))
+    assert v12["depenses_schl"]["concierge"] == 4_380 and v12["depenses_schl"]["gestion"] == 6_000
+    # Revenus nets saisis : ils priment sur le calcul SCHL.
+    i["revenus_nets_annuels"] = 90_000
+    v2 = svc.valeur_immeuble(i)
+    assert v2["valeur"] == 1_800_000 and v2["source_revenus_nets"] == "saisis"
+    # Sans taux de cap : le rapport, avec le rappel de saisir le taux.
+    i["revenus_nets_annuels"] = 0
+    i["taux_cap_pct"] = 0
+    v3 = svc.valeur_immeuble(i)
+    assert v3["valeur"] == 1_500_000 and "taux de cap" in v3["methode"] and v3["revenus_nets"] == 81_350
+    # Sans loyers : pas de calcul SCHL, le rapport.
+    v0 = svc.valeur_immeuble(_imm(phase="stabilise", valeur_rapport=900_000, taux_cap_pct=5))
+    assert v0["depenses_schl"] is None and v0["revenus_nets"] is None and v0["valeur"] == 900_000
+    # Barème des Paramètres → Prospection (overrides, seuil, inoccupation) appliqué tel quel.
+    bareme = {"overrides": {"entretien": 700.0, "gestion_lt12": 0.05}, "seuil": 12, "taux_inoccupation": 0.04}
+    v4 = svc.valeur_immeuble(_imm(phase="stabilise", nb_logements=10, loyers_bruts_mensuels=10_000, taux_cap_pct=5), bareme)
+    d4 = v4["depenses_schl"]
+    assert d4["inoccupation"] == 4_800 and d4["entretien"] == 7_000 and d4["gestion"] == 6_000
+    eff = svc.bareme_effectif(bareme)
+    assert eff["entretien"] == 700 and eff["taux_inoccupation"] == 0.04 and eff["concierge_lt12"] == 215
+    # Dans un scénario : la VAN suit (valeur = revenus nets ÷ cap) et le référentiel explique le barème.
+    s = svc.scenario_defaut()
+    s["immeubles"] = [{**i, "taux_cap_pct": 5, "dette": 1_000_000}]
+    r = svc.calculer(s)
+    assert r["parc"]["valeur"] == 1_627_000 and r["parc"]["van"] == 627_000 and r["parc"]["bareme_schl"]["taux_inoccupation"] == 0.03
+    fiche = r["parc"]["immeubles"][0]
+    assert fiche["revenus_nets"] == 81_350 and fiche["depenses_schl"]["total"] == 38_650
+    assert "SCHL" in svc.referentiel()["schl_note"] and "4.25 %" in svc.referentiel()["schl_note"]
+    # Normalisation : nouveaux champs ≥ 0.
+    n = svc.normaliser({"immeubles": [{"nom": "X", "taxes_municipales": -5, "energie": "1200"}]})
+    assert n["immeubles"][0]["taxes_municipales"] == 0 and n["immeubles"][0]["energie"] == 1_200
+
+
 def test_api_scenarios_admins_seulement(client, auth_headers, employee_headers):
     assert client.get(f"{RD}/scenarios", headers=employee_headers).status_code == 403
     r = client.get(f"{RD}/scenarios", headers=auth_headers)
@@ -237,7 +285,7 @@ def test_api_scenarios_admins_seulement(client, auth_headers, employee_headers):
 
 def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, run):
     from app.models.immobilier import (
-        Bail, BailStatus, Evaluation, Hypotheque, HypothequeStatus, Immeuble, Locataire, Logement, LogementStatus,
+        Bail, BailStatus, DepenseImmeuble, Evaluation, Hypotheque, HypothequeStatus, Immeuble, Locataire, Logement, LogementStatus,
     )
 
     async def _seed():
@@ -249,7 +297,8 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
             l2 = Logement(immeuble_id=imm.id, numero="2", status=LogementStatus.OCCUPE.value, location_en_chambres=True, nb_chambres=3)
             loc = Locataire(full_name="Locataire RD")
             occ = Locataire(full_name="Occupant parallèle", categorie="parallele")
-            s.add_all([l1, l2, loc, occ])
+            l3 = Logement(immeuble_id=imm.id, numero="3", status=LogementStatus.HORS_LOC.value)
+            s.add_all([l1, l2, l3, loc, occ])
             await s.flush()
             s.add_all([
                 Bail(logement_id=l1.id, locataire_id=loc.id, date_debut=date(2026, 1, 1), date_fin=date(2026, 12, 31), loyer_mensuel=1_000.0, status=BailStatus.ACTIF.value),
@@ -261,6 +310,13 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
                 Hypotheque(immeuble_id=imm.id, preteur="Ancienne", montant_initial=300_000.0, balance_actuelle=0.0, status=HypothequeStatus.REMBOURSEE.value),
                 Evaluation(immeuble_id=imm.id, kind="municipale", valeur=800_000.0, date_evaluation=date(2026, 1, 1), created_at=datetime.now(timezone.utc)),
                 Evaluation(immeuble_id=imm.id, kind="appraisal", valeur=1_200_000.0, date_evaluation=date(2025, 6, 1), created_at=datetime.now(timezone.utc)),
+                # Dépenses réelles : coût courant comme le P&L (annuel, mensuel × 12, ponctuel des 12 derniers mois) ;
+                # conciergerie ignorée (normalisée par le barème SCHL).
+                DepenseImmeuble(immeuble_id=imm.id, categorie="taxes_municipales", libelle="Taxes 2026", montant=6_000.0, frequence="annuel"),
+                DepenseImmeuble(immeuble_id=imm.id, categorie="assurances", libelle="Assurance", montant=200.0, frequence="mensuel"),
+                DepenseImmeuble(immeuble_id=imm.id, categorie="energie", libelle="Hydro", montant=500.0, frequence="ponctuel", date_depense=date.today() - timedelta(days=60)),
+                DepenseImmeuble(immeuble_id=imm.id, categorie="energie", libelle="Vieux Hydro", montant=900.0, frequence="ponctuel", date_depense=date.today() - timedelta(days=500)),
+                DepenseImmeuble(immeuble_id=imm.id, categorie="conciergerie", libelle="Concierge", montant=1_000.0, frequence="annuel"),
             ])
             await s.commit()
             return imm.id
@@ -275,6 +331,8 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
             # Gestion externe : pas de bail dans Kratos, le loyer est saisi sur le logement (occupé).
             s.add(Logement(immeuble_id=ext.id, numero="A", status=LogementStatus.OCCUPE.value, loyer_demande=1_500.0))
             s.add(Logement(immeuble_id=ext.id, numero="B", status=LogementStatus.VACANT.value, loyer_demande=1_400.0))
+            # En chambres mais sans nombre de chambres saisi : Kratos compte 0 → alerte.
+            s.add(Logement(immeuble_id=ext.id, numero="C", status=LogementStatus.VACANT.value, location_en_chambres=True))
             await s.commit()
             return ext.id
 
@@ -287,9 +345,16 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
     assert it["loyers_bruts_mensuels"] == 2_200 and it["gestion_externe"] is False     # baux terminé et parallèle ignorés
     assert it["dette"] == 450_000                                                    # hypothèque active seulement
     assert it["valeur_rapport"] == 1_200_000 and it["annee_rapport"] == 2025 and it["source_rapport"] == "appraisal"
-    assert it["notes_import"] == []
+    assert it["taxes_municipales"] == 6_000 and it["taxes_scolaires"] == 0 and it["assurances"] == 2_400 and it["energie"] == 500 and it["autres_depenses"] == 0
+    # Portes = logements actifs (le hors location est exclu, comme la liste des immeubles).
+    assert it["nb_logements"] == 2
+    # Alertes : taxes scolaires absentes, taux de cap à saisir — rien sur les loyers, le rapport ou l'hypothèque.
+    assert any("taxes scolaires" in n and "taxes municipales" not in n for n in it["notes_import"])
+    assert any("Taux de cap" in n for n in it["notes_import"])
+    assert not any("Aucun loyer" in n or "Aucun rapport" in n or "hypothèque" in n for n in it["notes_import"])
     # Gestion externe : même total que la liste des immeubles de Kratos (loyer saisi des unités louées), alertes claires.
     ex = next(x for x in r.json()["items"] if x["kratos_immeuble_id"] == ext_id)
-    assert ex["gestion_externe"] is True and ex["loyers_bruts_mensuels"] == 1_500 and ex["nb_logements"] == 2
+    assert ex["gestion_externe"] is True and ex["loyers_bruts_mensuels"] == 1_500 and ex["nb_logements"] == 3 and ex["nb_chambres"] == 0
+    assert any("en chambres sans nombre de chambres" in n for n in ex["notes_import"])
     assert any("rapport d'évaluation" in n for n in ex["notes_import"]) and any("hypothèque" in n for n in ex["notes_import"])
     assert not any("loyer" in n.lower() for n in ex["notes_import"])
