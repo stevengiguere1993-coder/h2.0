@@ -704,6 +704,9 @@ class AchatRead(_Base):
     #: montant de l'achat, la facture est fractionnée dans QB et l'achat
     #: n'en porte que la part de son projet.
     qbo_txn_total: Optional[float] = None
+    #: Pièce jointe QuickBooks qui porte le reçu de l'achat ; NULL = le
+    #: reçu n'est pas (encore) dans QB.
+    qbo_attachable_id: Optional[str] = None
     #: Reçu DIVISÉ entre plusieurs projets dans Kratos : id de la première
     #: part, commun à toutes les parts (une par projet) ; NULL = achat
     #: simple. Les parts partagent la même transaction QuickBooks.

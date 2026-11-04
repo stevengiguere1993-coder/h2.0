@@ -569,6 +569,18 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet achats échoué", exc_info=True)
 
+    # ── Reçus d'achats jamais joints à leur transaction QB (2026-11-04) ──
+    # Le PDF arrive après l'auto-push (A-520, A-462), ou l'achat date
+    # d'avant la pièce automatique : chaque heure on relie (QB l'a déjà)
+    # ou on téléverse. Anti-doublon : qbo_attachable_id + relecture des
+    # Attachables QB (services/achat_piece_qbo.py).
+    try:
+        from app.services.achat_piece_qbo import rattraper_pieces_qbo
+
+        out["pieces_achats"] = await rattraper_pieces_qbo(limit=100)
+    except Exception:  # noqa: BLE001
+        log.warning("Filet pièces jointes d'achats échoué", exc_info=True)
+
     # ── Paiements d'achats jamais parvenus à QB → BillPayment ──
     # « Marquer payé » pousse la BillPayment UNE seule fois, en fond : si
     # l'achat n'était pas encore relié au Bill QB, si le compte du mode de

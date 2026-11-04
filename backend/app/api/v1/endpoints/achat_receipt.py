@@ -1,7 +1,23 @@
 """Upload / download / delete the scanned receipt image attached to
-an Achat (purchase order)."""
+an Achat (purchase order).
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
+Le reçu suit l'achat dans QuickBooks (Steven 2026-11-04 : « le PDF
+devrait toujours se joindre dans les pièces jointes quand ça part de
+Kratos et qu'il est présent ») : chaque arrivée, remplacement, rotation
+ou retrait du reçu est répercuté sur la transaction QB en tâche de fond
+(services/achat_piece_qbo.py), après l'enregistrement en base."""
+
+from typing import Optional
+
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    File,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 from fastapi.responses import Response
 from sqlalchemy import select
 
@@ -27,6 +43,35 @@ async def _soeurs(db, ac: Achat) -> list[Achat]:
     ]
 
 
+def _piece_qb_a_refaire(achats: list[Achat]) -> Optional[str]:
+    """Le reçu change : la pièce QB connue ne vaut plus. Retourne son Id
+    (à retirer de QB une fois la nouvelle version envoyée) et efface le
+    lien sur toutes les parts."""
+    ancien = next(
+        (str(a.qbo_attachable_id) for a in achats if a.qbo_attachable_id),
+        None,
+    )
+    for a in achats:
+        a.qbo_attachable_id = None
+    return ancien
+
+
+def _joindre_a_qb_en_fond(
+    taches: BackgroundTasks, achat_id: int, *, ancien: Optional[str]
+) -> None:
+    """Après la réponse (donc après le commit) : le reçu part vers la
+    transaction QB de l'achat. Un remplacement (ancienne pièce connue)
+    téléverse la nouvelle version puis retire l'ancienne."""
+    from app.services.achat_piece_qbo import joindre_recu_en_fond
+
+    taches.add_task(
+        joindre_recu_en_fond,
+        int(achat_id),
+        retirer=ancien,
+        forcer=bool(ancien),
+    )
+
+
 _ALLOWED_CONTENT = {
     "image/jpeg",
     "image/jpg",
@@ -48,6 +93,7 @@ async def upload_receipt(
     achat_id: int,
     db: DBSession,
     _: CurrentUser,
+    taches: BackgroundTasks,
     file: UploadFile = File(...),
 ) -> Response:
     ac = (
@@ -74,12 +120,17 @@ async def upload_receipt(
             f"Fichier trop gros (>{_MAX_BYTES // (1024 * 1024)} Mo).",
         )
 
+    soeurs = await _soeurs(db, ac)
     ac.receipt_image = blob
     ac.receipt_image_content_type = ct
-    for s in await _soeurs(db, ac):
+    for s in soeurs:
         s.receipt_image = blob
         s.receipt_image_content_type = ct
-    await db.flush()
+    ancien = _piece_qb_a_refaire([ac, *soeurs])
+    # Commit ICI (pas en fin de requête) : la tâche de fond relit l'achat
+    # dans sa propre session et doit voir le reçu.
+    await db.commit()
+    _joindre_a_qb_en_fond(taches, achat_id, ancien=ancien)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -122,6 +173,7 @@ async def rotate_receipt(
     achat_id: int,
     db: DBSession,
     _: CurrentUser,
+    taches: BackgroundTasks,
     direction: str = Query(
         default="left",
         pattern="^(left|right)$",
@@ -129,7 +181,8 @@ async def rotate_receipt(
     ),
 ) -> dict:
     """Fait pivoter de 90° le PDF/image stocké, et le réenregistre.
-    Permet de corriger un reçu mal orienté directement depuis la fiche."""
+    Permet de corriger un reçu mal orienté directement depuis la fiche.
+    La version pivotée remplace la pièce dans QuickBooks."""
     ac = (
         await db.execute(select(Achat).where(Achat.id == achat_id))
     ).scalar_one_or_none()
@@ -153,11 +206,14 @@ async def rotate_receipt(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Rotation impossible pour ce format de fichier.",
         )
+    soeurs = await _soeurs(db, ac)
     ac.receipt_image = rotated
-    for s in await _soeurs(db, ac):
+    for s in soeurs:
         s.receipt_image = rotated
         s.receipt_image_content_type = ac.receipt_image_content_type
-    await db.flush()
+    ancien = _piece_qb_a_refaire([ac, *soeurs])
+    await db.commit()
+    _joindre_a_qb_en_fond(taches, achat_id, ancien=ancien)
     return {"rotated": True, "direction": direction}
 
 
@@ -170,16 +226,24 @@ async def delete_receipt(
     achat_id: int,
     db: DBSession,
     _: CurrentUser,
+    taches: BackgroundTasks,
 ) -> Response:
     ac = (
         await db.execute(select(Achat).where(Achat.id == achat_id))
     ).scalar_one_or_none()
     if ac is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Achat not found")
+    soeurs = await _soeurs(db, ac)
     ac.receipt_image = None
     ac.receipt_image_content_type = None
-    for s in await _soeurs(db, ac):
+    for s in soeurs:
         s.receipt_image = None
         s.receipt_image_content_type = None
-    await db.flush()
+    ancien = _piece_qb_a_refaire([ac, *soeurs])
+    await db.commit()
+    if ancien:
+        # Le reçu quitte Kratos → sa pièce quitte aussi la transaction QB.
+        from app.services.achat_piece_qbo import retirer_piece_qb_en_fond
+
+        taches.add_task(retirer_piece_qb_en_fond, ancien)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -71,6 +71,8 @@ type Achat = {
   qbo_bill_id: string | null;
   // Dépense IMPORTÉE de QB (pull) : l'Id QB vit ici, pas dans qbo_bill_id.
   qbo_purchase_id?: string | null;
+  // Pièce jointe QuickBooks qui porte le reçu ; null = pas (encore) dans QB.
+  qbo_attachable_id?: string | null;
   qbo_doc_number: string | null;
   payment_method: string | null;
   is_billable: boolean;
@@ -1184,6 +1186,21 @@ export default function AchatDetailPage() {
                         ? "PDF attaché"
                         : "Photo attachée"}
                     </span>
+                    {a.qbo_attachable_id ? (
+                      <span
+                        className="badge badge-emerald"
+                        title="Le reçu est joint à la transaction QuickBooks"
+                      >
+                        Dans QuickBooks
+                      </span>
+                    ) : a.qbo_bill_id || a.qbo_purchase_id ? (
+                      <span
+                        className="text-xs text-white/50"
+                        title="Envoi automatique en cours ; rattrapé chaque heure au besoin"
+                      >
+                        Pas encore joint dans QuickBooks
+                      </span>
+                    ) : null}
                     <button
                       type="button"
                       onClick={openReceipt}

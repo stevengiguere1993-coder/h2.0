@@ -248,6 +248,15 @@ class Achat(Base, TimestampUpdateMixin):
     qbo_txn_total: Mapped[Optional[float]] = mapped_column(
         Numeric(12, 2), nullable=True
     )
+    # Pièce jointe QuickBooks (Attachable) qui porte le reçu de cet achat
+    # sur sa transaction QB (2026-11-04, services/achat_piece_qbo.py).
+    # NULL = reçu pas (encore) dans QB. Posé à la synchro, à l'arrivée du
+    # reçu dans Kratos, par le filet horaire, ou à l'import d'un reçu
+    # déposé dans QB. Partagé par les parts d'un reçu divisé. Colonne →
+    # ensure_critical_columns.
+    qbo_attachable_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
 
     # REÇU DIVISÉ ENTRE PLUSIEURS PROJETS (Steven 2026-10-30) : un reçu
     # saisi dans Kratos peut être réparti entre plusieurs projets → un

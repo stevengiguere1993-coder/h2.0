@@ -374,6 +374,9 @@ async def ensure_critical_columns() -> None:
         # Total TTC de la transaction QB d'origine d'un achat importé
         # (facture fractionnée : part du projet vs facture entière).
         ("achats", "qbo_txn_total", "NUMERIC(12, 2)"),
+        # Pièce jointe QB (Attachable) portant le reçu de l'achat
+        # (2026-11-04) : garde anti-doublon de l'envoi du reçu à QB.
+        ("achats", "qbo_attachable_id", "VARCHAR(64)"),
         # Reçu divisé entre plusieurs projets (2026-10-30) : id de la
         # première part, commun à toutes les parts du même reçu.
         ("achats", "groupe_id", "INTEGER"),
