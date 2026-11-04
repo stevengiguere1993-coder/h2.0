@@ -853,6 +853,41 @@ class QuickBooksClient:
         )
         return data.get("Customer") or data
 
+    async def count(self, sql: str) -> int:
+        """``SELECT COUNT(*) FROM …`` : le nombre d'objets
+        (``QueryResponse.totalCount``, absent quand il n'y en a aucun)."""
+        data = await self._request(
+            "GET",
+            "/query",
+            params={"query": sql, "minorversion": "70"},
+        )
+        return int((data.get("QueryResponse") or {}).get("totalCount") or 0)
+
+    async def update_customer_fields(
+        self, customer_id: str, **champs: Any
+    ) -> Dict[str, Any]:
+        """Mise à jour SPARSE d'un client (actif ou inactif) avec les
+        champs QuickBooks donnés tels quels (``DisplayName``, ``Active``,
+        ``ParentRef`` + ``Job``, ``BillWithParent``…), sur le SyncToken
+        relu juste avant (exigé par QuickBooks). Une seule requête pour
+        tous les champs. Lève QuickBooksError si la fiche est introuvable
+        ou si QuickBooks refuse (nom déjà pris, solde non nul…)."""
+        cust = await self.get_customer_any(customer_id)
+        if not cust:
+            raise QuickBooksError(
+                f"Client QuickBooks {customer_id} introuvable."
+            )
+        body: Dict[str, Any] = {
+            "Id": str(cust.get("Id")),
+            "SyncToken": str(cust.get("SyncToken") or "0"),
+            "sparse": True,
+        }
+        body.update({k: v for k, v in champs.items() if v is not None})
+        data = await self._request(
+            "POST", "/customer", json_body=body, params={"minorversion": "70"}
+        )
+        return data.get("Customer") or data
+
     async def find_customer_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         safe = name.replace("'", "''")
         rows = await self.query(
