@@ -774,14 +774,12 @@ class QuickBooksClient:
             "Job": True,
             "ParentRef": {"value": str(new_parent_id)},
         }
-        # « Facturer avec le client parent » : sans ce drapeau, QB ne
-        # propose pas le sous-client dans « Convertir depuis un
-        # sous-client » (le 1660 Saint-Clément, déplacé, n'y était
-        # plus — Steven 2026-11-02) et REFUSE de déplacer un projet
-        # (« Un projet doit être un client rattaché facturé à son compte
-        # principal », projet 108 → 209, 2026-11-04) : envoyé pour les
-        # deux, un projet étant toujours facturé avec son parent.
-        body["BillWithParent"] = True
+        if not cust.get("IsProject"):
+            # « Facturer avec le client parent » : sans ce drapeau, QB ne
+            # propose pas le sous-client dans « Convertir depuis un
+            # sous-client » (le 1660 Saint-Clément, déplacé, n'y était
+            # plus — Steven 2026-11-02).
+            body["BillWithParent"] = True
         data = await self._request(
             "POST", "/customer", json_body=body, params={"minorversion": "70"}
         )
