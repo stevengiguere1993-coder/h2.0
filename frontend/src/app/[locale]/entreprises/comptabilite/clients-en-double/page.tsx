@@ -6,6 +6,9 @@
    autres pôles, INC). Intuit ne fusionne pas de clients par API : la
    fusion se fait dans QuickBooks en renommant le doublon au nom EXACT de
    la fiche gardée (bouton Copier, lien qui ouvre la bonne compagnie).
+   QuickBooks refuse tant qu'une des deux fiches a des sous-clients ; avec
+   un projet d'un côté ou de l'autre, pas de fusion : les opérations du
+   doublon passent à la main sous la fiche gardée, puis il devient inactif.
    Kratos désactive lui-même une fiche vide, puis remet ses liens sur la
    fiche gardée (« C'est fait », ou le webhook « Merge » d'Intuit) pour
    que le doublon ne revienne pas au prochain envoi. */
@@ -161,7 +164,7 @@ function resumeSuivi(s: Suivi): string {
     ? `« ${s.source.nom ?? s.source.id} » désactivée dans QuickBooks.`
     : s.sens_inverse
       ? `La fusion s'est faite vers « ${s.cible.nom} » : Kratos a suivi dans ce sens.`
-      : "Fusion constatée dans QuickBooks.";
+      : `« ${s.source.nom ?? s.source.id} » n'est plus active dans QuickBooks.`;
   return parts.length
     ? `${debut} Kratos relie maintenant à « ${s.cible.nom} » : ${parts.join(", ")}.`
     : `${debut} Rien dans Kratos ne pointait le doublon.`;
@@ -457,11 +460,12 @@ function CarteGroupe({ groupe, scope, ouvert = false }: { groupe: Groupe; scope:
             ))}
           </ul>
 
-          {fiche && fiche.sous_clients.length > 0 ? (
+          {fiche && fiche.sous_clients.some((c) => c.projet) ? (
             <p className="flex items-start gap-1.5 text-xs text-amber-300">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              La fiche gardée a {pluriel(fiche.sous_clients.length, "sous-client")} ou projet(s) : si QuickBooks
-              refuse la fusion, détache-les le temps de la fusion, puis rattache-les.
+              « {fiche.nom} » a {pluriel(fiche.sous_clients.filter((c) => c.projet).length, "projet")} : QuickBooks
+              ne fusionne pas une fiche qui a des projets. Les opérations de chaque doublon passent plutôt sous elle,
+              puis le doublon devient inactif.
             </p>
           ) : null}
 
@@ -665,7 +669,50 @@ function EtapesFusion({
         .filter(([, n]) => n > 0)
         .map(([lib, n]) => compte(n, lib))
     : [];
-  const projets = source.sous_clients.filter((c) => c.projet);
+  const projetsSource = source.sous_clients.filter((c) => c.projet);
+  const autresSource = source.sous_clients.filter((c) => !c.projet);
+  // Intuit : pas de fusion tant qu'une des deux fiches a des sous-clients,
+  // projets compris. Un sous-client se détache le temps de la fusion ; un
+  // projet ne change pas de client, donc avec un projet d'un côté ou de
+  // l'autre, les opérations du doublon passent à la main sous la fiche
+  // gardée, puis le doublon devient inactif.
+  const sansFusion = projetsSource.length > 0 || cible.sous_clients.some((c) => c.projet);
+  const aDetacher = [...autresSource, ...cible.sous_clients];
+  const noms = (liste: SousClient[]) => liste.map((c) => `« ${c.nom} »`).join(", ");
+
+  const ouvrir = (
+    <li>
+      <a href={source.lien_qb} target="_blank" rel="noreferrer" className="underline-offset-2 hover:underline">
+        Ouvrir « {source.nom} » dans QuickBooks <ExternalLink className="inline h-3 w-3 align-[-1px]" />
+      </a>
+    </li>
+  );
+  const boutonFait = (
+    <li>
+      <button
+        type="button"
+        className="btn-secondary btn-sm inline-flex items-center gap-1.5"
+        disabled={occupe !== null}
+        onClick={() => void envoyer("fusion")}
+        title="Kratos vérifie dans QuickBooks et remet ses liens sur la fiche gardée"
+      >
+        {occupe === "fusion" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+        C&apos;est fait
+      </button>
+    </li>
+  );
+  const boutonDesactiver = (
+    <button
+      type="button"
+      className="btn-accent btn-sm inline-flex items-center gap-1.5"
+      disabled={occupe !== null}
+      onClick={() => void envoyer("desactiver")}
+      title="Kratos vérifie qu'elle est vide, la rend inactive dans QuickBooks et remet ses liens sur la fiche gardée"
+    >
+      {occupe === "desactiver" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+      Désactiver dans QuickBooks
+    </button>
+  );
 
   return (
     <div className="rounded-lg border p-3 text-sm" style={{ borderColor: "var(--qg-border)" }}>
@@ -686,59 +733,68 @@ function EtapesFusion({
         </p>
       ) : null}
 
-      {source.sous_clients.length > 0 ? (
-        <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-300">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          D&apos;abord, détache ses {pluriel(source.sous_clients.length, "sous-client")} (Modifier, décocher « Est un
-          client rattaché ») : QuickBooks refuse la fusion sinon.
-          {projets.length > 0
-            ? ` Un projet ne change pas de client : recrée « ${projets.map((p) => p.nom).join(" », « ")} » sous la fiche gardée.`
-            : ""}
-        </p>
-      ) : null}
-
-      {apercu?.vide ? (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            className="btn-accent btn-sm inline-flex items-center gap-1.5"
-            disabled={occupe !== null}
-            onClick={() => void envoyer("desactiver")}
-            title="Kratos rend cette fiche inactive dans QuickBooks, sans que tu l'ouvres"
-          >
-            {occupe === "desactiver" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-            Désactiver dans QuickBooks
-          </button>
-          <span className="text-xs text-[var(--qg-text-muted)]">ou fusionne-la dans QuickBooks :</span>
-        </div>
-      ) : null}
-
-      <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-[var(--qg-text)]">
-        <li>
-          <a href={source.lien_qb} target="_blank" rel="noreferrer" className="underline-offset-2 hover:underline">
-            Ouvrir « {source.nom} » dans QuickBooks <ExternalLink className="inline h-3 w-3 align-[-1px]" />
-          </a>
-        </li>
-        <li>
-          <span>
-            Modifier, puis remplace le nom d&apos;affichage par <strong>{cible.nom}</strong>
-          </span>{" "}
-          <BoutonCopier texte={cible.nom} quoi="le nom de la fiche gardée" />
-        </li>
-        <li>Enregistrer, puis Oui quand QuickBooks propose de fusionner.</li>
-        <li>
-          <button
-            type="button"
-            className="btn-secondary btn-sm inline-flex items-center gap-1.5"
-            disabled={occupe !== null}
-            onClick={() => void envoyer("fusion")}
-            title="Kratos vérifie dans QuickBooks et remet ses liens sur la fiche gardée"
-          >
-            {occupe === "fusion" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-            C&apos;est fait
-          </button>
-        </li>
-      </ol>
+      {sansFusion ? (
+        <>
+          {projetsSource.length > 0 ? (
+            <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-300">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {projetsSource.length > 1
+                ? `Ses projets ${noms(projetsSource)} restent sous elle (un projet ne change pas de client) et deviendront inactifs avec elle. S'ils sont en cours, garde plutôt cette fiche.`
+                : `Son projet ${noms(projetsSource)} reste sous elle (un projet ne change pas de client) et deviendra inactif avec elle. S'il est en cours, garde plutôt cette fiche.`}
+            </p>
+          ) : null}
+          {autresSource.length > 0 ? (
+            <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-300">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {`Rattache ${autresSource.length > 1 ? "ses sous-clients" : "son sous-client"} ${noms(autresSource)} à « ${cible.nom} » (Modifier, client parent).`}
+            </p>
+          ) : null}
+          <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-[var(--qg-text)]">
+            {ouvrir}
+            <li>
+              <span>
+                Sur chacune de ses opérations, remplace le client par <strong>{cible.nom}</strong> ou un de ses
+                projets, puis enregistre.
+              </span>{" "}
+              <BoutonCopier texte={cible.nom} quoi="le nom de la fiche gardée" />
+            </li>
+            {projetsSource.length > 0 ? (
+              <>
+                <li>Une fois son solde à zéro, projets compris, rends-la inactive dans QuickBooks.</li>
+                {boutonFait}
+              </>
+            ) : (
+              <li>{boutonDesactiver}</li>
+            )}
+          </ol>
+        </>
+      ) : (
+        <>
+          {aDetacher.length > 0 ? (
+            <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-300">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {`D'abord, détache ${noms(aDetacher)} (Modifier, décocher « Est un client rattaché ») : QuickBooks refuse la fusion tant qu'une des deux fiches a des sous-clients. ${aDetacher.length > 1 ? "Rattache-les" : "Rattache-le"} ensuite à « ${cible.nom} ».`}
+            </p>
+          ) : null}
+          {apercu?.vide ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {boutonDesactiver}
+              <span className="text-xs text-[var(--qg-text-muted)]">ou fusionne-la dans QuickBooks :</span>
+            </div>
+          ) : null}
+          <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-[var(--qg-text)]">
+            {ouvrir}
+            <li>
+              <span>
+                Modifier, puis remplace le nom d&apos;affichage par <strong>{cible.nom}</strong>
+              </span>{" "}
+              <BoutonCopier texte={cible.nom} quoi="le nom de la fiche gardée" />
+            </li>
+            <li>Enregistrer, puis Oui quand QuickBooks propose de fusionner.</li>
+            {boutonFait}
+          </ol>
+        </>
+      )}
 
       {message ? <p className="mt-2 text-xs text-rose-300">{message}</p> : null}
     </div>

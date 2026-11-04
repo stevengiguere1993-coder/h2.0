@@ -7,8 +7,12 @@ retrouvent dans QB. »
 Intuit n'offre PAS la fusion de clients par API. La vraie fusion (tout
 l'historique passe sous une seule fiche, aucun montant ne change) se fait
 dans l'écran de QuickBooks : on renomme le doublon au nom d'affichage
-EXACT de la fiche gardée et QuickBooks propose de fusionner. Kratos fait
-le reste, pour chaque compagnie QuickBooks connectée :
+EXACT de la fiche gardée et QuickBooks propose de fusionner. QuickBooks
+refuse tant qu'une des deux fiches a des sous-clients ; un projet ne se
+détache pas, donc une paire où l'une a un projet ne se fusionne pas du
+tout : les opérations du doublon passent à la main sous la fiche gardée,
+puis il devient inactif. Kratos fait le reste, pour chaque compagnie
+QuickBooks connectée :
 
 - ``compagnies`` : une entrée par compagnie (realm), et les entreprises
   dont le QuickBooks n'est pas encore connecté ;
@@ -18,8 +22,9 @@ le reste, pour chaque compagnie QuickBooks connectée :
   (sous-clients, projets) et ce que Kratos y relie ;
 - ``apercu`` / ``desactiver`` : une fiche sans vente, paiement ni
   soumission est simplement désactivée par l'API ;
-- ``suivre_fusion`` : après la fusion (bouton « C'est fait », ou webhook
-  « Merge » d'Intuit), Kratos remet ses liens sur la fiche gardée et
+- ``suivre_fusion`` : après la fusion ou la désactivation (bouton
+  « C'est fait », ou webhook « Merge » d'Intuit), Kratos remet ses liens
+  sur la fiche gardée et
   prend son nom exact. Sans ça le doublon reviendrait : les flux de
   Kratos retrouvent le client QuickBooks par son NOM (``ensure_customer``)
   et la fiche fusionnée n'existe plus sous ce nom.
@@ -791,10 +796,12 @@ async def groupe_choisi(db: AsyncSession, scope: str, ids: List[str]) -> Dict[st
 # ──────────────────────────────────────────────────────────────────────
 
 
-async def _apercu(qbo: Any, scope: str, customer_id: str) -> Dict[str, Any]:
+async def _apercu(
+    qbo: Any, scope: str, customer_id: str, rows: Optional[List[Dict[str, Any]]] = None
+) -> Dict[str, Any]:
     safe = str(customer_id).replace("'", "''")
     try:
-        cust = await qbo.read_customer(customer_id)
+        cust = await qbo.get_customer_any(customer_id)
     except QuickBooksError as exc:
         raise _erreur_qb(exc, scope) from exc
     if not cust:
@@ -810,7 +817,8 @@ async def _apercu(qbo: Any, scope: str, customer_id: str) -> Dict[str, Any]:
             raise _erreur_qb(exc, scope) from exc
         except QuickBooksError:
             inconnus.append(libelle)
-    rows = await _lire_clients(qbo, scope)
+    if rows is None:
+        rows = await _lire_clients(qbo, scope)
     enfants = [
         {"id": str(r.get("Id")), "nom": r.get("DisplayName") or "", "projet": bool(r.get("IsProject"))}
         for r in rows
@@ -848,7 +856,7 @@ async def apercu(db: AsyncSession, scope: str, customer_id: str) -> Dict[str, An
 async def _lire_actif(qbo: Any, scope: str, customer_id: str) -> Optional[Dict[str, Any]]:
     """La fiche si elle est encore active dans QuickBooks, sinon None."""
     try:
-        cust = await qbo.read_customer(customer_id)
+        cust = await qbo.get_customer_any(customer_id)
     except QuickBooksError as exc:
         raise _erreur_qb(exc, scope) from exc
     return cust if cust and cust.get("Active", True) else None
@@ -864,16 +872,19 @@ async def desactiver(
 ) -> Dict[str, Any]:
     """Désactive par l'API une fiche VIDE (rien à déplacer), puis Kratos
     suit comme pour une fusion. Une fiche qui porte quoi que ce soit se
-    fusionne dans QuickBooks : la désactiver laisserait son historique à
-    part."""
+    fusionne dans QuickBooks, ou se vide à la main quand un projet bloque
+    la fusion : la désactiver laisserait son historique à part. Déjà
+    inactive (rendue inactive dans QuickBooks) : Kratos suit seulement."""
     if str(source_id) == str(cible_id):
         raise DoublonErreur("La fiche à garder et le doublon sont la même fiche.", 422)
     qbo = await _client_qb(scope)
     cible = await _lire_actif(qbo, scope, cible_id)
     if cible is None:
         raise DoublonErreur("La fiche à garder n'est plus active dans QuickBooks.", 409)
-    ap = await _apercu(qbo, scope, source_id)
-    if not ap["vide"]:
+    rows = await _lire_clients(qbo, scope)
+    ap = await _apercu(qbo, scope, source_id, rows)
+    deja_inactive = not ap["actif"]
+    if not deja_inactive and not ap["vide"]:
         porte = [_compte(n, lib) for lib, n in ap["compteurs"].items() if n]
         if ap["sous_clients"]:
             porte.append(f"{len(ap['sous_clients'])} sous-client(s) ou projet(s)")
@@ -881,17 +892,28 @@ async def desactiver(
             porte.append(f"un solde de {_montant(ap['solde'])}")
         if ap["inconnus"]:
             porte.append("des transactions que Kratos n'a pas pu compter")
-        if not ap["actif"]:
-            porte = ["elle est déjà inactive"]
+        # Un projet, d'un côté ou de l'autre, empêche la fusion (Intuit).
+        projet = any(c["projet"] for c in ap["sous_clients"]) or any(
+            r.get("IsProject") and _parent_id(r) == str(cible_id) for r in rows
+        )
         raise DoublonErreur(
-            f"« {ap['nom']} » n'est pas vide ({', '.join(porte)}) : fusionne-la "
-            "dans QuickBooks pour que son historique passe sous la fiche gardée.",
+            f"« {ap['nom']} » n'est pas vide ({', '.join(porte)}) : "
+            + (
+                "déplace d'abord ce qu'elle porte vers la fiche gardée (un projet "
+                "empêche la fusion)."
+                if projet
+                else "fusionne-la dans QuickBooks pour que son historique passe "
+                "sous la fiche gardée."
+            ),
             409,
         )
-    try:
-        await qbo.deactivate_customer(source_id)
-    except QuickBooksError as exc:
-        raise _erreur_qb(exc, scope) from exc
+    if not deja_inactive:
+        try:
+            trouvee = await qbo.deactivate_customer(source_id)
+        except QuickBooksError as exc:
+            raise _erreur_qb(exc, scope) from exc
+        if not trouvee:
+            raise DoublonErreur("Client introuvable dans QuickBooks.", 404)
     suivi = await suivre_fusion(
         db,
         realm_id=str(qbo.realm_id or ""),
@@ -900,7 +922,7 @@ async def desactiver(
         nom_source=nom_source or ap["nom"],
         nom_cible=cible.get("DisplayName") or "",
     )
-    return {"desactivee": True, **suivi}
+    return {"desactivee": not deja_inactive, **suivi}
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -928,9 +950,9 @@ async def fusion_faite(
     sens_inverse = False
     if source is not None and cible is not None:
         raise DoublonErreur(
-            f"La fusion n'est pas encore faite : « {source.get('DisplayName')} » est "
-            "toujours active dans QuickBooks. Ouvre-la, Modifier, remplace le nom "
-            f"d'affichage par « {cible.get('DisplayName')} », Enregistrer, puis Oui.",
+            f"« {source.get('DisplayName')} » est toujours active dans QuickBooks : "
+            f"la fusion dans « {cible.get('DisplayName')} » (ou sa désactivation) "
+            "n'est pas encore faite.",
             409,
         )
     if source is None and cible is None:
@@ -945,7 +967,7 @@ async def fusion_faite(
         nom_source = None
     if not nom_source:
         try:
-            ancienne = await qbo.read_customer(source_id)
+            ancienne = await qbo.get_customer_any(source_id)
         except QuickBooksError:
             ancienne = None
         nom_source = sans_suffixe_supprime((ancienne or {}).get("DisplayName"))
@@ -1102,8 +1124,8 @@ async def suivre_fusion_webhook(
 
     qbo = get_qbo(scope)
     await qbo._load_refresh_from_db()  # noqa: SLF001
-    cible = await qbo.read_customer(cible_id)
-    source = await qbo.read_customer(source_id)
+    cible = await qbo.get_customer_any(cible_id)
+    source = await qbo.get_customer_any(source_id)
     return await suivre_fusion(
         db,
         realm_id=str(realm_id),

@@ -43,7 +43,7 @@ R_INC = "realm-doublons-inc"
 
 class _FakeQbo:
     """Une compagnie QuickBooks : ``query_all`` ne rend que les clients
-    actifs (comme QuickBooks), ``read_customer`` les rend tous."""
+    actifs (comme QuickBooks), ``get_customer_any`` les rend tous."""
 
     ready = True
     env = "production"
@@ -86,7 +86,7 @@ class _FakeQbo:
         assert "FROM Customer" in sql
         return [dict(r) for r in self.customers.values() if r.get("Active", True)]
 
-    async def read_customer(self, cid: str) -> Optional[Dict[str, Any]]:
+    async def get_customer_any(self, cid: str) -> Optional[Dict[str, Any]]:
         r = self.customers.get(str(cid))
         return dict(r) if r else None
 
@@ -102,10 +102,12 @@ class _FakeQbo:
             raise QuickBooksError(f"QBO refus : {entite} non interrogeable — QBO GET /query failed: 400")
         return self.comptes.get((entite, cid), 0)
 
-    async def deactivate_customer(self, cid: str) -> Dict[str, Any]:
+    async def deactivate_customer(self, cid: str) -> bool:
+        if cid not in self.customers:
+            return False
         self.desactives.append(cid)
         self.fusionner(cid)
-        return dict(self.customers[cid])
+        return True
 
 
 @pytest.fixture()
@@ -398,8 +400,19 @@ def test_desactiver_seulement_une_fiche_vide(client, run, owner_headers, qb):
         headers=owner_headers,
     )
     assert r.status_code == 409, r.text
-    assert "3 factures" in r.json()["detail"]
+    assert "3 factures" in r.json()["detail"] and "fusionne-la" in r.json()["detail"]
     assert h.desactives == []
+
+    # Un projet sous la fiche gardée empêche la fusion : déplacer à la main.
+    chantier = h.ajouter("Roy : salle de bain", parent=garde, IsProject=True)
+    r = client.post(
+        "/api/v1/qbo-doublons/desactiver",
+        json={"scope": "construction", "source_id": plein, "cible_id": garde},
+        headers=owner_headers,
+    )
+    assert r.status_code == 409, r.text
+    assert "un projet empêche la fusion" in r.json()["detail"]
+    h.customers.pop(chantier)
 
     # Une transaction que QuickBooks ne laisse pas compter : pas « vide ».
     h.refus.add("RefundReceipt")
@@ -416,6 +429,21 @@ def test_desactiver_seulement_une_fiche_vide(client, run, owner_headers, qb):
     assert r.json()["desactivee"] is True
     assert h.desactives == [vide]
     assert _lire(run, TimesheetCompany, comp).qbo_customer_id == garde
+
+    # Rendue inactive dans QuickBooks (un projet bloquait la fusion, ses
+    # opérations ont été déplacées à la main) : Kratos suit seulement.
+    projet_seul = h.ajouter("Plomberie Roy (chantier)")
+    (comp2,) = _ajouter(run, TimesheetCompany(label="Roy chantier", qbo_customer_id=projet_seul))
+    h.fusionner(projet_seul)
+    r = client.post(
+        "/api/v1/qbo-doublons/desactiver",
+        json={"scope": "construction", "source_id": projet_seul, "cible_id": garde},
+        headers=owner_headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["desactivee"] is False and h.desactives == [vide]
+    assert r.json()["source"]["nom"] == "Plomberie Roy (chantier)"
+    assert _lire(run, TimesheetCompany, comp2).qbo_customer_id == garde
 
 
 def test_compagnie_inconnue_ou_non_connectee(client, owner_headers, qb):
