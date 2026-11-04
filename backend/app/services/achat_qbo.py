@@ -842,10 +842,18 @@ async def sync_achat_to_qbo(
     groupe_id = (
         await db.execute(select(Achat.groupe_id).where(Achat.id == achat_id))
     ).scalar_one_or_none()
-    if not groupe_id:
+    # Achat simple : verrou sur son propre id — l'auto-push à la création
+    # et la jonction du reçu arrivé juste après (achat_piece_qbo) ne se
+    # croisent pas.
+    async with verrou_achat(int(achat_id), groupe_id):
         return await _sync_achat_sans_verrou(db, achat_id)
-    async with _verrou_groupe(int(groupe_id)):
-        return await _sync_achat_sans_verrou(db, achat_id)
+
+
+def verrou_achat(achat_id: int, groupe_id: Optional[int]) -> asyncio.Lock:
+    """Verrou d'une transaction QB côté Kratos : le groupe d'un reçu
+    divisé (sa tête = première part), sinon l'achat lui-même. Partagé par
+    la synchro et la jonction du reçu."""
+    return _verrou_groupe(int(groupe_id or achat_id))
 
 
 async def _sync_achat_sans_verrou(
@@ -1711,65 +1719,24 @@ async def _sync_achat_sans_verrou(
             )
 
     # Joindre la facture fournisseur (image / PDF) si l'employé en a
-    # uploadé une. On le fait après création du Bill/Purchase ; en cas
-    # d'échec on log mais on ne bloque pas le push principal.
-    # NB: receipt_image est une colonne `deferred` — non chargée par
-    # défaut. Il faut explicitement rafraîchir pour la lire.
-    # On n'attache la pièce QUE lors d'une création (did_create), pas à
-    # chaque re-synchro (update), pour éviter de dupliquer la facture
-    # dans QBO.
+    # uploadé une — à la création de la transaction QB ET à toute
+    # re-synchro tant qu'elle n'y est pas (Steven 2026-11-04 : « le PDF
+    # devrait toujours se joindre quand ça part de Kratos et qu'il est
+    # présent »). Anti-doublon : achat.qbo_attachable_id + relecture des
+    # pièces déjà sur la transaction (services/achat_piece_qbo.py). En
+    # cas d'échec on log mais on ne bloque pas le push principal.
     receipt_attached = False
     receipt_error: Optional[str] = None
-    # Reçu divisé : la même facture est sur chaque part → on la joint UNE
-    # fois, depuis la première part qui la porte.
-    porteur_recu = next(
-        (p for p in parts if p.receipt_image_content_type), achat
-    )
-    # `receipt_image` est une colonne deferred : y accéder sans l'avoir
-    # chargée déclenche un SELECT implicite, interdit sur une AsyncSession
-    # (MissingGreenlet) — ce qui faisait échouer le push APRÈS la création
-    # de la transaction QB pour tout achat SANS reçu (lien QB perdu jusqu'au
-    # filet horaire). On ne lit la colonne qu'après un refresh réussi.
-    recu_bytes: Optional[bytes] = None
-    if did_create and qbo_id and porteur_recu.receipt_image_content_type:
-        try:
-            await db.refresh(porteur_recu, attribute_names=["receipt_image"])
-            recu_bytes = (
-                bytes(porteur_recu.receipt_image)
-                if porteur_recu.receipt_image
-                else None
-            )
-        except Exception as exc:  # noqa: BLE001
-            receipt_error = f"refresh: {exc}"
-            log.warning("Refresh receipt_image failed: %s", exc)
-    if recu_bytes:
-        try:
-            ctype = (
-                porteur_recu.receipt_image_content_type
-                or "application/octet-stream"
-            )
-            ext = "pdf" if "pdf" in ctype else "jpg"
-            if "png" in ctype:
-                ext = "png"
-            file_name = f"facture-A{achat.id}.{ext}"
-            await qbo.upload_attachment(
-                entity_type=kind,
-                entity_id=qbo_id,
-                file_name=file_name,
-                content_type=ctype,
-                content=recu_bytes,
-            )
-            receipt_attached = True
-            log.info(
-                "Attached receipt to QBO %s %s (file=%s)",
-                kind, qbo_id, file_name,
-            )
-        except Exception as exc:  # noqa: BLE001
-            receipt_error = str(exc)[:200]
-            log.warning(
-                "Receipt upload failed for Achat %s -> QBO %s %s: %s",
-                achat.id, kind, qbo_id, exc,
-            )
+    if qbo_id and not etat["lie_seulement"]:
+        from app.services.achat_piece_qbo import joindre_recu
+
+        piece = await joindre_recu(
+            db, qbo, parts, type_qb=kind, id_qb=qbo_id, forcer=did_create
+        )
+        receipt_attached = piece["statut"] == "joint"
+        receipt_error = piece.get("erreur")
+        if receipt_attached or piece["statut"] == "relie":
+            await db.flush()
 
     return {
         "ok": True,

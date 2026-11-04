@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import or_, select
 
@@ -35,6 +35,10 @@ class AchatQboSyncResult(BaseModel):
     qbo_bill_id: str
     qbo_doc_number: str
     qbo_vendor_id: str
+    #: Le reçu a été joint à la transaction QB pendant CE push (sinon il
+    #: y était déjà, ou l'achat n'en a pas).
+    receipt_attached: bool = False
+    receipt_error: Optional[str] = None
 
 
 @router.post(
@@ -58,6 +62,54 @@ async def push_achat_to_qbo(
             detail=f"QBO sync failed: {exc}",
         )
     return AchatQboSyncResult(**result)
+
+
+@router.post(
+    "/qbo/pieces/rattraper",
+    summary=(
+        "Joindre à QuickBooks les reçus d'achats qui n'y sont pas encore "
+        "(rattrapage, même travail que le filet horaire)"
+    ),
+)
+async def rattraper_pieces_qbo_maintenant(
+    db: DBSession,
+    user: CurrentUser,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict:
+    if not await user_has_capability(db, user, "qbo.push"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permissions insuffisantes pour cette action.",
+        )
+    from app.services.achat_piece_qbo import rattraper_pieces_qbo
+
+    return await rattraper_pieces_qbo(limit=limit)
+
+
+@router.post(
+    "/{achat_id}/qbo/piece",
+    summary="Joindre maintenant le reçu de cet achat à sa transaction QuickBooks",
+)
+async def joindre_piece_qbo_maintenant(
+    achat_id: int, db: DBSession, user: CurrentUser
+) -> dict:
+    if not await user_has_capability(db, user, "qbo.push"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permissions insuffisantes pour cette action.",
+        )
+    from app.services.achat_piece_qbo import joindre_maintenant
+
+    try:
+        res = await joindre_maintenant(db, achat_id)
+    except AchatSyncError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"QBO sync failed: {exc}",
+        )
+    if res["statut"] == "introuvable":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Achat not found")
+    return res
 
 
 async def autopush_achat(achat_id: int) -> None:

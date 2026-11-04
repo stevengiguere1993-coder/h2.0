@@ -120,6 +120,9 @@ async def _import_qbo_receipts(db: AsyncSession, qbo: Any) -> int:
             for achat in cibles:
                 achat.receipt_image = content
                 achat.receipt_image_content_type = ctype
+                # Le reçu vient de QB : sa pièce y est déjà, on ne la
+                # renverra pas (achat_piece_qbo).
+                achat.qbo_attachable_id = att_id
                 done.add(achat.id)
                 imported += 1
                 log.info(
