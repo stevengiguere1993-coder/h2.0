@@ -676,8 +676,11 @@ def test_vrai_client_qb_deplacement_et_facturer_avec_parent(run):
 
     run(qbc.move_subcustomer("10", "2"))
     assert envoyes[-1]["BillWithParent"] is True and envoyes[-1]["ParentRef"] == {"value": "2"}
+    # Un projet aussi : QuickBooks refuse de le déplacer sans le drapeau
+    # (« Un projet doit être un client rattaché facturé à son compte
+    # principal », projet 108 → 209, 2026-11-04).
     run(qbc.move_subcustomer("11", "2"))
-    assert "BillWithParent" not in envoyes[-1]
+    assert envoyes[-1]["BillWithParent"] is True and envoyes[-1]["ParentRef"] == {"value": "2"}
 
     envoyes.clear()
     run(qbc.facturer_avec_parent("10"))

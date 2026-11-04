@@ -208,7 +208,13 @@ mère au lieu d'oublier le lien et d'en créer un second (le nom d'affichage
 nouveau prenait un nom dérivé). Pas de déplacement si le sous-client est
 porté par un autre projet, si le nouveau client a déjà un sous-client au
 nom exact (adopté), ou vers un parent autre que le client QB mémorisé sur
-la fiche ; un refus de QB (projet QB) retombe sur la création.
+la fiche ; un refus de QB retombe sur la création. Un projet QB SE DÉPLACE à
+condition que le corps redise `BillWithParent: true` (sinon « Un projet
+doit être un client rattaché facturé à son compte principal », projet
+108 → 209, 2026-11-04) : `move_subcustomer` et `POST
+/qbo/customers/{id}/modifier` l'envoient d'office pour un projet ou un
+sous-client déjà coché ; « facturer_avec_parent: true » sur un projet
+ne change rien, « false » est refusé (422).
 Client mère : une seule règle, `app/services/qbo_client_mere.py` — le
 client QB doit PORTER LE NOM de la fiche (accents / majuscules /
 ponctuation près) : lien de la fiche, nom exact, courriel unique ; un

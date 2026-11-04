@@ -818,6 +818,14 @@ async def modifier(
                 )
             corps["ParentRef"] = {"value": parent_id}
             corps["Job"] = True
+            if courant.get("IsProject") or courant.get("BillWithParent"):
+                # QuickBooks REFUSE de déplacer un projet si le corps ne
+                # redit pas « facturé avec le client parent » (« Un projet
+                # doit être un client rattaché facturé à son compte
+                # principal », projet 108 → 209, 2026-11-04) ; un
+                # sous-client déjà coché garde son réglage sous le nouveau
+                # parent.
+                corps["BillWithParent"] = True
             faits.append(
                 {
                     "champ": "parent",
@@ -844,10 +852,15 @@ async def modifier(
                 "sous-client.",
             )
         if courant.get("IsProject"):
-            raise ClientQboErreur(
-                422, "Un projet QuickBooks ne porte pas ce réglage."
-            )
-        if bool(fap) != bool(courant.get("BillWithParent", False)):
+            if not fap:
+                raise ClientQboErreur(
+                    422,
+                    "Un projet QuickBooks est toujours facturé avec le client "
+                    "parent : ce réglage ne se retire pas.",
+                )
+            # Vrai sur un projet : déjà le cas (QuickBooks l'exige), rien à
+            # changer ; un déplacement l'envoie d'office (ci-dessus).
+        elif bool(fap) != bool(courant.get("BillWithParent", False)):
             corps["BillWithParent"] = bool(fap)
             if "ParentRef" not in corps:
                 # QuickBooks veut ParentRef + Job avec BillWithParent.
