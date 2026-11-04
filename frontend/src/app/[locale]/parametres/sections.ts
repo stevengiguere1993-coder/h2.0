@@ -185,6 +185,13 @@ export const SECTIONS: Section[] = [
         minRole: "admin"
       },
       {
+        title: "Courriel à la technicienne comptable",
+        desc: "Activer l'envoi des instructions à chaque nouveau projet (sous-client QuickBooks à convertir) et choisir le courriel qui les reçoit.",
+        href: "/parametres/technicienne-comptable",
+        icon: Mail,
+        minRole: "admin"
+      },
+      {
         title: "Numérotation",
         desc: "Compteurs séquentiels factures / devis / PO, alignés sur QuickBooks.",
         href: "/parametres/numerotation",
