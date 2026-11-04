@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -28,14 +28,17 @@ from app.models.revenus_depenses import RdScenario
 from app.models.immobilier import (
     Bail,
     BailStatus,
+    DepenseImmeuble,
     Evaluation,
     Hypotheque,
     HypothequeStatus,
     Immeuble,
     Logement,
+    LogementStatus,
     bail_non_parallele,
 )
 from app.services import revenus_depenses as svc
+from app.services.locatif_chambres import compter_chambres
 from app.services.loyer_effectif import loyer_effectif_loue
 from app.services.audit import log_action
 
@@ -76,9 +79,19 @@ def _resume_scenario(s: RdScenario) -> Dict[str, Any]:
     }
 
 
-def _detail(s: RdScenario) -> Dict[str, Any]:
+async def _bareme_schl(db) -> Dict[str, Any]:
+    """Barème des dépenses normalisées SCHL de Prospection (Paramètres →
+    Prospection) : LE même que l'analyse d'un lead, une seule source de vérité."""
+    from app.api.v1.endpoints.lead_analyses import _load_bareme_overrides
+
+    overrides, seuil, inocc = await _load_bareme_overrides(db)
+    return {"overrides": overrides, "seuil": seuil, "taux_inoccupation": inocc}
+
+
+async def _detail(db, s: RdScenario) -> Dict[str, Any]:
     data = svc.charger(s.data_json)
-    return {**_resume_scenario(s), "data": data, "resultats": svc.calculer(data), "referentiel": svc.referentiel()}
+    bareme = await _bareme_schl(db)
+    return {**_resume_scenario(s), "data": data, "resultats": svc.calculer(data, bareme), "referentiel": svc.referentiel(bareme)}
 
 
 async def _scenario_ou_404(db, scenario_id: int) -> RdScenario:
@@ -95,7 +108,7 @@ async def _assurer_defaut(db, user) -> List[RdScenario]:
     data = svc.scenario_defaut()
     s = RdScenario(
         nom="Scénario de base", data_json=json.dumps(data, ensure_ascii=False),
-        resume_json=json.dumps(svc.resume(svc.calculer(data)), ensure_ascii=False),
+        resume_json=json.dumps(svc.resume(svc.calculer(data, await _bareme_schl(db))), ensure_ascii=False),
         is_default=True, created_by_email=getattr(user, "email", None),
     )
     db.add(s)
@@ -121,7 +134,7 @@ async def creer_scenario(payload: ScenarioIn, db: DBSession, user: RequireAdminO
         nom = (payload.nom or "").strip() or "Nouveau scénario"
     s = RdScenario(
         nom=nom[:120], data_json=json.dumps(data, ensure_ascii=False),
-        resume_json=json.dumps(svc.resume(svc.calculer(data)), ensure_ascii=False),
+        resume_json=json.dumps(svc.resume(svc.calculer(data, await _bareme_schl(db))), ensure_ascii=False),
         is_default=False, created_by_email=getattr(user, "email", None),
     )
     db.add(s)
@@ -130,12 +143,12 @@ async def creer_scenario(payload: ScenarioIn, db: DBSession, user: RequireAdminO
                      details={"nom": s.nom, "source_id": payload.source_id})
     await db.commit()
     await db.refresh(s)
-    return _detail(s)
+    return await _detail(db, s)
 
 
 @router.get("/scenarios/{scenario_id}", summary="Hypothèses, résultats et référentiel d'un scénario")
 async def lire_scenario(scenario_id: int, db: DBSession, user: RequireAdminOrOwner) -> Dict[str, Any]:
-    return _detail(await _scenario_ou_404(db, scenario_id))
+    return await _detail(db, await _scenario_ou_404(db, scenario_id))
 
 
 @router.put("/scenarios/{scenario_id}", summary="Enregistrer les hypothèses et recalculer")
@@ -149,13 +162,13 @@ async def enregistrer_scenario(scenario_id: int, payload: ScenarioUpdate, db: DB
     if payload.data is not None:
         data = svc.normaliser(payload.data)
         s.data_json = json.dumps(data, ensure_ascii=False)
-        s.resume_json = json.dumps(svc.resume(svc.calculer(data)), ensure_ascii=False)
+        s.resume_json = json.dumps(svc.resume(svc.calculer(data, await _bareme_schl(db))), ensure_ascii=False)
     s.updated_at = _now()
     await log_action(db, user=user, action="revenus_depenses.scenario_modifie", entity_type="rd_scenario", entity_id=s.id,
                      details={"nom": s.nom, "resume": json.loads(s.resume_json) if s.resume_json else None})
     await db.commit()
     await db.refresh(s)
-    return _detail(s)
+    return await _detail(db, s)
 
 
 @router.delete("/scenarios/{scenario_id}", summary="Supprimer un scénario", status_code=204)
@@ -175,9 +188,9 @@ async def supprimer_scenario(scenario_id: int, db: DBSession, user: RequireAdmin
 
 
 @router.post("/calculer", summary="Calculer sans enregistrer")
-async def calculer(payload: CalculIn, user: RequireAdminOrOwner) -> Dict[str, Any]:
+async def calculer(payload: CalculIn, db: DBSession, user: RequireAdminOrOwner) -> Dict[str, Any]:
     data = svc.normaliser(payload.data)
-    return {"data": data, "resultats": svc.calculer(data)}
+    return {"data": data, "resultats": svc.calculer(data, await _bareme_schl(db))}
 
 
 @router.get("/immeubles-kratos", summary="Immeubles déjà dans Kratos, prêts à être ajoutés à un scénario")
@@ -215,12 +228,49 @@ async def immeubles_kratos(db: DBSession, user: RequireAdminOrOwner) -> Dict[str
         m = loyer_effectif_loue(l, loyer_bail.get(l.id), gestion_externe=externe_par_imm.get(l.immeuble_id, False))
         if m is not None:
             loyers[l.immeuble_id] = loyers.get(l.immeuble_id, 0.0) + float(m)
+    # Portes et chambres : mêmes règles que la liste des immeubles (hors
+    # location exclus, chambres par ``compter_chambres``).
     nb_log: Dict[int, int] = {}
-    nb_ch: Dict[int, int] = {}
     for l in logements:
+        if l.status == LogementStatus.HORS_LOC.value:
+            continue
         nb_log[l.immeuble_id] = nb_log.get(l.immeuble_id, 0) + 1
-        if getattr(l, "location_en_chambres", False):
-            nb_ch[l.immeuble_id] = nb_ch.get(l.immeuble_id, 0) + int(getattr(l, "nb_chambres", 0) or 0)
+    nb_ch: Dict[int, int] = {iid: int(c.get("tot", 0)) for iid, c in (await compter_chambres(db, immeubles)).items()}
+    # Logements loués en chambres SANS nombre de chambres dans Kratos (Phil :
+    # « il semble pas reconnaître les chambres comme sur Saint-Clément ») :
+    # Kratos n'en compte alors que les baux actifs — à signaler.
+    sans_chambres: Dict[int, int] = {}
+    for l in logements:
+        if getattr(l, "location_en_chambres", False) and l.status != LogementStatus.HORS_LOC.value and not int(getattr(l, "nb_chambres", 0) or 0):
+            sans_chambres[l.immeuble_id] = sans_chambres.get(l.immeuble_id, 0) + 1
+    # Dépenses RÉELLES annuelles (fiche de l'immeuble → Dépenses), coût courant
+    # comme le P&L : % des loyers → $, taxable → × 1,14975, mensuel × 12,
+    # annuel × 1, ponctuel des 12 derniers mois. Taxes, assurances, énergie et
+    # autres alimentent les revenus nets SCHL ; entretien, conciergerie et
+    # gestion sont NORMALISÉS par le barème (pas repris : double compte).
+    _CAT = {"taxes_municipales": "taxes_municipales", "taxes_scolaires": "taxes_scolaires", "assurances": "assurances",
+            "energie": "energie", "deneigement": "autres_depenses", "autre": "autres_depenses"}
+    depenses: Dict[int, Dict[str, float]] = {}
+    depuis = date.today() - timedelta(days=365)
+    for dp in (await db.execute(select(DepenseImmeuble).where(DepenseImmeuble.immeuble_id.in_(ids)))).scalars().all():
+        cat = _CAT.get(dp.categorie or "autre")
+        if cat is None:
+            continue
+        m = float(dp.montant or 0.0)
+        if dp.is_pourcentage:
+            m = loyers.get(dp.immeuble_id, 0.0) * m / 100.0
+        if dp.taxable:
+            m *= 1.14975
+        if dp.frequence == "mensuel":
+            annuel = m * 12.0
+        elif dp.frequence == "annuel":
+            annuel = m
+        elif dp.date_depense and dp.date_depense >= depuis:
+            annuel = m
+        else:
+            continue
+        bucket = depenses.setdefault(dp.immeuble_id, {})
+        bucket[cat] = bucket.get(cat, 0.0) + annuel
     dettes: Dict[int, float] = {}
     for iid, solde, initial in (
         await db.execute(
@@ -246,16 +296,28 @@ async def immeubles_kratos(db: DBSession, user: RequireAdminOrOwner) -> Dict[str
         notes: List[str] = []
         if not nb_log.get(i.id):
             notes.append("Aucun logement dans Kratos pour cet immeuble : logements et chambres à saisir.")
+        if sans_chambres.get(i.id):
+            notes.append(f"{sans_chambres[i.id]} logement(s) loué(s) en chambres sans nombre de chambres dans Kratos (fiche de l'immeuble → logements) : "
+                         f"Kratos ne compte que les baux actifs ({nb_ch.get(i.id, 0)} chambre(s)) — ajuste les chambres ici ou dans la fiche.")
         if loyers.get(i.id, 0.0) <= 0:
             notes.append(
                 "Aucun loyer dans Kratos : pas de bail actif ni de loyer saisi sur les logements"
                 + (" (gestion externe : entre le loyer sur chaque logement de la fiche de l'immeuble)" if externe_par_imm.get(i.id) else "")
                 + " — saisis les loyers bruts ici."
             )
+        dep = depenses.get(i.id, {})
+        manquantes = [lbl for k, lbl in (("taxes_municipales", "taxes municipales"), ("taxes_scolaires", "taxes scolaires"),
+                                         ("assurances", "assurances"), ("energie", "énergie")) if not dep.get(k)]
+        if manquantes and loyers.get(i.id, 0.0) > 0:
+            notes.append("Dépenses réelles absentes dans Kratos (fiche de l'immeuble → Dépenses) : " + ", ".join(manquantes)
+                         + " — à saisir ici pour des revenus nets SCHL justes.")
         if ev is None:
-            notes.append("Aucun rapport d'évaluation dans Kratos (fiche de l'immeuble → Finances → Évaluations) : valeur à saisir ici.")
+            notes.append("Aucun rapport d'évaluation dans Kratos (fiche de l'immeuble → Finances → Évaluations) : "
+                         "valeur à saisir ici, ou taux de cap pour la calculer des revenus nets SCHL.")
         elif ev.kind != "appraisal":
             notes.append(f"Pas de rapport d'évaluateur dans Kratos : valeur reprise de l'évaluation « {ev.kind} » ({ev.date_evaluation.year if ev.date_evaluation else '?'}).")
+        if ev is not None:
+            notes.append("Taux de cap du rapport à saisir ici (Kratos ne le conserve pas) : la valeur suivra alors les revenus nets SCHL ÷ taux de cap.")
         if not dettes.get(i.id):
             notes.append("Aucune hypothèque active dans Kratos : dette à 0 $, à vérifier.")
         items.append({
@@ -271,6 +333,11 @@ async def immeubles_kratos(db: DBSession, user: RequireAdminOrOwner) -> Dict[str
             "valeur_rapport": round(float(ev.valeur), 2) if ev else 0.0,
             "annee_rapport": ev.date_evaluation.year if ev and ev.date_evaluation else None,
             "source_rapport": (ev.kind if ev else None),
+            "taxes_municipales": round(dep.get("taxes_municipales", 0.0), 2),
+            "taxes_scolaires": round(dep.get("taxes_scolaires", 0.0), 2),
+            "assurances": round(dep.get("assurances", 0.0), 2),
+            "energie": round(dep.get("energie", 0.0), 2),
+            "autres_depenses": round(dep.get("autres_depenses", 0.0), 2),
             "notes_import": notes,
         })
     return {"items": items, "total": len(items), "nb_total": int((await db.execute(select(func.count(Immeuble.id)))).scalar() or 0)}

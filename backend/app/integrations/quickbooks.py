@@ -1846,6 +1846,30 @@ class QuickBooksClient:
         )
         return data.get("Item", data)
 
+    async def get_attachable(self, attachable_id: str) -> Dict[str, Any]:
+        data = await self._request("GET", f"/attachable/{attachable_id}")
+        return data.get("Attachable") or data
+
+    async def delete_attachable(self, attachable_id: str) -> bool:
+        """Retire une pièce jointe QB (best-effort) — quand le reçu est
+        remplacé ou supprimé dans Kratos. Renvoie False sans lever si
+        l'objet n'existe plus."""
+        try:
+            cur = await self.get_attachable(str(attachable_id))
+            tok = str(cur.get("SyncToken") or "0")
+        except Exception:  # noqa: BLE001
+            return False
+        try:
+            await self._request(
+                "POST",
+                "/attachable",
+                json_body={"Id": str(attachable_id), "SyncToken": tok},
+                params={"operation": "delete", "minorversion": "70"},
+            )
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
     # ------------------------------------------------------------------
     # Attachable upload — joint un fichier (image, PDF) à une entité QBO
     # (Bill, Purchase, Invoice, etc.) via /v3/company/{id}/upload.

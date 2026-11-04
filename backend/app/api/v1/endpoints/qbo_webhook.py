@@ -154,6 +154,9 @@ async def qbo_webhook(request: Request) -> Response:
     except Exception as exc:  # noqa: BLE001
         log.warning("webhook QBO: résolution des realms échouée: %s", exc)
     changed: List[Tuple[str, str]] = []
+    # Dépenses / factures fournisseurs SUPPRIMÉES dans QuickBooks → les
+    # achats Kratos liés disparaissent aussi (Steven 2026-11-04).
+    supprimees: List[Tuple[str, str]] = []
     pull_needed = False
     for note in payload.get("eventNotifications") or []:
         rid = str(note.get("realmId") or "")
@@ -166,7 +169,11 @@ async def qbo_webhook(request: Request) -> Response:
             name = str(ent.get("name") or "")
             eid = str(ent.get("id") or "")
             op = str(ent.get("operation") or "")
-            if op in ("Delete", "Merge"):
+            if op == "Delete":
+                if eid and name in ("Purchase", "Bill"):
+                    supprimees.append((name, eid))
+                continue
+            if op == "Merge":
                 continue
             # Tout événement « coût » déclenche un import complet LIVE
             # (nouveaux coûts, fournisseurs, paiements, reçus) — pas
@@ -183,7 +190,7 @@ async def qbo_webhook(request: Request) -> Response:
                 continue
             changed.append((name, eid))
 
-    if not changed and not pull_needed:
+    if not changed and not pull_needed and not supprimees:
         return Response(status_code=status.HTTP_200_OK)
 
     qbo = get_qbo()
@@ -201,6 +208,19 @@ async def qbo_webhook(request: Request) -> Response:
                     "reverse-sync QBO %s %s échoué: %s", name, eid, exc
                 )
         await db.commit()
+
+    if supprimees:
+        from app.services.achat_suppression_qbo import supprimer_depuis_qb
+
+        for name, eid in supprimees:
+            try:
+                async with AsyncSessionLocal() as db:
+                    await supprimer_depuis_qb(db, qbo, type_qb=name, id_qb=eid)
+                    await db.commit()
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "suppression QBO %s %s → Kratos échouée: %s", name, eid, exc
+                )
 
     # Import complet QB → Kratos en ARRIÈRE-PLAN (même logique que le pull
     # horaire : nouveaux coûts, création des fournisseurs, paiements,

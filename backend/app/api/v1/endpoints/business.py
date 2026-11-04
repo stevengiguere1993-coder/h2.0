@@ -1211,6 +1211,25 @@ def make_crud_router(
                 await remettre_en_stock_achat(db, obj)
             except InventaireErreur as exc:
                 raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+        # Achat supprimé dans Kratos → sa transaction QuickBooks (dépense
+        # ou facture fournisseur), son paiement et sa pièce jointe
+        # disparaissent aussi (Steven 2026-11-04). Reçu divisé : seulement
+        # quand la dernière part s'en va (sinon la transaction vient d'être
+        # réécrite). Refus QB → 409, rien n'est supprimé.
+        if model is Achat:
+            from app.services.achat_qbo import AchatSyncError as _ErrQB
+            from app.services.achat_suppression_qbo import (
+                supprimer_miroir_qb,
+            )
+
+            try:
+                await supprimer_miroir_qb(db, obj)
+            except _ErrQB as exc:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "Achat non supprimé : QuickBooks n'a pas pu supprimer "
+                    f"sa transaction — {exc}",
+                )
         await crud.delete(obj)
         if _punch_ta_id:
             import asyncio as _asyncio

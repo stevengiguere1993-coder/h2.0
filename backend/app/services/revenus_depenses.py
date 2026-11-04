@@ -146,6 +146,9 @@ def immeuble_vide(**kw: Any) -> Dict[str, Any]:
         "valeur_rapport": 0.0, "annee_rapport": None, "taux_cap_pct": 0.0, "revenus_nets_annuels": 0.0,
         # Les deux.
         "dette": 0.0,
+        #: Dépenses RÉELLES annuelles (taxes, assurances, énergie, autres) : entrent dans
+        #: les revenus nets SCHL avec le barème normalisé de Prospection.
+        "taxes_municipales": 0.0, "taxes_scolaires": 0.0, "assurances": 0.0, "energie": 0.0, "autres_depenses": 0.0,
         #: Date de l'acquisition dans l'année du scénario (prorata) ; vide = 1er janvier.
         "date_acquisition": None,
         #: Alertes de l'import Kratos (loyers ou rapport manquants…), effaçables.
@@ -226,6 +229,8 @@ def normaliser(data: Any) -> Dict[str, Any]:
             valeur_rapport=_pos(i.get("valeur_rapport")), annee_rapport=annee if annee and annee > 1900 else None,
             taux_cap_pct=_pos(i.get("taux_cap_pct")), revenus_nets_annuels=_pos(i.get("revenus_nets_annuels")),
             dette=_pos(i.get("dette")), date_acquisition=_date_iso(i.get("date_acquisition")),
+            taxes_municipales=_pos(i.get("taxes_municipales")), taxes_scolaires=_pos(i.get("taxes_scolaires")),
+            assurances=_pos(i.get("assurances")), energie=_pos(i.get("energie")), autres_depenses=_pos(i.get("autres_depenses")),
             notes_import=[str(n)[:200] for n in (i.get("notes_import") if isinstance(i.get("notes_import"), list) else [])][:6],
         ))
 
@@ -351,11 +356,70 @@ def part_annee(i: Dict[str, Any], annee: int) -> Dict[str, Any]:
     return {"part": jours / jours_annee, "jours": jours, "jours_annee": jours_annee, "acquise_cette_annee": True, "date": d.isoformat()}
 
 
-def valeur_immeuble(i: Dict[str, Any]) -> Dict[str, Any]:
-    """Valeur d'un immeuble selon le document (p. 11) : stabilisé = rapport,
-    ou revenus nets ÷ taux de cap s'ils sont donnés ; en rénovation = coût
-    du projet + plus-value linéaire vers la valeur future."""
+#: Taux d'inoccupation SCHL standard quand les Paramètres → Prospection n'en donnent pas.
+TAUX_INOCCUPATION_DEFAUT = 0.03
+
+
+def bareme_effectif(bareme: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Barème SCHL réellement appliqué : constantes du moteur de Prospection
+    (``lead_analysis_finance.BAREME``) écrasées par les Paramètres → Prospection
+    (``bareme["overrides"]``), seuil petit/grand immeuble, taux d'inoccupation."""
+    from app.services.lead_analysis_finance import BAREME, SEUIL_BASCULE_BAREME_LOG
+
+    b = bareme or {}
+    eff = dict(BAREME)
+    for k, v in (b.get("overrides") or {}).items():
+        if v is not None:
+            eff[k] = float(v)
+    inocc = b.get("taux_inoccupation")
+    return {
+        "taux_inoccupation": float(inocc) if inocc is not None else TAUX_INOCCUPATION_DEFAUT,
+        "seuil_log": int(b.get("seuil") or SEUIL_BASCULE_BAREME_LOG),
+        "concierge_lt12": eff["concierge_lt12"], "concierge_gte12": eff["concierge_gte12"], "entretien": eff["entretien"],
+        "gestion_lt12": eff["gestion_lt12"], "gestion_gte12": eff["gestion_gte12"],
+        "autres_normalisations_pct": float(eff.get("autres_normalisations_pct", 0.01)),
+    }
+
+
+def depenses_normalisees(i: Dict[str, Any], bareme: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Revenus nets « SCHL » d'un immeuble = loyers bruts annuels − dépenses
+    normalisées, calculées par LE moteur de Prospection
+    (``compute_depenses_for_scenario``, barème des Paramètres → Prospection) :
+    inoccupation, taxes, assurances, énergie et autres dépenses réelles saisies,
+    conciergerie et entretien par logement, gestion et autres normalisations en %
+    des revenus (Phil 2026-11-04 : « les calculs de revenus SCHL, tu peux les
+    faire automatiquement »). None si l'immeuble n'a pas de loyers."""
+    from app.services.lead_analysis_finance import compute_depenses_for_scenario
+
+    revenus = i["loyers_bruts_mensuels"] * 12.0
+    if revenus <= 0:
+        return None
+    eff = bareme_effectif(bareme)
+    d = compute_depenses_for_scenario(
+        is_refi=False, is_aph=False, nb_log=int(i["nb_logements"]), revenus_totaux=revenus,
+        taxes_municipales=i["taxes_municipales"], taxes_scolaires=i["taxes_scolaires"], assurances=i["assurances"],
+        energie_base=i["energie"], reduction_energie_pct=0.0, depenses_autres=i["autres_depenses"],
+        wifi_ajoute=False, nb_thermopompes_ajoutees=0, taux_inoccupation_pct=eff["taux_inoccupation"],
+        bareme_overrides=((bareme or {}).get("overrides") or None), seuil_bascule_log=eff["seuil_log"],
+    )
+    return {
+        "revenus_bruts_annuels": _r(revenus), "inoccupation": _r(d.inoccupation),
+        "taxes_municipales": _r(d.taxes_municipales), "taxes_scolaires": _r(d.taxes_scolaires), "assurances": _r(d.assurances),
+        "energie": _r(d.energie), "concierge": _r(d.concierge), "entretien": _r(d.entretien), "gestion": _r(d.gestion),
+        "autres": _r(d.autres), "autres_normalisations": _r(d.autres_normalisations), "total": _r(d.total),
+        "revenus_nets": _r(revenus - d.total),
+    }
+
+
+def valeur_immeuble(i: Dict[str, Any], bareme: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Valeur d'un immeuble selon le document (p. 11) : stabilisé = revenus nets
+    ÷ taux de cap du rapport (revenus nets saisis, sinon calculés SCHL
+    automatiquement — « la valeur nette va être ajustée selon le cap rate »),
+    sinon le dernier rapport ; en rénovation = coût du projet + plus-value
+    linéaire vers la valeur future."""
     cout_projet = i["prix_acquisition"] + i["travaux_initiaux"] + i["frais_connexes"]
+    schl = depenses_normalisees(i, bareme)
+    base = {"depenses_schl": schl, "revenus_nets_schl": (schl["revenus_nets"] if schl else None)}
     if i["phase"] == "stabilisation":
         if i["valeur_future"] > 0 and i["mois_prevus"] > 0:
             avance = min(max(i["mois_ecoules"], 0), i["mois_prevus"]) / i["mois_prevus"]
@@ -365,20 +429,39 @@ def valeur_immeuble(i: Dict[str, Any]) -> Dict[str, Any]:
             valeur = cout_projet
             methode = "coût du projet (pas de valeur future donnée)"
         return {
+            **base, "revenus_nets": None, "source_revenus_nets": None,
             "cout_projet": _r(cout_projet), "valeur": _r(valeur), "valeur_a_terme": _r(i["valeur_future"] or cout_projet),
             "plus_value_prevue": _r((i["valeur_future"] - cout_projet) if i["valeur_future"] > 0 else 0.0), "methode": methode,
         }
-    if i["revenus_nets_annuels"] > 0 and i["taux_cap_pct"] > 0:
-        valeur = i["revenus_nets_annuels"] / (i["taux_cap_pct"] / 100.0)
-        methode = f"revenus nets {i['revenus_nets_annuels']:,.0f} $ ÷ taux de cap {i['taux_cap_pct']:g} %"
+    # Revenus nets : saisis s'ils le sont (priment), sinon SCHL automatiques.
+    if i["revenus_nets_annuels"] > 0:
+        noi, source = i["revenus_nets_annuels"], "saisis"
+    elif schl:
+        noi, source = schl["revenus_nets"], "schl"
+    else:
+        noi, source = 0.0, None
+    rapport = f"dernier rapport d'évaluation{(' (' + str(i['annee_rapport']) + ')') if i['annee_rapport'] else ''}"
+    if i["taux_cap_pct"] > 0 and noi > 0:
+        valeur = noi / (i["taux_cap_pct"] / 100.0)
+        methode = (f"revenus nets {'saisis' if source == 'saisis' else 'SCHL (loyers − dépenses normalisées)'} "
+                   f"{noi:,.0f} $ ÷ taux de cap {i['taux_cap_pct']:g} %")
+    elif i["taux_cap_pct"] > 0 and source:
+        valeur = i["valeur_rapport"]
+        methode = f"{rapport} — revenus nets ≤ 0, le taux de cap ne s'applique pas"
+    elif noi > 0:
+        valeur = i["valeur_rapport"]
+        methode = f"{rapport} — entre le taux de cap du rapport pour que la valeur suive les revenus nets"
     else:
         valeur = i["valeur_rapport"]
-        methode = f"dernier rapport d'évaluation{(' (' + str(i['annee_rapport']) + ')') if i['annee_rapport'] else ''}"
-    return {"cout_projet": _r(cout_projet), "valeur": _r(valeur), "valeur_a_terme": _r(valeur), "plus_value_prevue": 0.0, "methode": methode}
+        methode = rapport
+    return {**base, "revenus_nets": (_r(noi) if source else None), "source_revenus_nets": source,
+            "cout_projet": _r(cout_projet), "valeur": _r(valeur), "valeur_a_terme": _r(valeur), "plus_value_prevue": 0.0, "methode": methode}
 
 
-def calculer(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Résultats annuels d'un scénario normalisé."""
+def calculer(data: Dict[str, Any], bareme: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Résultats annuels d'un scénario normalisé. ``bareme`` : barème SCHL des
+    Paramètres → Prospection (``{overrides, seuil, taux_inoccupation}``), None =
+    constantes du moteur."""
     d = normaliser(data)
     fonds, dev, prosp = d["fonds"], d["developpement"], d["prospection"]
     constr, maint, gest, loc, pg, dep = d["construction"], d["maintenance"], d["gestion"], d["location"], d["part_des_gains"], d["depenses"]
@@ -391,7 +474,7 @@ def calculer(data: Dict[str, Any]) -> Dict[str, Any]:
     fiches = []
     valeur_parc = dettes = valeur_a_terme = equite_ponderee = 0.0
     for i in immeubles:
-        v = valeur_immeuble(i)
+        v = valeur_immeuble(i, bareme)
         equite = v["valeur"] - i["dette"]
         pa = parts[i["id"]]
         fiches.append({"id": i["id"], "nom": i["nom"] or "Sans nom", "dans_le_fonds": i["dans_le_fonds"], "phase": i["phase"],
@@ -552,7 +635,7 @@ def calculer(data: Dict[str, Any]) -> Dict[str, Any]:
             "immeubles": fiches,
             "valeur": _r(valeur_parc), "dettes": _r(dettes), "equite": _r(valeur_parc - dettes), "cash": _r(fonds["cash"]),
             "van": _r(van), "van_ponderee": _r(van_ponderee), "valeur_a_terme": _r(valeur_a_terme), "van_a_terme": _r(van_a_terme),
-            "annee": annee, "nb_prorates": len(prorates),
+            "annee": annee, "nb_prorates": len(prorates), "bareme_schl": bareme_effectif(bareme),
             "nb_dans_le_fonds": sum(1 for i in immeubles if i["dans_le_fonds"]),
             "nb_hors_fonds": sum(1 for i in immeubles if not i["dans_le_fonds"]),
             "nb_en_renovation": sum(1 for i in immeubles if i["dans_le_fonds"] and i["phase"] == "stabilisation"),
@@ -615,7 +698,8 @@ def resume(resultats: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def referentiel() -> Dict[str, Any]:
+def referentiel(bareme: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    eff = bareme_effectif(bareme)
     return {
         "categories_frais_fixes": [{"key": c, "label": l} for c, l in CATEGORIES_FRAIS_FIXES],
         "sections_revenus": [{"key": k, "label": l} for k, l in SECTIONS_REVENUS],
@@ -625,6 +709,13 @@ def referentiel() -> Dict[str, Any]:
         "charges_sociales_note": (
             "Charges de l'employeur en plus du salaire brut : RRQ, assurance-emploi, RQAP, FSS, CNESST et "
             "normes du travail — autour de 14 % au Québec pour une petite entreprise. Modifiable."
+        ),
+        "schl_note": (
+            "Revenus nets SCHL = loyers bruts annuels − dépenses normalisées, avec le barème de Prospection (Paramètres → Prospection) : "
+            f"inoccupation {eff['taux_inoccupation'] * 100:g} %, conciergerie {eff['concierge_lt12']:g} $ / {eff['concierge_gte12']:g} $ par logement "
+            f"(moins de {eff['seuil_log']} logements / {eff['seuil_log']} et plus), entretien {eff['entretien']:g} $ par logement, "
+            f"gestion {eff['gestion_lt12'] * 100:g} % / {eff['gestion_gte12'] * 100:g} % des revenus, autres normalisations {eff['autres_normalisations_pct'] * 100:g} %, "
+            "plus les taxes, assurances, énergie et autres dépenses réelles saisies. Valeur d'un immeuble stabilisé = revenus nets ÷ taux de cap du rapport."
         ),
         "prorata_note": (
             "Une acquisition conclue dans l'année est comptée au prorata des jours restants (ex. 3 avril → 273 jours sur 365) "
@@ -649,5 +740,6 @@ def charger(txt: Optional[str]) -> Dict[str, Any]:
 __all__ = [
     "CATEGORIES_FRAIS_FIXES", "POSTES_DEFAUT", "ASSOCIES_DEFAUT", "PALIERS_DEV_DEFAUT", "SECTIONS_REVENUS",
     "immeuble_vide", "scenario_defaut", "normaliser", "frais_developpement", "valeur_immeuble", "part_annee", "annee_defaut", "calculer",
+    "bareme_effectif", "depenses_normalisees", "TAUX_INOCCUPATION_DEFAUT",
     "resume", "referentiel", "charger",
 ]

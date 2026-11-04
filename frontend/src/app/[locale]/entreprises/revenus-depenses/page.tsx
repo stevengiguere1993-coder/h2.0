@@ -32,6 +32,8 @@ import {
   Building2,
   Calculator,
   Check,
+  ChevronDown,
+  ChevronRight,
   Copy,
   Database,
   HardHat,
@@ -44,6 +46,7 @@ import {
   PiggyBank,
   Plus,
   Receipt,
+  RefreshCw,
   Search,
   Sparkles,
   TrendingUp,
@@ -88,6 +91,11 @@ type Immeuble = {
   dette: number;
   date_acquisition: string | null;
   notes_import: string[];
+  taxes_municipales: number;
+  taxes_scolaires: number;
+  assurances: number;
+  energie: number;
+  autres_depenses: number;
 };
 type LigneRefact = { id: string; libelle: string; montant_annuel: number };
 type FraisFixe = { id: string; categorie: string; libelle: string; montant: number; periode: "mois" | "an" };
@@ -108,9 +116,22 @@ type Data = {
   depenses: { frais_fixes: FraisFixe[]; charges_sociales_pct: number; salaires: Salaire[]; associes: Associe[]; sous_traitance_gestion_pct: number };
 };
 type SectionRevenu = { key: string; label: string; revenu: number; part_pct: number; [k: string]: unknown };
-type FicheImmeuble = { id: string; nom: string; dans_le_fonds: boolean; phase: string; cout_projet: number; valeur: number; valeur_a_terme: number; plus_value_prevue: number; methode: string; dette: number; equite: number; part_annee: number; jours: number; jours_annee: number; date_acquisition: string | null; acquise_cette_annee: boolean; notes_import: string[] };
+type DepensesSchl = { revenus_bruts_annuels: number; inoccupation: number; taxes_municipales: number; taxes_scolaires: number; assurances: number; energie: number; concierge: number; entretien: number; gestion: number; autres: number; autres_normalisations: number; total: number; revenus_nets: number };
+const LIGNES_SCHL: [string, keyof DepensesSchl][] = [
+  ["Inoccupation", "inoccupation"],
+  ["Taxes municipales", "taxes_municipales"],
+  ["Taxes scolaires", "taxes_scolaires"],
+  ["Assurances", "assurances"],
+  ["Énergie", "energie"],
+  ["Conciergerie (barème)", "concierge"],
+  ["Entretien (barème)", "entretien"],
+  ["Gestion (barème)", "gestion"],
+  ["Autres dépenses", "autres"],
+  ["Autres normalisations (barème)", "autres_normalisations"]
+];
+type FicheImmeuble = { id: string; nom: string; dans_le_fonds: boolean; phase: string; cout_projet: number; valeur: number; valeur_a_terme: number; plus_value_prevue: number; methode: string; dette: number; equite: number; part_annee: number; jours: number; jours_annee: number; date_acquisition: string | null; acquise_cette_annee: boolean; notes_import: string[]; revenus_nets: number | null; source_revenus_nets: "schl" | "saisis" | null; depenses_schl: DepensesSchl | null };
 type Resultats = {
-  parc: { immeubles: FicheImmeuble[]; valeur: number; dettes: number; equite: number; cash: number; van: number; van_ponderee: number; valeur_a_terme: number; van_a_terme: number; nb_dans_le_fonds: number; nb_hors_fonds: number; nb_en_renovation: number; annee: number; nb_prorates: number };
+  parc: { immeubles: FicheImmeuble[]; valeur: number; dettes: number; equite: number; cash: number; van: number; van_ponderee: number; valeur_a_terme: number; van_a_terme: number; nb_dans_le_fonds: number; nb_hors_fonds: number; nb_en_renovation: number; annee: number; nb_prorates: number; bareme_schl: { taux_inoccupation: number; seuil_log: number; concierge_lt12: number; concierge_gte12: number; entretien: number; gestion_lt12: number; gestion_gte12: number; autres_normalisations_pct: number } };
   revenus: SectionRevenu[];
   part_des_gains: { van: number; rendement_pct: number; gain: number; tranche_investisseurs: number; tranche_nous: number; reste: number; part_nous: number; part_investisseurs: number; par_holding: number; nb_holdings: number; pct_du_gain_nous: number };
   depenses: {
@@ -132,10 +153,10 @@ type Resultats = {
   point_mort: { couvert: boolean; van_necessaire: number; van_actuelle: number; loyers_mensuels_sous_gestion_necessaires: number; loyers_mensuels_sous_gestion_actuels: number };
   avertissements: string[];
 };
-type Referentiel = { categories_frais_fixes: { key: string; label: string }[]; charges_sociales_note: string; valorisation_note: string; prorata_note: string };
+type Referentiel = { categories_frais_fixes: { key: string; label: string }[]; charges_sociales_note: string; valorisation_note: string; prorata_note: string; schl_note: string };
 type ScenarioResume = { id: number; nom: string; is_default: boolean; updated_at: string | null; resume: Record<string, number | null> };
 type Detail = ScenarioResume & { data: Data; resultats: Resultats; referentiel: Referentiel };
-type ImmeubleKratos = { kratos_immeuble_id: number; nom: string; adresse: string | null; ville: string | null; nb_logements: number; nb_chambres: number; loyers_bruts_mensuels: number; gestion_externe: boolean; dette: number; valeur_rapport: number; annee_rapport: number | null; source_rapport: string | null; notes_import: string[] };
+type ImmeubleKratos = { kratos_immeuble_id: number; nom: string; adresse: string | null; ville: string | null; nb_logements: number; nb_chambres: number; loyers_bruts_mensuels: number; gestion_externe: boolean; dette: number; valeur_rapport: number; annee_rapport: number | null; source_rapport: string | null; notes_import: string[]; taxes_municipales: number; taxes_scolaires: number; assurances: number; energie: number; autres_depenses: number };
 
 // ─── Couleurs ────────────────────────────────────────────────────────────
 
@@ -223,11 +244,12 @@ function immeubleVide(extra: Partial<Immeuble> = {}): Immeuble {
     travaux_initiaux: 0, frais_connexes: 0, valeur_future: 0, mois_prevus: 24, mois_ecoules: 0,
     valeur_rapport: 0, annee_rapport: null, taux_cap_pct: 0, revenus_nets_annuels: 0, dette: 0,
     date_acquisition: null, notes_import: [],
+    taxes_municipales: 0, taxes_scolaires: 0, assurances: 0, energie: 0, autres_depenses: 0,
     ...extra
   };
 }
 
-function Num({ value, onChange, className = "", placeholder, title, step, suffixe }: { value: number | null | undefined; onChange: (v: number) => void; className?: string; placeholder?: string; title?: string; step?: number; suffixe?: string }) {
+function Num({ value, onChange, className = "", placeholder, title, step, suffixe, verrouille }: { value: number | null | undefined; onChange: (v: number) => void; className?: string; placeholder?: string; title?: string; step?: number; suffixe?: string; verrouille?: boolean }) {
   return (
     <span className="relative inline-flex w-full items-center">
       <input
@@ -237,9 +259,11 @@ function Num({ value, onChange, className = "", placeholder, title, step, suffix
         step={step ?? "any"}
         value={value == null || Number.isNaN(value) ? "" : value}
         placeholder={placeholder}
-        title={title}
-        onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))}
-        className={`${INPUT} w-full min-w-[110px] text-right tabular-nums ${suffixe ? "pr-9" : ""} ${className}`}
+        title={verrouille ? "Valeur reprise de Kratos — clique sur Modifier (crayon) pour l'ajuster" : title}
+        readOnly={verrouille}
+        tabIndex={verrouille ? -1 : undefined}
+        onChange={(e) => { if (!verrouille) onChange(e.target.value === "" ? 0 : Number(e.target.value)); }}
+        className={`${INPUT} w-full min-w-[110px] text-right tabular-nums ${suffixe ? "pr-9" : ""} ${verrouille ? "cursor-default border-dashed opacity-75" : ""} ${className}`}
       />
       {suffixe ? <span className={`pointer-events-none absolute right-2.5 text-xs ${FAINT}`}>{suffixe}</span> : null}
     </span>
@@ -751,7 +775,7 @@ export default function RevenusDepensesPage() {
 
 // ─── Fiche d'immeuble ────────────────────────────────────────────────────
 
-function FicheImmeubleCarte({ im, fiche, modifier }: { im: Immeuble; fiche?: FicheImmeuble; modifier: (fn: (d: Data) => void) => void }) {
+function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Immeuble; fiche?: FicheImmeuble; modifier: (fn: (d: Data) => void) => void; replie: boolean; onToggle: () => void }) {
   const set = (fn: (x: Immeuble) => void) =>
     modifier((d) => {
       const x = d.immeubles.find((y) => y.id === im.id);
@@ -759,29 +783,79 @@ function FicheImmeubleCarte({ im, fiche, modifier }: { im: Immeuble; fiche?: Fic
     });
   const coutProjet = im.prix_acquisition + im.travaux_initiaux + im.frais_connexes;
   const hex = im.dans_le_fonds ? C.immeubles : "#94a3b8";
+  const ds = fiche?.depenses_schl ?? null;
+  // Valeurs reprises de Kratos : verrouillées, on les ajuste seulement après « Modifier » (Phil 2026-11-04).
+  const [verrou, setVerrou] = useState<boolean>(!!im.kratos_immeuble_id);
+  const [sync, setSync] = useState<"" | "en_cours" | "ok" | "erreur">("");
+  const k = verrou && !!im.kratos_immeuble_id;
+  const actualiser = async () => {
+    if (!im.kratos_immeuble_id) return;
+    setSync("en_cours");
+    try {
+      const r = await authedFetch(`${RD}/immeubles-kratos`);
+      if (!r.ok) throw new Error(String(r.status));
+      const j = (await r.json()) as { items: ImmeubleKratos[] };
+      const it = j.items.find((x) => x.kratos_immeuble_id === im.kratos_immeuble_id);
+      if (!it) throw new Error("introuvable");
+      set((x) => {
+        x.nb_logements = it.nb_logements; x.nb_chambres = it.nb_chambres; x.loyers_bruts_mensuels = it.loyers_bruts_mensuels;
+        x.gestion_interne = !it.gestion_externe; x.valeur_rapport = it.valeur_rapport; x.annee_rapport = it.annee_rapport; x.dette = it.dette;
+        x.taxes_municipales = it.taxes_municipales; x.taxes_scolaires = it.taxes_scolaires; x.assurances = it.assurances; x.energie = it.energie;
+        x.autres_depenses = it.autres_depenses; x.notes_import = it.notes_import;
+      });
+      setSync("ok");
+    } catch {
+      setSync("erreur");
+    }
+  };
   return (
     <div className={`${CARD} overflow-hidden`} style={{ borderLeft: `4px solid ${hex}` }}>
       <div className="flex flex-wrap items-center gap-2 px-4 py-3" style={{ background: teinte(hex, "10") }}>
+        <button type="button" onClick={onToggle} className="rounded-lg p-1 transition hover:bg-black/10" title={replie ? "Déplier" : "Replier"} aria-expanded={!replie}>
+          {replie ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </button>
         <input value={im.nom} placeholder="Nom ou adresse de l'immeuble" onChange={(e) => set((x) => { x.nom = e.target.value; })} className={`${INPUT} min-w-[220px] flex-1 font-semibold`} />
         {im.kratos_immeuble_id ? (
-          <span className="inline-flex items-center gap-1 rounded-full border border-[var(--qg-border)] px-2 py-0.5 text-[10px] uppercase tracking-wider" title="Importé de Kratos">
-            <Database className="h-3 w-3" /> Kratos
+          <span className="inline-flex items-center gap-1">
+            <span className="inline-flex items-center gap-1 rounded-full border border-[var(--qg-border)] px-2 py-0.5 text-[10px] uppercase tracking-wider" title="Importé de Kratos : loyers, portes, chambres, rapport, dette et dépenses réelles sont repris tels quels">
+              <Database className="h-3 w-3" /> Kratos
+            </span>
+            <button type="button" className="btn-secondary btn-sm" onClick={() => setVerrou((v) => !v)} title={verrou ? "Déverrouiller les valeurs reprises de Kratos pour les ajuster à la main" : "Reverrouiller les valeurs reprises de Kratos"}>
+              {verrou ? <Pencil className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />} {verrou ? "Modifier" : "Verrouiller"}
+            </button>
+            <button type="button" className="btn-secondary btn-sm" onClick={() => void actualiser()} disabled={sync === "en_cours"} title="Reprendre les valeurs à jour de Kratos (écrase les ajustements faits ici)">
+              <RefreshCw className={`h-3.5 w-3.5 ${sync === "en_cours" ? "animate-spin" : ""}`} /> Actualiser{sync === "ok" ? " ✓" : sync === "erreur" ? " ✗" : ""}
+            </button>
           </span>
         ) : null}
         <Interrupteur actif={im.dans_le_fonds} onChange={(v) => set((x) => { x.dans_le_fonds = v; })} hex={C.fonds} label={im.dans_le_fonds ? "Dans le fonds" : "Hors fonds"} hint="Dans le fonds : compte dans la valeur du parc, les dettes, la VAN, les frais de gestion du fonds et les frais de développement / prospection. Hors fonds : détenu ailleurs — rapporte seulement gestion locative, location, construction, maintenance." />
         <Interrupteur actif={im.gestion_interne} onChange={(v) => set((x) => { x.gestion_interne = v; })} hex={C.gestion} label={im.gestion_interne ? "Gestion à l'interne" : "Gestion sous-traitée"} hint="À l'interne : nos frais de location s'appliquent. Sous-traitée : les loyers de cet immeuble servent à calculer la dépense du sous-traitant de gestion (onglet Dépenses) ; les frais de gestion restent facturés si l'option est cochée dans la section 7." />
         <BoutonRetirer onClick={() => modifier((d) => { d.immeubles = d.immeubles.filter((y) => y.id !== im.id); })} title="Retirer cet immeuble du scénario" />
       </div>
+      {replie ? (
+        <button type="button" onClick={onToggle} className={`flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2 text-left text-xs ${MUTED}`} title="Déplier la fiche">
+          <span>{im.nb_logements} log.{im.nb_chambres ? ` · ${im.nb_chambres} ch.` : ""}</span>
+          <span><b className="tabular-nums" style={{ color: C.gestion }}>{money(im.loyers_bruts_mensuels)}</b> / mois</span>
+          <span>{im.phase === "stabilisation" ? "En rénovation" : "Stabilisé"}</span>
+          {fiche ? <span>valeur <b className="tabular-nums">{money(fiche.valeur)}</b></span> : null}
+          {fiche ? <span>dette <b className="tabular-nums">{money(fiche.dette)}</b></span> : null}
+          {fiche ? <span>équité <b className={`tabular-nums ${fiche.equite < 0 ? "text-rose-400" : ""}`}>{money(fiche.equite)}</b></span> : null}
+          {fiche && fiche.revenus_nets != null ? <span>revenus nets {fiche.source_revenus_nets === "schl" ? "SCHL" : "saisis"} <b className="tabular-nums">{money(fiche.revenus_nets)}</b></span> : null}
+          {fiche && fiche.date_acquisition && fiche.part_annee < 100 ? <span className="text-amber-300">{pct(fiche.part_annee)} de l&apos;année</span> : null}
+          {im.notes_import.length ? <span className="inline-flex items-center gap-1 text-amber-300"><AlertTriangle className="h-3 w-3" /> {im.notes_import.length} à vérifier</span> : null}
+        </button>
+      ) : (
       <div className="grid gap-4 p-4 lg:grid-cols-3">
         {/* Loyers et portes */}
         <div className="space-y-2">
           <p className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider" style={{ color: C.gestion }}>
             <Pastille hex={C.gestion} /> Loyers et portes
           </p>
-          <Champ label="Loyers bruts par mois"><Num value={im.loyers_bruts_mensuels} onChange={(v) => set((x) => { x.loyers_bruts_mensuels = v; })} suffixe="$" /></Champ>
+          {k ? <p className={`text-[11px] leading-snug ${FAINT}`}>Valeurs de Kratos verrouillées (pointillés) : « Modifier » pour les ajuster, « Actualiser » pour reprendre Kratos.</p> : null}
+          <Champ label="Loyers bruts par mois"><Num value={im.loyers_bruts_mensuels} onChange={(v) => set((x) => { x.loyers_bruts_mensuels = v; })} suffixe="$" verrouille={k} /></Champ>
           <div className="grid grid-cols-2 gap-2">
-            <Champ label="Logements"><Num value={im.nb_logements} step={1} onChange={(v) => set((x) => { x.nb_logements = Math.round(v); })} /></Champ>
-            <Champ label="Chambres" hint="Chambres louées à l'unité"><Num value={im.nb_chambres} step={1} onChange={(v) => set((x) => { x.nb_chambres = Math.round(v); })} /></Champ>
+            <Champ label="Logements"><Num value={im.nb_logements} step={1} onChange={(v) => set((x) => { x.nb_logements = Math.round(v); })} verrouille={k} /></Champ>
+            <Champ label="Chambres" hint="Chambres louées à l'unité"><Num value={im.nb_chambres} step={1} onChange={(v) => set((x) => { x.nb_chambres = Math.round(v); })} verrouille={k} /></Champ>
           </div>
         </div>
         {/* Statut et valeur */}
@@ -836,15 +910,37 @@ function FicheImmeubleCarte({ im, fiche, modifier }: { im: Immeuble; fiche?: Fic
           ) : (
             <>
               <div className="grid grid-cols-[1fr_90px] gap-2">
-                <Champ label="Dernier rapport d'évaluation"><Num value={im.valeur_rapport} onChange={(v) => set((x) => { x.valeur_rapport = v; })} suffixe="$" /></Champ>
+                <Champ label="Dernier rapport d'évaluation"><Num value={im.valeur_rapport} onChange={(v) => set((x) => { x.valeur_rapport = v; })} suffixe="$" verrouille={k} /></Champ>
                 <Champ label="Année">
-                  <input type="number" min={1990} max={2100} step={1} value={im.annee_rapport ?? ""} placeholder="2026" onChange={(e) => set((x) => { x.annee_rapport = e.target.value === "" ? null : Math.round(Number(e.target.value)); })} className={`${INPUT} w-full text-right tabular-nums`} />
+                  <input type="number" min={1990} max={2100} step={1} value={im.annee_rapport ?? ""} placeholder="2026" readOnly={k} tabIndex={k ? -1 : undefined} title={k ? "Valeur reprise de Kratos — clique sur Modifier (crayon) pour l'ajuster" : undefined} onChange={(e) => { if (!k) set((x) => { x.annee_rapport = e.target.value === "" ? null : Math.round(Number(e.target.value)); }); }} className={`${INPUT} w-full text-right tabular-nums ${k ? "cursor-default border-dashed opacity-75" : ""}`} />
                 </Champ>
               </div>
+              <Champ label="Taux de cap du rapport" hint="Avec des loyers, la valeur suit les revenus nets SCHL ÷ taux de cap (elle s'ajuste quand les loyers ou les dépenses bougent). Sans taux, la valeur reste celle du rapport."><Num value={im.taux_cap_pct} step={0.1} onChange={(v) => set((x) => { x.taux_cap_pct = v; })} suffixe="%" /></Champ>
+              <p className="flex items-center gap-2 pt-1 text-[10px] font-semibold uppercase tracking-wider" style={{ color: C.construction }}>
+                <Pastille hex={C.construction} /> Dépenses réelles par an
+              </p>
               <div className="grid grid-cols-2 gap-2">
-                <Champ label="Taux de cap du rapport"><Num value={im.taux_cap_pct} step={0.1} onChange={(v) => set((x) => { x.taux_cap_pct = v; })} suffixe="%" /></Champ>
-                <Champ label="Revenus nets à jour (SCHL)" hint="Optionnel : entre deux rapports, valeur = revenus nets ÷ taux de cap"><Num value={im.revenus_nets_annuels} onChange={(v) => set((x) => { x.revenus_nets_annuels = v; })} suffixe="$/an" /></Champ>
+                <Champ label="Taxes municipales"><Num value={im.taxes_municipales} onChange={(v) => set((x) => { x.taxes_municipales = v; })} suffixe="$" verrouille={k} /></Champ>
+                <Champ label="Taxes scolaires"><Num value={im.taxes_scolaires} onChange={(v) => set((x) => { x.taxes_scolaires = v; })} suffixe="$" verrouille={k} /></Champ>
+                <Champ label="Assurances"><Num value={im.assurances} onChange={(v) => set((x) => { x.assurances = v; })} suffixe="$" verrouille={k} /></Champ>
+                <Champ label="Énergie"><Num value={im.energie} onChange={(v) => set((x) => { x.energie = v; })} suffixe="$" verrouille={k} /></Champ>
               </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Champ label="Autres dépenses" hint="Déneigement, etc. Entretien, conciergerie et gestion sont normalisés par le barème SCHL : ne les saisis pas ici."><Num value={im.autres_depenses} onChange={(v) => set((x) => { x.autres_depenses = v; })} suffixe="$" verrouille={k} /></Champ>
+                <Champ label="Revenus nets saisis" hint="Optionnel : laisse à 0 pour le calcul SCHL automatique (loyers bruts − dépenses normalisées). Une valeur saisie prime."><Num value={im.revenus_nets_annuels} onChange={(v) => set((x) => { x.revenus_nets_annuels = v; })} suffixe="$/an" /></Champ>
+              </div>
+              {ds ? (
+                <details className={`rounded-xl border border-[var(--qg-border)] px-3 py-2 text-xs ${MUTED}`}>
+                  <summary className="cursor-pointer">Revenus nets SCHL : <b className="tabular-nums">{money(ds.revenus_nets)}</b> / an <span className={FAINT}>(détails)</span></summary>
+                  <ul className="mt-1 space-y-0.5 tabular-nums">
+                    <li className="flex justify-between gap-2"><span>Loyers bruts annuels</span><span>{money(ds.revenus_bruts_annuels)}</span></li>
+                    {LIGNES_SCHL.map(([l, k]) => (
+                      <li key={k} className="flex justify-between gap-2"><span>− {l}</span><span>{money(ds[k])}</span></li>
+                    ))}
+                    <li className="flex justify-between gap-2 border-t border-[var(--qg-border)] pt-0.5 font-semibold"><span>Revenus nets</span><span>{money(ds.revenus_nets)}</span></li>
+                  </ul>
+                </details>
+              ) : null}
             </>
           )}
         </div>
@@ -853,7 +949,7 @@ function FicheImmeubleCarte({ im, fiche, modifier }: { im: Immeuble; fiche?: Fic
           <p className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider" style={{ color: C.fonds }}>
             <Pastille hex={C.fonds} /> Dette et équité
           </p>
-          <Champ label="Dette (solde du prêt)"><Num value={im.dette} onChange={(v) => set((x) => { x.dette = v; })} suffixe="$" /></Champ>
+          <Champ label="Dette (solde du prêt)"><Num value={im.dette} onChange={(v) => set((x) => { x.dette = v; })} suffixe="$" verrouille={k} /></Champ>
           {fiche ? (
             <div className="rounded-xl p-3 text-xs" style={{ background: teinte(hex, "12"), border: `1px solid ${teinte(hex, "44")}` }}>
               <ul className="space-y-1">
@@ -889,6 +985,7 @@ function FicheImmeubleCarte({ im, fiche, modifier }: { im: Immeuble; fiche?: Fic
           ) : null}
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -998,6 +1095,9 @@ function ImportKratosModal({ dejaPris, onClose, onAjouter }: { dejaPris: Set<num
 
 function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res: Resultats; rev: Record<string, SectionRevenu>; modifier: (fn: (d: Data) => void) => void; referentiel?: Referentiel }) {
   const [importOuvert, setImportOuvert] = useState(false);
+  // Fiches repliées par défaut (Phil : « sinon c'est gros ») ; on retient celles qu'on a dépliées.
+  const [deplies, setDeplies] = useState<Set<string>>(() => new Set());
+  const basculer = (id: string) => setDeplies((s) => { const n = new Set(Array.from(s)); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const f = data.fonds;
   const parc = res.parc;
   const fiches = Object.fromEntries(parc.immeubles.map((x) => [x.id, x])) as Record<string, FicheImmeuble>;
@@ -1042,7 +1142,7 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
           </span>
           <div className="min-w-0 flex-1">
             <h3 className="text-sm font-semibold">Immeubles</h3>
-            <p className={`text-[11px] leading-snug ${MUTED}`}>{referentiel?.valorisation_note} {referentiel?.prorata_note}</p>
+            <p className={`text-[11px] leading-snug ${MUTED}`}>{referentiel?.valorisation_note} {referentiel?.schl_note} {referentiel?.prorata_note}</p>
           </div>
           <div className="text-right text-xs">
             <p className={FAINT}>{parc.nb_dans_le_fonds} dans le fonds · {parc.nb_hors_fonds} hors fonds · {parc.nb_en_renovation} en rénovation{parc.nb_prorates ? ` · ${parc.nb_prorates} au prorata (${parc.annee})` : ""}</p>
@@ -1051,16 +1151,22 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
         </div>
         <div className="space-y-3 p-4">
           {immeubles.map((im) => (
-            <FicheImmeubleCarte key={im.id} im={im} fiche={fiches[im.id]} modifier={modifier} />
+            <FicheImmeubleCarte key={im.id} im={im} fiche={fiches[im.id]} modifier={modifier} replie={!deplies.has(im.id)} onToggle={() => basculer(im.id)} />
           ))}
           {immeubles.length === 0 ? <p className={`rounded-xl border border-dashed border-[var(--qg-border)] px-4 py-6 text-center text-sm ${FAINT}`}>Aucun immeuble — ajoute ceux que le fonds va détenir, ou reprends ceux déjà dans Kratos.</p> : null}
           <div className="flex flex-wrap gap-2">
-            <button className="btn-accent btn-sm" onClick={() => modifier((d) => { d.immeubles.push(immeubleVide()); })}>
+            <button className="btn-accent btn-sm" onClick={() => { const n = immeubleVide(); modifier((d) => { d.immeubles.push(n); }); setDeplies((s) => new Set([...Array.from(s), n.id])); }}>
               <Plus className="h-3.5 w-3.5" /> Ajouter un immeuble
             </button>
             <button className="btn-secondary btn-sm" onClick={() => setImportOuvert(true)}>
               <Database className="h-3.5 w-3.5" /> Depuis Kratos…
             </button>
+            {immeubles.length > 1 ? (
+              <>
+                <button className="btn-secondary btn-sm" onClick={() => setDeplies(new Set(immeubles.map((i) => i.id)))}><ChevronDown className="h-3.5 w-3.5" /> Tout déplier</button>
+                <button className="btn-secondary btn-sm" onClick={() => setDeplies(new Set())}><ChevronRight className="h-3.5 w-3.5" /> Tout replier</button>
+              </>
+            ) : null}
           </div>
         </div>
       </section>
@@ -1071,7 +1177,7 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
           onAjouter={(items) => {
             modifier((d) => {
               for (const it of items) {
-                d.immeubles.push(immeubleVide({ nom: it.nom, kratos_immeuble_id: it.kratos_immeuble_id, nb_logements: it.nb_logements, nb_chambres: it.nb_chambres, loyers_bruts_mensuels: it.loyers_bruts_mensuels, gestion_interne: !it.gestion_externe, phase: "stabilise", valeur_rapport: it.valeur_rapport, annee_rapport: it.annee_rapport, dette: it.dette, notes_import: it.notes_import }));
+                d.immeubles.push(immeubleVide({ nom: it.nom, kratos_immeuble_id: it.kratos_immeuble_id, nb_logements: it.nb_logements, nb_chambres: it.nb_chambres, loyers_bruts_mensuels: it.loyers_bruts_mensuels, gestion_interne: !it.gestion_externe, phase: "stabilise", valeur_rapport: it.valeur_rapport, annee_rapport: it.annee_rapport, dette: it.dette, taxes_municipales: it.taxes_municipales, taxes_scolaires: it.taxes_scolaires, assurances: it.assurances, energie: it.energie, autres_depenses: it.autres_depenses, notes_import: it.notes_import }));
               }
             });
             setImportOuvert(false);
