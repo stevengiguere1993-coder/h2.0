@@ -157,6 +157,101 @@ async def ecrire_destinataires_brief(
     return {"destinataires": emails}
 
 
+class AlerteProjetQboIn(BaseModel):
+    actif: bool
+    destinataire: str = Field(default="", max_length=254)
+
+
+@router.get(
+    "/projet-qbo-alerte",
+    summary="Courriel à la technicienne comptable (projets QuickBooks) : réglage",
+)
+async def lire_alerte_projet_qbo(user: RequireAdminOrOwner) -> dict:
+    """Activé ou non + courriel qui reçoit, à chaque nouveau projet, le nom
+    du sous-client QuickBooks à convertir en projet. `source` dit d'où vient
+    le réglage (« parametres », « variable » BOOKKEEPER_EMAIL, « aucun »)."""
+    from app.integrations.email_graph import get_mailer
+    from app.services.project_qbo_notify import lire_reglage
+
+    reglage = await lire_reglage()
+    reglage["envoi_pret"] = bool(get_mailer().ready)
+    return reglage
+
+
+@router.put(
+    "/projet-qbo-alerte",
+    summary="Activer / couper le courriel à la technicienne comptable et changer le destinataire",
+)
+async def ecrire_alerte_projet_qbo(
+    data: AlerteProjetQboIn, db: DBSession, user: RequireAdminOrOwner
+) -> dict:
+    from app.services.audit import log_action
+    from app.services.project_qbo_notify import (
+        CLE_REGLAGE,
+        courriel_valide,
+        reglage_depuis_config,
+    )
+
+    dest = (data.destinataire or "").strip()
+    if dest and not courriel_valide(dest):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Courriel invalide."
+        )
+    if data.actif and not dest:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Indique le courriel qui reçoit les instructions avant d'activer.",
+        )
+    actuel = dict(await get_automation_config(CLE_REGLAGE) or {})
+    actuel.update({"actif": bool(data.actif), "destinataire": dest})
+    await set_automation_config(db, CLE_REGLAGE, actuel, user_id=user.id)
+    await log_action(
+        db, user=user, action="automations.projet_qbo_alerte",
+        entity_type="automation_setting", entity_id=None,
+        details={"actif": bool(data.actif), "destinataire": dest},
+    )
+    await db.flush()
+    return reglage_depuis_config(actuel)
+
+
+@router.post(
+    "/projet-qbo-alerte/essai",
+    summary="Envoyer un courriel d'essai à la technicienne comptable",
+)
+async def essai_alerte_projet_qbo(user: RequireAdminOrOwner) -> dict:
+    """Envoie l'alerte (marquée « Essai ») au destinataire enregistré, même
+    si l'envoi automatique est coupé, pour vérifier l'adresse."""
+    from app.integrations.email_graph import get_mailer
+    from app.services.project_qbo_notify import (
+        construire_courriel,
+        lire_reglage,
+    )
+
+    reglage = await lire_reglage()
+    dest = reglage["destinataire"]
+    if not dest:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Aucun courriel destinataire enregistré.",
+        )
+    mailer = get_mailer()
+    if not mailer.ready:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "L'envoi de courriels n'est pas configuré sur ce serveur.",
+        )
+    sujet, corps = construire_courriel(
+        "123 rue Exemple, Montréal", "Client exemple", essai=True
+    )
+    try:
+        await mailer.send(to=[dest], subject=sujet, html_body=corps)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, f"Envoi refusé : {exc}"
+        ) from exc
+    return {"envoye_a": dest}
+
+
 @router.patch("/{key}/config")
 async def update_automation_config(
     key: str,
