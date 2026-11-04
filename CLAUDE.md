@@ -285,3 +285,26 @@ RQAP, RRQ, FSS, cotisations, équipement) SANS la CNESST, comptée à part une
 seule fois. Aide de saisie : « coût complet CCQ connu » → charges calculées
 (`coût / salaire − 1 − CNESST`). Ne jamais saisir un coût complet dans le
 taux de salaire : CNESST et charges s'y ajouteraient en double.
+
+## QuickBooks — fiches clients par l'API, clients en double (2026-11-04)
+
+Steven : clients en double dans le QuickBooks d'Horizon, factures
+réparties entre les doublons, « passe par le lien Kratos » pour les
+corriger. Routes ``/api/v1/qbo/customers`` (admin / propriétaire,
+``app/services/qbo_clients_modif.py``) : liste (actifs ET inactifs),
+fiche ``/{id}`` (même inactive, sous-clients), inventaire
+``/{id}/transactions`` (comptages ``COUNT`` par type + rapport
+« TransactionList » filtré sur le client, ``vide`` quand la fiche ne
+porte rien), et ``POST /{id}/modifier`` (nom, ``parent_id``, ``actif``,
+``facturer_avec_parent``, ``simuler``, ``forcer``) : UNE mise à jour
+sparse sur le SyncToken relu, fiche avant / après dans la réponse,
+journal automatique. Actionnable par ``kratos_action`` (capacité
+« Exécuter toute action »). **L'API Intuit ne fusionne pas deux
+clients** : un nom déjà porté est refusé (6240), d'où le 409 avant
+l'envoi ; la fusion se fait dans l'écran de QuickBooks en renommant le
+doublon au nom EXACT de la fiche gardée (QuickBooks la propose alors).
+Réactiver une fiche « (supprimé) » lui rend son nom : même 409 si ce
+nom est pris. Rendre inactive une fiche à solde ou avec des
+sous-clients actifs est refusé (QuickBooks désactive les sous-clients
+avec le parent) sauf ``forcer``. Retirer un client mère (revenir au
+premier niveau) n'existe pas dans l'API.
