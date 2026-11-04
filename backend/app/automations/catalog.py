@@ -172,6 +172,15 @@ CATALOG: tuple[Automation, ...] = (
         "Invitation calendrier (.ics) + courriel à la prise / réassignation d'un RDV.",
         controllable=False,
     ),
+    Automation(
+        "projet_qbo_alerte", "Courriel à la technicienne comptable (projets QB)",
+        "courriel", "evenement", None,
+        "À chaque nouveau projet, envoie à la technicienne comptable le nom "
+        "du sous-client QuickBooks à convertir en projet. S'active et se "
+        "règle (courriel destinataire) dans Paramètres → Entreprises → "
+        "Courriel à la technicienne comptable.",
+        controllable=False,
+    ),
     # ---- Téléphonie / Léa (réglée dans le volet Téléphonie) ----
     Automation(
         "voice_secretary", "Secrétaire IA (Léa)", "telephonie", "evenement",
