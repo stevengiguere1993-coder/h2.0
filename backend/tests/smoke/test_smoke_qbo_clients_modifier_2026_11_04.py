@@ -210,6 +210,19 @@ class _FauxQbo:
             raise QuickBooksError(
                 "QBO refus : Duplicate Name Exists Error — QBO POST /customer failed: 400"
             )
+        nouveau_parent = str((champs.get("ParentRef") or {}).get("value") or "")
+        if (
+            row.get("IsProject")
+            and nouveau_parent
+            and nouveau_parent != str((row.get("ParentRef") or {}).get("value") or "")
+            and champs.get("BillWithParent") is not True
+        ):
+            # Constat réel du 2026-11-04 (projet 108 → 209) : QuickBooks
+            # exige le drapeau dans le corps pour déplacer un projet.
+            raise QuickBooksError(
+                "QBO refus : Business Validation Error: Un projet doit être un "
+                "client rattaché facturé à son compte principal — QBO POST /customer failed: 400"
+            )
         row.update({k: v for k, v in champs.items() if k not in ("DisplayName", "Active")})
         row["DisplayName"] = nom
         if "Active" in champs:
@@ -422,8 +435,54 @@ def test_parent_refuse_422(client, auth_headers, qb):
     assert qb.mises_a_jour == []
     assert _essai("410", "402") == 200 and qb.mises_a_jour[-1]["ParentRef"] == {"value": "402"}
     assert _essai("420", "403") == 200 and qb.mises_a_jour[-1]["ParentRef"] == {"value": "403"}
-    # Un projet QuickBooks se déplace (comme move_subcustomer).
+    # Un projet QuickBooks se déplace (comme move_subcustomer), avec
+    # « facturé avec le parent » redit dans le corps, sinon QuickBooks refuse.
     assert _essai("300", "208") == 200
+    assert qb.mises_a_jour[-1]["BillWithParent"] is True
+
+
+def test_deplacer_un_projet_redit_facture_avec_le_parent(client, auth_headers, run, qb):
+    """Projet 108 → 209 du 2026-11-04 : sans BillWithParent dans le corps,
+    QuickBooks répond « Un projet doit être un client rattaché facturé à
+    son compte principal ». Le déplacement d'un projet (ou d'un
+    sous-client déjà coché) l'envoie d'office ; aucun réglage ne change."""
+    r = _post(client, auth_headers, "300", {"parent_id": "208", "simuler": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["corps"] == {"ParentRef": {"value": "208"}, "Job": True, "BillWithParent": True}
+    assert [f["champ"] for f in r.json()["changements"]] == ["parent"]
+    assert qb.mises_a_jour == []
+
+    r = _post(client, auth_headers, "300", {"parent_id": "208"})
+    assert r.status_code == 200, r.text
+    assert r.json()["apres"]["ParentRef"]["value"] == "208"
+    assert r.json()["apres"]["BillWithParent"] is True
+    assert qb.mises_a_jour[-1] == {
+        "Id": "300", "SyncToken": "2", "sparse": True,
+        "ParentRef": {"value": "208"}, "Job": True, "BillWithParent": True,
+    }
+
+    # Le drapeau explicite sur un projet qui change de parent : même corps.
+    r = _post(client, auth_headers, "300", {"parent_id": "209", "facturer_avec_parent": True,
+                                            "simuler": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["corps"] == {"ParentRef": {"value": "209"}, "Job": True, "BillWithParent": True}
+    assert [f["champ"] for f in r.json()["changements"]] == ["parent"]
+
+    # Un sous-client ordinaire déjà coché garde son réglage en changeant
+    # de parent ; non coché, le déplacement ne coche rien.
+    qb.clients["289"]["BillWithParent"] = True
+    r = _post(client, auth_headers, "289", {"parent_id": "209"})
+    assert r.status_code == 200, r.text
+    assert qb.mises_a_jour[-1]["BillWithParent"] is True
+    assert [f["champ"] for f in r.json()["changements"]] == ["parent"]
+    r = _post(client, auth_headers, "110", {"parent_id": "208"})
+    assert r.status_code == 200, r.text
+    assert "BillWithParent" not in qb.mises_a_jour[-1]
+
+    # Le double de test reproduit le refus de QuickBooks quand le drapeau
+    # manque (preuve que le corps du service le porte bien).
+    with pytest.raises(QuickBooksError, match="facturé à son compte principal"):
+        run(qb.update_customer_fields("300", ParentRef={"value": "53"}, Job=True))
 
 
 def test_desactiver_garde_fous_puis_fiche_vide(client, auth_headers, qb):
@@ -507,7 +566,11 @@ def test_renommer_facturer_avec_parent_et_rien_a_changer(client, auth_headers, q
     assert qb.mises_a_jour[-1]["DisplayName"] == "8900 Saint-Hubert inc. (ancien)"
 
     assert _post(client, auth_headers, "233", {"facturer_avec_parent": True}).status_code == 422
-    assert _post(client, auth_headers, "300", {"facturer_avec_parent": True}).status_code == 422
+    # Un projet est toujours facturé avec le parent : « vrai » ne change
+    # rien, « faux » est refusé.
+    b = _post(client, auth_headers, "300", {"facturer_avec_parent": True}).json()
+    assert b["changements"] == [] and "Rien" in b["note"]
+    assert _post(client, auth_headers, "300", {"facturer_avec_parent": False}).status_code == 422
     assert len(qb.mises_a_jour) == 1
 
     r = _post(client, auth_headers, "289", {"facturer_avec_parent": True})
