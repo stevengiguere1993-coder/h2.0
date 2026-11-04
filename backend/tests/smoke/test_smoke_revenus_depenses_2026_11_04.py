@@ -356,5 +356,32 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
     ex = next(x for x in r.json()["items"] if x["kratos_immeuble_id"] == ext_id)
     assert ex["gestion_externe"] is True and ex["loyers_bruts_mensuels"] == 1_500 and ex["nb_logements"] == 3 and ex["nb_chambres"] == 0
     assert any("en chambres sans nombre de chambres" in n for n in ex["notes_import"])
+
+    # Hydratation (Phil : « prendre toutes les informations disponibles ») : un immeuble du scénario
+    # qui « suit Kratos » reprend les valeurs à jour à chaque enregistrement, lecture et calcul ;
+    # un immeuble figé garde ses valeurs ; une alerte fermée ne revient pas.
+    r = client.post(f"{RD}/scenarios", json={"nom": "Hydratation"}, headers=auth_headers)
+    assert r.status_code in (200, 201), r.text
+    sid, data = r.json()["id"], r.json()["data"]
+    cap_note = next(n for n in it["notes_import"] if "Taux de cap" in n)
+    data["immeubles"] = [
+        svc.immeuble_vide(nom="Suivi", kratos_immeuble_id=imm_id, suivre_kratos=True, loyers_bruts_mensuels=1, nb_chambres=0, notes_ignorees=[cap_note]),
+        svc.immeuble_vide(nom="Figé", kratos_immeuble_id=imm_id, suivre_kratos=False, loyers_bruts_mensuels=1),
+    ]
+    r = client.put(f"{RD}/scenarios/{sid}", json={"data": data}, headers=auth_headers)
+    assert r.status_code == 200, r.text
+    suivi, fige = r.json()["data"]["immeubles"]
+    assert suivi["loyers_bruts_mensuels"] == 2_200 and suivi["nb_chambres"] == 3 and suivi["taxes_municipales"] == 6_000 and suivi["dette"] == 450_000
+    assert suivi["gestion_interne"] is True and suivi["valeur_rapport"] == 1_200_000 and suivi["notes_ignorees"] == [cap_note]
+    assert not any("Taux de cap" in n for n in suivi["notes_import"]) and any("taxes scolaires" in n for n in suivi["notes_import"])
+    assert fige["loyers_bruts_mensuels"] == 1 and fige["nb_chambres"] == 0
+    r = client.get(f"{RD}/scenarios/{sid}", headers=auth_headers)
+    assert r.json()["data"]["immeubles"][0]["loyers_bruts_mensuels"] == 2_200
+    r = client.post(f"{RD}/calculer", json={"data": data}, headers=auth_headers)
+    assert r.json()["data"]["immeubles"][0]["loyers_bruts_mensuels"] == 2_200 and r.json()["resultats"]["parc"]["immeubles"][0]["suivre_kratos"] is True
+    # Immeuble disparu de Kratos : valeurs figées + alerte.
+    data["immeubles"] = [svc.immeuble_vide(nom="Fantôme", kratos_immeuble_id=999_999, suivre_kratos=True, loyers_bruts_mensuels=5)]
+    r = client.post(f"{RD}/calculer", json={"data": data}, headers=auth_headers)
+    assert r.json()["data"]["immeubles"][0]["loyers_bruts_mensuels"] == 5 and "introuvable" in r.json()["data"]["immeubles"][0]["notes_import"][0]
     assert any("rapport d'évaluation" in n for n in ex["notes_import"]) and any("hypothèque" in n for n in ex["notes_import"])
     assert not any("loyer" in n.lower() for n in ex["notes_import"])
