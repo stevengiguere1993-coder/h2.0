@@ -28,6 +28,7 @@ def _imm(**kw):
 
 def _scenario_test() -> dict:
     d = svc.scenario_defaut()
+    d["annee"] = 2027
     d["fonds"] = {"cash": 1_000_000, "taux_pct": 1.5}
     d["immeubles"] = [
         _imm(id="a", nom="A", nb_logements=20, loyers_bruts_mensuels=25_000, phase="stabilisation",
@@ -146,6 +147,63 @@ def test_moteur_point_mort_tranches_et_garde_fous():
     assert {s["key"]: s for s in svc.calculer(d2)["revenus"]}["gestion"]["revenu"] == 55_200
 
 
+def test_moteur_prorata_date_acquisition():
+    """Phil 2026-11-04 : « un immeuble le 3 avril, un autre le 30 juin » — les
+    revenus récurrents (gestion, location, rénos au roulement, frais du fonds,
+    sous-traitant) comptent au prorata des jours restants ; développement et
+    prospection sont dus en entier à l'acquisition."""
+    d = svc.scenario_defaut()
+    d["annee"] = 2027
+    d["fonds"] = {"cash": 0, "taux_pct": 1.5}
+    d["gestion"]["taux_pct"] = 10
+    d["location"] = {"frais_logement": 600, "frais_chambre": 400, "taux_roulement_pct": 20, "nb_relocations_logements": None, "nb_relocations_chambres": None}
+    d["depenses"]["sous_traitance_gestion_pct"] = 5
+    d["immeubles"] = [
+        _imm(id="a", nom="A (3 avril)", phase="stabilise", acquisition_cette_annee=True, date_acquisition="2027-04-03",
+             prix_acquisition=2_000_000, prospecte_par_nous=True, valeur_rapport=2_000_000, dette=1_200_000,
+             nb_logements=10, loyers_bruts_mensuels=10_000),
+        _imm(id="b", nom="B (30 juin, sous-traité)", gestion_interne=False, phase="stabilise", acquisition_cette_annee=True,
+             date_acquisition="2027-06-30", prix_acquisition=1_000_000, prospecte_par_nous=False, valeur_rapport=1_000_000,
+             dette=600_000, nb_logements=5, loyers_bruts_mensuels=5_000),
+    ]
+    r = svc.calculer(d)
+    pa = 273 / 365   # du 3 avril au 31 décembre inclus
+    pb = 185 / 365   # du 30 juin au 31 décembre inclus
+    fiches = {f["nom"]: f for f in r["parc"]["immeubles"]}
+    assert fiches["A (3 avril)"]["jours"] == 273 and fiches["A (3 avril)"]["part_annee"] == round(100 * pa, 2)
+    assert fiches["B (30 juin, sous-traité)"]["jours"] == 185 and r["parc"]["nb_prorates"] == 2 and r["parc"]["annee"] == 2027
+    rev = {s["key"]: s for s in r["revenus"]}
+    # VAN de fin d'année entière ; frais du fonds sur l'équité pondérée par le temps.
+    assert r["parc"]["van"] == 1_200_000
+    assert rev["fonds"]["van_ponderee"] == round(800_000 * pa + 400_000 * pb, 2)
+    assert rev["fonds"]["revenu"] == round((800_000 * pa + 400_000 * pb) * 0.015, 2)
+    # Développement et prospection : en entier (A prospecté, B non).
+    assert rev["developpement"]["revenu"] == 100_000 + 50_000 and rev["prospection"]["revenu"] == 40_000
+    # Gestion : A (interne) et B (sous-traité, facturé) au prorata.
+    assert rev["gestion"]["loyers_internes_annuels"] == round(120_000 * pa, 2)
+    assert rev["gestion"]["loyers_sous_traites_annuels"] == round(60_000 * pb, 2)
+    assert rev["gestion"]["revenu"] == round((120_000 * pa + 60_000 * pb) * 0.10, 2)
+    # Location : 10 logements internes × 20 % × 273/365 = 1,5 → 1 (sans B, sous-traité).
+    assert rev["location"]["relocations_logements_calculees"] == 1 and rev["location"]["revenu"] == 600
+    # Rénos au roulement : (10 × pa + 5 × pb) × 10 % × 15 000 × 10 %.
+    assert rev["construction"]["revenu_renovations"] == round((10 * pa + 5 * pb) * 0.10 * 15_000 * 0.10, 2)
+    # Sous-traitant : 5 % des loyers prorata de B.
+    assert r["depenses"]["sous_traitance_gestion"] == round(60_000 * pb * 0.05, 2)
+    # Sans date = année entière ; date avant l'année = pas de frais d'acquisition ; après = rien cette année.
+    d["immeubles"][0]["date_acquisition"] = None
+    r2 = svc.calculer(d)
+    assert {f["nom"]: f for f in r2["parc"]["immeubles"]}["A (3 avril)"]["part_annee"] == 100.0
+    d["immeubles"][0]["date_acquisition"] = "2026-09-01"
+    r3 = svc.calculer(d)
+    assert {s["key"]: s for s in r3["revenus"]}["developpement"]["revenu"] == 50_000   # seulement B
+    d["immeubles"][0]["date_acquisition"] = "2028-01-15"
+    r4 = svc.calculer(d)
+    assert {f["nom"]: f for f in r4["parc"]["immeubles"]}["A (3 avril)"]["part_annee"] == 0.0 and r4["parc"]["van"] == 400_000
+    # Normalisation : date invalide ignorée, année bornée.
+    n = svc.normaliser({"annee": "abc", "immeubles": [{"nom": "X", "date_acquisition": "pas une date", "notes_import": ["a", 5]}]})
+    assert n["annee"] == svc.annee_defaut() and n["immeubles"][0]["date_acquisition"] is None and n["immeubles"][0]["notes_import"] == ["a", "5"]
+
+
 def test_api_scenarios_admins_seulement(client, auth_headers, employee_headers):
     assert client.get(f"{RD}/scenarios", headers=employee_headers).status_code == 403
     r = client.get(f"{RD}/scenarios", headers=auth_headers)
@@ -208,6 +266,19 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
             return imm.id
 
     imm_id = run(_seed())
+
+    async def _seed_externe():
+        async with TestSessionLocal() as s:
+            ext = Immeuble(name="Immeuble RD Externe", address="9 rue Externe", city="Valcourt", is_active=True, gestion_externe=True)
+            s.add(ext)
+            await s.flush()
+            # Gestion externe : pas de bail dans Kratos, le loyer est saisi sur le logement (occupé).
+            s.add(Logement(immeuble_id=ext.id, numero="A", status=LogementStatus.OCCUPE.value, loyer_demande=1_500.0))
+            s.add(Logement(immeuble_id=ext.id, numero="B", status=LogementStatus.VACANT.value, loyer_demande=1_400.0))
+            await s.commit()
+            return ext.id
+
+    ext_id = run(_seed_externe())
     assert client.get(f"{RD}/immeubles-kratos", headers=employee_headers).status_code == 403
     r = client.get(f"{RD}/immeubles-kratos", headers=auth_headers)
     assert r.status_code == 200, r.text
@@ -216,3 +287,9 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
     assert it["loyers_bruts_mensuels"] == 2_200 and it["gestion_externe"] is False     # baux terminé et parallèle ignorés
     assert it["dette"] == 450_000                                                    # hypothèque active seulement
     assert it["valeur_rapport"] == 1_200_000 and it["annee_rapport"] == 2025 and it["source_rapport"] == "appraisal"
+    assert it["notes_import"] == []
+    # Gestion externe : même total que la liste des immeubles de Kratos (loyer saisi des unités louées), alertes claires.
+    ex = next(x for x in r.json()["items"] if x["kratos_immeuble_id"] == ext_id)
+    assert ex["gestion_externe"] is True and ex["loyers_bruts_mensuels"] == 1_500 and ex["nb_logements"] == 2
+    assert any("rapport d'évaluation" in n for n in ex["notes_import"]) and any("hypothèque" in n for n in ex["notes_import"])
+    assert not any("loyer" in n.lower() for n in ex["notes_import"])
