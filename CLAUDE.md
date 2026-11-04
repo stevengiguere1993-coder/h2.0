@@ -292,19 +292,27 @@ Steven : clients en double dans le QuickBooks d'Horizon, factures
 réparties entre les doublons, « passe par le lien Kratos » pour les
 corriger. Routes ``/api/v1/qbo/customers`` (admin / propriétaire,
 ``app/services/qbo_clients_modif.py``) : liste (actifs ET inactifs),
-fiche ``/{id}`` (même inactive, sous-clients), inventaire
+fiche ``/{id}`` (même inactive, sous-clients, ``liens_kratos`` : fiches
+clients, projets, immeubles, compagnies de la feuille de temps,
+factures mensuelles reliés à ce client QB), inventaire
 ``/{id}/transactions`` (comptages ``COUNT`` par type + rapport
-« TransactionList » filtré sur le client, ``vide`` quand la fiche ne
-porte rien), et ``POST /{id}/modifier`` (nom, ``parent_id``, ``actif``,
-``facturer_avec_parent``, ``simuler``, ``forcer``) : UNE mise à jour
-sparse sur le SyncToken relu, fiche avant / après dans la réponse,
-journal automatique. Actionnable par ``kratos_action`` (capacité
+« TransactionList » filtré sur le client ; ``vide`` vrai / faux / null
+quand l'inventaire est incomplet), et ``POST /{id}/modifier`` (nom,
+``parent_id``, ``actif``, ``facturer_avec_parent``, ``simuler``,
+``forcer`` ; champ inconnu → 422) : UNE mise à jour sparse sur le
+SyncToken relu, fiche avant / après et avertissements dans la réponse,
+journal automatique, ``detail`` d'erreur toujours un objet
+``{"message", …}``. Actionnable par ``kratos_action`` (capacité
 « Exécuter toute action »). **L'API Intuit ne fusionne pas deux
-clients** : un nom déjà porté est refusé (6240), d'où le 409 avant
-l'envoi ; la fusion se fait dans l'écran de QuickBooks en renommant le
-doublon au nom EXACT de la fiche gardée (QuickBooks la propose alors).
-Réactiver une fiche « (supprimé) » lui rend son nom : même 409 si ce
-nom est pris. Rendre inactive une fiche à solde ou avec des
-sous-clients actifs est refusé (QuickBooks désactive les sous-clients
-avec le parent) sauf ``forcer``. Retirer un client mère (revenir au
-premier niveau) n'existe pas dans l'API.
+clients** : un nom déjà porté (fiche active ou inactive, fournisseur
+ou employé — nom unique entre les trois) est refusé (6240), d'où le
+409 avant l'envoi ; la fusion se fait dans l'écran de QuickBooks en
+renommant le doublon au nom EXACT de la fiche gardée (QuickBooks la
+propose alors). Réactiver une fiche « (supprimé) » lui rend son nom :
+même 409 si ce nom est pris. Rendre inactive une fiche à solde, avec
+des sous-clients actifs (QuickBooks les désactive avec le parent, la
+réponse liste ``sous_clients_desactives``) ou que Kratos utilise
+(``ensure_customer`` la réactiverait ou en créerait une autre) est
+refusé sauf ``forcer``. Un projet QB n'a pas de sous-clients ; retirer
+un client mère (revenir au premier niveau) n'existe pas dans l'API ;
+QuickBooks non connecté → 503 avec où reconnecter.

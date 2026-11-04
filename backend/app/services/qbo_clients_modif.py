@@ -15,20 +15,26 @@ doublon au nom EXACT de la fiche gardée — QuickBooks propose alors de
 fusionner, et tout l'historique passe sous la fiche gardée.
 
 Garde-fous, vérifiés AVANT tout envoi à QuickBooks :
-- nom déjà porté par une autre fiche, active ou non → 409 (QuickBooks le
-  refuserait avec un message obscur) ; même vérification à la
-  réactivation, QuickBooks retirant alors le suffixe « (supprimé) » ;
-- parent introuvable, inactif, la fiche elle-même ou un de ses propres
-  sous-clients → 422 ; plus de cinq niveaux → 422 ;
-- rendre inactive une fiche qui a des sous-clients actifs ou un solde →
-  409 sauf ``forcer`` (QuickBooks désactive les sous-clients avec leur
-  parent et refuse un solde non nul) ;
+- nom déjà porté par une autre fiche, active ou non — client, mais
+  aussi fournisseur ou employé, QuickBooks exigeant un nom d'affichage
+  unique entre les trois → 409 (QuickBooks le refuserait avec un message
+  obscur) ; même vérification à la réactivation, QuickBooks retirant
+  alors le suffixe « (supprimé) » ;
+- parent introuvable, inactif, projet QuickBooks (un projet n'a pas de
+  sous-clients), la fiche elle-même ou un de ses propres sous-clients
+  → 422 ; plus de cinq niveaux → 422 ;
+- rendre inactive une fiche qui a des sous-clients actifs, un solde, ou
+  que Kratos utilise (client, projet, immeuble, compagnie de la feuille
+  de temps) → 409 sauf ``forcer`` (QuickBooks désactive les sous-clients
+  avec leur parent et refuse un solde non nul) ;
 - ``simuler`` : tout est validé et décrit, rien n'est écrit.
 
 Chaque modification est UNE mise à jour « sparse » sur le SyncToken relu
 (exigence QuickBooks), journalisée par le journal automatique des
-écritures (``audit_middleware``) ; la réponse rend la fiche avant et
-après. Rien n'est copié en base : QuickBooks reste la seule source.
+écritures (``audit_middleware``, simulation comprise, le corps masqué
+montrant ``simuler``) ; la réponse rend la fiche avant et après. Rien
+n'est copié en base : QuickBooks reste la seule source ; les liens de
+Kratos vers la fiche (``liens_kratos``) sont seulement LUS.
 """
 
 from __future__ import annotations
@@ -36,7 +42,10 @@ from __future__ import annotations
 import logging
 import re
 from datetime import date, timedelta
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations import quickbooks as qbo_mod
 
@@ -64,9 +73,15 @@ TYPES_TRANSACTIONS: Tuple[Tuple[str, str], ...] = (
     ("TimeActivity", "temps"),
 )
 
+#: Erreurs de l'intégration QuickBooks à traduire en réponse HTTP :
+#: refus d'Intuit, reconnexion requise, ou connexion non configurée
+#: (``RuntimeError`` de ``QuickBooksClient._refresh``).
+_ERREURS_QB: Tuple[type, ...] = (qbo_mod.QuickBooksError, RuntimeError)
+
 
 class ClientQboErreur(Exception):
-    """Erreur à renvoyer telle quelle au client HTTP (statut + détail)."""
+    """Erreur à renvoyer telle quelle au client HTTP (statut + détail).
+    ``detail`` est TOUJOURS un objet ``{"message": …, …}``."""
 
     def __init__(self, statut: int, message: str, **extra: Any) -> None:
         super().__init__(message)
@@ -75,9 +90,7 @@ class ClientQboErreur(Exception):
         self.extra = extra
 
     @property
-    def detail(self) -> Any:
-        if not self.extra:
-            return self.message
+    def detail(self) -> Dict[str, Any]:
         return {"message": self.message, **self.extra}
 
 
@@ -108,10 +121,22 @@ def _motif(exc: Exception) -> str:
 
 
 def _erreur_qb(exc: Exception, compagnie: str) -> ClientQboErreur:
+    ou = qbo_mod.ou_reconnecter(compagnie)
+    if isinstance(exc, RuntimeError):
+        return ClientQboErreur(
+            503,
+            f"QuickBooks ({compagnie}) n'est pas connecté à Kratos : "
+            f"{_motif(exc)}. Pour connecter : {ou}.",
+        )
+    if isinstance(exc, qbo_mod.QuickBooksReconnexionRequise):
+        return ClientQboErreur(
+            503,
+            f"QuickBooks ({compagnie}) demande une reconnexion : "
+            f"{_motif(exc)}. {ou}.",
+        )
     return ClientQboErreur(
         502,
-        f"QuickBooks ({compagnie}) a refusé : {_motif(exc)}. "
-        f"Au besoin : {qbo_mod.ou_reconnecter(compagnie)}.",
+        f"QuickBooks ({compagnie}) a refusé : {_motif(exc)}. Au besoin : {ou}.",
     )
 
 
@@ -171,7 +196,7 @@ async def _tous(qbo: Any, compagnie: str) -> List[Dict[str, Any]]:
     """Tous les clients et sous-clients, actifs ET inactifs."""
     try:
         rows = await qbo.all_customers_any()
-    except qbo_mod.QuickBooksError as exc:
+    except _ERREURS_QB as exc:
         raise _erreur_qb(exc, compagnie)
     return [r for r in rows if isinstance(r, dict) and r.get("Id") is not None]
 
@@ -183,7 +208,7 @@ async def _fiche_courante(
     if row is None:
         try:
             row = await qbo.get_customer_any(customer_id)
-        except qbo_mod.QuickBooksError as exc:
+        except _ERREURS_QB as exc:
             raise _erreur_qb(exc, compagnie)
     if not row:
         raise ClientQboErreur(
@@ -201,8 +226,90 @@ def _sous_clients(
     )
 
 
-async def lire(compagnie: str, customer_id: str) -> Dict[str, Any]:
-    """Une fiche, même inactive, avec ses sous-clients directs."""
+def _descendants(par_id: Dict[str, Dict[str, Any]], customer_id: str) -> List[str]:
+    """Ids de tous les sous-clients, à tous les niveaux (sans boucle)."""
+    out: List[str] = []
+    vus: Set[str] = {customer_id}
+    a_voir = [customer_id]
+    while a_voir:
+        cur = a_voir.pop()
+        for i, r in par_id.items():
+            if parent_de(r) == cur and i not in vus:
+                vus.add(i)
+                out.append(i)
+                a_voir.append(i)
+    return out
+
+
+async def liens_kratos(
+    db: Optional[AsyncSession], customer_id: str
+) -> Optional[Dict[str, Any]]:
+    """Ce que Kratos relie à ce client QuickBooks : fiches clients
+    (``qbo_customer_id``), projets (sous-client ``qbo_job_id``),
+    immeubles, compagnies de la feuille de temps, factures mensuelles.
+    ``None`` sans session (lien non consulté)."""
+    if db is None:
+        return None
+    from app.models.client import Client
+    from app.models.immobilier import Immeuble
+    from app.models.project import Project
+    from app.models.qbo_monthly_invoice import QboMonthlyInvoice
+    from app.models.timesheet import TimesheetCompany
+
+    cid = str(customer_id)
+    clients = (
+        await db.execute(
+            select(Client.id, Client.name)
+            .where(Client.qbo_customer_id == cid)
+            .order_by(Client.id)
+        )
+    ).all()
+    projets = (
+        await db.execute(
+            select(Project.id, Project.name)
+            .where(Project.qbo_job_id == cid)
+            .order_by(Project.id)
+        )
+    ).all()
+    immeubles = (
+        await db.execute(
+            select(Immeuble.id, Immeuble.name)
+            .where(Immeuble.qbo_customer_id == cid)
+            .order_by(Immeuble.id)
+        )
+    ).all()
+    compagnies = (
+        await db.execute(
+            select(TimesheetCompany.id, TimesheetCompany.label)
+            .where(TimesheetCompany.qbo_customer_id == cid)
+            .order_by(TimesheetCompany.id)
+        )
+    ).all()
+    factures_mensuelles = (
+        await db.execute(
+            select(func.count())
+            .select_from(QboMonthlyInvoice)
+            .where(QboMonthlyInvoice.qbo_customer_id == cid)
+        )
+    ).scalar_one()
+    out = {
+        "clients": [{"id": i, "nom": n} for i, n in clients],
+        "projets": [{"id": i, "nom": n} for i, n in projets],
+        "immeubles": [{"id": i, "nom": n} for i, n in immeubles],
+        "compagnies_feuille_de_temps": [{"id": i, "nom": n} for i, n in compagnies],
+        "factures_mensuelles": int(factures_mensuelles or 0),
+    }
+    out["utilise_par_kratos"] = any(
+        out[k] for k in ("clients", "projets", "immeubles", "compagnies_feuille_de_temps")
+    ) or out["factures_mensuelles"] > 0
+    return out
+
+
+async def lire(
+    compagnie: str, customer_id: str, db: Optional[AsyncSession] = None
+) -> Dict[str, Any]:
+    """Une fiche, même inactive, avec ses sous-clients directs et les
+    liens que Kratos garde vers elle."""
     compagnie = compagnie_valide(compagnie)
     qbo = _client(compagnie)
     tous = await _tous(qbo, compagnie)
@@ -211,6 +318,7 @@ async def lire(compagnie: str, customer_id: str) -> Dict[str, Any]:
     out = fiche(row)
     out["compagnie"] = compagnie
     out["sous_clients"] = [_resume(r) for r in _sous_clients(tous, customer_id)]
+    out["liens_kratos"] = await liens_kratos(db, customer_id)
     return out
 
 
@@ -220,7 +328,8 @@ async def lire(compagnie: str, customer_id: str) -> Dict[str, Any]:
 def lignes_rapport(rapport: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Lignes de données d'un rapport QuickBooks « TransactionList »
     (colonnes repérées par leur ``ColType``, id de la transaction porté
-    par la colonne du type)."""
+    par la colonne du type ; sections imbriquées parcourues, lignes de
+    total ignorées)."""
     colonnes = [
         ((c.get("ColType") or "").strip(), (c.get("ColTitle") or "").strip())
         for c in ((rapport.get("Columns") or {}).get("Column") or [])
@@ -271,12 +380,17 @@ def lignes_rapport(rapport: Dict[str, Any]) -> List[Dict[str, Any]]:
     return lignes
 
 
-async def inventaire(compagnie: str, customer_id: str) -> Dict[str, Any]:
+async def inventaire(
+    compagnie: str, customer_id: str, db: Optional[AsyncSession] = None
+) -> Dict[str, Any]:
     """Ce que porte une fiche : nombre de transactions par type (requêtes
     ``COUNT`` de QuickBooks), liste des transactions du rapport
-    « TransactionList » filtré sur le client (toutes dates), sous-clients.
-    Sert à vérifier qu'une fiche est vide avant de la désactiver, et à
-    garder l'état d'une fiche avant une fusion."""
+    « TransactionList » filtré sur le client (toutes dates), sous-clients,
+    liens Kratos. ``vide`` est vrai quand la fiche ne porte rien, faux
+    quand elle porte quelque chose, et ``null`` quand l'inventaire est
+    incomplet (un comptage ou le rapport refusé : voir ``notes``). Sert
+    à vérifier qu'une fiche est vide avant de la désactiver, et à garder
+    l'état d'une fiche avant une fusion."""
     compagnie = compagnie_valide(compagnie)
     qbo = _client(compagnie)
     tous = await _tous(qbo, compagnie)
@@ -290,7 +404,7 @@ async def inventaire(compagnie: str, customer_id: str) -> Dict[str, Any]:
             comptes[libelle] = await qbo.count(
                 f"SELECT COUNT(*) FROM {entite} WHERE CustomerRef = '{customer_id}'"
             )
-        except qbo_mod.QuickBooksError as exc:  # noqa: BLE001
+        except _ERREURS_QB as exc:  # noqa: BLE001
             comptes[libelle] = None
             notes.append(f"{libelle} : comptage refusé ({_motif(exc)})")
 
@@ -303,19 +417,26 @@ async def inventaire(compagnie: str, customer_id: str) -> Dict[str, Any]:
             end_date=(date.today() + timedelta(days=366)).isoformat(),
         )
         lignes = lignes_rapport(rapport)
-    except qbo_mod.QuickBooksError as exc:  # noqa: BLE001
+    except _ERREURS_QB as exc:  # noqa: BLE001
         notes.append(f"rapport TransactionList refusé ({_motif(exc)})")
 
     connus = sum(n for n in comptes.values() if n)
     sous = _sous_clients(tous, customer_id)
+    if lignes or connus or sous:
+        vide: Optional[bool] = False
+    elif notes:
+        vide = None  # rien vu, mais l'inventaire est incomplet
+    else:
+        vide = True
     return {
         "compagnie": compagnie,
         "fiche": fiche(row),
         "sous_clients": [_resume(r) for r in sous],
+        "liens_kratos": await liens_kratos(db, customer_id),
         "transactions_par_type": comptes,
         "nb_transactions": len(lignes),
         "transactions": lignes,
-        "vide": not lignes and connus == 0 and not sous,
+        "vide": vide,
         "notes": notes,
     }
 
@@ -330,7 +451,7 @@ def _nom_cle(nom: Optional[str]) -> str:
 def _porteur_du_nom(
     tous: Iterable[Dict[str, Any]], nom: str, *, sauf: str
 ) -> Optional[Dict[str, Any]]:
-    """Une AUTRE fiche (active ou non) portant ce nom d'affichage."""
+    """Une AUTRE fiche client (active ou non) portant ce nom d'affichage."""
     cle = _nom_cle(nom)
     for r in tous:
         if str(r.get("Id")) != sauf and _nom_cle(r.get("DisplayName")) == cle:
@@ -338,27 +459,101 @@ def _porteur_du_nom(
     return None
 
 
+async def _nom_pris_ailleurs(qbo: Any, nom: str) -> Optional[Dict[str, Any]]:
+    """Fournisseur ou employé (actif ou non) portant ce nom : QuickBooks
+    exige un nom d'affichage unique entre clients, fournisseurs et
+    employés. Une requête refusée est ignorée (QuickBooks tranchera)."""
+    safe = nom.replace("'", "''")
+    for entite, libelle in (("Vendor", "fournisseur"), ("Employee", "employé")):
+        try:
+            rows = await qbo.query(
+                f"SELECT * FROM {entite} WHERE Active IN (true, false) "
+                f"AND DisplayName = '{safe}' MAXRESULTS 1"
+            )
+        except _ERREURS_QB:  # noqa: BLE001
+            continue
+        if rows:
+            r = rows[0]
+            return {
+                "type": libelle,
+                "Id": str(r.get("Id")),
+                "DisplayName": r.get("DisplayName"),
+                "Active": bool(r.get("Active", True)),
+            }
+    return None
+
+
+async def _refuser_si_nom_pris(
+    qbo: Any, tous: List[Dict[str, Any]], nom: str, *, sauf: str, contexte: str
+) -> None:
+    autre = _porteur_du_nom(tous, nom, sauf=sauf)
+    if autre:
+        raise ClientQboErreur(
+            409,
+            f"{contexte} « {nom} » : ce nom est déjà porté par la fiche client "
+            f"#{autre.get('Id')} ({'active' if autre.get('Active', True) else 'inactive'}). "
+            "QuickBooks le refuserait : l'API ne fusionne pas deux fiches. "
+            "Pour fusionner, renomme le doublon à ce nom exact dans l'écran "
+            "de QuickBooks, qui proposera la fusion.",
+            fiche=_resume(autre),
+        )
+    ailleurs = await _nom_pris_ailleurs(qbo, nom)
+    if ailleurs:
+        raise ClientQboErreur(
+            409,
+            f"{contexte} « {nom} » : ce nom est déjà porté par le "
+            f"{ailleurs['type']} #{ailleurs['Id']} "
+            f"({'actif' if ailleurs['Active'] else 'inactif'}). QuickBooks exige "
+            "un nom d'affichage unique entre clients, fournisseurs et employés.",
+            fiche=ailleurs,
+        )
+
+
 def _ancetres(par_id: Dict[str, Dict[str, Any]], customer_id: str) -> List[str]:
     """Ids des parents, du plus proche à la racine (garde-fou contre une
     boucle de données)."""
     out: List[str] = []
     cur = parent_de(par_id.get(customer_id))
-    while cur and cur not in out and len(out) < 50:
+    while cur and cur not in out and cur != customer_id and len(out) < 50:
         out.append(cur)
         cur = parent_de(par_id.get(cur))
     return out
 
 
-def _profondeur(par_id: Dict[str, Dict[str, Any]], customer_id: str) -> int:
-    """Nombre de niveaux SOUS la fiche (0 sans sous-client)."""
-    enfants = [i for i, r in par_id.items() if parent_de(r) == customer_id]
-    if not enfants:
+def _profondeur(
+    par_id: Dict[str, Dict[str, Any]], customer_id: str, _vus: Optional[Set[str]] = None
+) -> int:
+    """Nombre de niveaux SOUS la fiche (0 sans sous-client), borné contre
+    une boucle de données."""
+    vus = set(_vus or ()) | {customer_id}
+    enfants = [
+        i for i, r in par_id.items() if parent_de(r) == customer_id and i not in vus
+    ]
+    if not enfants or len(vus) > NIVEAU_MAX + 2:
         return 0
-    return 1 + max(_profondeur(par_id, e) for e in enfants)
+    return 1 + max(_profondeur(par_id, e, vus) for e in enfants)
+
+
+def _liens_lisibles(liens: Dict[str, Any]) -> str:
+    morceaux = []
+    for cle, libelle in (
+        ("clients", "client"),
+        ("projets", "projet"),
+        ("immeubles", "immeuble"),
+        ("compagnies_feuille_de_temps", "compagnie de la feuille de temps"),
+    ):
+        for l in liens.get(cle) or []:
+            morceaux.append(f"{libelle} #{l['id']} ({l['nom']})")
+    if liens.get("factures_mensuelles"):
+        morceaux.append(f"{liens['factures_mensuelles']} facture(s) mensuelle(s)")
+    return ", ".join(morceaux)
 
 
 async def modifier(
-    compagnie: str, customer_id: str, changements: Dict[str, Any]
+    compagnie: str,
+    customer_id: str,
+    changements: Dict[str, Any],
+    db: Optional[AsyncSession] = None,
 ) -> Dict[str, Any]:
     """Applique les changements demandés (nom, actif, parent_id,
     facturer_avec_parent) en UNE mise à jour sparse, après les
@@ -370,59 +565,64 @@ async def modifier(
     courant = await _fiche_courante(qbo, compagnie, customer_id, par_id)
     simuler = bool(changements.get("simuler"))
     forcer = bool(changements.get("forcer"))
+    liens = await liens_kratos(db, customer_id)
 
     corps: Dict[str, Any] = {}
     faits: List[Dict[str, Any]] = []
     avertissements: List[str] = []
+    nom_courant = " ".join(str(courant.get("DisplayName") or "").split())
 
     # Nom d'affichage.
-    nom = " ".join(str(changements.get("nom") or "").split())
-    if nom:
+    if "nom" in changements:
+        nom = " ".join(str(changements.get("nom") or "").split())
+        if not nom:
+            raise ClientQboErreur(422, "`nom` est vide.")
         if ":" in nom:
             raise ClientQboErreur(
                 422, "QuickBooks réserve « : » au chemin des sous-clients."
             )
-        if nom != (courant.get("DisplayName") or ""):
-            autre = _porteur_du_nom(tous, nom, sauf=customer_id)
-            if autre:
-                raise ClientQboErreur(
-                    409,
-                    f"Le nom « {nom} » est déjà porté par la fiche "
-                    f"#{autre.get('Id')} ({'active' if autre.get('Active', True) else 'inactive'}). "
-                    "QuickBooks le refuserait : l'API ne fusionne pas deux "
-                    "fiches. Pour fusionner, renomme le doublon à ce nom "
-                    "exact dans l'écran de QuickBooks, qui proposera la fusion.",
-                    fiche=_resume(autre),
-                )
+        if nom != nom_courant:
+            await _refuser_si_nom_pris(
+                qbo, tous, nom, sauf=customer_id, contexte="Renommer en"
+            )
             corps["DisplayName"] = nom[:100]
             faits.append(
                 {"champ": "nom", "de": courant.get("DisplayName"), "a": nom[:100]}
             )
+            if liens and liens["utilise_par_kratos"]:
+                avertissements.append(
+                    "Kratos relie cette fiche (" + _liens_lisibles(liens) + ") : "
+                    "ses flux retrouvent le client QuickBooks par son nom, vérifie "
+                    "que le nouveau nom reste celui de la fiche Kratos."
+                )
 
     # Actif / inactif.
     actif = changements.get("actif")
     if actif is not None and bool(actif) != bool(courant.get("Active", True)):
+        nom_final = corps.get("DisplayName") or nom_courant
         if actif:
-            base = RE_SUPPRIME.sub(
-                "", corps.get("DisplayName") or str(courant.get("DisplayName") or "")
+            base = RE_SUPPRIME.sub("", nom_final)
+            await _refuser_si_nom_pris(
+                qbo, tous, base, sauf=customer_id,
+                contexte="Réactivée, la fiche reprendrait le nom",
             )
-            autre = _porteur_du_nom(tous, base, sauf=customer_id)
-            if autre:
-                raise ClientQboErreur(
-                    409,
-                    f"Réactivée, la fiche reprendrait le nom « {base} », déjà "
-                    f"porté par la fiche #{autre.get('Id')}. QuickBooks le "
-                    "refuserait par l'API ; dans l'écran de QuickBooks, la "
-                    "réactivation proposera de fusionner les deux fiches.",
-                    fiche=_resume(autre),
-                )
         else:
             sous_actifs = [
-                r for r in _sous_clients(tous, customer_id) if r.get("Active", True)
+                par_id[i] for i in _descendants(par_id, customer_id)
+                if par_id[i].get("Active", True)
             ]
             solde = _num(courant.get("BalanceWithJobs"))
             if solde is None:
                 solde = _num(courant.get("Balance")) or 0.0
+            if liens and liens["utilise_par_kratos"] and not forcer:
+                raise ClientQboErreur(
+                    409,
+                    "Kratos utilise cette fiche (" + _liens_lisibles(liens) + ") : "
+                    "la rendre inactive casserait ces liens (Kratos la "
+                    "réactiverait ou en créerait une autre au prochain envoi). "
+                    "Relie d'abord Kratos à la fiche gardée, ou passe `forcer`.",
+                    liens_kratos=liens,
+                )
             if sous_actifs and not forcer:
                 raise ClientQboErreur(
                     409,
@@ -442,7 +642,21 @@ async def modifier(
             if sous_actifs or abs(solde) >= 0.005:
                 avertissements.append(
                     "Désactivation forcée malgré des sous-clients actifs ou "
-                    "un solde : QuickBooks peut refuser."
+                    "un solde : QuickBooks peut refuser, ou rendre les "
+                    "sous-clients inactifs avec le parent."
+                )
+            if liens and liens["utilise_par_kratos"]:
+                avertissements.append(
+                    "Désactivation forcée d'une fiche que Kratos utilise ("
+                    + _liens_lisibles(liens) + ")."
+                )
+            deja = _porteur_du_nom(tous, f"{nom_final} (supprimé)", sauf=customer_id) \
+                or _porteur_du_nom(tous, f"{nom_final} (deleted)", sauf=customer_id)
+            if deja:
+                avertissements.append(
+                    f"Une fiche inactive porte déjà « {deja.get('DisplayName')} » "
+                    f"(#{deja.get('Id')}) : QuickBooks, qui ajoute ce suffixe aux "
+                    "fiches inactives, peut refuser."
                 )
         corps["Active"] = bool(actif)
         faits.append(
@@ -472,6 +686,12 @@ async def modifier(
                 f"Le client mère #{parent_id} ({parent.get('DisplayName')}) est "
                 "inactif : réactive-le d'abord.",
             )
+        if parent.get("IsProject"):
+            raise ClientQboErreur(
+                422,
+                f"#{parent_id} ({parent.get('DisplayName')}) est un projet "
+                "QuickBooks : un projet n'a pas de sous-clients.",
+            )
         if customer_id in _ancetres(par_id, parent_id):
             raise ClientQboErreur(
                 422,
@@ -496,6 +716,13 @@ async def modifier(
                     "nom_parent": parent.get("DisplayName"),
                 }
             )
+            if liens and liens["projets"]:
+                avertissements.append(
+                    "Kratos relie des projets à ce sous-client ("
+                    + _liens_lisibles(liens) + ") : son filet horaire le replace "
+                    "sous le client QuickBooks mémorisé sur la fiche client du "
+                    "projet si ce n'est pas celui-ci."
+                )
 
     # Facturer avec le client parent.
     fap = changements.get("facturer_avec_parent")
@@ -529,6 +756,7 @@ async def modifier(
         "simule": simuler,
         "changements": faits,
         "avertissements": avertissements,
+        "liens_kratos": liens,
         "avant": fiche(courant),
         "apres": None,
     }
@@ -541,19 +769,39 @@ async def modifier(
         resultat["corps"] = corps
         return resultat
 
+    actifs_avant = {
+        i for i in _descendants(par_id, customer_id) if par_id[i].get("Active", True)
+    }
     try:
         maj = await qbo.update_customer_fields(customer_id, **corps)
-    except qbo_mod.QuickBooksError as exc:
+    except _ERREURS_QB as exc:
         raise _erreur_qb(exc, compagnie)
+    apres: Optional[Dict[str, Any]] = None
     try:
-        apres = await qbo.get_customer_any(customer_id)
-    except qbo_mod.QuickBooksError:  # noqa: BLE001
+        if corps.get("Active") is False and actifs_avant:
+            # Désactivation d'un parent : QuickBooks peut avoir rendu les
+            # sous-clients inactifs avec lui — on le constate et on le dit.
+            relus = {str(r["Id"]): r for r in await _tous(qbo, compagnie)}
+            apres = relus.get(customer_id)
+            resultat["sous_clients_desactives"] = [
+                _resume(relus[i]) for i in sorted(actifs_avant, key=int)
+                if i in relus and not relus[i].get("Active", True)
+            ]
+        else:
+            apres = await qbo.get_customer_any(customer_id)
+    except _ERREURS_QB:  # noqa: BLE001
         apres = None
     resultat["apres"] = fiche(apres or maj)
     log.info(
-        "Client QuickBooks %s (%s) modifié : %s",
+        "Client QuickBooks %s (%s) modifié : %s%s",
         customer_id,
         compagnie,
         ", ".join(f"{f['champ']} {f.get('de')!r} → {f.get('a')!r}" for f in faits),
+        (
+            " ; sous-clients rendus inactifs : "
+            + ", ".join(s["Id"] for s in resultat["sous_clients_desactives"])
+            if resultat.get("sous_clients_desactives")
+            else ""
+        ),
     )
     return resultat

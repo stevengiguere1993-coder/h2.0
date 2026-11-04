@@ -21,9 +21,9 @@ import re
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Path, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.deps import RequireAdminOrOwner
+from app.api.deps import DBSession, RequireAdminOrOwner
 from app.integrations import quickbooks as qbo_mod
 from app.services import qbo_clients_modif as modif
 
@@ -194,7 +194,10 @@ def _http(exc: modif.ClientQboErreur) -> HTTPException:
 
 class ModifierClientIn(BaseModel):
     """Changements à appliquer à une fiche ; un champ absent n'est pas
-    touché. Tout est validé avant l'envoi (voir le service)."""
+    touché, un champ inconnu est refusé (422). Tout est validé avant
+    l'envoi (voir le service)."""
+
+    model_config = ConfigDict(extra="forbid")
 
     nom: Optional[str] = Field(
         None, max_length=100, description="Nouveau nom d'affichage (DisplayName)"
@@ -228,13 +231,16 @@ class ModifierClientIn(BaseModel):
 )
 async def lire_customer_qbo(
     _: RequireAdminOrOwner,
+    db: DBSession,
     customer_id: str = _ID_QB,
     compagnie: str = _COMPAGNIE_Q,
 ) -> dict[str, Any]:
-    """Fiche complète (nom, parent, actif, soldes, SyncToken, dates) et
-    liste de ses sous-clients directs, actifs et inactifs."""
+    """Fiche complète (nom, parent, actif, soldes, SyncToken, dates),
+    liste de ses sous-clients directs, actifs et inactifs, et liens que
+    Kratos garde vers elle (clients, projets, immeubles, compagnies de la
+    feuille de temps, factures mensuelles)."""
     try:
-        return await modif.lire(compagnie, customer_id)
+        return await modif.lire(compagnie, customer_id, db=db)
     except modif.ClientQboErreur as exc:
         raise _http(exc) from exc
 
@@ -245,16 +251,19 @@ async def lire_customer_qbo(
 )
 async def transactions_customer_qbo(
     _: RequireAdminOrOwner,
+    db: DBSession,
     customer_id: str = _ID_QB,
     compagnie: str = _COMPAGNIE_Q,
 ) -> dict[str, Any]:
     """Nombre de transactions par type (factures, paiements, notes de
     crédit, reçus de vente, remboursements, soumissions, temps), liste
     du rapport « TransactionList » filtré sur le client, sous-clients,
-    et ``vide`` quand la fiche ne porte rien. À lire avant de rendre une
-    fiche inactive, et pour garder l'état d'une fiche avant une fusion."""
+    liens Kratos, et ``vide`` : vrai quand la fiche ne porte rien, faux
+    quand elle porte quelque chose, null quand l'inventaire est incomplet
+    (voir ``notes``). À lire avant de rendre une fiche inactive, et pour
+    garder l'état d'une fiche avant une fusion."""
     try:
-        return await modif.inventaire(compagnie, customer_id)
+        return await modif.inventaire(compagnie, customer_id, db=db)
     except modif.ClientQboErreur as exc:
         raise _http(exc) from exc
 
@@ -269,20 +278,24 @@ async def transactions_customer_qbo(
 async def modifier_customer_qbo(
     body: ModifierClientIn,
     _: RequireAdminOrOwner,
+    db: DBSession,
     customer_id: str = _ID_QB,
     compagnie: str = _COMPAGNIE_Q,
 ) -> dict[str, Any]:
     """Une seule mise à jour « sparse » dans QuickBooks, après les
-    garde-fous : 409 si le nom est déjà porté par une autre fiche (l'API
-    Intuit ne fusionne pas ; la fusion se fait dans l'écran de QuickBooks
-    en renommant le doublon au nom exact de la fiche gardée), 422 si le
-    client mère est introuvable, inactif ou un de ses propres
-    sous-clients, 409 pour rendre inactive une fiche à solde ou avec des
-    sous-clients actifs (sauf ``forcer``). ``simuler`` décrit sans écrire.
-    Renvoie la fiche avant et après et la liste des changements."""
+    garde-fous : 409 si le nom est déjà porté par une autre fiche, un
+    fournisseur ou un employé (l'API Intuit ne fusionne pas ; la fusion
+    se fait dans l'écran de QuickBooks en renommant le doublon au nom
+    exact de la fiche gardée), 422 si le client mère est introuvable,
+    inactif, un projet QuickBooks ou un de ses propres sous-clients, 409
+    pour rendre inactive une fiche à solde, avec des sous-clients actifs
+    ou que Kratos utilise (sauf ``forcer``), 503 si QuickBooks n'est pas
+    connecté. ``simuler`` décrit sans écrire. Renvoie la fiche avant et
+    après, la liste des changements, les avertissements et, après une
+    désactivation forcée, les sous-clients rendus inactifs avec elle."""
     try:
         return await modif.modifier(
-            compagnie, customer_id, body.model_dump(exclude_none=True)
+            compagnie, customer_id, body.model_dump(exclude_none=True), db=db
         )
     except modif.ClientQboErreur as exc:
         raise _http(exc) from exc
