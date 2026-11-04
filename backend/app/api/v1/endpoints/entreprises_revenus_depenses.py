@@ -36,6 +36,7 @@ from app.models.immobilier import (
     bail_non_parallele,
 )
 from app.services import revenus_depenses as svc
+from app.services.loyer_effectif import loyer_effectif_loue
 from app.services.audit import log_action
 
 log = logging.getLogger(__name__)
@@ -192,8 +193,13 @@ async def immeubles_kratos(db: DBSession, user: RequireAdminOrOwner) -> Dict[str
         return {"items": []}
     logements = (await db.execute(select(Logement).where(Logement.immeuble_id.in_(ids)))).scalars().all()
     log_ids = [l.id for l in logements]
-    imm_par_log = {l.id: l.immeuble_id for l in logements}
-    loyers: Dict[int, float] = {}
+    # Loyer effectif par logement, LA définition commune de Kratos (liste des
+    # immeubles, P&L) : interne = baux actifs + loyer demandé des occupés sans
+    # bail ; gestion externe = le loyer saisi sur le logement prime. Phil
+    # 2026-11-04 : « ceux en gestion externe, on peut quand même voir leur
+    # total mensuel et annuel » — l'import doit donner le même chiffre.
+    externe_par_imm = {i.id: bool(getattr(i, "gestion_externe", False)) for i in immeubles}
+    loyer_bail: Dict[int, float] = {}
     if log_ids:
         baux = (
             await db.execute(
@@ -203,9 +209,12 @@ async def immeubles_kratos(db: DBSession, user: RequireAdminOrOwner) -> Dict[str
             )
         ).all()
         for lid, loyer in baux:
-            iid = imm_par_log.get(lid)
-            if iid is not None:
-                loyers[iid] = loyers.get(iid, 0.0) + float(loyer or 0.0)
+            loyer_bail[lid] = loyer_bail.get(lid, 0.0) + float(loyer or 0.0)
+    loyers: Dict[int, float] = {}
+    for l in logements:
+        m = loyer_effectif_loue(l, loyer_bail.get(l.id), gestion_externe=externe_par_imm.get(l.immeuble_id, False))
+        if m is not None:
+            loyers[l.immeuble_id] = loyers.get(l.immeuble_id, 0.0) + float(m)
     nb_log: Dict[int, int] = {}
     nb_ch: Dict[int, int] = {}
     for l in logements:
@@ -234,6 +243,21 @@ async def immeubles_kratos(db: DBSession, user: RequireAdminOrOwner) -> Dict[str
     items = []
     for i in immeubles:
         ev = evals.get(i.id)
+        notes: List[str] = []
+        if not nb_log.get(i.id):
+            notes.append("Aucun logement dans Kratos pour cet immeuble : logements et chambres à saisir.")
+        if loyers.get(i.id, 0.0) <= 0:
+            notes.append(
+                "Aucun loyer dans Kratos : pas de bail actif ni de loyer saisi sur les logements"
+                + (" (gestion externe : entre le loyer sur chaque logement de la fiche de l'immeuble)" if externe_par_imm.get(i.id) else "")
+                + " — saisis les loyers bruts ici."
+            )
+        if ev is None:
+            notes.append("Aucun rapport d'évaluation dans Kratos (fiche de l'immeuble → Finances → Évaluations) : valeur à saisir ici.")
+        elif ev.kind != "appraisal":
+            notes.append(f"Pas de rapport d'évaluateur dans Kratos : valeur reprise de l'évaluation « {ev.kind} » ({ev.date_evaluation.year if ev.date_evaluation else '?'}).")
+        if not dettes.get(i.id):
+            notes.append("Aucune hypothèque active dans Kratos : dette à 0 $, à vérifier.")
         items.append({
             "kratos_immeuble_id": i.id,
             "nom": i.name,
@@ -247,5 +271,6 @@ async def immeubles_kratos(db: DBSession, user: RequireAdminOrOwner) -> Dict[str
             "valeur_rapport": round(float(ev.valeur), 2) if ev else 0.0,
             "annee_rapport": ev.date_evaluation.year if ev and ev.date_evaluation else None,
             "source_rapport": (ev.kind if ev else None),
+            "notes_import": notes,
         })
     return {"items": items, "total": len(items), "nb_total": int((await db.execute(select(func.count(Immeuble.id)))).scalar() or 0)}
