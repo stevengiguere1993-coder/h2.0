@@ -94,6 +94,7 @@ def demander(project: Project, row: Optional[Dict[str, Any]] = None) -> None:
     if project.qbo_conversion_etat != A_CONVERTIR:
         project.qbo_conversion_etat = A_CONVERTIR
         project.qbo_conversion_detail = None
+        project.qbo_conversion_le = _maintenant()
 
 
 def _marquer_convertie(project: Project, row: Dict[str, Any]) -> None:
@@ -112,6 +113,7 @@ def ignorer(project: Project) -> None:
 def reprendre(project: Project) -> None:
     project.qbo_conversion_etat = A_CONVERTIR
     project.qbo_conversion_detail = None
+    project.qbo_conversion_le = _maintenant()
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -283,11 +285,106 @@ async def verifier(
 
 async def verifier_pour_cron(db: AsyncSession) -> Dict[str, Any]:
     """Passage quotidien : raye ce qui a été converti (extension ou à la
-    main). Rien à faire sans projet en attente ou sans QuickBooks."""
+    main), puis alerte si des sous-clients attendent depuis trop longtemps.
+    Rien à faire sans projet en attente ou sans QuickBooks."""
     try:
-        return await verifier(db)
+        res = await verifier(db)
     except ConversionErreur as exc:
         return {"skipped": exc.message}
+    res["alerte"] = await alerter_attente(db)
+    return res
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Alerte : sous-clients en attente de conversion (Steven, 2026-11-04)
+# ──────────────────────────────────────────────────────────────────────
+
+#: Un sous-client « à convertir » depuis plus longtemps est signalé.
+ATTENTE_ALERTE_JOURS = 3
+#: Rappel tant que la liste n'est pas vide (sauf nouveau retard avant).
+RAPPEL_ALERTE_JOURS = 7
+KIND_ALERTE_ATTENTE = "qbo_conversion_en_attente"
+LIEN_PAGE = "/entreprises/comptabilite/projets-quickbooks"
+
+
+def _utc(d: Optional[datetime]) -> Optional[datetime]:
+    if d is None:
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def _attente_depuis(project: Project) -> Optional[datetime]:
+    """Entrée dans la liste (``qbo_conversion_le`` posé depuis le
+    2026-11-04), sinon création du projet pour les lignes plus anciennes."""
+    return _utc(project.qbo_conversion_le) or _utc(project.created_at)
+
+
+async def alerter_attente(
+    db: AsyncSession, *, maintenant: Optional[datetime] = None
+) -> Dict[str, Any]:
+    """Cloche Kratos des admins quand des sous-clients attendent leur
+    conversion depuis plus de ``ATTENTE_ALERTE_JOURS`` jours (l'extension
+    en mode Automatique ne tourne que si QuickBooks est ouvert sur la page
+    Projets). Une alerte au plus par ``RAPPEL_ALERTE_JOURS`` jours, sauf si
+    un sous-client a dépassé le délai depuis la dernière."""
+    from datetime import timedelta
+
+    from sqlalchemy import func
+
+    from app.models.notification import Notification
+    from app.services.notifications import notify_role
+
+    now = _utc(maintenant) or _maintenant()
+    seuil = now - timedelta(days=ATTENTE_ALERTE_JOURS)
+    projets = list(
+        (
+            await db.execute(
+                select(Project).where(Project.qbo_conversion_etat == A_CONVERTIR)
+            )
+        ).scalars().all()
+    )
+    en_retard = [
+        (p, d) for p in projets if (d := _attente_depuis(p)) is not None and d <= seuil
+    ]
+    if not en_retard:
+        return {"en_retard": 0, "envoyee": False}
+
+    derniere = _utc(
+        (
+            await db.execute(
+                select(func.max(Notification.created_at)).where(
+                    Notification.kind == KIND_ALERTE_ATTENTE
+                )
+            )
+        ).scalar()
+    )
+    nouveau_retard = derniere is None or any(
+        d + timedelta(days=ATTENTE_ALERTE_JOURS) > derniere for _, d in en_retard
+    )
+    rappel_du = derniere is None or derniere <= now - timedelta(days=RAPPEL_ALERTE_JOURS)
+    if not (nouveau_retard or rappel_du):
+        return {"en_retard": len(en_retard), "envoyee": False}
+
+    en_retard.sort(key=lambda x: x[1])
+    noms = [_nom_qb(p) or p.name or f"projet {p.id}" for p, _ in en_retard]
+    apercu = ", ".join(noms[:3]) + (f" et {len(noms) - 3} autre(s)" if len(noms) > 3 else "")
+    n = len(en_retard)
+    await notify_role(
+        db,
+        min_role="admin",
+        kind=KIND_ALERTE_ATTENTE,
+        title=(
+            f"{n} sous-client{'s' if n > 1 else ''} QuickBooks à convertir "
+            f"en projet depuis plus de {ATTENTE_ALERTE_JOURS} jours"
+        ),
+        body=(
+            f"{apercu}. Ouvre QuickBooks sur la page Projets avec l'extension "
+            "Kratos (case « Automatique » cochée) : la conversion se fait seule."
+        ),
+        href=LIEN_PAGE,
+        push=False,
+    )
+    return {"en_retard": n, "envoyee": True}
 
 
 #: Sous-clients corrigés au plus par passage du filet (borne de sécurité).
@@ -378,6 +475,7 @@ async def ajouter_existants(db: AsyncSession) -> Dict[str, Any]:
             p.qbo_job_name = nom_sous_client(row) or p.qbo_job_name
             p.qbo_conversion_etat = A_CONVERTIR
             p.qbo_conversion_detail = "Projet existant, ajouté à la demande."
+            p.qbo_conversion_le = _maintenant()
             ajoutes += 1
     await db.flush()
     return {"ajoutes": ajoutes, "deja_converties": deja}
@@ -418,7 +516,16 @@ def _ligne(project: Project, clients: Dict[int, str]) -> Dict[str, Any]:
         "sous_client_complet": f"{client}:{nom}" if client else nom,
         "etat": project.qbo_conversion_etat,
         "detail": project.qbo_conversion_detail,
-        "convertie_le": project.qbo_conversion_le.isoformat() if project.qbo_conversion_le else None,
+        "convertie_le": (
+            project.qbo_conversion_le.isoformat()
+            if project.qbo_conversion_le and project.qbo_conversion_etat == CONVERTIE
+            else None
+        ),
+        "en_attente_depuis": (
+            _attente_depuis(project).isoformat()
+            if project.qbo_conversion_etat == A_CONVERTIR and _attente_depuis(project)
+            else None
+        ),
         "cree_le": project.created_at.isoformat() if project.created_at else None,
     }
 
