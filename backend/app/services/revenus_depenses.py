@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 CATEGORIES_FRAIS_FIXES: List[tuple[str, str]] = [
@@ -69,6 +70,20 @@ PALIERS_DEV_DEFAUT = [
     {"jusqua": None, "pct": 2.5},
 ]
 PHASES = ("stabilisation", "stabilise")
+
+
+def annee_defaut() -> int:
+    """Un scénario se planifie pour l'année qui vient (Phil : « je planifie pour 2027 »)."""
+    return date.today().year + 1
+
+
+def _date_iso(v: Any) -> Optional[str]:
+    if not v:
+        return None
+    try:
+        return date.fromisoformat(str(v)[:10]).isoformat()
+    except ValueError:
+        return None
 PERIODES = ("mois", "an")
 
 SECTIONS_REVENUS = [
@@ -131,6 +146,10 @@ def immeuble_vide(**kw: Any) -> Dict[str, Any]:
         "valeur_rapport": 0.0, "annee_rapport": None, "taux_cap_pct": 0.0, "revenus_nets_annuels": 0.0,
         # Les deux.
         "dette": 0.0,
+        #: Date de l'acquisition dans l'année du scénario (prorata) ; vide = 1er janvier.
+        "date_acquisition": None,
+        #: Alertes de l'import Kratos (loyers ou rapport manquants…), effaçables.
+        "notes_import": [],
     }
     base.update(kw)
     return base
@@ -139,6 +158,7 @@ def immeuble_vide(**kw: Any) -> Dict[str, Any]:
 def scenario_defaut() -> Dict[str, Any]:
     """Hypothèses de départ (tous les chiffres sont modifiables dans la page)."""
     return normaliser({
+        "annee": annee_defaut(),
         "fonds": {"cash": 0, "taux_pct": 1.5},
         "developpement": {"paliers": [dict(p) for p in PALIERS_DEV_DEFAUT]},
         "prospection": {"taux_pct": 2.0},
@@ -205,7 +225,8 @@ def normaliser(data: Any) -> Dict[str, Any]:
             mois_prevus=max(1, int(_pos(i.get("mois_prevus"), 24) or 24)), mois_ecoules=int(_pos(i.get("mois_ecoules"))),
             valeur_rapport=_pos(i.get("valeur_rapport")), annee_rapport=annee if annee and annee > 1900 else None,
             taux_cap_pct=_pos(i.get("taux_cap_pct")), revenus_nets_annuels=_pos(i.get("revenus_nets_annuels")),
-            dette=_pos(i.get("dette")),
+            dette=_pos(i.get("dette")), date_acquisition=_date_iso(i.get("date_acquisition")),
+            notes_import=[str(n)[:200] for n in (i.get("notes_import") if isinstance(i.get("notes_import"), list) else [])][:6],
         ))
 
     refact = d.get("refacturation") if isinstance(d.get("refacturation"), dict) else {}
@@ -243,7 +264,11 @@ def normaliser(data: Any) -> Dict[str, Any]:
                              "salaire_annuel": _pos(a.get("salaire_annuel")),
                              "dividendes_annuels": _pos(a.get("dividendes_annuels"))})
 
+    annee = int(_pos(d.get("annee"), annee_defaut()) or annee_defaut())
+    if not 2000 <= annee <= 2100:
+        annee = annee_defaut()
     return {
+        "annee": annee,
         "fonds": {"cash": _pos(fonds.get("cash")), "taux_pct": _pos(fonds.get("taux_pct"), 1.5)},
         "developpement": {"paliers": paliers},
         "prospection": {"taux_pct": _pos(prosp.get("taux_pct"), 2.0)},
@@ -308,6 +333,24 @@ def frais_developpement(prix: float, paliers: List[Dict[str, Any]]) -> Dict[str,
     return {"total": _r(total), "tranches": tranches, "taux_effectif_pct": _r(100.0 * total / prix) if prix > 0 else 0.0}
 
 
+def part_annee(i: Dict[str, Any], annee: int) -> Dict[str, Any]:
+    """Part de l'année du scénario pendant laquelle l'immeuble est à nous.
+    Acquisition conclue cette année avec une date → prorata au jour près
+    (3 avril 2027 → 273 jours sur 365) ; sans date → 1er janvier (année
+    entière) ; date avant l'année → année entière, mais plus de frais
+    d'acquisition ; date après l'année → rien cette année."""
+    jours_annee = 366 if (annee % 4 == 0 and (annee % 100 != 0 or annee % 400 == 0)) else 365
+    if not i["acquisition_cette_annee"] or not i.get("date_acquisition"):
+        return {"part": 1.0, "jours": jours_annee, "jours_annee": jours_annee, "acquise_cette_annee": bool(i["acquisition_cette_annee"]), "date": None}
+    d = date.fromisoformat(i["date_acquisition"])
+    if d.year < annee:
+        return {"part": 1.0, "jours": jours_annee, "jours_annee": jours_annee, "acquise_cette_annee": False, "date": d.isoformat()}
+    if d.year > annee:
+        return {"part": 0.0, "jours": 0, "jours_annee": jours_annee, "acquise_cette_annee": False, "date": d.isoformat()}
+    jours = (date(annee, 12, 31) - d).days + 1
+    return {"part": jours / jours_annee, "jours": jours, "jours_annee": jours_annee, "acquise_cette_annee": True, "date": d.isoformat()}
+
+
 def valeur_immeuble(i: Dict[str, Any]) -> Dict[str, Any]:
     """Valeur d'un immeuble selon le document (p. 11) : stabilisé = rapport,
     ou revenus nets ÷ taux de cap s'ils sont donnés ; en rénovation = coût
@@ -343,30 +386,40 @@ def calculer(data: Dict[str, Any]) -> Dict[str, Any]:
     avert: List[str] = []
 
     # Parc : valeur, dette, équité par immeuble ; totaux du fonds (immeubles « dans le fonds »).
+    annee = d["annee"]
+    parts = {i["id"]: part_annee(i, annee) for i in immeubles}
     fiches = []
-    valeur_parc = dettes = valeur_a_terme = 0.0
+    valeur_parc = dettes = valeur_a_terme = equite_ponderee = 0.0
     for i in immeubles:
         v = valeur_immeuble(i)
         equite = v["valeur"] - i["dette"]
+        pa = parts[i["id"]]
         fiches.append({"id": i["id"], "nom": i["nom"] or "Sans nom", "dans_le_fonds": i["dans_le_fonds"], "phase": i["phase"],
-                       **v, "dette": _r(i["dette"]), "equite": _r(equite)})
-        if i["dans_le_fonds"]:
+                       **v, "dette": _r(i["dette"]), "equite": _r(equite),
+                       "part_annee": _r(100.0 * pa["part"]), "jours": pa["jours"], "jours_annee": pa["jours_annee"],
+                       "date_acquisition": pa["date"], "acquise_cette_annee": pa["acquise_cette_annee"],
+                       "notes_import": list(i.get("notes_import") or [])})
+        if i["dans_le_fonds"] and pa["part"] > 0:
             valeur_parc += v["valeur"]
             dettes += i["dette"]
             valeur_a_terme += v["valeur_a_terme"]
+            equite_ponderee += equite * pa["part"]
             if equite < 0:
                 avert.append(f"{i['nom'] or 'Un immeuble'} : la dette dépasse la valeur (équité négative).")
     van = valeur_parc + fonds["cash"] - dettes
     van_a_terme = valeur_a_terme + fonds["cash"] - dettes
+    # Frais du fonds au prorata : un immeuble acquis le 3 avril ne rapporte
+    # que 273/365 de son équité dans l'année (Phil 2026-11-04).
+    van_ponderee = equite_ponderee + fonds["cash"]
     if van < 0:
         avert.append("La valeur nette du fonds est négative : aucun frais de gestion du fonds.")
-    rev_fonds = max(van, 0.0) * fonds["taux_pct"] / 100.0
+    rev_fonds = max(van_ponderee, 0.0) * fonds["taux_pct"] / 100.0
 
     # 2-3. Développement (par tranches) et prospection, acquisitions de l'année dans le fonds.
     lignes_dev, lignes_prosp = [], []
     rev_dev = rev_prosp = 0.0
     for i in immeubles:
-        if not i["dans_le_fonds"] or not i["acquisition_cette_annee"] or i["prix_acquisition"] <= 0:
+        if not i["dans_le_fonds"] or not parts[i["id"]]["acquise_cette_annee"] or i["prix_acquisition"] <= 0:
             continue
         fd = frais_developpement(i["prix_acquisition"], dev["paliers"])
         rev_dev += fd["total"]
@@ -384,7 +437,8 @@ def calculer(data: Dict[str, Any]) -> Dict[str, Any]:
     # 5. Construction : rénovation (travaux initiaux) + parc stabilisé (rénovations au roulement), fonds ou hors fonds.
     travaux_stab = sum(i["travaux_initiaux"] for i in immeubles if i["phase"] == "stabilisation")
     logements_stabilises = sum(i["nb_logements"] for i in immeubles if i["phase"] == "stabilise")
-    nb_renos = logements_stabilises * constr["pct_logements_renoves_par_an"] / 100.0
+    logements_stabilises_ponderes = sum(i["nb_logements"] * parts[i["id"]]["part"] for i in immeubles if i["phase"] == "stabilise")
+    nb_renos = logements_stabilises_ponderes * constr["pct_logements_renoves_par_an"] / 100.0
     volume_renos = nb_renos * constr["cout_reno_logement"]
     rev_constr_stab = travaux_stab * constr["marge_pct"] / 100.0
     rev_constr_renos = volume_renos * constr["marge_pct"] / 100.0
@@ -401,8 +455,8 @@ def calculer(data: Dict[str, Any]) -> Dict[str, Any]:
     # 7. Gestion locative : loyers des immeubles gérés à l'interne (+ sous-traités si on les facture aussi).
     internes = [i for i in immeubles if i["gestion_interne"]]
     sous_traites = [i for i in immeubles if not i["gestion_interne"]]
-    loyers_internes = sum(i["loyers_bruts_mensuels"] for i in internes) * 12.0
-    loyers_sous_traites = sum(i["loyers_bruts_mensuels"] for i in sous_traites) * 12.0
+    loyers_internes = sum(i["loyers_bruts_mensuels"] * parts[i["id"]]["part"] for i in internes) * 12.0
+    loyers_sous_traites = sum(i["loyers_bruts_mensuels"] * parts[i["id"]]["part"] for i in sous_traites) * 12.0
     base_gestion = loyers_internes + (loyers_sous_traites if gest["facturer_sous_traites"] else 0.0)
     rev_gestion = base_gestion * gest["taux_pct"] / 100.0
     rev_projection = gest["loyers_additionnels_mensuels"] * 12.0 * gest["taux_pct"] / 100.0
@@ -410,14 +464,16 @@ def calculer(data: Dict[str, Any]) -> Dict[str, Any]:
     # 8. Location : relocations sur les portes gérées à l'interne (roulement ou nombres saisis) × frais.
     logements_internes = sum(i["nb_logements"] for i in internes)
     chambres_internes = sum(i["nb_chambres"] for i in internes)
-    reloc_log_calc = int(round(logements_internes * loc["taux_roulement_pct"] / 100.0))
-    reloc_ch_calc = int(round(chambres_internes * loc["taux_roulement_pct"] / 100.0))
+    logements_internes_ponderes = sum(i["nb_logements"] * parts[i["id"]]["part"] for i in internes)
+    chambres_internes_ponderees = sum(i["nb_chambres"] * parts[i["id"]]["part"] for i in internes)
+    reloc_log_calc = int(round(logements_internes_ponderes * loc["taux_roulement_pct"] / 100.0))
+    reloc_ch_calc = int(round(chambres_internes_ponderees * loc["taux_roulement_pct"] / 100.0))
     reloc_log = loc["nb_relocations_logements"] if loc["nb_relocations_logements"] is not None else reloc_log_calc
     reloc_ch = loc["nb_relocations_chambres"] if loc["nb_relocations_chambres"] is not None else reloc_ch_calc
     rev_location = reloc_log * loc["frais_logement"] + reloc_ch * loc["frais_chambre"]
 
     revenus = [
-        {"key": "fonds", "revenu": _r(rev_fonds), "van": _r(van), "taux_pct": fonds["taux_pct"]},
+        {"key": "fonds", "revenu": _r(rev_fonds), "van": _r(van), "van_ponderee": _r(van_ponderee), "taux_pct": fonds["taux_pct"]},
         {"key": "developpement", "revenu": _r(rev_dev), "lignes": lignes_dev},
         {"key": "prospection", "revenu": _r(rev_prosp), "lignes": lignes_prosp, "taux_pct": prosp["taux_pct"]},
         {"key": "refacturation", "revenu": _r(rev_refact), "montant_avance": _r(avance), "marge_pct": d["refacturation"]["marge_pct"]},
@@ -452,6 +508,7 @@ def calculer(data: Dict[str, Any]) -> Dict[str, Any]:
     part_nous = t2 + nous_reste
     part_investisseurs = t1 + (reste - nous_reste)
     nb_holdings = max(1, len(dep["associes"]) or 3)
+    prorates = [f for f in fiches if f["acquise_cette_annee"] and f["date_acquisition"] and f["part_annee"] < 100.0]
 
     # Dépenses.
     par_categorie: Dict[str, float] = {c: 0.0 for c, _ in CATEGORIES_FRAIS_FIXES}
@@ -494,7 +551,8 @@ def calculer(data: Dict[str, Any]) -> Dict[str, Any]:
         "parc": {
             "immeubles": fiches,
             "valeur": _r(valeur_parc), "dettes": _r(dettes), "equite": _r(valeur_parc - dettes), "cash": _r(fonds["cash"]),
-            "van": _r(van), "valeur_a_terme": _r(valeur_a_terme), "van_a_terme": _r(van_a_terme),
+            "van": _r(van), "van_ponderee": _r(van_ponderee), "valeur_a_terme": _r(valeur_a_terme), "van_a_terme": _r(van_a_terme),
+            "annee": annee, "nb_prorates": len(prorates),
             "nb_dans_le_fonds": sum(1 for i in immeubles if i["dans_le_fonds"]),
             "nb_hors_fonds": sum(1 for i in immeubles if not i["dans_le_fonds"]),
             "nb_en_renovation": sum(1 for i in immeubles if i["dans_le_fonds"] and i["phase"] == "stabilisation"),
@@ -568,6 +626,11 @@ def referentiel() -> Dict[str, Any]:
             "Charges de l'employeur en plus du salaire brut : RRQ, assurance-emploi, RQAP, FSS, CNESST et "
             "normes du travail — autour de 14 % au Québec pour une petite entreprise. Modifiable."
         ),
+        "prorata_note": (
+            "Une acquisition conclue dans l'année est comptée au prorata des jours restants (ex. 3 avril → 273 jours sur 365) "
+            "pour la gestion locative, les relocations, les rénovations au roulement, les frais du fonds et le sous-traitant. "
+            "Les frais de développement et de prospection sont dus en entier à l'acquisition."
+        ),
         "valorisation_note": (
             "Document du fonds (p. 11) : VAN = valeur des immeubles + cash − dettes. Stabilisé = valeur du dernier "
             "rapport, ou revenus nets ÷ taux de capitalisation du rapport. En rénovation = coût du projet "
@@ -585,6 +648,6 @@ def charger(txt: Optional[str]) -> Dict[str, Any]:
 
 __all__ = [
     "CATEGORIES_FRAIS_FIXES", "POSTES_DEFAUT", "ASSOCIES_DEFAUT", "PALIERS_DEV_DEFAUT", "SECTIONS_REVENUS",
-    "immeuble_vide", "scenario_defaut", "normaliser", "frais_developpement", "valeur_immeuble", "calculer",
+    "immeuble_vide", "scenario_defaut", "normaliser", "frais_developpement", "valeur_immeuble", "part_annee", "annee_defaut", "calculer",
     "resume", "referentiel", "charger",
 ]

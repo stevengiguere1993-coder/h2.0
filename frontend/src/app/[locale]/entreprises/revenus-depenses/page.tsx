@@ -28,6 +28,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AlertTriangle,
   Building2,
   Calculator,
   Check,
@@ -85,12 +86,15 @@ type Immeuble = {
   taux_cap_pct: number;
   revenus_nets_annuels: number;
   dette: number;
+  date_acquisition: string | null;
+  notes_import: string[];
 };
 type LigneRefact = { id: string; libelle: string; montant_annuel: number };
 type FraisFixe = { id: string; categorie: string; libelle: string; montant: number; periode: "mois" | "an" };
 type Salaire = { id: string; poste: string; salaire_annuel: number };
 type Associe = { id: string; nom: string; salaire_annuel: number; dividendes_annuels: number };
 type Data = {
+  annee: number;
   fonds: { cash: number; taux_pct: number };
   developpement: { paliers: Palier[] };
   prospection: { taux_pct: number };
@@ -104,9 +108,9 @@ type Data = {
   depenses: { frais_fixes: FraisFixe[]; charges_sociales_pct: number; salaires: Salaire[]; associes: Associe[]; sous_traitance_gestion_pct: number };
 };
 type SectionRevenu = { key: string; label: string; revenu: number; part_pct: number; [k: string]: unknown };
-type FicheImmeuble = { id: string; nom: string; dans_le_fonds: boolean; phase: string; cout_projet: number; valeur: number; valeur_a_terme: number; plus_value_prevue: number; methode: string; dette: number; equite: number };
+type FicheImmeuble = { id: string; nom: string; dans_le_fonds: boolean; phase: string; cout_projet: number; valeur: number; valeur_a_terme: number; plus_value_prevue: number; methode: string; dette: number; equite: number; part_annee: number; jours: number; jours_annee: number; date_acquisition: string | null; acquise_cette_annee: boolean; notes_import: string[] };
 type Resultats = {
-  parc: { immeubles: FicheImmeuble[]; valeur: number; dettes: number; equite: number; cash: number; van: number; valeur_a_terme: number; van_a_terme: number; nb_dans_le_fonds: number; nb_hors_fonds: number; nb_en_renovation: number };
+  parc: { immeubles: FicheImmeuble[]; valeur: number; dettes: number; equite: number; cash: number; van: number; van_ponderee: number; valeur_a_terme: number; van_a_terme: number; nb_dans_le_fonds: number; nb_hors_fonds: number; nb_en_renovation: number; annee: number; nb_prorates: number };
   revenus: SectionRevenu[];
   part_des_gains: { van: number; rendement_pct: number; gain: number; tranche_investisseurs: number; tranche_nous: number; reste: number; part_nous: number; part_investisseurs: number; par_holding: number; nb_holdings: number; pct_du_gain_nous: number };
   depenses: {
@@ -128,10 +132,10 @@ type Resultats = {
   point_mort: { couvert: boolean; van_necessaire: number; van_actuelle: number; loyers_mensuels_sous_gestion_necessaires: number; loyers_mensuels_sous_gestion_actuels: number };
   avertissements: string[];
 };
-type Referentiel = { categories_frais_fixes: { key: string; label: string }[]; charges_sociales_note: string; valorisation_note: string };
+type Referentiel = { categories_frais_fixes: { key: string; label: string }[]; charges_sociales_note: string; valorisation_note: string; prorata_note: string };
 type ScenarioResume = { id: number; nom: string; is_default: boolean; updated_at: string | null; resume: Record<string, number | null> };
 type Detail = ScenarioResume & { data: Data; resultats: Resultats; referentiel: Referentiel };
-type ImmeubleKratos = { kratos_immeuble_id: number; nom: string; adresse: string | null; ville: string | null; nb_logements: number; nb_chambres: number; loyers_bruts_mensuels: number; gestion_externe: boolean; dette: number; valeur_rapport: number; annee_rapport: number | null; source_rapport: string | null };
+type ImmeubleKratos = { kratos_immeuble_id: number; nom: string; adresse: string | null; ville: string | null; nb_logements: number; nb_chambres: number; loyers_bruts_mensuels: number; gestion_externe: boolean; dette: number; valeur_rapport: number; annee_rapport: number | null; source_rapport: string | null; notes_import: string[] };
 
 // ─── Couleurs ────────────────────────────────────────────────────────────
 
@@ -205,6 +209,12 @@ function clone<T>(v: T): T {
 function teinte(hex: string, alpha = "22"): string {
   return `${hex}${alpha}`;
 }
+function fmtDateFr(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(y, m - 1, d).toLocaleDateString("fr-CA", { day: "numeric", month: "long", year: "numeric" });
+}
 function immeubleVide(extra: Partial<Immeuble> = {}): Immeuble {
   return {
     id: uid(), nom: "", kratos_immeuble_id: null, dans_le_fonds: true, gestion_interne: true,
@@ -212,6 +222,7 @@ function immeubleVide(extra: Partial<Immeuble> = {}): Immeuble {
     acquisition_cette_annee: false, prix_acquisition: 0, prospecte_par_nous: true,
     travaux_initiaux: 0, frais_connexes: 0, valeur_future: 0, mois_prevus: 24, mois_ecoules: 0,
     valeur_rapport: 0, annee_rapport: null, taux_cap_pct: 0, revenus_nets_annuels: 0, dette: 0,
+    date_acquisition: null, notes_import: [],
     ...extra
   };
 }
@@ -655,6 +666,10 @@ export default function RevenusDepensesPage() {
           <button className="btn-accent btn-sm" onClick={() => void nouveau(false)} title="Nouveau scénario vide">
             <Plus className="h-3.5 w-3.5" /> Nouveau scénario
           </button>
+          <label className={`ml-2 flex items-center gap-2 text-xs ${MUTED}`} title="Année planifiée : les acquisitions datées dans cette année sont comptées au prorata des jours restants">
+            Année
+            <input type="number" min={2000} max={2100} step={1} value={data.annee} onChange={(e) => modifier((d) => { d.annee = Math.round(Number(e.target.value) || d.annee); })} className={`${INPUT} w-24 text-right tabular-nums font-semibold`} />
+          </label>
           <button className="ml-auto inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs text-rose-400/80 transition hover:bg-rose-500/10 hover:text-rose-400" onClick={() => void supprimer()} title="Supprimer ce scénario">
             <Trash2 className="h-3.5 w-3.5" /> Supprimer
           </button>
@@ -794,9 +809,14 @@ function FicheImmeubleCarte({ im, fiche, modifier }: { im: Immeuble; fiche?: Fic
             <Champ label="Prix d'acquisition"><Num value={im.prix_acquisition} onChange={(v) => set((x) => { x.prix_acquisition = v; })} suffixe="$" /></Champ>
           ) : null}
           {im.acquisition_cette_annee ? (
-            <label className={`flex items-center gap-2 text-xs ${MUTED}`}>
-              <input type="checkbox" className="h-4 w-4" style={{ accentColor: C.prospection }} checked={im.prospecte_par_nous} onChange={(e) => set((x) => { x.prospecte_par_nous = e.target.checked; })} /> Prospecté par nous (frais de prospection)
-            </label>
+            <>
+              <Champ label="Date d'acquisition" hint="Vide = 1er janvier (année entière). Avec une date, gestion, location, rénos au roulement, frais du fonds et sous-traitant comptent au prorata des jours restants.">
+                <input type="date" value={im.date_acquisition ?? ""} onChange={(e) => set((x) => { x.date_acquisition = e.target.value || null; })} className={`${INPUT} w-full`} />
+              </Champ>
+              <label className={`flex items-center gap-2 text-xs ${MUTED}`}>
+                <input type="checkbox" className="h-4 w-4" style={{ accentColor: C.prospection }} checked={im.prospecte_par_nous} onChange={(e) => set((x) => { x.prospecte_par_nous = e.target.checked; })} /> Prospecté par nous (frais de prospection)
+              </label>
+            </>
           ) : null}
           {im.phase === "stabilisation" ? (
             <>
@@ -845,6 +865,25 @@ function FicheImmeubleCarte({ im, fiche, modifier }: { im: Immeuble; fiche?: Fic
                 <li className="flex justify-between gap-2 border-t border-[var(--qg-border)] pt-1 font-semibold"><span>Équité</span><span className={`tabular-nums ${fiche.equite < 0 ? "text-rose-400" : ""}`}>{money(fiche.equite)}</span></li>
                 <li className={`${FAINT} leading-snug`}>{fiche.methode}</li>
                 {!im.dans_le_fonds ? <li className={FAINT}>Hors fonds : pas dans la VAN.</li> : null}
+                {fiche.date_acquisition && fiche.part_annee < 100 ? (
+                  <li className="text-amber-300">Acquis le {fmtDateFr(fiche.date_acquisition)} : {fiche.jours} jours sur {fiche.jours_annee} = {pct(fiche.part_annee)} de l&apos;année au prorata.</li>
+                ) : null}
+                {fiche.date_acquisition && !fiche.acquise_cette_annee ? (
+                  <li className="text-amber-300">Date hors de l&apos;année du scénario : {fiche.part_annee === 0 ? "rien cette année" : "année entière, sans frais d'acquisition"}.</li>
+                ) : null}
+              </ul>
+            </div>
+          ) : null}
+          {im.notes_import.length ? (
+            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-2.5 text-[11px] text-amber-200">
+              <p className="mb-1 flex items-center gap-1 font-semibold"><AlertTriangle className="h-3.5 w-3.5" /> À vérifier (import Kratos)</p>
+              <ul className="space-y-0.5">
+                {im.notes_import.map((n, idx) => (
+                  <li key={idx} className="flex items-start gap-1">
+                    <span className="flex-1">{n}</span>
+                    <button className="shrink-0 underline-offset-2 hover:underline" title="J'ai vérifié, retirer cette alerte" onClick={() => set((x) => { x.notes_import = x.notes_import.filter((_, j) => j !== idx); })}>ok</button>
+                  </li>
+                ))}
               </ul>
             </div>
           ) : null}
@@ -888,7 +927,7 @@ function ImportKratosModal({ dejaPris, onClose, onAjouter }: { dejaPris: Set<num
             <X className="h-4 w-4" />
           </button>
         </div>
-        <p className={`px-4 pt-3 text-xs ${MUTED}`}>Logements, chambres, loyers des baux actifs, gestion externe, dette des hypothèques actives et dernier rapport d&apos;évaluation sont repris tels quels. Tu ajustes ensuite dans la fiche (statut, dans le fonds ou non…).</p>
+        <p className={`px-4 pt-3 text-xs ${MUTED}`}>Logements, chambres, loyers (même total que la liste des immeubles : baux actifs, ou loyer saisi sur les logements en gestion externe), gestion externe, dette des hypothèques actives et dernier rapport d&apos;évaluation sont repris tels quels. Le triangle signale ce qui manque dans Kratos ; l&apos;alerte suit l&apos;immeuble dans sa fiche. Tu ajustes ensuite (statut, dans le fonds ou non…).</p>
         <div className="max-h-[55vh] overflow-auto px-4 py-3">
           {items == null ? (
             <Loader2 className="h-5 w-5 animate-spin text-[var(--qg-accent)]" />
@@ -906,6 +945,7 @@ function ImportKratosModal({ dejaPris, onClose, onAjouter }: { dejaPris: Set<num
                   <th className="py-1">Gestion</th>
                   <th className="py-1 text-right">Dette</th>
                   <th className="py-1 text-right">Rapport</th>
+                  <th className="py-1" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--qg-border)]">
@@ -924,12 +964,19 @@ function ImportKratosModal({ dejaPris, onClose, onAjouter }: { dejaPris: Set<num
                       <td className="py-1.5">{it.gestion_externe ? "externe" : "interne"}</td>
                       <td className="py-1.5 text-right tabular-nums">{money(it.dette)}</td>
                       <td className="py-1.5 text-right tabular-nums">{it.valeur_rapport ? `${money(it.valeur_rapport)}${it.annee_rapport ? ` (${it.annee_rapport})` : ""}` : "—"}</td>
+                      <td className="py-1.5 pl-2">
+                        {it.notes_import.length ? (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-300" title={it.notes_import.join("\n")}>
+                            <AlertTriangle className="h-3 w-3" /> {it.notes_import.length}
+                          </span>
+                        ) : null}
+                      </td>
                     </tr>
                   );
                 })}
                 {items.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className={`py-4 text-center ${FAINT}`}>Aucun immeuble actif dans Kratos.</td>
+                    <td colSpan={9} className={`py-4 text-center ${FAINT}`}>Aucun immeuble actif dans Kratos.</td>
                   </tr>
                 ) : null}
               </tbody>
@@ -995,10 +1042,10 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
           </span>
           <div className="min-w-0 flex-1">
             <h3 className="text-sm font-semibold">Immeubles</h3>
-            <p className={`text-[11px] leading-snug ${MUTED}`}>{referentiel?.valorisation_note}</p>
+            <p className={`text-[11px] leading-snug ${MUTED}`}>{referentiel?.valorisation_note} {referentiel?.prorata_note}</p>
           </div>
           <div className="text-right text-xs">
-            <p className={FAINT}>{parc.nb_dans_le_fonds} dans le fonds · {parc.nb_hors_fonds} hors fonds · {parc.nb_en_renovation} en rénovation</p>
+            <p className={FAINT}>{parc.nb_dans_le_fonds} dans le fonds · {parc.nb_hors_fonds} hors fonds · {parc.nb_en_renovation} en rénovation{parc.nb_prorates ? ` · ${parc.nb_prorates} au prorata (${parc.annee})` : ""}</p>
             <p className="font-bold tabular-nums" style={{ color: C.immeubles }}>Parc {money(parc.valeur)} · dettes {money(parc.dettes)} · équité {money(parc.equite)}</p>
           </div>
         </div>
@@ -1024,7 +1071,7 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
           onAjouter={(items) => {
             modifier((d) => {
               for (const it of items) {
-                d.immeubles.push(immeubleVide({ nom: it.nom, kratos_immeuble_id: it.kratos_immeuble_id, nb_logements: it.nb_logements, nb_chambres: it.nb_chambres, loyers_bruts_mensuels: it.loyers_bruts_mensuels, gestion_interne: !it.gestion_externe, phase: "stabilise", valeur_rapport: it.valeur_rapport, annee_rapport: it.annee_rapport, dette: it.dette }));
+                d.immeubles.push(immeubleVide({ nom: it.nom, kratos_immeuble_id: it.kratos_immeuble_id, nb_logements: it.nb_logements, nb_chambres: it.nb_chambres, loyers_bruts_mensuels: it.loyers_bruts_mensuels, gestion_interne: !it.gestion_externe, phase: "stabilise", valeur_rapport: it.valeur_rapport, annee_rapport: it.annee_rapport, dette: it.dette, notes_import: it.notes_import }));
               }
             });
             setImportOuvert(false);
@@ -1047,6 +1094,7 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
               <li className="flex justify-between gap-2"><span>+ Cash</span><span className="tabular-nums">{money(parc.cash)}</span></li>
               <li className="flex justify-between gap-2"><span>− Dettes</span><span className="tabular-nums">{money(parc.dettes)}</span></li>
               <li className="flex justify-between gap-2 border-t border-[var(--qg-border)] pt-1 font-semibold"><span>VAN</span><b className={`tabular-nums ${parc.van < 0 ? "text-rose-400" : ""}`}>{money(parc.van)}</b></li>
+              {parc.nb_prorates ? <li className="flex justify-between gap-2"><span>VAN pondérée par le temps (acquisitions au prorata)</span><span className="tabular-nums">{money(parc.van_ponderee)}</span></li> : null}
               <li className="flex justify-between gap-2"><span>× {pct(f.taux_pct)}</span><b className="tabular-nums" style={{ color: C.fonds }}>{money(rev.fonds?.revenu)} / an</b></li>
               <li className={FAINT}>VAN à terme (rénovations terminées) : {money(parc.van_a_terme)}</li>
             </ul>
