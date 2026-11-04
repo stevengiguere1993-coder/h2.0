@@ -26,7 +26,7 @@
  * Kratos et QuickBooks). Réservé aux admins.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Building2,
@@ -96,6 +96,8 @@ type Immeuble = {
   assurances: number;
   energie: number;
   autres_depenses: number;
+  suivre_kratos: boolean;
+  notes_ignorees: string[];
 };
 type LigneRefact = { id: string; libelle: string; montant_annuel: number };
 type FraisFixe = { id: string; categorie: string; libelle: string; montant: number; periode: "mois" | "an" };
@@ -129,7 +131,7 @@ const LIGNES_SCHL: [string, keyof DepensesSchl][] = [
   ["Autres dépenses", "autres"],
   ["Autres normalisations (barème)", "autres_normalisations"]
 ];
-type FicheImmeuble = { id: string; nom: string; dans_le_fonds: boolean; phase: string; cout_projet: number; valeur: number; valeur_a_terme: number; plus_value_prevue: number; methode: string; dette: number; equite: number; part_annee: number; jours: number; jours_annee: number; date_acquisition: string | null; acquise_cette_annee: boolean; notes_import: string[]; revenus_nets: number | null; source_revenus_nets: "schl" | "saisis" | null; depenses_schl: DepensesSchl | null };
+type FicheImmeuble = { id: string; nom: string; dans_le_fonds: boolean; phase: string; cout_projet: number; valeur: number; valeur_a_terme: number; plus_value_prevue: number; methode: string; dette: number; equite: number; part_annee: number; jours: number; jours_annee: number; date_acquisition: string | null; acquise_cette_annee: boolean; notes_import: string[]; suivre_kratos: boolean; revenus_nets: number | null; source_revenus_nets: "schl" | "saisis" | null; depenses_schl: DepensesSchl | null };
 type Resultats = {
   parc: { immeubles: FicheImmeuble[]; valeur: number; dettes: number; equite: number; cash: number; van: number; van_ponderee: number; valeur_a_terme: number; van_a_terme: number; nb_dans_le_fonds: number; nb_hors_fonds: number; nb_en_renovation: number; annee: number; nb_prorates: number; bareme_schl: { taux_inoccupation: number; seuil_log: number; concierge_lt12: number; concierge_gte12: number; entretien: number; gestion_lt12: number; gestion_gte12: number; autres_normalisations_pct: number } };
   revenus: SectionRevenu[];
@@ -207,7 +209,7 @@ const ICONES: Record<string, React.ComponentType<{ className?: string }>> = {
 // ─── Outils ──────────────────────────────────────────────────────────────
 
 const INPUT =
-  "rounded-lg border border-[var(--qg-border)] bg-[var(--qg-bg)] px-2.5 py-1.5 text-sm outline-none transition focus:border-[var(--qg-accent)]";
+  "rounded-lg border border-[var(--qg-border)] bg-[var(--qg-bg)] px-2.5 py-1.5 text-sm outline-none transition focus:border-[var(--qg-accent)] disabled:cursor-default disabled:border-dashed disabled:opacity-75";
 const CARD = "rounded-2xl border border-[var(--qg-border)] bg-[var(--qg-card-bg)]";
 const MUTED = "text-[var(--qg-text-muted)]";
 const FAINT = "text-[var(--qg-text-faint)]";
@@ -245,8 +247,33 @@ function immeubleVide(extra: Partial<Immeuble> = {}): Immeuble {
     valeur_rapport: 0, annee_rapport: null, taux_cap_pct: 0, revenus_nets_annuels: 0, dette: 0,
     date_acquisition: null, notes_import: [],
     taxes_municipales: 0, taxes_scolaires: 0, assurances: 0, energie: 0, autres_depenses: 0,
+    suivre_kratos: false, notes_ignorees: [],
     ...extra
   };
+}
+
+// Lecture seule par défaut : chaque section et chaque fiche se déverrouille avec « Modifier »
+// (Phil 2026-11-04 : « c'est trop facile en ce moment de modifier des infos »).
+type Edition = { actif: (k: string) => boolean; basculer: (k: string) => void; toutVerrouiller: () => void; nb: number };
+const EditionCtx = createContext<Edition>({ actif: () => true, basculer: () => {}, toutVerrouiller: () => {}, nb: 0 });
+
+function BoutonModifier({ k, className = "" }: { k: string; className?: string }) {
+  const ed = useContext(EditionCtx);
+  const actif = ed.actif(k);
+  return (
+    <button type="button" className={`btn-secondary btn-sm ${className}`} onClick={() => ed.basculer(k)} title={actif ? "Terminer et reverrouiller" : "Déverrouiller pour modifier"}>
+      {actif ? <Check className="h-3.5 w-3.5" /> : <Pencil className="h-3.5 w-3.5" />} {actif ? "Terminé" : "Modifier"}
+    </button>
+  );
+}
+
+function Verrou({ k, children, className = "" }: { k: string; children: React.ReactNode; className?: string }) {
+  const ed = useContext(EditionCtx);
+  return (
+    <fieldset disabled={!ed.actif(k)} className={`m-0 min-w-0 border-0 p-0 ${className}`}>
+      {children}
+    </fieldset>
+  );
 }
 
 function Num({ value, onChange, className = "", placeholder, title, step, suffixe, verrouille }: { value: number | null | undefined; onChange: (v: number) => void; className?: string; placeholder?: string; title?: string; step?: number; suffixe?: string; verrouille?: boolean }) {
@@ -433,11 +460,12 @@ function Carte({ id, num, titre, hex, icon: Icon, revenu, revenuLabel = "par an"
             </p>
           </div>
         ) : null}
+        <BoutonModifier k={id} />
       </div>
       <div className="grid gap-4 p-4 lg:grid-cols-[1fr_minmax(220px,0.9fr)]">
         <div>
           <p className={`mb-2 text-[10px] font-semibold uppercase tracking-wider ${FAINT}`}>Hypothèses</p>
-          {hypotheses}
+          <Verrou k={id}>{hypotheses}</Verrou>
         </div>
         {resultat ? (
           <div className="rounded-xl p-3 text-xs" style={{ background: teinte(hex, "12"), border: `1px solid ${teinte(hex, "44")}` }}>
@@ -482,6 +510,13 @@ export default function RevenusDepensesPage() {
   const [etat, setEtat] = useState<"charge" | "sale" | "sauvegarde" | "ok" | "erreur">("charge");
   const [err, setErr] = useState<string | null>(null);
   const [renomme, setRenomme] = useState<string | null>(null);
+  const [editables, setEditables] = useState<Set<string>>(() => new Set());
+  const edition: Edition = {
+    actif: (k) => editables.has(k),
+    basculer: (k) => setEditables((s) => { const n = new Set(Array.from(s)); if (n.has(k)) n.delete(k); else n.add(k); return n; }),
+    toutVerrouiller: () => setEditables(new Set()),
+    nb: editables.size
+  };
   const skipSave = useRef(true);
   const timer = useRef<number | null>(null);
 
@@ -690,10 +725,18 @@ export default function RevenusDepensesPage() {
           <button className="btn-accent btn-sm" onClick={() => void nouveau(false)} title="Nouveau scénario vide">
             <Plus className="h-3.5 w-3.5" /> Nouveau scénario
           </button>
-          <label className={`ml-2 flex items-center gap-2 text-xs ${MUTED}`} title="Année planifiée : les acquisitions datées dans cette année sont comptées au prorata des jours restants">
+          <fieldset disabled={!edition.actif("annee")} className={`m-0 ml-2 inline-flex items-center gap-2 border-0 p-0 text-xs ${MUTED}`} title="Année planifiée : les acquisitions datées dans cette année sont comptées au prorata des jours restants">
             Année
             <input type="number" min={2000} max={2100} step={1} value={data.annee} onChange={(e) => modifier((d) => { d.annee = Math.round(Number(e.target.value) || d.annee); })} className={`${INPUT} w-24 text-right tabular-nums font-semibold`} />
-          </label>
+          </fieldset>
+          <button type="button" className="btn-secondary btn-sm" onClick={() => edition.basculer("annee")} title={edition.actif("annee") ? "Terminé" : "Modifier l'année"}>
+            {edition.actif("annee") ? <Check className="h-3.5 w-3.5" /> : <Pencil className="h-3.5 w-3.5" />}
+          </button>
+          {edition.nb > 0 ? (
+            <button type="button" className="btn-secondary btn-sm" onClick={edition.toutVerrouiller} title="Reverrouiller toutes les sections ouvertes">
+              <Lock className="h-3.5 w-3.5" /> Tout verrouiller ({edition.nb})
+            </button>
+          ) : null}
           <button className="ml-auto inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs text-rose-400/80 transition hover:bg-rose-500/10 hover:text-rose-400" onClick={() => void supprimer()} title="Supprimer ce scénario">
             <Trash2 className="h-3.5 w-3.5" /> Supprimer
           </button>
@@ -767,7 +810,9 @@ export default function RevenusDepensesPage() {
           ))}
         </div>
 
-        {onglet === "revenus" ? <RevenusTab data={data} res={res} rev={rev} modifier={modifier} referentiel={detail?.referentiel} /> : <DepensesTab data={data} res={res} referentiel={detail?.referentiel} modifier={modifier} />}
+        <EditionCtx.Provider value={edition}>
+          {onglet === "revenus" ? <RevenusTab data={data} res={res} rev={rev} modifier={modifier} referentiel={detail?.referentiel} /> : <DepensesTab data={data} res={res} referentiel={detail?.referentiel} modifier={modifier} />}
+        </EditionCtx.Provider>
       </div>
     </>
   );
@@ -784,10 +829,10 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
   const coutProjet = im.prix_acquisition + im.travaux_initiaux + im.frais_connexes;
   const hex = im.dans_le_fonds ? C.immeubles : "#94a3b8";
   const ds = fiche?.depenses_schl ?? null;
-  // Valeurs reprises de Kratos : verrouillées, on les ajuste seulement après « Modifier » (Phil 2026-11-04).
-  const [verrou, setVerrou] = useState<boolean>(!!im.kratos_immeuble_id);
   const [sync, setSync] = useState<"" | "en_cours" | "ok" | "erreur">("");
-  const k = verrou && !!im.kratos_immeuble_id;
+  const cle = `imm:${im.id}`;
+  // Champs repris de Kratos : les ajuster à la main = l'immeuble ne suit plus Kratos (« Actualiser » pour y revenir).
+  const setK = (fn: (x: Immeuble) => void) => set((x) => { fn(x); x.suivre_kratos = false; });
   const actualiser = async () => {
     if (!im.kratos_immeuble_id) return;
     setSync("en_cours");
@@ -801,7 +846,8 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
         x.nb_logements = it.nb_logements; x.nb_chambres = it.nb_chambres; x.loyers_bruts_mensuels = it.loyers_bruts_mensuels;
         x.gestion_interne = !it.gestion_externe; x.valeur_rapport = it.valeur_rapport; x.annee_rapport = it.annee_rapport; x.dette = it.dette;
         x.taxes_municipales = it.taxes_municipales; x.taxes_scolaires = it.taxes_scolaires; x.assurances = it.assurances; x.energie = it.energie;
-        x.autres_depenses = it.autres_depenses; x.notes_import = it.notes_import;
+        x.autres_depenses = it.autres_depenses; x.notes_import = it.notes_import.filter((n) => !x.notes_ignorees.includes(n));
+        x.suivre_kratos = true;
       });
       setSync("ok");
     } catch {
@@ -817,20 +863,20 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
         <input value={im.nom} placeholder="Nom ou adresse de l'immeuble" onChange={(e) => set((x) => { x.nom = e.target.value; })} className={`${INPUT} min-w-[220px] flex-1 font-semibold`} />
         {im.kratos_immeuble_id ? (
           <span className="inline-flex items-center gap-1">
-            <span className="inline-flex items-center gap-1 rounded-full border border-[var(--qg-border)] px-2 py-0.5 text-[10px] uppercase tracking-wider" title="Importé de Kratos : loyers, portes, chambres, rapport, dette et dépenses réelles sont repris tels quels">
-              <Database className="h-3 w-3" /> Kratos
+            <span className="inline-flex items-center gap-1 rounded-full border border-[var(--qg-border)] px-2 py-0.5 text-[10px] uppercase tracking-wider" title={im.suivre_kratos ? "Suit Kratos : loyers, portes, chambres, rapport, dette et dépenses réelles sont repris à jour à chaque ouverture" : "Valeurs ajustées à la main : « Actualiser » pour revenir à celles de Kratos"}>
+              <Database className="h-3 w-3" /> Kratos{im.suivre_kratos ? "" : " · manuel"}
             </span>
-            <button type="button" className="btn-secondary btn-sm" onClick={() => setVerrou((v) => !v)} title={verrou ? "Déverrouiller les valeurs reprises de Kratos pour les ajuster à la main" : "Reverrouiller les valeurs reprises de Kratos"}>
-              {verrou ? <Pencil className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />} {verrou ? "Modifier" : "Verrouiller"}
-            </button>
             <button type="button" className="btn-secondary btn-sm" onClick={() => void actualiser()} disabled={sync === "en_cours"} title="Reprendre les valeurs à jour de Kratos (écrase les ajustements faits ici)">
               <RefreshCw className={`h-3.5 w-3.5 ${sync === "en_cours" ? "animate-spin" : ""}`} /> Actualiser{sync === "ok" ? " ✓" : sync === "erreur" ? " ✗" : ""}
             </button>
           </span>
         ) : null}
+        <Verrou k={cle} className="inline-flex flex-wrap items-center gap-2">
         <Interrupteur actif={im.dans_le_fonds} onChange={(v) => set((x) => { x.dans_le_fonds = v; })} hex={C.fonds} label={im.dans_le_fonds ? "Dans le fonds" : "Hors fonds"} hint="Dans le fonds : compte dans la valeur du parc, les dettes, la VAN, les frais de gestion du fonds et les frais de développement / prospection. Hors fonds : détenu ailleurs — rapporte seulement gestion locative, location, construction, maintenance." />
-        <Interrupteur actif={im.gestion_interne} onChange={(v) => set((x) => { x.gestion_interne = v; })} hex={C.gestion} label={im.gestion_interne ? "Gestion à l'interne" : "Gestion sous-traitée"} hint="À l'interne : nos frais de location s'appliquent. Sous-traitée : les loyers de cet immeuble servent à calculer la dépense du sous-traitant de gestion (onglet Dépenses) ; les frais de gestion restent facturés si l'option est cochée dans la section 7." />
+        <Interrupteur actif={im.gestion_interne} onChange={(v) => setK((x) => { x.gestion_interne = v; })} hex={C.gestion} label={im.gestion_interne ? "Gestion à l'interne" : "Gestion sous-traitée"} hint="À l'interne : nos frais de location s'appliquent. Sous-traitée : les loyers de cet immeuble servent à calculer la dépense du sous-traitant de gestion (onglet Dépenses) ; les frais de gestion restent facturés si l'option est cochée dans la section 7." />
         <BoutonRetirer onClick={() => modifier((d) => { d.immeubles = d.immeubles.filter((y) => y.id !== im.id); })} title="Retirer cet immeuble du scénario" />
+        </Verrou>
+        <BoutonModifier k={cle} />
       </div>
       {replie ? (
         <button type="button" onClick={onToggle} className={`flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2 text-left text-xs ${MUTED}`} title="Déplier la fiche">
@@ -845,17 +891,17 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
           {im.notes_import.length ? <span className="inline-flex items-center gap-1 text-amber-300"><AlertTriangle className="h-3 w-3" /> {im.notes_import.length} à vérifier</span> : null}
         </button>
       ) : (
-      <div className="grid gap-4 p-4 lg:grid-cols-3">
+      <Verrou k={cle}><div className="grid gap-4 p-4 lg:grid-cols-3">
         {/* Loyers et portes */}
         <div className="space-y-2">
           <p className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider" style={{ color: C.gestion }}>
             <Pastille hex={C.gestion} /> Loyers et portes
           </p>
-          {k ? <p className={`text-[11px] leading-snug ${FAINT}`}>Valeurs de Kratos verrouillées (pointillés) : « Modifier » pour les ajuster, « Actualiser » pour reprendre Kratos.</p> : null}
-          <Champ label="Loyers bruts par mois"><Num value={im.loyers_bruts_mensuels} onChange={(v) => set((x) => { x.loyers_bruts_mensuels = v; })} suffixe="$" verrouille={k} /></Champ>
+          {im.kratos_immeuble_id ? <p className={`text-[11px] leading-snug ${FAINT}`}>{im.suivre_kratos ? "Valeurs de Kratos, reprises à jour à chaque ouverture de la page." : "Valeurs ajustées à la main : « Actualiser » pour revenir à celles de Kratos."}</p> : null}
+          <Champ label="Loyers bruts par mois"><Num value={im.loyers_bruts_mensuels} onChange={(v) => setK((x) => { x.loyers_bruts_mensuels = v; })} suffixe="$" /></Champ>
           <div className="grid grid-cols-2 gap-2">
-            <Champ label="Logements"><Num value={im.nb_logements} step={1} onChange={(v) => set((x) => { x.nb_logements = Math.round(v); })} verrouille={k} /></Champ>
-            <Champ label="Chambres" hint="Chambres louées à l'unité"><Num value={im.nb_chambres} step={1} onChange={(v) => set((x) => { x.nb_chambres = Math.round(v); })} verrouille={k} /></Champ>
+            <Champ label="Logements"><Num value={im.nb_logements} step={1} onChange={(v) => setK((x) => { x.nb_logements = Math.round(v); })} /></Champ>
+            <Champ label="Chambres" hint="Chambres louées à l'unité"><Num value={im.nb_chambres} step={1} onChange={(v) => setK((x) => { x.nb_chambres = Math.round(v); })} /></Champ>
           </div>
         </div>
         {/* Statut et valeur */}
@@ -910,9 +956,9 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
           ) : (
             <>
               <div className="grid grid-cols-[1fr_90px] gap-2">
-                <Champ label="Dernier rapport d'évaluation"><Num value={im.valeur_rapport} onChange={(v) => set((x) => { x.valeur_rapport = v; })} suffixe="$" verrouille={k} /></Champ>
+                <Champ label="Dernier rapport d'évaluation"><Num value={im.valeur_rapport} onChange={(v) => setK((x) => { x.valeur_rapport = v; })} suffixe="$" /></Champ>
                 <Champ label="Année">
-                  <input type="number" min={1990} max={2100} step={1} value={im.annee_rapport ?? ""} placeholder="2026" readOnly={k} tabIndex={k ? -1 : undefined} title={k ? "Valeur reprise de Kratos — clique sur Modifier (crayon) pour l'ajuster" : undefined} onChange={(e) => { if (!k) set((x) => { x.annee_rapport = e.target.value === "" ? null : Math.round(Number(e.target.value)); }); }} className={`${INPUT} w-full text-right tabular-nums ${k ? "cursor-default border-dashed opacity-75" : ""}`} />
+                  <input type="number" min={1990} max={2100} step={1} value={im.annee_rapport ?? ""} placeholder="2026" onChange={(e) => setK((x) => { x.annee_rapport = e.target.value === "" ? null : Math.round(Number(e.target.value)); })} className={`${INPUT} w-full text-right tabular-nums`} />
                 </Champ>
               </div>
               <Champ label="Taux de cap du rapport" hint="Avec des loyers, la valeur suit les revenus nets SCHL ÷ taux de cap (elle s'ajuste quand les loyers ou les dépenses bougent). Sans taux, la valeur reste celle du rapport."><Num value={im.taux_cap_pct} step={0.1} onChange={(v) => set((x) => { x.taux_cap_pct = v; })} suffixe="%" /></Champ>
@@ -920,13 +966,13 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
                 <Pastille hex={C.construction} /> Dépenses réelles par an
               </p>
               <div className="grid grid-cols-2 gap-2">
-                <Champ label="Taxes municipales"><Num value={im.taxes_municipales} onChange={(v) => set((x) => { x.taxes_municipales = v; })} suffixe="$" verrouille={k} /></Champ>
-                <Champ label="Taxes scolaires"><Num value={im.taxes_scolaires} onChange={(v) => set((x) => { x.taxes_scolaires = v; })} suffixe="$" verrouille={k} /></Champ>
-                <Champ label="Assurances"><Num value={im.assurances} onChange={(v) => set((x) => { x.assurances = v; })} suffixe="$" verrouille={k} /></Champ>
-                <Champ label="Énergie"><Num value={im.energie} onChange={(v) => set((x) => { x.energie = v; })} suffixe="$" verrouille={k} /></Champ>
+                <Champ label="Taxes municipales"><Num value={im.taxes_municipales} onChange={(v) => setK((x) => { x.taxes_municipales = v; })} suffixe="$" /></Champ>
+                <Champ label="Taxes scolaires"><Num value={im.taxes_scolaires} onChange={(v) => setK((x) => { x.taxes_scolaires = v; })} suffixe="$" /></Champ>
+                <Champ label="Assurances"><Num value={im.assurances} onChange={(v) => setK((x) => { x.assurances = v; })} suffixe="$" /></Champ>
+                <Champ label="Énergie"><Num value={im.energie} onChange={(v) => setK((x) => { x.energie = v; })} suffixe="$" /></Champ>
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <Champ label="Autres dépenses" hint="Déneigement, etc. Entretien, conciergerie et gestion sont normalisés par le barème SCHL : ne les saisis pas ici."><Num value={im.autres_depenses} onChange={(v) => set((x) => { x.autres_depenses = v; })} suffixe="$" verrouille={k} /></Champ>
+                <Champ label="Autres dépenses" hint="Déneigement, etc. Entretien, conciergerie et gestion sont normalisés par le barème SCHL : ne les saisis pas ici."><Num value={im.autres_depenses} onChange={(v) => setK((x) => { x.autres_depenses = v; })} suffixe="$" /></Champ>
                 <Champ label="Revenus nets saisis" hint="Optionnel : laisse à 0 pour le calcul SCHL automatique (loyers bruts − dépenses normalisées). Une valeur saisie prime."><Num value={im.revenus_nets_annuels} onChange={(v) => set((x) => { x.revenus_nets_annuels = v; })} suffixe="$/an" /></Champ>
               </div>
               {ds ? (
@@ -949,7 +995,7 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
           <p className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider" style={{ color: C.fonds }}>
             <Pastille hex={C.fonds} /> Dette et équité
           </p>
-          <Champ label="Dette (solde du prêt)"><Num value={im.dette} onChange={(v) => set((x) => { x.dette = v; })} suffixe="$" verrouille={k} /></Champ>
+          <Champ label="Dette (solde du prêt)"><Num value={im.dette} onChange={(v) => setK((x) => { x.dette = v; })} suffixe="$" /></Champ>
           {fiche ? (
             <div className="rounded-xl p-3 text-xs" style={{ background: teinte(hex, "12"), border: `1px solid ${teinte(hex, "44")}` }}>
               <ul className="space-y-1">
@@ -977,14 +1023,14 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
                 {im.notes_import.map((n, idx) => (
                   <li key={idx} className="flex items-start gap-1">
                     <span className="flex-1">{n}</span>
-                    <button className="shrink-0 underline-offset-2 hover:underline" title="J'ai vérifié, retirer cette alerte" onClick={() => set((x) => { x.notes_import = x.notes_import.filter((_, j) => j !== idx); })}>ok</button>
+                    <button className="shrink-0 underline-offset-2 hover:underline" title="J'ai vérifié, retirer cette alerte" onClick={() => set((x) => { x.notes_ignorees = [...x.notes_ignorees, n]; x.notes_import = x.notes_import.filter((_, j) => j !== idx); })}>ok</button>
                   </li>
                 ))}
               </ul>
             </div>
           ) : null}
         </div>
-      </div>
+      </div></Verrou>
       )}
     </div>
   );
@@ -1098,6 +1144,7 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
   // Fiches repliées par défaut (Phil : « sinon c'est gros ») ; on retient celles qu'on a dépliées.
   const [deplies, setDeplies] = useState<Set<string>>(() => new Set());
   const basculer = (id: string) => setDeplies((s) => { const n = new Set(Array.from(s)); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const ed = useContext(EditionCtx);
   const f = data.fonds;
   const parc = res.parc;
   const fiches = Object.fromEntries(parc.immeubles.map((x) => [x.id, x])) as Record<string, FicheImmeuble>;
@@ -1155,7 +1202,7 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
           ))}
           {immeubles.length === 0 ? <p className={`rounded-xl border border-dashed border-[var(--qg-border)] px-4 py-6 text-center text-sm ${FAINT}`}>Aucun immeuble — ajoute ceux que le fonds va détenir, ou reprends ceux déjà dans Kratos.</p> : null}
           <div className="flex flex-wrap gap-2">
-            <button className="btn-accent btn-sm" onClick={() => { const n = immeubleVide(); modifier((d) => { d.immeubles.push(n); }); setDeplies((s) => new Set([...Array.from(s), n.id])); }}>
+            <button className="btn-accent btn-sm" onClick={() => { const n = immeubleVide(); modifier((d) => { d.immeubles.push(n); }); setDeplies((s) => new Set([...Array.from(s), n.id])); ed.basculer(`imm:${n.id}`); }}>
               <Plus className="h-3.5 w-3.5" /> Ajouter un immeuble
             </button>
             <button className="btn-secondary btn-sm" onClick={() => setImportOuvert(true)}>
@@ -1177,7 +1224,7 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
           onAjouter={(items) => {
             modifier((d) => {
               for (const it of items) {
-                d.immeubles.push(immeubleVide({ nom: it.nom, kratos_immeuble_id: it.kratos_immeuble_id, nb_logements: it.nb_logements, nb_chambres: it.nb_chambres, loyers_bruts_mensuels: it.loyers_bruts_mensuels, gestion_interne: !it.gestion_externe, phase: "stabilise", valeur_rapport: it.valeur_rapport, annee_rapport: it.annee_rapport, dette: it.dette, taxes_municipales: it.taxes_municipales, taxes_scolaires: it.taxes_scolaires, assurances: it.assurances, energie: it.energie, autres_depenses: it.autres_depenses, notes_import: it.notes_import }));
+                d.immeubles.push(immeubleVide({ nom: it.nom, kratos_immeuble_id: it.kratos_immeuble_id, nb_logements: it.nb_logements, nb_chambres: it.nb_chambres, loyers_bruts_mensuels: it.loyers_bruts_mensuels, gestion_interne: !it.gestion_externe, phase: "stabilise", valeur_rapport: it.valeur_rapport, annee_rapport: it.annee_rapport, dette: it.dette, taxes_municipales: it.taxes_municipales, taxes_scolaires: it.taxes_scolaires, assurances: it.assurances, energie: it.energie, autres_depenses: it.autres_depenses, notes_import: it.notes_import, suivre_kratos: true }));
               }
             });
             setImportOuvert(false);

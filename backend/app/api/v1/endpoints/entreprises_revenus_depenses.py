@@ -89,7 +89,7 @@ async def _bareme_schl(db) -> Dict[str, Any]:
 
 
 async def _detail(db, s: RdScenario) -> Dict[str, Any]:
-    data = svc.charger(s.data_json)
+    data = await hydrater_kratos(db, svc.charger(s.data_json))
     bareme = await _bareme_schl(db)
     return {**_resume_scenario(s), "data": data, "resultats": svc.calculer(data, bareme), "referentiel": svc.referentiel(bareme)}
 
@@ -160,7 +160,7 @@ async def enregistrer_scenario(scenario_id: int, payload: ScenarioUpdate, db: DB
             raise HTTPException(status_code=422, detail="Le nom du scénario ne peut pas être vide.")
         s.nom = nom[:120]
     if payload.data is not None:
-        data = svc.normaliser(payload.data)
+        data = await hydrater_kratos(db, svc.normaliser(payload.data))
         s.data_json = json.dumps(data, ensure_ascii=False)
         s.resume_json = json.dumps(svc.resume(svc.calculer(data, await _bareme_schl(db))), ensure_ascii=False)
     s.updated_at = _now()
@@ -189,7 +189,7 @@ async def supprimer_scenario(scenario_id: int, db: DBSession, user: RequireAdmin
 
 @router.post("/calculer", summary="Calculer sans enregistrer")
 async def calculer(payload: CalculIn, db: DBSession, user: RequireAdminOrOwner) -> Dict[str, Any]:
-    data = svc.normaliser(payload.data)
+    data = await hydrater_kratos(db, svc.normaliser(payload.data))
     return {"data": data, "resultats": svc.calculer(data, await _bareme_schl(db))}
 
 
@@ -200,10 +200,52 @@ async def immeubles_kratos(db: DBSession, user: RequireAdminOrOwner) -> Dict[str
     dette = solde des hypothèques actives, dernier rapport d'évaluation
     (valeur, année). Phil 2026-11-04 : « permet de sélectionner ceux que
     j'ai déjà dans Kratos »."""
-    immeubles = (await db.execute(select(Immeuble).where(Immeuble.is_active.is_(True)).order_by(Immeuble.name))).scalars().all()
+    items = await lire_immeubles_kratos(db)
+    return {"items": items, "total": len(items), "nb_total": int((await db.execute(select(func.count(Immeuble.id)))).scalar() or 0)}
+
+
+#: Champs d'un immeuble du scénario qui viennent de Kratos (repris à jour tant que « suivre_kratos »).
+CHAMPS_KRATOS = ("nb_logements", "nb_chambres", "loyers_bruts_mensuels", "gestion_interne", "valeur_rapport", "annee_rapport", "dette",
+                 "taxes_municipales", "taxes_scolaires", "assurances", "energie", "autres_depenses")
+_log = logging.getLogger(__name__)
+
+
+async def hydrater_kratos(db, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Phil 2026-11-04 : « je t'ai dit de prendre toutes les informations qui
+    étaient disponibles ». Les immeubles importés qui « suivent Kratos »
+    reprennent, à chaque lecture / enregistrement / calcul, les valeurs à jour de
+    Kratos (loyers, portes, chambres, rapport, dette, dépenses réelles) et leurs
+    alertes, moins celles que l'utilisateur a fermées (``notes_ignorees``)."""
+    cibles = [i for i in data.get("immeubles", []) if i.get("kratos_immeuble_id") and i.get("suivre_kratos")]
+    if not cibles:
+        return data
+    try:
+        items = {it["kratos_immeuble_id"]: it for it in await lire_immeubles_kratos(db, [int(i["kratos_immeuble_id"]) for i in cibles])}
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("Hydratation Kratos impossible : %s", exc)
+        return data
+    for i in cibles:
+        it = items.get(i["kratos_immeuble_id"])
+        if not it:
+            i["notes_import"] = ["Immeuble introuvable ou inactif dans Kratos : valeurs figées."]
+            continue
+        for k in CHAMPS_KRATOS:
+            i[k] = (not it["gestion_externe"]) if k == "gestion_interne" else it[k]
+        ignorees = set(i.get("notes_ignorees") or [])
+        i["notes_import"] = [n for n in it["notes_import"] if n not in ignorees]
+    return data
+
+
+async def lire_immeubles_kratos(db, ids_filtre: Optional[List[int]] = None) -> List[Dict[str, Any]]:
+    """Immeubles actifs de Kratos tels que la simulation les reprend (voir la route
+    ``/immeubles-kratos``) ; ``ids_filtre`` limite aux immeubles d'un scénario."""
+    q = select(Immeuble).where(Immeuble.is_active.is_(True))
+    if ids_filtre:
+        q = q.where(Immeuble.id.in_(ids_filtre))
+    immeubles = (await db.execute(q.order_by(Immeuble.name))).scalars().all()
     ids = [i.id for i in immeubles]
     if not ids:
-        return {"items": []}
+        return []
     logements = (await db.execute(select(Logement).where(Logement.immeuble_id.in_(ids)))).scalars().all()
     log_ids = [l.id for l in logements]
     # Loyer effectif par logement, LA définition commune de Kratos (liste des
@@ -340,4 +382,4 @@ async def immeubles_kratos(db: DBSession, user: RequireAdminOrOwner) -> Dict[str
             "autres_depenses": round(dep.get("autres_depenses", 0.0), 2),
             "notes_import": notes,
         })
-    return {"items": items, "total": len(items), "nb_total": int((await db.execute(select(func.count(Immeuble.id)))).scalar() or 0)}
+    return items
