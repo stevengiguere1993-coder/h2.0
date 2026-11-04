@@ -25,6 +25,7 @@ from app.models.prospection_courtier import (  # noqa: F401
     ProspectionCourtierAnnonce,
     ProspectionCourtierContact,
 )
+from app.models.revenus_depenses import RdScenario  # noqa: F401
 from app.models.tal_bail import (  # noqa: F401
     TalConnexion,
     TalSchema,

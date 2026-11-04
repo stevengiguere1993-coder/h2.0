@@ -56,6 +56,7 @@ from app.models.immobilier import (
     ImmeubleCode,
 )
 from app.models.tal_bail import TalTransmission
+from app.models.revenus_depenses import RdScenario
 from app.models.project import Project
 from app.models.inventaire import InventaireArticle, InventaireMouvement
 from app.models.materiau import Materiau
@@ -1593,6 +1594,10 @@ _DETAIL_ENTITIES: dict[str, tuple] = {
     "entreprise": (
         Entreprise, "entreprise", "entreprise", "entreprise:read",
     ),
+    # Scénario « Revenus et dépenses » de la société de gestion (2026-11-04).
+    "rd_scenario": (
+        RdScenario, "entreprise", "rd_scenario", "entreprise:read",
+    ),
     "lead_analysis": (
         LeadAnalysis, "prospection", "lead_analysis",
         "prospection:analyses:read",
@@ -1932,6 +1937,13 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         entity_type="devlog_project", list_cap="devlog:projects:list",
         order_attr="updated_at", stage_attr="status", supports_active=False,
     ),
+    # Gestion d'entreprise (2026-11-04) : scénarios de simulation des revenus
+    # et dépenses de la société de gestion du fonds.
+    "simulations_revenus_depenses": _ListSpec(
+        model=RdScenario, pole="entreprise",
+        entity_type="rd_scenario", list_cap="entreprise:list",
+        order_attr="updated_at", stage_attr=None, supports_active=False,
+    ),
     "entreprises": _ListSpec(
         model=Entreprise, pole="entreprise",
         entity_type="entreprise", list_cap="entreprise:list",
@@ -2064,6 +2076,9 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
 #: Alias supplémentaires (noms « complets ») vers les mêmes specs, pour que
 #: l'API accepte aussi bien « deals » que « prospection_deal ».
 _LIST_ALIASES: dict[str, str] = {
+    "revenus_depenses": "simulations_revenus_depenses",
+    "rd_scenarios": "simulations_revenus_depenses",
+    "scenarios_revenus_depenses": "simulations_revenus_depenses",
     "prospection_deal": "deals",
     "prospection_deals": "deals",
     "lead_analysis": "analyses",

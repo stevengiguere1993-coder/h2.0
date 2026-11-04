@@ -1283,6 +1283,41 @@ def serialize_imm_hypotheque(obj: Any, level: str = "summary") -> dict:
     return _drop_none(data)
 
 
+def serialize_rd_scenario(obj: Any, level: str = "summary") -> dict:
+    """Scénario « Revenus et dépenses » de la société de gestion (Gestion
+    d'entreprise, 2026-11-04) : nom + résumé des résultats (revenus, dépenses,
+    bénéfice, marge, dividendes, VAN nécessaire). Hypothèses complètes en détail."""
+    import json as _json
+
+    try:
+        res = _json.loads(_get(obj, "resume_json") or "{}") or {}
+    except Exception:  # noqa: BLE001
+        res = {}
+    data: dict[str, Any] = {
+        "entity_type": "rd_scenario",
+        "type": "rd_scenario",
+        "id": _get(obj, "id"),
+        "label": f"Simulation revenus/dépenses — {_str(_get(obj, 'nom')) or 'scénario'}",
+        "pole": "entreprise",
+        "nom": _str(_get(obj, "nom")),
+        "is_default": bool(_get(obj, "is_default")),
+        "revenus_annuels": _num(res.get("revenus")),
+        "depenses_annuelles": _num(res.get("depenses")),
+        "benefice": _num(res.get("benefice")),
+        "marge_pct": _num(res.get("marge_pct")),
+        "dividendes": _num(res.get("dividendes")),
+        "van_necessaire": _num(res.get("van_necessaire")),
+        "updated_at": _iso(_get(obj, "updated_at")),
+    }
+    if level in ("detail", "full"):
+        try:
+            data["hypotheses"] = _json.loads(_get(obj, "data_json") or "{}")
+        except Exception:  # noqa: BLE001
+            data["hypotheses"] = None
+        data["created_by_email"] = _str(_get(obj, "created_by_email"))
+    return _drop_none(data)
+
+
 SERIALIZERS: dict[str, Callable[..., dict]] = {
     "voice_routing_rule": serialize_voice_routing_rule,
     "voice_user_call_hours": serialize_voice_user_call_hours,
@@ -1302,6 +1337,7 @@ SERIALIZERS: dict[str, Callable[..., dict]] = {
     "inventaire_article": serialize_inventaire_article,
     "inventaire_mouvement": serialize_inventaire_mouvement,
     "entreprise": serialize_entreprise,
+    "rd_scenario": serialize_rd_scenario,
     "imm_tal_dossier": serialize_imm_tal_dossier,
     "imm_locataire_contact": serialize_imm_locataire_contact,
     "lot_paiement": serialize_lot_paiement,

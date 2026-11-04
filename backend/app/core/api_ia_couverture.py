@@ -22,6 +22,10 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     # Tables enregistrées via les endpoints (hors app/models/__init__)
     # — existantes au moment du cliquet.
     "construction_bon_defaults",
+    #: Scénarios « Revenus et dépenses » de la société de gestion (Gestion
+    #: d'entreprise, 2026-11-04). Lecture IA : liste simulations_revenus_depenses
+    #: + détail rd_scenario ; routes /entreprises/revenus-depenses.
+    "rd_scenarios",
     "qbo_connections",
     "qbo_recus_drive",
     #: Reçus saisis dans Kratos et envoyés à QuickBooks (pôle Entreprises,
