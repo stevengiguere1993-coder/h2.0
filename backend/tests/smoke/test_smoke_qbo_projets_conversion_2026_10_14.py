@@ -373,3 +373,79 @@ def test_sans_quickbooks_la_verification_le_dit(client, run, owner_headers, fake
 def test_section_reservee_aux_proprietaires(client, run, fake_qbo):
     employe = _entetes(_compte(run, "employee"))
     assert client.get("/api/v1/qbo-conversions", headers=employe).status_code in (401, 403)
+
+
+def test_alerte_attente_plus_de_3_jours(client, run, owner_headers, fake_qbo):
+    """Steven 2026-11-04 : la cloche des admins signale un sous-client qui
+    attend sa conversion depuis plus de 3 jours, sans se répéter chaque
+    jour ; un NOUVEAU retard relance l'alerte avant le rappel hebdo."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import func, select
+
+    from app.models.notification import Notification
+
+    ids = _projet(run, nom="Alerte", adresse="5 rue Attente", client_nom="Ève Lavoie")
+    _lier(run, ids["project_id"])
+    assert _etat(run, ids["project_id"])["le"] is not None  # entrée datée
+
+    async def _alerter(quand: datetime) -> Dict[str, Any]:
+        async with TestSessionLocal() as s:
+            r = await svc.alerter_attente(s, maintenant=quand)
+            await s.commit()
+            return r
+
+    async def _nb() -> int:
+        async with TestSessionLocal() as s:
+            return (
+                await s.execute(
+                    select(func.count()).select_from(Notification).where(
+                        Notification.kind == svc.KIND_ALERTE_ATTENTE
+                    )
+                )
+            ).scalar()
+
+    async def _vieillir_alertes(jours: int) -> None:
+        async with TestSessionLocal() as s:
+            for n in (
+                await s.execute(
+                    select(Notification).where(Notification.kind == svc.KIND_ALERTE_ATTENTE)
+                )
+            ).scalars():
+                n.created_at = n.created_at - timedelta(days=jours)
+            await s.commit()
+
+    # Base partagée : on part sans alerte récente de ce type.
+    run(_vieillir_alertes(365))
+    avant = run(_nb())
+
+    async def _dater(jours: int) -> None:
+        async with TestSessionLocal() as s:
+            p = await s.get(Project, ids["project_id"])
+            p.qbo_conversion_le = datetime.now(timezone.utc) - timedelta(days=jours)
+            await s.commit()
+
+    maintenant = datetime.now(timezone.utc) + timedelta(seconds=1)
+    # En attente depuis 1 jour : rien.
+    run(_dater(1))
+    assert run(_alerter(maintenant))["envoyee"] is False
+    # Depuis 4 jours : alerte.
+    run(_dater(4))
+    r = run(_alerter(maintenant))
+    assert r["envoyee"] is True and r["en_retard"] >= 1
+    assert run(_nb()) > avant
+    # Le passage suivant (même retard) : pas de doublon.
+    nb = run(_nb())
+    assert run(_alerter(maintenant + timedelta(days=1)))["envoyee"] is False
+    assert run(_nb()) == nb
+    # Une semaine plus tard : rappel.
+    run(_vieillir_alertes(8))
+    assert run(_alerter(maintenant))["envoyee"] is True
+
+    # Converti : il sort de l'alerte.
+    fake_qbo.convertir(_etat(run, ids["project_id"])["qbo_job_id"])
+    client.post("/api/v1/qbo-conversions/verifier", headers=owner_headers)
+    assert _etat(run, ids["project_id"])["etat"] == svc.CONVERTIE
+    body = client.get("/api/v1/qbo-conversions", headers=owner_headers).json()
+    assert all(l.get("convertie_le") is None for l in body["a_convertir"])
+    assert all(l.get("en_attente_depuis") for l in body["a_convertir"])

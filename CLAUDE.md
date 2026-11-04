@@ -330,3 +330,17 @@ Les colonnes se reconnaissent par ``MetaData`` ColKey, puis ``ColType``
 s'il est une clé connue, puis le titre (``_cle_colonne``) ; montants
 « 1 350,00 $ » et « (45,00 $) » acceptés ; ``colonnes_rapport`` dans la
 réponse montre le format réellement reçu.
+
+## QuickBooks — conversion en projet : pas d'API, alerte d'attente (2026-11-04)
+
+Steven : « convertir un sous-client en projet sans cliquer ni passer par
+l'extension ». Impossible par l'API : l'API comptable v3 ne fait que LIRE
+`Customer.IsProject`, et l'API Projets (GraphQL, palier Silver+, refusé)
+CRÉE un projet mais ne CONVERTIT pas un sous-client. Choix de Steven :
+l'extension en mode « Automatique ». Kratos met le sous-client dans la
+liste dès sa création (soumission acceptée → projet), date l'entrée
+(`qbo_conversion_le`, aussi pour « à convertir » ; `en_attente_depuis`
+dans la liste) et le cron quotidien (`verifier_pour_cron` →
+`alerter_attente`) envoie aux admins une notification
+`qbo_conversion_en_attente` quand un sous-client attend depuis plus de
+3 jours : au plus une fois par 7 jours, sauf nouveau retard.
