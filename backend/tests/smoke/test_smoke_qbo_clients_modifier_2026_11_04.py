@@ -210,6 +210,19 @@ class _FauxQbo:
             raise QuickBooksError(
                 "QBO refus : Duplicate Name Exists Error — QBO POST /customer failed: 400"
             )
+        nouveau_parent = str((champs.get("ParentRef") or {}).get("value") or "")
+        if (
+            row.get("IsProject")
+            and nouveau_parent
+            and nouveau_parent != str((row.get("ParentRef") or {}).get("value") or "")
+            and champs.get("BillWithParent") is not True
+        ):
+            # Constat réel du 2026-11-04 (projet 108 → 209) : QuickBooks
+            # exige le drapeau dans le corps pour déplacer un projet.
+            raise QuickBooksError(
+                "QBO refus : Business Validation Error: Un projet doit être un "
+                "client rattaché facturé à son compte principal — QBO POST /customer failed: 400"
+            )
         row.update({k: v for k, v in champs.items() if k not in ("DisplayName", "Active")})
         row["DisplayName"] = nom
         if "Active" in champs:
@@ -285,6 +298,10 @@ def test_inventaire_des_transactions(client, auth_headers, qb):
     assert f["type"] == "Facture" and f["id"] == "5127" and f["numero"] == "5127"
     assert f["montant"] == 24387.94 and f["date"] == "2026-09-30"
     assert b["transactions"][1]["montant"] == -24387.95
+    # Le format réel des colonnes voyage avec l'inventaire (diagnostic).
+    assert [c.split("|")[-1] for c in b["colonnes_rapport"]] == [
+        "tx_date", "txn_type", "doc_num", "name", "memo", "account_name", "subt_nat_amount",
+    ]
 
     # Fiche sans rien : « vide ».
     b = client.get("/api/v1/qbo/customers/227/transactions", headers=auth_headers).json()
@@ -418,8 +435,54 @@ def test_parent_refuse_422(client, auth_headers, qb):
     assert qb.mises_a_jour == []
     assert _essai("410", "402") == 200 and qb.mises_a_jour[-1]["ParentRef"] == {"value": "402"}
     assert _essai("420", "403") == 200 and qb.mises_a_jour[-1]["ParentRef"] == {"value": "403"}
-    # Un projet QuickBooks se déplace (comme move_subcustomer).
+    # Un projet QuickBooks se déplace (comme move_subcustomer), avec
+    # « facturé avec le parent » redit dans le corps, sinon QuickBooks refuse.
     assert _essai("300", "208") == 200
+    assert qb.mises_a_jour[-1]["BillWithParent"] is True
+
+
+def test_deplacer_un_projet_redit_facture_avec_le_parent(client, auth_headers, run, qb):
+    """Projet 108 → 209 du 2026-11-04 : sans BillWithParent dans le corps,
+    QuickBooks répond « Un projet doit être un client rattaché facturé à
+    son compte principal ». Le déplacement d'un projet (ou d'un
+    sous-client déjà coché) l'envoie d'office ; aucun réglage ne change."""
+    r = _post(client, auth_headers, "300", {"parent_id": "208", "simuler": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["corps"] == {"ParentRef": {"value": "208"}, "Job": True, "BillWithParent": True}
+    assert [f["champ"] for f in r.json()["changements"]] == ["parent"]
+    assert qb.mises_a_jour == []
+
+    r = _post(client, auth_headers, "300", {"parent_id": "208"})
+    assert r.status_code == 200, r.text
+    assert r.json()["apres"]["ParentRef"]["value"] == "208"
+    assert r.json()["apres"]["BillWithParent"] is True
+    assert qb.mises_a_jour[-1] == {
+        "Id": "300", "SyncToken": "2", "sparse": True,
+        "ParentRef": {"value": "208"}, "Job": True, "BillWithParent": True,
+    }
+
+    # Le drapeau explicite sur un projet qui change de parent : même corps.
+    r = _post(client, auth_headers, "300", {"parent_id": "209", "facturer_avec_parent": True,
+                                            "simuler": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["corps"] == {"ParentRef": {"value": "209"}, "Job": True, "BillWithParent": True}
+    assert [f["champ"] for f in r.json()["changements"]] == ["parent"]
+
+    # Un sous-client ordinaire déjà coché garde son réglage en changeant
+    # de parent ; non coché, le déplacement ne coche rien.
+    qb.clients["289"]["BillWithParent"] = True
+    r = _post(client, auth_headers, "289", {"parent_id": "209"})
+    assert r.status_code == 200, r.text
+    assert qb.mises_a_jour[-1]["BillWithParent"] is True
+    assert [f["champ"] for f in r.json()["changements"]] == ["parent"]
+    r = _post(client, auth_headers, "110", {"parent_id": "208"})
+    assert r.status_code == 200, r.text
+    assert "BillWithParent" not in qb.mises_a_jour[-1]
+
+    # Le double de test reproduit le refus de QuickBooks quand le drapeau
+    # manque (preuve que le corps du service le porte bien).
+    with pytest.raises(QuickBooksError, match="facturé à son compte principal"):
+        run(qb.update_customer_fields("300", ParentRef={"value": "53"}, Job=True))
 
 
 def test_desactiver_garde_fous_puis_fiche_vide(client, auth_headers, qb):
@@ -503,7 +566,11 @@ def test_renommer_facturer_avec_parent_et_rien_a_changer(client, auth_headers, q
     assert qb.mises_a_jour[-1]["DisplayName"] == "8900 Saint-Hubert inc. (ancien)"
 
     assert _post(client, auth_headers, "233", {"facturer_avec_parent": True}).status_code == 422
-    assert _post(client, auth_headers, "300", {"facturer_avec_parent": True}).status_code == 422
+    # Un projet est toujours facturé avec le parent : « vrai » ne change
+    # rien, « faux » est refusé.
+    b = _post(client, auth_headers, "300", {"facturer_avec_parent": True}).json()
+    assert b["changements"] == [] and "Rien" in b["note"]
+    assert _post(client, auth_headers, "300", {"facturer_avec_parent": False}).status_code == 422
     assert len(qb.mises_a_jour) == 1
 
     r = _post(client, auth_headers, "289", {"facturer_avec_parent": True})
@@ -709,6 +776,94 @@ def test_lignes_rapport_imbriquees_et_sections():
         ("Payment", "10", None, "2026-01-03"),
     ]
     assert modif.lignes_rapport({}) == []
+
+
+def test_lignes_rapport_format_reel_compagnie_en_francais():
+    """Le rapport réel d'une compagnie en français : ``ColType`` porte le
+    TYPE de donnée (Date / String / Money), pas la clé ; titres en
+    français ; montants « 1 350,00 $ » et négatifs entre parenthèses ;
+    parfois un ``MetaData`` ColKey. Avant le 2026-11-04 toutes ces
+    lignes sortaient à null (fiche 270 : 7 lignes vides)."""
+    rapport = {
+        "Columns": {
+            "Column": [
+                {"ColTitle": "Date", "ColType": "Date"},
+                {"ColTitle": "Type de transaction", "ColType": "String"},
+                {"ColTitle": "N°", "ColType": "String"},
+                {"ColTitle": "Comptabilisation", "ColType": "String"},
+                {"ColTitle": "Nom", "ColType": "String"},
+                {"ColTitle": "Note/Description", "ColType": "String"},
+                {"ColTitle": "Compte", "ColType": "String"},
+                {"ColTitle": "Fractionnement", "ColType": "String",
+                 "MetaData": [{"Name": "ColKey", "Value": "other_account"}]},
+                {"ColTitle": "Montant", "ColType": "Money"},
+            ]
+        },
+        "Rows": {
+            "Row": [
+                {"type": "Data", "ColData": [
+                    {"value": "2026-09-30"}, {"value": "Facture", "id": "5127"},
+                    {"value": "5127"}, {"value": "Oui"},
+                    {"value": "710, Rue Legendre Est", "id": "270"},
+                    {"value": "Rénovation"}, {"value": "Comptes clients"},
+                    {"value": "-Fractionné-"}, {"value": "24 387,94 $"},
+                ]},
+                {"type": "Data", "ColData": [
+                    {"value": "2026-10-14"}, {"value": "Paiement", "id": "5301"},
+                    {"value": ""}, {"value": "Oui"},
+                    {"value": "710, Rue Legendre Est", "id": "270"},
+                    {"value": ""}, {"value": "Comptes clients"},
+                    {"value": "Banque"}, {"value": "(1 350,00 $)"},
+                ]},
+                {"type": "Data", "ColData": [
+                    {"value": "2026-10-20"}, {"value": "Note de crédit", "id": "5400"},
+                    {"value": "NC-1"}, {"value": "Oui"}, {"value": "710, Rue Legendre Est"},
+                    {"value": ""}, {"value": "Comptes clients"}, {"value": ""},
+                    {"value": "1,350.00"},
+                ]},
+            ]
+        },
+    }
+    assert modif.colonnes_rapport(rapport) == [
+        "Date|Date|tx_date", "Type de transaction|String|txn_type", "N°|String|doc_num",
+        "Comptabilisation|String|comptabilisation", "Nom|String|name",
+        "Note/Description|String|memo", "Compte|String|account_name",
+        "Fractionnement|String|other_account", "Montant|Money|subt_nat_amount",
+    ]
+    lignes = modif.lignes_rapport(rapport)
+    assert [(l["date"], l["type"], l["id"], l["numero"], l["nom"], l["compte"], l["montant"])
+            for l in lignes] == [
+        ("2026-09-30", "Facture", "5127", "5127", "710, Rue Legendre Est",
+         "Comptes clients", 24387.94),
+        ("2026-10-14", "Paiement", "5301", "", "710, Rue Legendre Est",
+         "Comptes clients", -1350.0),
+        ("2026-10-20", "Note de crédit", "5400", "NC-1", "710, Rue Legendre Est",
+         "Comptes clients", 1350.0),
+    ]
+    assert lignes[0]["memo"] == "Rénovation"
+
+    # Grand livre en Débit / Crédit, sans colonne Montant.
+    gl = {
+        "Columns": {"Column": [
+            {"ColTitle": "Date", "ColType": "Date"}, {"ColTitle": "Type", "ColType": "String"},
+            {"ColTitle": "Débit", "ColType": "Money"}, {"ColTitle": "Crédit", "ColType": "Money"},
+        ]},
+        "Rows": {"Row": [
+            {"type": "Data", "ColData": [{"value": "2026-01-05"}, {"value": "Facture", "id": "1"},
+                                          {"value": "100,00"}, {"value": ""}]},
+            {"type": "Data", "ColData": [{"value": "2026-01-06"}, {"value": "Paiement", "id": "2"},
+                                          {"value": ""}, {"value": "40,50"}]},
+        ]},
+    }
+    assert [(l["id"], l["montant"]) for l in modif.lignes_rapport(gl)] == [("1", 100.0), ("2", -40.5)]
+
+    # Sans colonnes du tout : les lignes existent, sans champs reconnus.
+    sans = {"Rows": {"Row": [{"type": "Data", "ColData": [{"value": "x"}]}]}}
+    assert modif.lignes_rapport(sans) == [
+        {"date": None, "type": None, "id": None, "numero": None, "nom": None,
+         "memo": None, "compte": None, "montant": None}
+    ]
+    assert modif.colonnes_rapport(sans) == []
 
 
 def test_profondeur_et_ancetres_bornes_sur_une_boucle():
