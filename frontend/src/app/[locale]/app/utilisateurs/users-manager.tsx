@@ -972,8 +972,37 @@ export function UsersManager({
                     </div>
                   )}
 
-                  {selectedUser.role === "employee" &&
-                  (selectedUser.volets || []).includes("immobilier") ? (
+                  {/* Immeubles accessibles : la section reste visible pour
+                      tout le monde et explique pourquoi la liste est
+                      absente (retour Steven 2026-11-04 : « je ne vois pas
+                      immeubles accessibles »). La liste à cocher n'a de
+                      sens que pour un Employé qui a le volet Immobilier. */}
+                  {selectedUser.role !== "employee" ? (
+                    <div className="border-t border-brand-800 p-4">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-accent-500">
+                        Immeubles accessibles
+                      </label>
+                      <p className="mt-1 text-xs text-white/60">
+                        Les <strong>{ROLE_LABEL[selectedUser.role]}</strong>{" "}
+                        voient tous les immeubles du volet Immobilier (s&apos;ils
+                        ont ce volet). Pour limiter l&apos;accès à certains
+                        immeubles, passe ce compte au rôle{" "}
+                        <strong>Employé</strong> : la liste à cocher
+                        apparaîtra ici.
+                      </p>
+                    </div>
+                  ) : !(selectedUser.volets || []).includes("immobilier") ? (
+                    <div className="border-t border-brand-800 p-4">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-accent-500">
+                        Immeubles accessibles
+                      </label>
+                      <p className="mt-1 text-xs text-white/60">
+                        Coche d&apos;abord le volet <strong>Immobilier</strong>{" "}
+                        dans « Volets accessibles » ci-dessus : la liste des
+                        immeubles à cocher apparaîtra ici.
+                      </p>
+                    </div>
+                  ) : (
                     <div className="border-t border-brand-800 p-4">
                       <div className="flex items-center justify-between">
                         <div>
@@ -1048,7 +1077,7 @@ export function UsersManager({
                         </ul>
                       )}
                     </div>
-                  ) : null}
+                  )}
                 </>
               ) : (
                 <div className="p-10 text-center text-sm text-white/50">
