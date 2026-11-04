@@ -68,6 +68,7 @@ from app.api.v1.endpoints import (
     immobilier_tal_garants,
     immobilier_tal_bail,
     immobilier_codes,
+    entreprises_revenus_depenses,
     immobilier_fusion,
     immobilier_extras,
     immobilier_import_excel,
@@ -532,6 +533,8 @@ api_router.include_router(recus_qbo.router, dependencies=DEP_ENTREPRISES)
 api_router.include_router(paiements.router, dependencies=DEP_ENTREPRISES)
 # Dépenses construction et coût à l'heure vs entrées de fonds (bug 14, 2026-10-18).
 api_router.include_router(depenses_construction.router, dependencies=DEP_ENTREPRISES)
+# Revenus et dépenses de la société de gestion — simulation (2026-11-04), admins.
+api_router.include_router(entreprises_revenus_depenses.router, dependencies=DEP_ENTREPRISES)
 # Sous-clients QB à convertir en projet (Comptabilité → Projets QB, 2026-10-14).
 api_router.include_router(qbo_conversions.router, dependencies=DEP_ENTREPRISES)
 api_router.include_router(rencontres_teams.router)

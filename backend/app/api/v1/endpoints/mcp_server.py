@@ -736,6 +736,8 @@ _LIST_GENERIC_CHOICES = (
     "inventaire_mouvements",
     # Zone employés (2026-10-18) : bloc-notes des employés.
     "bloc_notes",
+    # Gestion d'entreprise (2026-11-04) : scénarios revenus et dépenses.
+    "simulations_revenus_depenses",
 )
 
 _LIMIT_PROP = {
