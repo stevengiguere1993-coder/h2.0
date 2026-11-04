@@ -21,10 +21,20 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.deps import DBSession, RequireAdminOrOwner
 from app.models.revenus_depenses import RdScenario
+from app.models.immobilier import (
+    Bail,
+    BailStatus,
+    Evaluation,
+    Hypotheque,
+    HypothequeStatus,
+    Immeuble,
+    Logement,
+    bail_non_parallele,
+)
 from app.services import revenus_depenses as svc
 from app.services.audit import log_action
 
@@ -167,3 +177,75 @@ async def supprimer_scenario(scenario_id: int, db: DBSession, user: RequireAdmin
 async def calculer(payload: CalculIn, user: RequireAdminOrOwner) -> Dict[str, Any]:
     data = svc.normaliser(payload.data)
     return {"data": data, "resultats": svc.calculer(data)}
+
+
+@router.get("/immeubles-kratos", summary="Immeubles déjà dans Kratos, prêts à être ajoutés à un scénario")
+async def immeubles_kratos(db: DBSession, user: RequireAdminOrOwner) -> Dict[str, Any]:
+    """Pour chaque immeuble actif : logements, chambres, loyers bruts des
+    baux actifs (hors baux parallèles), gestion externe (→ sous-traitée),
+    dette = solde des hypothèques actives, dernier rapport d'évaluation
+    (valeur, année). Phil 2026-11-04 : « permet de sélectionner ceux que
+    j'ai déjà dans Kratos »."""
+    immeubles = (await db.execute(select(Immeuble).where(Immeuble.is_active.is_(True)).order_by(Immeuble.name))).scalars().all()
+    ids = [i.id for i in immeubles]
+    if not ids:
+        return {"items": []}
+    logements = (await db.execute(select(Logement).where(Logement.immeuble_id.in_(ids)))).scalars().all()
+    log_ids = [l.id for l in logements]
+    imm_par_log = {l.id: l.immeuble_id for l in logements}
+    loyers: Dict[int, float] = {}
+    if log_ids:
+        baux = (
+            await db.execute(
+                select(Bail.logement_id, Bail.loyer_mensuel).where(
+                    Bail.logement_id.in_(log_ids), Bail.status == BailStatus.ACTIF.value, bail_non_parallele()
+                )
+            )
+        ).all()
+        for lid, loyer in baux:
+            iid = imm_par_log.get(lid)
+            if iid is not None:
+                loyers[iid] = loyers.get(iid, 0.0) + float(loyer or 0.0)
+    nb_log: Dict[int, int] = {}
+    nb_ch: Dict[int, int] = {}
+    for l in logements:
+        nb_log[l.immeuble_id] = nb_log.get(l.immeuble_id, 0) + 1
+        if getattr(l, "location_en_chambres", False):
+            nb_ch[l.immeuble_id] = nb_ch.get(l.immeuble_id, 0) + int(getattr(l, "nb_chambres", 0) or 0)
+    dettes: Dict[int, float] = {}
+    for iid, solde, initial in (
+        await db.execute(
+            select(Hypotheque.immeuble_id, Hypotheque.balance_actuelle, Hypotheque.montant_initial).where(
+                Hypotheque.immeuble_id.in_(ids), Hypotheque.status == HypothequeStatus.ACTIVE.value
+            )
+        )
+    ).all():
+        dettes[iid] = dettes.get(iid, 0.0) + float(solde if solde is not None else (initial or 0.0))
+    evals: Dict[int, Evaluation] = {}
+    for ev in (
+        await db.execute(select(Evaluation).where(Evaluation.immeuble_id.in_(ids)).order_by(Evaluation.date_evaluation.desc(), Evaluation.id.desc()))
+    ).scalars().all():
+        cur = evals.get(ev.immeuble_id)
+        # Un rapport pro ou l'évaluation de référence prime sur les autres.
+        prio = (ev.kind == "appraisal") * 2 + int(bool(getattr(ev, "is_reference", False)))
+        cur_prio = ((cur.kind == "appraisal") * 2 + int(bool(getattr(cur, "is_reference", False)))) if cur else -1
+        if cur is None or prio > cur_prio:
+            evals[ev.immeuble_id] = ev
+    items = []
+    for i in immeubles:
+        ev = evals.get(i.id)
+        items.append({
+            "kratos_immeuble_id": i.id,
+            "nom": i.name,
+            "adresse": i.address,
+            "ville": i.city,
+            "nb_logements": nb_log.get(i.id) or int(i.nb_logements or 0),
+            "nb_chambres": nb_ch.get(i.id, 0),
+            "loyers_bruts_mensuels": round(loyers.get(i.id, 0.0), 2),
+            "gestion_externe": bool(getattr(i, "gestion_externe", False)),
+            "dette": round(dettes.get(i.id, 0.0), 2),
+            "valeur_rapport": round(float(ev.valeur), 2) if ev else 0.0,
+            "annee_rapport": ev.date_evaluation.year if ev and ev.date_evaluation else None,
+            "source_rapport": (ev.kind if ev else None),
+        })
+    return {"items": items, "total": len(items), "nb_total": int((await db.execute(select(func.count(Immeuble.id)))).scalar() or 0)}

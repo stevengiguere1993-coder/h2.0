@@ -1,26 +1,29 @@
 "use client";
 
 /**
- * Gestion d'entreprise → Revenus et dépenses (2026-11-04) — mode SIMULATION.
+ * Gestion d'entreprise → Revenus et dépenses (2026-11-04) — mode SIMULATION,
+ * aligné sur « Le Fonds MGV d'investissements » (document de travail,
+ * novembre 2026).
  *
- * Brainstorm Phil : « on va bientôt construire un fonds immobilier, j'aimerais
- * savoir une fois en place ça va être quoi nos revenus et nos dépenses ».
  * La page modélise la SOCIÉTÉ DE GESTION (ce que vous gagnez en gérant le
  * fonds et son parc), pas les loyers du fonds.
  *
- * Visuel v2 (retour Phil 2026-11-04 : « il manque de couleurs et de clarté ») :
- * une couleur par source de revenus et par famille de dépenses, reprise
- * partout (tuiles, anneau, barres, cartes de section) ; anneau des revenus,
- * cascade revenus → dépenses → bénéfice → dividendes, barres des dépenses ;
- * boutons hiérarchisés ; cartes de section avec « Hypothèses » et « Résultat ».
+ * v3 (retours Phil 2026-11-04) :
+ * - les immeubles sont des FICHES (plus un tableau étroit) : loyers et portes,
+ *   statut (en rénovation / stabilisé) avec les champs du document, dette ;
+ *   « dans le fonds » et « gestion à l'interne » expliqués ;
+ * - la valeur du parc, les dettes, l'équité et la VAN se CALCULENT depuis
+ *   les fiches (rénovation = coût du projet + plus-value linéaire ; stabilisé
+ *   = rapport ou revenus nets ÷ taux de cap) ; seul le cash se saisit ;
+ * - import des immeubles déjà dans Kratos (logements, chambres, loyers des
+ *   baux actifs, gestion externe, dette, dernier rapport) ;
+ * - frais de développement par TRANCHES comme l'impôt (barème du doc) ;
+ * - sous-traitant de gestion en dépense (% des loyers des immeubles non
+ *   gérés à l'interne) ; part des gains (en parts) calculée à part.
  *
- * - Un scénario = un jeu d'hypothèses enregistré ; tout se recalcule côté
- *   serveur (moteur unique, réutilisé plus tard par le mode réel branché
- *   sur Kratos et QuickBooks).
- * - La table des immeubles du fonds alimente la gestion locative, la
- *   location, la construction, le développement et la prospection.
- *
- * Réservé aux admins (le backend refuse les autres).
+ * Un scénario = un jeu d'hypothèses enregistré ; tout se recalcule côté
+ * serveur (moteur unique, réutilisé plus tard par le mode réel branché sur
+ * Kratos et QuickBooks). Réservé aux admins.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -29,6 +32,7 @@ import {
   Calculator,
   Check,
   Copy,
+  Database,
   HardHat,
   Home,
   KeyRound,
@@ -40,6 +44,7 @@ import {
   Plus,
   Receipt,
   Search,
+  Sparkles,
   TrendingUp,
   Trash2,
   Users,
@@ -60,41 +65,50 @@ type Palier = { jusqua: number | null; pct: number };
 type Immeuble = {
   id: string;
   nom: string;
+  kratos_immeuble_id: number | null;
+  dans_le_fonds: boolean;
+  gestion_interne: boolean;
   nb_logements: number;
   nb_chambres: number;
   loyers_bruts_mensuels: number;
-  gere_par_nous: boolean;
   phase: "stabilisation" | "stabilise";
   acquisition_cette_annee: boolean;
   prix_acquisition: number;
   prospecte_par_nous: boolean;
   travaux_initiaux: number;
+  frais_connexes: number;
+  valeur_future: number;
+  mois_prevus: number;
+  mois_ecoules: number;
+  valeur_rapport: number;
+  annee_rapport: number | null;
+  taux_cap_pct: number;
+  revenus_nets_annuels: number;
+  dette: number;
 };
 type LigneRefact = { id: string; libelle: string; montant_annuel: number };
 type FraisFixe = { id: string; categorie: string; libelle: string; montant: number; periode: "mois" | "an" };
 type Salaire = { id: string; poste: string; salaire_annuel: number };
 type Associe = { id: string; nom: string; salaire_annuel: number; dividendes_annuels: number };
 type Data = {
-  fonds: { valeur_parc: number; cash: number; dettes: number; taux_pct: number };
+  fonds: { cash: number; taux_pct: number };
   developpement: { paliers: Palier[] };
   prospection: { taux_pct: number };
   immeubles: Immeuble[];
   refacturation: { marge_pct: number; lignes: LigneRefact[] };
   construction: { marge_pct: number; pct_logements_renoves_par_an: number; cout_reno_logement: number };
   maintenance: { heures_par_an: number; cout_horaire: number; taux_facture: number; materiaux_annuels: number; marge_materiaux_pct: number };
-  gestion: { taux_pct: number; loyers_additionnels_mensuels: number; inclure_projection: boolean };
-  location: {
-    frais_logement: number;
-    frais_chambre: number;
-    taux_roulement_pct: number;
-    nb_relocations_logements: number | null;
-    nb_relocations_chambres: number | null;
-  };
-  depenses: { frais_fixes: FraisFixe[]; charges_sociales_pct: number; salaires: Salaire[]; associes: Associe[] };
+  gestion: { taux_pct: number; facturer_sous_traites: boolean; loyers_additionnels_mensuels: number; inclure_projection: boolean };
+  location: { frais_logement: number; frais_chambre: number; taux_roulement_pct: number; nb_relocations_logements: number | null; nb_relocations_chambres: number | null };
+  part_des_gains: { rendement_pct: number; seuil_investisseurs_pct: number; tranche_nous_pct: number; part_nous_pct: number };
+  depenses: { frais_fixes: FraisFixe[]; charges_sociales_pct: number; salaires: Salaire[]; associes: Associe[]; sous_traitance_gestion_pct: number };
 };
 type SectionRevenu = { key: string; label: string; revenu: number; part_pct: number; [k: string]: unknown };
+type FicheImmeuble = { id: string; nom: string; dans_le_fonds: boolean; phase: string; cout_projet: number; valeur: number; valeur_a_terme: number; plus_value_prevue: number; methode: string; dette: number; equite: number };
 type Resultats = {
+  parc: { immeubles: FicheImmeuble[]; valeur: number; dettes: number; equite: number; cash: number; van: number; valeur_a_terme: number; van_a_terme: number; nb_dans_le_fonds: number; nb_hors_fonds: number; nb_en_renovation: number };
   revenus: SectionRevenu[];
+  part_des_gains: { van: number; rendement_pct: number; gain: number; tranche_investisseurs: number; tranche_nous: number; reste: number; part_nous: number; part_investisseurs: number; par_holding: number; nb_holdings: number; pct_du_gain_nous: number };
   depenses: {
     frais_fixes_par_categorie: { categorie: string; label: string; montant: number }[];
     total_frais_fixes: number;
@@ -104,35 +118,22 @@ type Resultats = {
     associes: { nom: string; salaire_brut: number; charges: number; cout_salaire: number; dividendes: number }[];
     total_associes_salaires: number;
     total_masse_salariale: number;
+    sous_traitance_gestion: number;
+    loyers_sous_traites_annuels: number;
     total_dividendes: number;
     total: number;
     charges_sociales_pct: number;
   };
-  totaux: {
-    revenus: number;
-    revenus_avec_projection: number;
-    depenses: number;
-    benefice: number;
-    marge_pct: number | null;
-    dividendes: number;
-    benefice_retenu: number;
-    revenus_mensuels: number;
-    depenses_mensuelles: number;
-  };
-  point_mort: {
-    couvert: boolean;
-    van_necessaire: number;
-    van_actuelle: number;
-    loyers_mensuels_sous_gestion_necessaires: number;
-    loyers_mensuels_sous_gestion_actuels: number;
-  };
+  totaux: { revenus: number; revenus_avec_projection: number; depenses: number; benefice: number; marge_pct: number | null; dividendes: number; benefice_retenu: number; revenus_mensuels: number; depenses_mensuelles: number };
+  point_mort: { couvert: boolean; van_necessaire: number; van_actuelle: number; loyers_mensuels_sous_gestion_necessaires: number; loyers_mensuels_sous_gestion_actuels: number };
   avertissements: string[];
 };
-type Referentiel = { categories_frais_fixes: { key: string; label: string }[]; charges_sociales_note: string };
+type Referentiel = { categories_frais_fixes: { key: string; label: string }[]; charges_sociales_note: string; valorisation_note: string };
 type ScenarioResume = { id: number; nom: string; is_default: boolean; updated_at: string | null; resume: Record<string, number | null> };
 type Detail = ScenarioResume & { data: Data; resultats: Resultats; referentiel: Referentiel };
+type ImmeubleKratos = { kratos_immeuble_id: number; nom: string; adresse: string | null; ville: string | null; nb_logements: number; nb_chambres: number; loyers_bruts_mensuels: number; gestion_externe: boolean; dette: number; valeur_rapport: number; annee_rapport: number | null; source_rapport: string | null };
 
-// ─── Couleurs (une par source de revenus et par famille de dépenses) ──────
+// ─── Couleurs ────────────────────────────────────────────────────────────
 
 const C: Record<string, string> = {
   fonds: "#8b5cf6",
@@ -144,9 +145,12 @@ const C: Record<string, string> = {
   gestion: "#10b981",
   gestion_projection: "#84cc16",
   location: "#ec4899",
+  part_des_gains: "#a855f7",
+  immeubles: "#38bdf8",
   frais_fixes: "#64748b",
   salaires: "#f43f5e",
   associes: "#d946ef",
+  sous_traitance: "#fb7185",
   dividendes: "#c084fc",
   revenus: "#10b981",
   depenses: "#f43f5e",
@@ -201,24 +205,18 @@ function clone<T>(v: T): T {
 function teinte(hex: string, alpha = "22"): string {
   return `${hex}${alpha}`;
 }
+function immeubleVide(extra: Partial<Immeuble> = {}): Immeuble {
+  return {
+    id: uid(), nom: "", kratos_immeuble_id: null, dans_le_fonds: true, gestion_interne: true,
+    nb_logements: 0, nb_chambres: 0, loyers_bruts_mensuels: 0, phase: "stabilise",
+    acquisition_cette_annee: false, prix_acquisition: 0, prospecte_par_nous: true,
+    travaux_initiaux: 0, frais_connexes: 0, valeur_future: 0, mois_prevus: 24, mois_ecoules: 0,
+    valeur_rapport: 0, annee_rapport: null, taux_cap_pct: 0, revenus_nets_annuels: 0, dette: 0,
+    ...extra
+  };
+}
 
-function Num({
-  value,
-  onChange,
-  className = "",
-  placeholder,
-  title,
-  step,
-  suffixe
-}: {
-  value: number | null | undefined;
-  onChange: (v: number) => void;
-  className?: string;
-  placeholder?: string;
-  title?: string;
-  step?: number;
-  suffixe?: string;
-}) {
+function Num({ value, onChange, className = "", placeholder, title, step, suffixe }: { value: number | null | undefined; onChange: (v: number) => void; className?: string; placeholder?: string; title?: string; step?: number; suffixe?: string }) {
   return (
     <span className="relative inline-flex w-full items-center">
       <input
@@ -230,16 +228,16 @@ function Num({
         placeholder={placeholder}
         title={title}
         onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))}
-        className={`${INPUT} w-full text-right tabular-nums ${suffixe ? "pr-8" : ""} ${className}`}
+        className={`${INPUT} w-full min-w-[110px] text-right tabular-nums ${suffixe ? "pr-9" : ""} ${className}`}
       />
       {suffixe ? <span className={`pointer-events-none absolute right-2.5 text-xs ${FAINT}`}>{suffixe}</span> : null}
     </span>
   );
 }
 
-function Champ({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
+function Champ({ label, children, hint, className = "" }: { label: string; children: React.ReactNode; hint?: string; className?: string }) {
   return (
-    <label className={`flex flex-col gap-1 text-xs ${MUTED}`} title={hint}>
+    <label className={`flex flex-col gap-1 text-xs ${MUTED} ${className}`} title={hint}>
       <span>{label}</span>
       {children}
     </label>
@@ -250,9 +248,26 @@ function Pastille({ hex, className = "" }: { hex: string; className?: string }) 
   return <span className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${className}`} style={{ background: hex }} />;
 }
 
-// ─── Graphiques (SVG / CSS, sans librairie) ──────────────────────────────
+function Interrupteur({ actif, onChange, hex, label, hint }: { actif: boolean; onChange: (v: boolean) => void; hex: string; label: string; hint?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!actif)}
+      title={hint}
+      className="inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs transition"
+      style={actif ? { borderColor: hex, background: teinte(hex, "22"), color: hex } : { borderColor: "var(--qg-border)", color: "var(--qg-text-muted)" }}
+    >
+      <span className="relative inline-block h-3.5 w-6 rounded-full transition" style={{ background: actif ? hex : "var(--qg-border)" }}>
+        <span className="absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white transition" style={{ left: actif ? "0.8rem" : "0.125rem" }} />
+      </span>
+      {label}
+    </button>
+  );
+}
 
-function Anneau({ parts, total, titre, sous }: { parts: { label: string; valeur: number; hex: string }[]; total: number; titre: string; sous?: string }) {
+// ─── Graphiques (SVG / CSS) ───────────────────────────────────────────────
+
+function Anneau({ parts, total, titre }: { parts: { label: string; valeur: number; hex: string }[]; total: number; titre: string }) {
   const visibles = parts.filter((p) => p.valeur > 0);
   let cumul = 0;
   const segments = visibles.map((p) => {
@@ -268,7 +283,6 @@ function Anneau({ parts, total, titre, sous }: { parts: { label: string; valeur:
         <div className="absolute inset-[22%] flex flex-col items-center justify-center rounded-full bg-[var(--qg-card-bg)] text-center">
           <span className={`text-[10px] uppercase tracking-wider ${FAINT}`}>{titre}</span>
           <span className="text-sm font-bold tabular-nums">{money(total)}</span>
-          {sous ? <span className={`text-[10px] ${FAINT}`}>{sous}</span> : null}
         </div>
       </div>
       <ul className="min-w-[220px] flex-1 space-y-1 text-xs">
@@ -319,7 +333,7 @@ function Cascade({ t }: { t: Resultats["totaux"] }) {
   );
 }
 
-function Barres({ items, total }: { items: { label: string; valeur: number; hex: string; sous?: string }[]; total: number }) {
+function Barres({ items, total }: { items: { label: string; valeur: number; hex: string }[]; total: number }) {
   return (
     <div className="space-y-2">
       {items.map((it) => {
@@ -329,7 +343,6 @@ function Barres({ items, total }: { items: { label: string; valeur: number; hex:
             <div className="flex items-baseline justify-between gap-2 text-xs">
               <span className="flex items-center gap-2">
                 <Pastille hex={it.hex} /> {it.label}
-                {it.sous ? <span className={FAINT}>{it.sous}</span> : null}
               </span>
               <span className="tabular-nums">
                 {money(it.valeur)} <span className={FAINT}>{total > 0 ? pct(w, 0) : ""}</span>
@@ -346,7 +359,7 @@ function Barres({ items, total }: { items: { label: string; valeur: number; hex:
   );
 }
 
-// ─── Briques de mise en page ─────────────────────────────────────────────
+// ─── Briques ─────────────────────────────────────────────────────────────
 
 function KPI({ label, valeur, sous, hex, icon: Icon, alerte = false }: { label: string; valeur: string; sous?: string; hex: string; icon: React.ComponentType<{ className?: string }>; alerte?: boolean }) {
   return (
@@ -363,27 +376,7 @@ function KPI({ label, valeur, sous, hex, icon: Icon, alerte = false }: { label: 
   );
 }
 
-function Carte({
-  id,
-  num,
-  titre,
-  hex,
-  icon: Icon,
-  revenu,
-  note,
-  hypotheses,
-  resultat
-}: {
-  id: string;
-  num?: string;
-  titre: string;
-  hex: string;
-  icon: React.ComponentType<{ className?: string }>;
-  revenu?: number;
-  note?: string;
-  hypotheses: React.ReactNode;
-  resultat?: React.ReactNode;
-}) {
+function Carte({ id, num, titre, hex, icon: Icon, revenu, revenuLabel = "par an", note, hypotheses, resultat }: { id: string; num?: string; titre: string; hex: string; icon: React.ComponentType<{ className?: string }>; revenu?: number; revenuLabel?: string; note?: string; hypotheses: React.ReactNode; resultat?: React.ReactNode }) {
   return (
     <section id={id} className={`${CARD} overflow-hidden`} style={{ borderTop: `3px solid ${hex}` }}>
       <div className="flex flex-wrap items-center gap-3 px-4 py-3" style={{ background: teinte(hex, "14") }}>
@@ -399,7 +392,7 @@ function Carte({
         </div>
         {revenu != null ? (
           <div className="text-right">
-            <p className={`text-[10px] uppercase tracking-wider ${FAINT}`}>par an</p>
+            <p className={`text-[10px] uppercase tracking-wider ${FAINT}`}>{revenuLabel}</p>
             <p className="text-lg font-bold tabular-nums" style={{ color: hex }}>
               {money(revenu)}
             </p>
@@ -427,6 +420,17 @@ function BoutonRetirer({ onClick, title = "Retirer" }: { onClick: () => void; ti
     <button className={`rounded-lg p-1 transition ${FAINT} hover:bg-rose-500/10 hover:text-rose-400`} title={title} onClick={onClick}>
       <X className="h-4 w-4" />
     </button>
+  );
+}
+
+function Lignes<T>({ lignes, rendu, vide }: { lignes: T[]; rendu: (l: T) => string; vide: string }) {
+  if (!lignes.length) return <p className={FAINT}>{vide}</p>;
+  return (
+    <ul className="space-y-1">
+      {lignes.map((l, i) => (
+        <li key={i}>{rendu(l)}</li>
+      ))}
+    </ul>
   );
 }
 
@@ -479,8 +483,6 @@ export default function RevenusDepensesPage() {
     })();
   }, [chargerListe, ouvrir]);
 
-  // Sauvegarde différée : toute modification est enregistrée et recalculée
-  // côté serveur ~700 ms après la dernière frappe.
   useEffect(() => {
     if (!data || courant == null) return;
     if (skipSave.current) {
@@ -492,11 +494,7 @@ export default function RevenusDepensesPage() {
     timer.current = window.setTimeout(async () => {
       setEtat("sauvegarde");
       try {
-        const r = await authedFetch(`${RD}/scenarios/${courant}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data })
-        });
+        const r = await authedFetch(`${RD}/scenarios/${courant}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data }) });
         if (!r.ok) throw new Error(`Erreur ${r.status}`);
         const d = (await r.json()) as Detail;
         setRes(d.resultats);
@@ -524,11 +522,7 @@ export default function RevenusDepensesPage() {
 
   async function nouveau(copie: boolean) {
     try {
-      const r = await authedFetch(`${RD}/scenarios`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(copie && courant != null ? { source_id: courant } : {})
-      });
+      const r = await authedFetch(`${RD}/scenarios`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(copie && courant != null ? { source_id: courant } : {}) });
       if (!r.ok) throw new Error(`Erreur ${r.status}`);
       const d = (await r.json()) as Detail;
       await chargerListe();
@@ -564,11 +558,7 @@ export default function RevenusDepensesPage() {
     setRenomme(null);
     if (!nom || nom === detail?.nom) return;
     try {
-      const r = await authedFetch(`${RD}/scenarios/${courant}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nom })
-      });
+      const r = await authedFetch(`${RD}/scenarios/${courant}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nom }) });
       if (!r.ok) throw new Error(`Erreur ${r.status}`);
       const d = (await r.json()) as Detail;
       setDetail((prev) => (prev ? { ...prev, nom: d.nom } : prev));
@@ -584,7 +574,7 @@ export default function RevenusDepensesPage() {
       <Calculator className="h-5 w-5 text-[var(--qg-accent)]" /> Revenus et dépenses
     </span>
   );
-  const sousTitre = "Ce que la société de gestion gagne et dépense une fois le fonds en place — simulation ; à brancher sur Kratos et QuickBooks en opération";
+  const sousTitre = "Ce que la société de gestion gagne et dépense une fois le fonds en place — simulation alignée sur le document du Fonds MGV ; à brancher sur Kratos et QuickBooks en opération";
 
   if (!isAdmin && user) {
     return (
@@ -622,7 +612,8 @@ export default function RevenusDepensesPage() {
   const partsDepenses = [
     ...dep.frais_fixes_par_categorie.map((c) => ({ label: c.label, valeur: c.montant, hex: CAT_COULEURS[c.categorie] || "#94a3b8" })),
     { label: "Salaires des postes (avec charges)", valeur: salairesPostes, hex: C.salaires },
-    { label: "Salaires des associés (avec charges)", valeur: dep.total_associes_salaires, hex: C.associes }
+    { label: "Salaires des associés (avec charges)", valeur: dep.total_associes_salaires, hex: C.associes },
+    { label: "Sous-traitant de gestion", valeur: dep.sous_traitance_gestion, hex: C.sous_traitance }
   ];
 
   return (
@@ -631,20 +622,14 @@ export default function RevenusDepensesPage() {
         greeting={greeting}
         subtitle={sousTitre}
         rightSlot={
-          <span
-            className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs"
-            style={{
-              background: etat === "erreur" ? teinte("#f43f5e") : etat === "ok" ? teinte("#10b981") : teinte("#f59e0b"),
-              color: etat === "erreur" ? "#f43f5e" : etat === "ok" ? "#10b981" : "#f59e0b"
-            }}
-          >
+          <span className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs" style={{ background: etat === "erreur" ? teinte("#f43f5e") : etat === "ok" ? teinte("#10b981") : teinte("#f59e0b"), color: etat === "erreur" ? "#f43f5e" : etat === "ok" ? "#10b981" : "#f59e0b" }}>
             {etat === "sauvegarde" || etat === "sale" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : etat === "ok" ? <Check className="h-3.5 w-3.5" /> : null}
             {etat === "sauvegarde" ? "Enregistrement…" : etat === "sale" ? "Modifié" : etat === "ok" ? "Enregistré" : etat === "erreur" ? "Erreur" : "Chargement"}
           </span>
         }
       />
       <div className="space-y-6 px-5 py-6 lg:px-8">
-        {/* Barre des scénarios */}
+        {/* Scénarios */}
         <div className={`${CARD} flex flex-wrap items-center gap-2 p-3`}>
           <span className={`flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider ${MUTED}`}>
             <PiggyBank className="h-4 w-4" /> Scénario
@@ -658,23 +643,13 @@ export default function RevenusDepensesPage() {
             ))}
           </select>
           {renomme != null ? (
-            <input
-              autoFocus
-              value={renomme}
-              onChange={(e) => setRenomme(e.target.value)}
-              onBlur={() => void enregistrerNom()}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void enregistrerNom();
-                if (e.key === "Escape") setRenomme(null);
-              }}
-              className={`${INPUT} w-56`}
-            />
+            <input autoFocus value={renomme} onChange={(e) => setRenomme(e.target.value)} onBlur={() => void enregistrerNom()} onKeyDown={(e) => { if (e.key === "Enter") void enregistrerNom(); if (e.key === "Escape") setRenomme(null); }} className={`${INPUT} w-56`} />
           ) : (
             <button className="btn-secondary btn-sm" onClick={() => setRenomme(detail?.nom || "")} title="Renommer ce scénario">
               <Pencil className="h-3.5 w-3.5" /> Renommer
             </button>
           )}
-          <button className="btn-secondary btn-sm" onClick={() => void nouveau(true)} title="Copier ce scénario pour tester une variante (prudent, ambitieux…)">
+          <button className="btn-secondary btn-sm" onClick={() => void nouveau(true)} title="Copier ce scénario pour tester une variante">
             <Copy className="h-3.5 w-3.5" /> Dupliquer
           </button>
           <button className="btn-accent btn-sm" onClick={() => void nouveau(false)} title="Nouveau scénario vide">
@@ -692,27 +667,17 @@ export default function RevenusDepensesPage() {
         ))}
 
         {/* Tableau de bord */}
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
           <KPI label="Revenus annuels" valeur={money(t.revenus)} sous={`${money(t.revenus_mensuels)} / mois${data.gestion.inclure_projection ? "" : ` · ${money(t.revenus_avec_projection)} avec la projection`}`} hex={C.revenus} icon={TrendingUp} />
           <KPI label="Dépenses annuelles" valeur={money(t.depenses)} sous={`${money(t.depenses_mensuelles)} / mois`} hex={C.depenses} icon={Wallet} />
           <KPI label="Bénéfice avant dividendes" valeur={money(t.benefice)} sous={t.marge_pct != null ? `marge ${pct(t.marge_pct)}` : "aucun revenu saisi"} hex={C.benefice} icon={Calculator} alerte={t.benefice < 0} />
           <KPI label="Dividendes des associés" valeur={money(t.dividendes)} sous={`bénéfice retenu ${money(t.benefice_retenu)}`} hex={C.dividendes} icon={Users} alerte={t.benefice_retenu < 0} />
-          <KPI
-            label="Point mort"
-            valeur={pm.couvert ? "Couvert" : money(pm.van_necessaire)}
-            sous={
-              pm.couvert
-                ? "les revenus couvrent les dépenses"
-                : `VAN du fonds nécessaire (actuelle ${money(pm.van_actuelle)}) — ou ${money(pm.loyers_mensuels_sous_gestion_necessaires)} de loyers/mois sous gestion (actuels ${money(pm.loyers_mensuels_sous_gestion_actuels)})`
-            }
-            hex="#f59e0b"
-            icon={Landmark}
-            alerte={!pm.couvert}
-          />
+          <KPI label="VAN du fonds" valeur={money(res.parc.van)} sous={`${money(res.parc.valeur)} d'immeubles + ${money(res.parc.cash)} de cash − ${money(res.parc.dettes)} de dettes · ${money(res.parc.van_a_terme)} à terme`} hex={C.fonds} icon={Landmark} alerte={res.parc.van < 0} />
+          <KPI label="Point mort" valeur={pm.couvert ? "Couvert" : money(pm.van_necessaire)} sous={pm.couvert ? "les revenus couvrent les dépenses" : `VAN nécessaire (actuelle ${money(pm.van_actuelle)}) — ou ${money(pm.loyers_mensuels_sous_gestion_necessaires)} de loyers/mois sous gestion (actuels ${money(pm.loyers_mensuels_sous_gestion_actuels)})`} hex="#f59e0b" icon={Sparkles} alerte={!pm.couvert} />
         </div>
 
         <div className="grid gap-4 xl:grid-cols-3">
-          <div className={`${CARD} p-4 xl:col-span-1`}>
+          <div className={`${CARD} p-4`}>
             <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
               <span className="flex h-7 w-7 items-center justify-center rounded-lg" style={{ background: teinte(C.revenus), color: C.revenus }}>
                 <TrendingUp className="h-4 w-4" />
@@ -749,12 +714,7 @@ export default function RevenusDepensesPage() {
               ["depenses", "Dépenses", t.depenses, C.depenses, Wallet]
             ] as ["revenus" | "depenses", string, number, string, React.ComponentType<{ className?: string }>][]
           ).map(([k, label, total, hex, Icon]) => (
-            <button
-              key={k}
-              onClick={() => setOnglet(k)}
-              className={`${CARD} flex items-center gap-3 px-4 py-2.5 text-left transition`}
-              style={onglet === k ? { borderColor: hex, background: teinte(hex, "14") } : undefined}
-            >
+            <button key={k} onClick={() => setOnglet(k)} className={`${CARD} flex items-center gap-3 px-4 py-2.5 text-left transition`} style={onglet === k ? { borderColor: hex, background: teinte(hex, "14") } : undefined}>
               <span className="flex h-8 w-8 items-center justify-center rounded-lg" style={{ background: teinte(hex, "33"), color: hex }}>
                 <Icon className="h-4 w-4" />
               </span>
@@ -768,27 +728,237 @@ export default function RevenusDepensesPage() {
           ))}
         </div>
 
-        {onglet === "revenus" ? <RevenusTab data={data} rev={rev} modifier={modifier} /> : <DepensesTab data={data} res={res} referentiel={detail?.referentiel} modifier={modifier} />}
+        {onglet === "revenus" ? <RevenusTab data={data} res={res} rev={rev} modifier={modifier} referentiel={detail?.referentiel} /> : <DepensesTab data={data} res={res} referentiel={detail?.referentiel} modifier={modifier} />}
       </div>
     </>
   );
 }
 
-// ─── Onglet Revenus ──────────────────────────────────────────────────────
+// ─── Fiche d'immeuble ────────────────────────────────────────────────────
 
-function RevenusTab({ data, rev, modifier }: { data: Data; rev: Record<string, SectionRevenu>; modifier: (fn: (d: Data) => void) => void }) {
-  const f = data.fonds;
-  const van = f.valeur_parc + f.cash - f.dettes;
-  const immeubles = data.immeubles;
-  const geres = immeubles.filter((i) => i.gere_par_nous);
-  const logementsGeres = geres.reduce((a, i) => a + i.nb_logements, 0);
-  const chambresGeres = geres.reduce((a, i) => a + i.nb_chambres, 0);
-  const loyersGeresMensuels = geres.reduce((a, i) => a + i.loyers_bruts_mensuels, 0);
-  const setImm = (id: string, fn: (x: Immeuble) => void) =>
+function FicheImmeubleCarte({ im, fiche, modifier }: { im: Immeuble; fiche?: FicheImmeuble; modifier: (fn: (d: Data) => void) => void }) {
+  const set = (fn: (x: Immeuble) => void) =>
     modifier((d) => {
-      const x = d.immeubles.find((y) => y.id === id);
+      const x = d.immeubles.find((y) => y.id === im.id);
       if (x) fn(x);
     });
+  const coutProjet = im.prix_acquisition + im.travaux_initiaux + im.frais_connexes;
+  const hex = im.dans_le_fonds ? C.immeubles : "#94a3b8";
+  return (
+    <div className={`${CARD} overflow-hidden`} style={{ borderLeft: `4px solid ${hex}` }}>
+      <div className="flex flex-wrap items-center gap-2 px-4 py-3" style={{ background: teinte(hex, "10") }}>
+        <input value={im.nom} placeholder="Nom ou adresse de l'immeuble" onChange={(e) => set((x) => { x.nom = e.target.value; })} className={`${INPUT} min-w-[220px] flex-1 font-semibold`} />
+        {im.kratos_immeuble_id ? (
+          <span className="inline-flex items-center gap-1 rounded-full border border-[var(--qg-border)] px-2 py-0.5 text-[10px] uppercase tracking-wider" title="Importé de Kratos">
+            <Database className="h-3 w-3" /> Kratos
+          </span>
+        ) : null}
+        <Interrupteur actif={im.dans_le_fonds} onChange={(v) => set((x) => { x.dans_le_fonds = v; })} hex={C.fonds} label={im.dans_le_fonds ? "Dans le fonds" : "Hors fonds"} hint="Dans le fonds : compte dans la valeur du parc, les dettes, la VAN, les frais de gestion du fonds et les frais de développement / prospection. Hors fonds : détenu ailleurs — rapporte seulement gestion locative, location, construction, maintenance." />
+        <Interrupteur actif={im.gestion_interne} onChange={(v) => set((x) => { x.gestion_interne = v; })} hex={C.gestion} label={im.gestion_interne ? "Gestion à l'interne" : "Gestion sous-traitée"} hint="À l'interne : nos frais de location s'appliquent. Sous-traitée : les loyers de cet immeuble servent à calculer la dépense du sous-traitant de gestion (onglet Dépenses) ; les frais de gestion restent facturés si l'option est cochée dans la section 7." />
+        <BoutonRetirer onClick={() => modifier((d) => { d.immeubles = d.immeubles.filter((y) => y.id !== im.id); })} title="Retirer cet immeuble du scénario" />
+      </div>
+      <div className="grid gap-4 p-4 lg:grid-cols-3">
+        {/* Loyers et portes */}
+        <div className="space-y-2">
+          <p className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider" style={{ color: C.gestion }}>
+            <Pastille hex={C.gestion} /> Loyers et portes
+          </p>
+          <Champ label="Loyers bruts par mois"><Num value={im.loyers_bruts_mensuels} onChange={(v) => set((x) => { x.loyers_bruts_mensuels = v; })} suffixe="$" /></Champ>
+          <div className="grid grid-cols-2 gap-2">
+            <Champ label="Logements"><Num value={im.nb_logements} step={1} onChange={(v) => set((x) => { x.nb_logements = Math.round(v); })} /></Champ>
+            <Champ label="Chambres" hint="Chambres louées à l'unité"><Num value={im.nb_chambres} step={1} onChange={(v) => set((x) => { x.nb_chambres = Math.round(v); })} /></Champ>
+          </div>
+        </div>
+        {/* Statut et valeur */}
+        <div className="space-y-2">
+          <p className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider" style={{ color: C.construction }}>
+            <Pastille hex={C.construction} /> Statut et valeur
+          </p>
+          <div className="flex gap-1 rounded-lg border border-[var(--qg-border)] p-0.5">
+            {(
+              [
+                ["stabilisation", "En rénovation"],
+                ["stabilise", "Stabilisé"]
+              ] as [Immeuble["phase"], string][]
+            ).map(([k, label]) => (
+              <button key={k} type="button" onClick={() => set((x) => { x.phase = k; })} className="flex-1 rounded-md px-2 py-1 text-xs font-semibold transition" style={im.phase === k ? { background: teinte(C.construction, "33"), color: C.construction } : { color: "var(--qg-text-muted)" }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <label className={`flex items-start gap-2 text-xs ${MUTED}`} title="Coche si l'achat se conclut cette année : ça déclenche les frais de développement (par tranches sur le prix) et, si prospecté par nous, les frais de prospection.">
+            <input type="checkbox" className="mt-0.5 h-4 w-4" style={{ accentColor: C.developpement }} checked={im.acquisition_cette_annee} onChange={(e) => set((x) => { x.acquisition_cette_annee = e.target.checked; })} />
+            <span>Acquisition conclue cette année <span className={FAINT}>(frais de développement et de prospection)</span></span>
+          </label>
+          {im.acquisition_cette_annee || im.phase === "stabilisation" ? (
+            <Champ label="Prix d'acquisition"><Num value={im.prix_acquisition} onChange={(v) => set((x) => { x.prix_acquisition = v; })} suffixe="$" /></Champ>
+          ) : null}
+          {im.acquisition_cette_annee ? (
+            <label className={`flex items-center gap-2 text-xs ${MUTED}`}>
+              <input type="checkbox" className="h-4 w-4" style={{ accentColor: C.prospection }} checked={im.prospecte_par_nous} onChange={(e) => set((x) => { x.prospecte_par_nous = e.target.checked; })} /> Prospecté par nous (frais de prospection)
+            </label>
+          ) : null}
+          {im.phase === "stabilisation" ? (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <Champ label="Travaux"><Num value={im.travaux_initiaux} onChange={(v) => set((x) => { x.travaux_initiaux = v; })} suffixe="$" /></Champ>
+                <Champ label="Frais connexes" hint="Frais de développement, taxe de bienvenue, frais du prêteur, notaire…"><Num value={im.frais_connexes} onChange={(v) => set((x) => { x.frais_connexes = v; })} suffixe="$" /></Champ>
+              </div>
+              <p className={`text-xs ${MUTED}`}>
+                Coût du projet : <b>{money(coutProjet)}</b>
+              </p>
+              <Champ label="Valeur future (rapport au refi)"><Num value={im.valeur_future} onChange={(v) => set((x) => { x.valeur_future = v; })} suffixe="$" /></Champ>
+              <div className="grid grid-cols-2 gap-2">
+                <Champ label="Durée du projet"><Num value={im.mois_prevus} step={1} onChange={(v) => set((x) => { x.mois_prevus = Math.max(1, Math.round(v)); })} suffixe="mois" /></Champ>
+                <Champ label="Mois écoulés" hint="Où on en est dans le projet : la plus-value se reconnaît en ligne droite, mois par mois"><Num value={im.mois_ecoules} step={1} onChange={(v) => set((x) => { x.mois_ecoules = Math.round(v); })} suffixe="mois" /></Champ>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="grid grid-cols-[1fr_90px] gap-2">
+                <Champ label="Dernier rapport d'évaluation"><Num value={im.valeur_rapport} onChange={(v) => set((x) => { x.valeur_rapport = v; })} suffixe="$" /></Champ>
+                <Champ label="Année">
+                  <input type="number" min={1990} max={2100} step={1} value={im.annee_rapport ?? ""} placeholder="2026" onChange={(e) => set((x) => { x.annee_rapport = e.target.value === "" ? null : Math.round(Number(e.target.value)); })} className={`${INPUT} w-full text-right tabular-nums`} />
+                </Champ>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Champ label="Taux de cap du rapport"><Num value={im.taux_cap_pct} step={0.1} onChange={(v) => set((x) => { x.taux_cap_pct = v; })} suffixe="%" /></Champ>
+                <Champ label="Revenus nets à jour (SCHL)" hint="Optionnel : entre deux rapports, valeur = revenus nets ÷ taux de cap"><Num value={im.revenus_nets_annuels} onChange={(v) => set((x) => { x.revenus_nets_annuels = v; })} suffixe="$/an" /></Champ>
+              </div>
+            </>
+          )}
+        </div>
+        {/* Dette et équité */}
+        <div className="space-y-2">
+          <p className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider" style={{ color: C.fonds }}>
+            <Pastille hex={C.fonds} /> Dette et équité
+          </p>
+          <Champ label="Dette (solde du prêt)"><Num value={im.dette} onChange={(v) => set((x) => { x.dette = v; })} suffixe="$" /></Champ>
+          {fiche ? (
+            <div className="rounded-xl p-3 text-xs" style={{ background: teinte(hex, "12"), border: `1px solid ${teinte(hex, "44")}` }}>
+              <ul className="space-y-1">
+                <li className="flex justify-between gap-2"><span>Valeur actuelle</span><b className="tabular-nums">{money(fiche.valeur)}</b></li>
+                {im.phase === "stabilisation" && fiche.plus_value_prevue ? (
+                  <li className="flex justify-between gap-2"><span>À terme</span><span className="tabular-nums">{money(fiche.valeur_a_terme)} <span className={FAINT}>(+{money(fiche.plus_value_prevue)})</span></span></li>
+                ) : null}
+                <li className="flex justify-between gap-2"><span>Dette</span><span className="tabular-nums">− {money(fiche.dette)}</span></li>
+                <li className="flex justify-between gap-2 border-t border-[var(--qg-border)] pt-1 font-semibold"><span>Équité</span><span className={`tabular-nums ${fiche.equite < 0 ? "text-rose-400" : ""}`}>{money(fiche.equite)}</span></li>
+                <li className={`${FAINT} leading-snug`}>{fiche.methode}</li>
+                {!im.dans_le_fonds ? <li className={FAINT}>Hors fonds : pas dans la VAN.</li> : null}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ImportKratosModal({ dejaPris, onClose, onAjouter }: { dejaPris: Set<number>; onClose: () => void; onAjouter: (items: ImmeubleKratos[]) => void }) {
+  const [items, setItems] = useState<ImmeubleKratos[] | null>(null);
+  const [choisis, setChoisis] = useState<Set<number>>(new Set());
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await authedFetch(`${RD}/immeubles-kratos`);
+        if (!r.ok) throw new Error(`Erreur ${r.status}`);
+        setItems(((await r.json()) as { items: ImmeubleKratos[] }).items);
+      } catch (e) {
+        setErr((e as Error).message);
+        setItems([]);
+      }
+    })();
+  }, []);
+  const basculer = (id: number) =>
+    setChoisis((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div className={`${CARD} max-h-[85vh] w-full max-w-4xl overflow-hidden`} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between gap-2 border-b border-[var(--qg-border)] px-4 py-3">
+          <h3 className="flex items-center gap-2 text-sm font-semibold">
+            <Database className="h-4 w-4 text-[var(--qg-accent)]" /> Immeubles déjà dans Kratos
+          </h3>
+          <button className={`rounded-lg p-1 ${FAINT} hover:text-white`} onClick={onClose}>
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <p className={`px-4 pt-3 text-xs ${MUTED}`}>Logements, chambres, loyers des baux actifs, gestion externe, dette des hypothèques actives et dernier rapport d&apos;évaluation sont repris tels quels. Tu ajustes ensuite dans la fiche (statut, dans le fonds ou non…).</p>
+        <div className="max-h-[55vh] overflow-auto px-4 py-3">
+          {items == null ? (
+            <Loader2 className="h-5 w-5 animate-spin text-[var(--qg-accent)]" />
+          ) : err ? (
+            <p className="text-xs text-rose-400">{err}</p>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className={`text-left ${MUTED}`}>
+                <tr>
+                  <th className="py-1" />
+                  <th className="py-1">Immeuble</th>
+                  <th className="py-1 text-right">Logements</th>
+                  <th className="py-1 text-right">Chambres</th>
+                  <th className="py-1 text-right">Loyers / mois</th>
+                  <th className="py-1">Gestion</th>
+                  <th className="py-1 text-right">Dette</th>
+                  <th className="py-1 text-right">Rapport</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--qg-border)]">
+                {items.map((it) => {
+                  const pris = dejaPris.has(it.kratos_immeuble_id);
+                  return (
+                    <tr key={it.kratos_immeuble_id} className={pris ? "opacity-50" : "cursor-pointer hover:bg-[var(--qg-bg)]/40"} onClick={() => !pris && basculer(it.kratos_immeuble_id)}>
+                      <td className="py-1.5"><input type="checkbox" disabled={pris} checked={pris || choisis.has(it.kratos_immeuble_id)} onChange={() => basculer(it.kratos_immeuble_id)} onClick={(e) => e.stopPropagation()} /></td>
+                      <td className="py-1.5">
+                        <div className="font-medium">{it.nom}</div>
+                        <div className={`text-[11px] ${FAINT}`}>{[it.adresse, it.ville].filter(Boolean).join(", ")}{pris ? " · déjà dans le scénario" : ""}</div>
+                      </td>
+                      <td className="py-1.5 text-right tabular-nums">{it.nb_logements}</td>
+                      <td className="py-1.5 text-right tabular-nums">{it.nb_chambres}</td>
+                      <td className="py-1.5 text-right tabular-nums">{money(it.loyers_bruts_mensuels)}</td>
+                      <td className="py-1.5">{it.gestion_externe ? "externe" : "interne"}</td>
+                      <td className="py-1.5 text-right tabular-nums">{money(it.dette)}</td>
+                      <td className="py-1.5 text-right tabular-nums">{it.valeur_rapport ? `${money(it.valeur_rapport)}${it.annee_rapport ? ` (${it.annee_rapport})` : ""}` : "—"}</td>
+                    </tr>
+                  );
+                })}
+                {items.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className={`py-4 text-center ${FAINT}`}>Aucun immeuble actif dans Kratos.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-[var(--qg-border)] px-4 py-3">
+          <button className="btn-secondary btn-sm" onClick={onClose}>Annuler</button>
+          <button className="btn-accent btn-sm" disabled={choisis.size === 0} onClick={() => onAjouter((items || []).filter((i) => choisis.has(i.kratos_immeuble_id)))}>
+            <Plus className="h-3.5 w-3.5" /> Ajouter {choisis.size || ""} immeuble{choisis.size > 1 ? "s" : ""}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Onglet Revenus ──────────────────────────────────────────────────────
+
+function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res: Resultats; rev: Record<string, SectionRevenu>; modifier: (fn: (d: Data) => void) => void; referentiel?: Referentiel }) {
+  const [importOuvert, setImportOuvert] = useState(false);
+  const f = data.fonds;
+  const parc = res.parc;
+  const fiches = Object.fromEntries(parc.immeubles.map((x) => [x.id, x])) as Record<string, FicheImmeuble>;
+  const immeubles = data.immeubles;
+  const internes = immeubles.filter((i) => i.gestion_interne);
+  const logementsInternes = internes.reduce((a, i) => a + i.nb_logements, 0);
+  const chambresInternes = internes.reduce((a, i) => a + i.nb_chambres, 0);
+  const pg = res.part_des_gains;
   const sections: [string, string][] = [
     ["fonds", "1. Fonds"],
     ["developpement", "2. Développement"],
@@ -802,7 +972,6 @@ function RevenusTab({ data, rev, modifier }: { data: Data; rev: Record<string, S
 
   return (
     <div className="space-y-4">
-      {/* Sommaire des sections */}
       <div className="flex flex-wrap gap-2">
         {sections.map(([k, label]) => (
           <a key={k} href={`#sec-${k}`} className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition hover:opacity-80" style={{ borderColor: teinte(C[k], "66"), background: teinte(C[k], "14") }}>
@@ -812,139 +981,86 @@ function RevenusTab({ data, rev, modifier }: { data: Data; rev: Record<string, S
             </span>
           </a>
         ))}
+        <a href="#sec-part_des_gains" className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition hover:opacity-80" style={{ borderColor: teinte(C.part_des_gains, "66"), background: teinte(C.part_des_gains, "14") }}>
+          <Pastille hex={C.part_des_gains} /> Part des gains (en parts)
+          <span className="font-semibold tabular-nums" style={{ color: C.part_des_gains }}>{money(pg.part_nous)}</span>
+        </a>
       </div>
 
-      {/* Immeubles du fonds */}
-      <Carte
-        id="sec-immeubles"
-        titre="Immeubles du fonds"
-        hex="#38bdf8"
-        icon={Building2}
-        note="Cette table alimente la gestion locative et la location (colonnes vertes), la construction (orange) et le développement / la prospection (indigo). Coche « géré par nous » seulement pour les immeubles dont on fait la gestion locative."
-        hypotheses={
-          <>
-            <div className="overflow-x-auto rounded-xl border border-[var(--qg-border)]">
-              <table className="w-full min-w-[1040px] text-xs">
-                <thead>
-                  <tr className={`text-[10px] uppercase tracking-wider ${FAINT}`}>
-                    <th className="px-2 pt-2" />
-                    <th colSpan={4} className="px-2 pt-2 text-left" style={{ color: C.gestion }}>
-                      Gestion locative et location
-                    </th>
-                    <th colSpan={2} className="px-2 pt-2 text-left" style={{ color: C.construction }}>
-                      Construction
-                    </th>
-                    <th colSpan={3} className="px-2 pt-2 text-left" style={{ color: C.developpement }}>
-                      Acquisition de l&apos;année
-                    </th>
-                    <th />
-                  </tr>
-                  <tr className={`text-left ${MUTED}`}>
-                    <th className="px-2 py-1.5">Immeuble</th>
-                    <th className="px-2 py-1.5 text-right">Logements</th>
-                    <th className="px-2 py-1.5 text-right">Chambres</th>
-                    <th className="px-2 py-1.5 text-right">Loyers bruts / mois</th>
-                    <th className="px-2 py-1.5 text-center">Géré par nous</th>
-                    <th className="px-2 py-1.5">Phase</th>
-                    <th className="px-2 py-1.5 text-right">Travaux initiaux</th>
-                    <th className="px-2 py-1.5 text-center">Acquis cette année</th>
-                    <th className="px-2 py-1.5 text-right">Prix d&apos;acquisition</th>
-                    <th className="px-2 py-1.5 text-center">Prospecté par nous</th>
-                    <th className="px-2 py-1.5" />
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[var(--qg-border)]">
-                  {immeubles.map((im) => (
-                    <tr key={im.id} className="odd:bg-[var(--qg-bg)]/40">
-                      <td className="px-2 py-1.5">
-                        <input value={im.nom} placeholder="Nom ou adresse" onChange={(e) => setImm(im.id, (x) => { x.nom = e.target.value; })} className={`${INPUT} w-44`} />
-                      </td>
-                      <td className="px-2 py-1.5"><Num value={im.nb_logements} step={1} onChange={(v) => setImm(im.id, (x) => { x.nb_logements = Math.round(v); })} className="w-20" /></td>
-                      <td className="px-2 py-1.5"><Num value={im.nb_chambres} step={1} onChange={(v) => setImm(im.id, (x) => { x.nb_chambres = Math.round(v); })} className="w-20" title="Chambres louées à l'unité" /></td>
-                      <td className="px-2 py-1.5"><Num value={im.loyers_bruts_mensuels} onChange={(v) => setImm(im.id, (x) => { x.loyers_bruts_mensuels = v; })} className="w-28" suffixe="$" /></td>
-                      <td className="px-2 py-1.5 text-center"><input type="checkbox" className="h-4 w-4" style={{ accentColor: C.gestion }} checked={im.gere_par_nous} onChange={(e) => setImm(im.id, (x) => { x.gere_par_nous = e.target.checked; })} /></td>
-                      <td className="px-2 py-1.5">
-                        <select value={im.phase} onChange={(e) => setImm(im.id, (x) => { x.phase = e.target.value as Immeuble["phase"]; })} className={INPUT}>
-                          <option value="stabilisation">En stabilisation (travaux)</option>
-                          <option value="stabilise">Stabilisé (rénos au roulement)</option>
-                        </select>
-                      </td>
-                      <td className="px-2 py-1.5">
-                        {im.phase === "stabilisation" ? <Num value={im.travaux_initiaux} onChange={(v) => setImm(im.id, (x) => { x.travaux_initiaux = v; })} className="w-28" suffixe="$" title="Travaux prévus à l'achat (cost-plus)" /> : <span className={`block text-center ${FAINT}`}>—</span>}
-                      </td>
-                      <td className="px-2 py-1.5 text-center"><input type="checkbox" className="h-4 w-4" style={{ accentColor: C.developpement }} checked={im.acquisition_cette_annee} onChange={(e) => setImm(im.id, (x) => { x.acquisition_cette_annee = e.target.checked; })} /></td>
-                      <td className="px-2 py-1.5">
-                        {im.acquisition_cette_annee ? <Num value={im.prix_acquisition} onChange={(v) => setImm(im.id, (x) => { x.prix_acquisition = v; })} className="w-32" suffixe="$" /> : <span className={`block text-center ${FAINT}`}>—</span>}
-                      </td>
-                      <td className="px-2 py-1.5 text-center">
-                        {im.acquisition_cette_annee ? <input type="checkbox" className="h-4 w-4" style={{ accentColor: C.prospection }} checked={im.prospecte_par_nous} onChange={(e) => setImm(im.id, (x) => { x.prospecte_par_nous = e.target.checked; })} /> : <span className={FAINT}>—</span>}
-                      </td>
-                      <td className="px-2 py-1.5 text-right"><BoutonRetirer onClick={() => modifier((d) => { d.immeubles = d.immeubles.filter((y) => y.id !== im.id); })} /></td>
-                    </tr>
-                  ))}
-                  {immeubles.length === 0 ? (
-                    <tr>
-                      <td colSpan={11} className={`px-2 py-5 text-center ${FAINT}`}>
-                        Aucun immeuble — ajoute ceux que le fonds va détenir.
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
-            <button
-              className="btn-accent btn-sm mt-3"
-              onClick={() =>
-                modifier((d) => {
-                  d.immeubles.push({ id: uid(), nom: "", nb_logements: 0, nb_chambres: 0, loyers_bruts_mensuels: 0, gere_par_nous: true, phase: "stabilise", acquisition_cette_annee: false, prix_acquisition: 0, prospecte_par_nous: true, travaux_initiaux: 0 });
-                })
-              }
-            >
+      {/* Immeubles */}
+      <section id="sec-immeubles" className={`${CARD} overflow-hidden`} style={{ borderTop: `3px solid ${C.immeubles}` }}>
+        <div className="flex flex-wrap items-center gap-3 px-4 py-3" style={{ background: teinte(C.immeubles, "14") }}>
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl" style={{ background: teinte(C.immeubles, "33"), color: C.immeubles }}>
+            <Building2 className="h-5 w-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h3 className="text-sm font-semibold">Immeubles</h3>
+            <p className={`text-[11px] leading-snug ${MUTED}`}>{referentiel?.valorisation_note}</p>
+          </div>
+          <div className="text-right text-xs">
+            <p className={FAINT}>{parc.nb_dans_le_fonds} dans le fonds · {parc.nb_hors_fonds} hors fonds · {parc.nb_en_renovation} en rénovation</p>
+            <p className="font-bold tabular-nums" style={{ color: C.immeubles }}>Parc {money(parc.valeur)} · dettes {money(parc.dettes)} · équité {money(parc.equite)}</p>
+          </div>
+        </div>
+        <div className="space-y-3 p-4">
+          {immeubles.map((im) => (
+            <FicheImmeubleCarte key={im.id} im={im} fiche={fiches[im.id]} modifier={modifier} />
+          ))}
+          {immeubles.length === 0 ? <p className={`rounded-xl border border-dashed border-[var(--qg-border)] px-4 py-6 text-center text-sm ${FAINT}`}>Aucun immeuble — ajoute ceux que le fonds va détenir, ou reprends ceux déjà dans Kratos.</p> : null}
+          <div className="flex flex-wrap gap-2">
+            <button className="btn-accent btn-sm" onClick={() => modifier((d) => { d.immeubles.push(immeubleVide()); })}>
               <Plus className="h-3.5 w-3.5" /> Ajouter un immeuble
             </button>
-          </>
-        }
-        resultat={
-          <ul className="space-y-1">
-            <li>{immeubles.length} immeuble{immeubles.length > 1 ? "s" : ""} · {geres.length} géré{geres.length > 1 ? "s" : ""} par nous</li>
-            <li>{logementsGeres} logements et {chambresGeres} chambres gérés</li>
-            <li>{money(loyersGeresMensuels)} de loyers bruts / mois sous gestion</li>
-            <li>{immeubles.filter((i) => i.acquisition_cette_annee).length} acquisition{immeubles.filter((i) => i.acquisition_cette_annee).length > 1 ? "s" : ""} cette année · {immeubles.filter((i) => i.phase === "stabilisation").length} en stabilisation</li>
-          </ul>
-        }
-      />
+            <button className="btn-secondary btn-sm" onClick={() => setImportOuvert(true)}>
+              <Database className="h-3.5 w-3.5" /> Depuis Kratos…
+            </button>
+          </div>
+        </div>
+      </section>
+      {importOuvert ? (
+        <ImportKratosModal
+          dejaPris={new Set(immeubles.map((i) => i.kratos_immeuble_id).filter((x): x is number => x != null))}
+          onClose={() => setImportOuvert(false)}
+          onAjouter={(items) => {
+            modifier((d) => {
+              for (const it of items) {
+                d.immeubles.push(immeubleVide({ nom: it.nom, kratos_immeuble_id: it.kratos_immeuble_id, nb_logements: it.nb_logements, nb_chambres: it.nb_chambres, loyers_bruts_mensuels: it.loyers_bruts_mensuels, gestion_interne: !it.gestion_externe, phase: "stabilise", valeur_rapport: it.valeur_rapport, annee_rapport: it.annee_rapport, dette: it.dette }));
+              }
+            });
+            setImportOuvert(false);
+          }}
+        />
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-2">
         {/* 1. Fonds */}
-        <Carte
-          id="sec-fonds" num="1." titre="Frais de gestion du fonds" hex={C.fonds} icon={ICONES.fonds} revenu={rev.fonds?.revenu}
-          note="VAN = valeur du parc + cash − dettes. Un seul chiffre pour l'instant ; en opération, la VAN sera réévaluée à chaque levée."
+        <Carte id="sec-fonds" num="1." titre="Frais de gestion du fonds" hex={C.fonds} icon={ICONES.fonds} revenu={rev.fonds?.revenu} note="VAN = valeur des immeubles du fonds + cash − dettes (document, p. 11). Valeur et dettes viennent des fiches ; seul le cash se saisit ici."
           hypotheses={
             <div className="grid gap-3 sm:grid-cols-2">
-              <Champ label="Valeur du parc"><Num value={f.valeur_parc} onChange={(v) => modifier((d) => { d.fonds.valeur_parc = v; })} suffixe="$" /></Champ>
-              <Champ label="Cash"><Num value={f.cash} onChange={(v) => modifier((d) => { d.fonds.cash = v; })} suffixe="$" /></Champ>
-              <Champ label="Dettes"><Num value={f.dettes} onChange={(v) => modifier((d) => { d.fonds.dettes = v; })} suffixe="$" /></Champ>
+              <Champ label="Cash du fonds et des inc." hint="Compte du fonds (levées, refis) + cash accumulé dans les inc."><Num value={f.cash} onChange={(v) => modifier((d) => { d.fonds.cash = v; })} suffixe="$" /></Champ>
               <Champ label="Frais de gestion (de la VAN, par an)"><Num value={f.taux_pct} step={0.1} onChange={(v) => modifier((d) => { d.fonds.taux_pct = v; })} suffixe="%" /></Champ>
             </div>
           }
           resultat={
             <ul className="space-y-1">
-              <li>VAN : <b className={van < 0 ? "text-rose-400" : ""}>{money(van)}</b></li>
-              <li>× {pct(f.taux_pct)} = <b style={{ color: C.fonds }}>{money(rev.fonds?.revenu)}</b> / an</li>
+              <li className="flex justify-between gap-2"><span>Immeubles du fonds</span><span className="tabular-nums">{money(parc.valeur)}</span></li>
+              <li className="flex justify-between gap-2"><span>+ Cash</span><span className="tabular-nums">{money(parc.cash)}</span></li>
+              <li className="flex justify-between gap-2"><span>− Dettes</span><span className="tabular-nums">{money(parc.dettes)}</span></li>
+              <li className="flex justify-between gap-2 border-t border-[var(--qg-border)] pt-1 font-semibold"><span>VAN</span><b className={`tabular-nums ${parc.van < 0 ? "text-rose-400" : ""}`}>{money(parc.van)}</b></li>
+              <li className="flex justify-between gap-2"><span>× {pct(f.taux_pct)}</span><b className="tabular-nums" style={{ color: C.fonds }}>{money(rev.fonds?.revenu)} / an</b></li>
+              <li className={FAINT}>VAN à terme (rénovations terminées) : {money(parc.van_a_terme)}</li>
             </ul>
           }
         />
 
         {/* 2. Développement */}
-        <Carte
-          id="sec-developpement" num="2." titre="Frais de développement" hex={C.developpement} icon={ICONES.developpement} revenu={rev.developpement?.revenu}
-          note="Pourcentage du prix d'acquisition selon le palier (le taux du palier s'applique au prix entier), pour les acquisitions de l'année cochées dans la table."
+        <Carte id="sec-developpement" num="2." titre="Frais de développement" hex={C.developpement} icon={ICONES.developpement} revenu={rev.developpement?.revenu} note="Sur le prix d'achat, par tranches comme l'impôt : chaque taux s'applique à sa tranche seulement (document, p. 21). Pour les acquisitions conclues cette année, dans le fonds."
           hypotheses={
             <>
               <table className="w-full text-xs">
                 <thead className={`text-left ${MUTED}`}>
                   <tr>
-                    <th className="py-1">Prix d&apos;acquisition jusqu&apos;à</th>
+                    <th className="py-1">Tranche jusqu&apos;à</th>
                     <th className="py-1 text-right">Taux</th>
                     <th />
                   </tr>
@@ -954,48 +1070,36 @@ function RevenusTab({ data, rev, modifier }: { data: Data; rev: Record<string, S
                     <tr key={idx}>
                       <td className="py-1 pr-2">{p.jusqua == null ? <span className={MUTED}>et plus</span> : <Num value={p.jusqua} onChange={(v) => modifier((d) => { d.developpement.paliers[idx].jusqua = v; })} className="w-40" suffixe="$" />}</td>
                       <td className="py-1 text-right"><Num value={p.pct} step={0.1} onChange={(v) => modifier((d) => { d.developpement.paliers[idx].pct = v; })} className="w-24" suffixe="%" /></td>
-                      <td className="py-1 text-right">{p.jusqua != null ? <BoutonRetirer title="Retirer ce palier" onClick={() => modifier((d) => { d.developpement.paliers.splice(idx, 1); })} /> : null}</td>
+                      <td className="py-1 text-right">{p.jusqua != null ? <BoutonRetirer title="Retirer cette tranche" onClick={() => modifier((d) => { d.developpement.paliers.splice(idx, 1); })} /> : null}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <button
-                className="btn-secondary btn-sm mt-2"
-                onClick={() =>
-                  modifier((d) => {
-                    const dernier = d.developpement.paliers.filter((p) => p.jusqua != null).slice(-1)[0];
-                    d.developpement.paliers.splice(d.developpement.paliers.length - 1, 0, { jusqua: (dernier?.jusqua || 0) + 5_000_000, pct: 3 });
-                  })
-                }
-              >
-                <Plus className="h-3.5 w-3.5" /> Ajouter un palier
+              <button className="btn-secondary btn-sm mt-2" onClick={() => modifier((d) => { const dernier = d.developpement.paliers.filter((p) => p.jusqua != null).slice(-1)[0]; d.developpement.paliers.splice(d.developpement.paliers.length - 1, 0, { jusqua: (dernier?.jusqua || 0) + 5_000_000, pct: 3 }); })}>
+                <Plus className="h-3.5 w-3.5" /> Ajouter une tranche
               </button>
             </>
           }
-          resultat={<Lignes lignes={(rev.developpement?.lignes as { immeuble: string; prix: number; pct: number; frais: number }[]) || []} rendu={(l) => `${l.immeuble} : ${money(l.prix)} × ${pct(l.pct)} = ${money(l.frais)}`} vide="Aucune acquisition cette année dans la table." />}
+          resultat={<Lignes lignes={(rev.developpement?.lignes as { immeuble: string; prix: number; frais: number; taux_effectif_pct: number }[]) || []} rendu={(l) => `${l.immeuble} : ${money(l.prix)} → ${money(l.frais)} (taux effectif ${pct(l.taux_effectif_pct, 2)})`} vide="Aucune acquisition conclue cette année dans le fonds." />}
         />
 
         {/* 3. Prospection */}
-        <Carte
-          id="sec-prospection" num="3." titre="Frais de prospection" hex={C.prospection} icon={ICONES.prospection} revenu={rev.prospection?.revenu}
-          note="Seulement quand c'est nous qui avons prospecté l'immeuble (case « prospecté par nous » dans la table)."
-          hypotheses={<Champ label="Taux (du prix d'acquisition)"><Num value={data.prospection.taux_pct} step={0.1} onChange={(v) => modifier((d) => { d.prospection.taux_pct = v; })} className="max-w-[160px]" suffixe="%" /></Champ>}
+        <Carte id="sec-prospection" num="3." titre="Frais de prospection" hex={C.prospection} icon={ICONES.prospection} revenu={rev.prospection?.revenu} note="Seulement quand c'est nous qui avons prospecté l'immeuble (case dans la fiche), sur les acquisitions conclues cette année."
+          hypotheses={<Champ label="Taux (du prix d'acquisition)" className="max-w-[180px]"><Num value={data.prospection.taux_pct} step={0.1} onChange={(v) => modifier((d) => { d.prospection.taux_pct = v; })} suffixe="%" /></Champ>}
           resultat={<Lignes lignes={(rev.prospection?.lignes as { immeuble: string; prix: number; frais: number }[]) || []} rendu={(l) => `${l.immeuble} : ${money(l.prix)} × ${pct(data.prospection.taux_pct)} = ${money(l.frais)}`} vide="Aucune acquisition prospectée par nous cette année." />}
         />
 
         {/* 4. Refacturation */}
-        <Carte
-          id="sec-refacturation" num="4." titre="Dépenses refacturées (cost-plus)" hex={C.refacturation} icon={ICONES.refacturation} revenu={rev.refacturation?.revenu}
-          note="On avance la dépense (ex. un avocat à 2 000 $) et on la recharge avec la marge. Seule la marge est un revenu : l'avance ne compte ni en revenu ni en dépense."
+        <Carte id="sec-refacturation" num="4." titre="Dépenses refacturées (cost-plus)" hex={C.refacturation} icon={ICONES.refacturation} revenu={rev.refacturation?.revenu} note="On avance la dépense (ex. un avocat à 2 000 $) et on la recharge 2 200 $ à l'inc. de l'immeuble. Seule la marge est un revenu."
           hypotheses={
             <>
-              <Champ label="Marge"><Num value={data.refacturation.marge_pct} step={0.5} onChange={(v) => modifier((d) => { d.refacturation.marge_pct = v; })} className="max-w-[160px]" suffixe="%" /></Champ>
+              <Champ label="Marge" className="max-w-[180px]"><Num value={data.refacturation.marge_pct} step={0.5} onChange={(v) => modifier((d) => { d.refacturation.marge_pct = v; })} suffixe="%" /></Champ>
               <table className="mt-3 w-full text-xs">
                 <tbody className="divide-y divide-[var(--qg-border)]">
                   {data.refacturation.lignes.map((l) => (
                     <tr key={l.id}>
                       <td className="py-1 pr-2"><input value={l.libelle} placeholder="Ex. honoraires d'avocat — 1660 Saint-Clément" onChange={(e) => modifier((d) => { const x = d.refacturation.lignes.find((y) => y.id === l.id); if (x) x.libelle = e.target.value; })} className={`${INPUT} w-full`} /></td>
-                      <td className="py-1 pr-1"><Num value={l.montant_annuel} onChange={(v) => modifier((d) => { const x = d.refacturation.lignes.find((y) => y.id === l.id); if (x) x.montant_annuel = v; })} className="w-32" suffixe="$" title="Montant avancé par année" /></td>
+                      <td className="w-40 py-1 pr-1"><Num value={l.montant_annuel} onChange={(v) => modifier((d) => { const x = d.refacturation.lignes.find((y) => y.id === l.id); if (x) x.montant_annuel = v; })} suffixe="$/an" title="Montant avancé par année" /></td>
                       <td className="py-1 text-right"><BoutonRetirer onClick={() => modifier((d) => { d.refacturation.lignes = d.refacturation.lignes.filter((y) => y.id !== l.id); })} /></td>
                     </tr>
                   ))}
@@ -1015,9 +1119,7 @@ function RevenusTab({ data, rev, modifier }: { data: Data; rev: Record<string, S
         />
 
         {/* 5. Construction */}
-        <Carte
-          id="sec-construction" num="5." titre="Construction (cost-plus)" hex={C.construction} icon={ICONES.construction} revenu={rev.construction?.revenu}
-          note="Deux moments : à l'achat, les gros travaux d'un immeuble en stabilisation ; une fois stabilisé, les rénovations d'appartements quand les gens quittent."
+        <Carte id="sec-construction" num="5." titre="Construction (cost-plus)" hex={C.construction} icon={ICONES.construction} revenu={rev.construction?.revenu} note="Horizon Construction Signature, coûtant + 10 % : les travaux des immeubles en rénovation, puis les rénovations d'appartements au roulement une fois stabilisés. Fonds et hors fonds."
           hypotheses={
             <div className="grid gap-3 sm:grid-cols-3">
               <Champ label="Marge cost-plus"><Num value={data.construction.marge_pct} step={0.5} onChange={(v) => modifier((d) => { d.construction.marge_pct = v; })} suffixe="%" /></Champ>
@@ -1027,7 +1129,7 @@ function RevenusTab({ data, rev, modifier }: { data: Data; rev: Record<string, S
           }
           resultat={
             <ul className="space-y-1">
-              <li>Stabilisation : travaux {money(rev.construction?.travaux_stabilisation as number)} × {pct(data.construction.marge_pct)} = <b>{money(rev.construction?.revenu_stabilisation as number)}</b></li>
+              <li>En rénovation : travaux {money(rev.construction?.travaux_stabilisation as number)} × {pct(data.construction.marge_pct)} = <b>{money(rev.construction?.revenu_stabilisation as number)}</b></li>
               <li>Stabilisé : {rev.construction?.logements_stabilises as number} logements × {pct(data.construction.pct_logements_renoves_par_an)} = {nb(rev.construction?.nb_renovations as number)} rénos × {money(data.construction.cout_reno_logement)} = {money(rev.construction?.volume_renovations as number)} × {pct(data.construction.marge_pct)} = <b>{money(rev.construction?.revenu_renovations as number)}</b></li>
               <li>Total : <b style={{ color: C.construction }}>{money(rev.construction?.revenu)}</b></li>
             </ul>
@@ -1035,9 +1137,7 @@ function RevenusTab({ data, rev, modifier }: { data: Data; rev: Record<string, S
         />
 
         {/* 6. Maintenance */}
-        <Carte
-          id="sec-maintenance" num="6." titre="Maintenance et appels de service" hex={C.maintenance} icon={ICONES.maintenance} revenu={rev.maintenance?.revenu}
-          note="On paie le gars à l'heure et on recharge un taux plus élevé ; les matériaux sont rechargés avec une marge."
+        <Carte id="sec-maintenance" num="6." titre="Maintenance et appels de service" hex={C.maintenance} icon={ICONES.maintenance} revenu={rev.maintenance?.revenu} note="On paie le gars à l'heure et on recharge un taux plus élevé ; les matériaux sont rechargés avec une marge."
           hypotheses={
             <div className="grid gap-3 sm:grid-cols-3">
               <Champ label="Heures facturées par an"><Num value={data.maintenance.heures_par_an} onChange={(v) => modifier((d) => { d.maintenance.heures_par_an = v; })} suffixe="h" /></Champ>
@@ -1057,18 +1157,19 @@ function RevenusTab({ data, rev, modifier }: { data: Data; rev: Record<string, S
         />
 
         {/* 7. Gestion locative */}
-        <Carte
-          id="sec-gestion" num="7." titre="Gestion locative" hex={C.gestion} icon={ICONES.gestion} revenu={rev.gestion?.revenu}
-          note="Pourcentage des loyers bruts des immeubles gérés par nous (table ci-dessus)."
+        <Carte id="sec-gestion" num="7." titre="Gestion locative" hex={C.gestion} icon={ICONES.gestion} revenu={rev.gestion?.revenu} note="Pourcentage des loyers bruts, facturé par MGV Développement. Les immeubles « gestion sous-traitée » sont facturés aussi ou non, au choix ; le sous-traitant se paie dans l'onglet Dépenses."
           hypotheses={
             <>
-              <Champ label="Frais de gestion (des loyers bruts)"><Num value={data.gestion.taux_pct} step={0.5} onChange={(v) => modifier((d) => { d.gestion.taux_pct = v; })} className="max-w-[160px]" suffixe="%" /></Champ>
+              <div className="flex flex-wrap items-end gap-3">
+                <Champ label="Frais de gestion (des loyers bruts)" className="max-w-[180px]"><Num value={data.gestion.taux_pct} step={0.5} onChange={(v) => modifier((d) => { d.gestion.taux_pct = v; })} suffixe="%" /></Champ>
+                <label className={`flex items-center gap-1.5 pb-2 text-xs ${MUTED}`}>
+                  <input type="checkbox" className="h-4 w-4" style={{ accentColor: C.gestion }} checked={data.gestion.facturer_sous_traites} onChange={(e) => modifier((d) => { d.gestion.facturer_sous_traites = e.target.checked; })} /> Facturer aussi les immeubles sous-traités
+                </label>
+              </div>
               <div className="mt-4 rounded-xl border border-dashed p-3" style={{ borderColor: teinte(C.gestion_projection, "88") }}>
-                <p className="flex items-center gap-2 text-xs font-semibold">
-                  <Pastille hex={C.gestion_projection} /> Projection : et si on gérait plus ?
-                </p>
+                <p className="flex items-center gap-2 text-xs font-semibold"><Pastille hex={C.gestion_projection} /> Projection : et si on gérait plus ?</p>
                 <div className="mt-2 flex flex-wrap items-end gap-3">
-                  <Champ label="Loyers bruts additionnels par mois"><Num value={data.gestion.loyers_additionnels_mensuels} onChange={(v) => modifier((d) => { d.gestion.loyers_additionnels_mensuels = v; })} className="w-44" suffixe="$" /></Champ>
+                  <Champ label="Loyers bruts additionnels par mois" className="w-48"><Num value={data.gestion.loyers_additionnels_mensuels} onChange={(v) => modifier((d) => { d.gestion.loyers_additionnels_mensuels = v; })} suffixe="$" /></Champ>
                   <label className={`flex items-center gap-1.5 pb-2 text-xs ${MUTED}`}>
                     <input type="checkbox" className="h-4 w-4" style={{ accentColor: C.gestion_projection }} checked={data.gestion.inclure_projection} onChange={(e) => modifier((d) => { d.gestion.inclure_projection = e.target.checked; })} /> Inclure dans les totaux
                   </label>
@@ -1078,52 +1179,61 @@ function RevenusTab({ data, rev, modifier }: { data: Data; rev: Record<string, S
           }
           resultat={
             <ul className="space-y-1">
-              <li>{geres.length} immeuble{geres.length > 1 ? "s" : ""} géré{geres.length > 1 ? "s" : ""} · {money(loyersGeresMensuels)} / mois × 12 × {pct(data.gestion.taux_pct)} = <b style={{ color: C.gestion }}>{money(rev.gestion?.revenu)}</b></li>
-              {(rev.gestion?.non_geres as string[])?.length ? <li className={FAINT}>Non gérés par nous : {(rev.gestion?.non_geres as string[]).join(", ")}</li> : null}
-              <li>
-                <Pastille hex={C.gestion_projection} className="mr-1" /> Projection : +{money(data.gestion.loyers_additionnels_mensuels)} / mois → <b style={{ color: C.gestion_projection }}>{money(rev.gestion_projection?.revenu)}</b> / an {data.gestion.inclure_projection ? "(inclus dans les totaux)" : "(hors totaux)"}
-              </li>
+              <li>À l&apos;interne ({rev.gestion?.nb_internes as number}) : {money(rev.gestion?.loyers_internes_annuels as number)} / an</li>
+              <li>Sous-traités ({rev.gestion?.nb_sous_traites as number}) : {money(rev.gestion?.loyers_sous_traites_annuels as number)} / an {data.gestion.facturer_sous_traites ? "(facturés)" : "(non facturés)"}</li>
+              <li>Base {money(rev.gestion?.base_annuelle as number)} × {pct(data.gestion.taux_pct)} = <b style={{ color: C.gestion }}>{money(rev.gestion?.revenu)}</b></li>
+              <li><Pastille hex={C.gestion_projection} className="mr-1" /> Projection : +{money(data.gestion.loyers_additionnels_mensuels)} / mois → <b style={{ color: C.gestion_projection }}>{money(rev.gestion_projection?.revenu)}</b> / an {data.gestion.inclure_projection ? "(inclus)" : "(hors totaux)"}</li>
             </ul>
           }
         />
 
         {/* 8. Location */}
-        <Carte
-          id="sec-location" num="8." titre="Frais de location" hex={C.location} icon={ICONES.location} revenu={rev.location?.revenu}
-          note="Frais chargé au propriétaire quand un logement ou une chambre est reloué. Le nombre de relocations vient du taux de roulement sur les portes gérées, ou tu le saisis directement."
+        <Carte id="sec-location" num="8." titre="Frais de location" hex={C.location} icon={ICONES.location} revenu={rev.location?.revenu} note="Frais chargé quand un logement ou une chambre est reloué, sur les portes gérées à l'interne. Le nombre de relocations vient du taux de roulement, ou tu le saisis."
           hypotheses={
             <div className="grid gap-3 sm:grid-cols-3">
               <Champ label="Frais par logement"><Num value={data.location.frais_logement} onChange={(v) => modifier((d) => { d.location.frais_logement = v; })} suffixe="$" /></Champ>
               <Champ label="Frais par chambre"><Num value={data.location.frais_chambre} onChange={(v) => modifier((d) => { d.location.frais_chambre = v; })} suffixe="$" /></Champ>
               <Champ label="Taux de roulement par an"><Num value={data.location.taux_roulement_pct} step={1} onChange={(v) => modifier((d) => { d.location.taux_roulement_pct = v; })} suffixe="%" /></Champ>
               <Champ label={`Relocations de logements (calculé : ${rev.location?.relocations_logements_calculees as number})`} hint="Laisse vide pour utiliser le calcul au roulement">
-                <input type="number" min={0} step={1} value={data.location.nb_relocations_logements ?? ""} placeholder={String(rev.location?.relocations_logements_calculees ?? 0)} onChange={(e) => modifier((d) => { d.location.nb_relocations_logements = e.target.value === "" ? null : Math.max(0, Math.round(Number(e.target.value))); })} className={`${INPUT} text-right tabular-nums`} />
+                <input type="number" min={0} step={1} value={data.location.nb_relocations_logements ?? ""} placeholder={String(rev.location?.relocations_logements_calculees ?? 0)} onChange={(e) => modifier((d) => { d.location.nb_relocations_logements = e.target.value === "" ? null : Math.max(0, Math.round(Number(e.target.value))); })} className={`${INPUT} w-full text-right tabular-nums`} />
               </Champ>
               <Champ label={`Relocations de chambres (calculé : ${rev.location?.relocations_chambres_calculees as number})`} hint="Laisse vide pour utiliser le calcul au roulement">
-                <input type="number" min={0} step={1} value={data.location.nb_relocations_chambres ?? ""} placeholder={String(rev.location?.relocations_chambres_calculees ?? 0)} onChange={(e) => modifier((d) => { d.location.nb_relocations_chambres = e.target.value === "" ? null : Math.max(0, Math.round(Number(e.target.value))); })} className={`${INPUT} text-right tabular-nums`} />
+                <input type="number" min={0} step={1} value={data.location.nb_relocations_chambres ?? ""} placeholder={String(rev.location?.relocations_chambres_calculees ?? 0)} onChange={(e) => modifier((d) => { d.location.nb_relocations_chambres = e.target.value === "" ? null : Math.max(0, Math.round(Number(e.target.value))); })} className={`${INPUT} w-full text-right tabular-nums`} />
               </Champ>
             </div>
           }
           resultat={
             <ul className="space-y-1">
-              <li>{logementsGeres} logements et {chambresGeres} chambres gérés</li>
+              <li>{logementsInternes} logements et {chambresInternes} chambres gérés à l&apos;interne</li>
               <li>{rev.location?.relocations_logements as number} × {money(data.location.frais_logement)} + {rev.location?.relocations_chambres as number} × {money(data.location.frais_chambre)} = <b style={{ color: C.location }}>{money(rev.location?.revenu)}</b></li>
+            </ul>
+          }
+        />
+
+        {/* Part des gains */}
+        <Carte id="sec-part_des_gains" titre="Part des gains — en parts, pas en cash" hex={C.part_des_gains} icon={PiggyBank} revenu={pg.part_nous} revenuLabel="pour nos 3 holdings, en parts" note="Document, p. 7 : les premiers 7 % du gain aux investisseurs, les 3 % suivants à nous, le reste 70 / 30. Payé en nouvelles parts du fonds (10 % à chaque holding), donc hors des revenus en cash."
+          hypotheses={
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Champ label="Rendement de l'année (sur la VAN)"><Num value={data.part_des_gains.rendement_pct} step={0.5} onChange={(v) => modifier((d) => { d.part_des_gains.rendement_pct = v; })} suffixe="%" /></Champ>
+              <Champ label="Premiers % aux investisseurs"><Num value={data.part_des_gains.seuil_investisseurs_pct} step={0.5} onChange={(v) => modifier((d) => { d.part_des_gains.seuil_investisseurs_pct = v; })} suffixe="%" /></Champ>
+              <Champ label="% suivants à nous"><Num value={data.part_des_gains.tranche_nous_pct} step={0.5} onChange={(v) => modifier((d) => { d.part_des_gains.tranche_nous_pct = v; })} suffixe="%" /></Champ>
+              <Champ label="Notre part du reste"><Num value={data.part_des_gains.part_nous_pct} step={1} onChange={(v) => modifier((d) => { d.part_des_gains.part_nous_pct = v; })} suffixe="%" /></Champ>
+            </div>
+          }
+          resultat={
+            <ul className="space-y-1">
+              <li className="flex justify-between gap-2"><span>Gain de l&apos;année ({pct(pg.rendement_pct)} de {money(pg.van)})</span><span className="tabular-nums">{money(pg.gain)}</span></li>
+              <li className="flex justify-between gap-2"><span>1. Aux investisseurs</span><span className="tabular-nums">{money(pg.tranche_investisseurs)}</span></li>
+              <li className="flex justify-between gap-2"><span>2. À nous</span><span className="tabular-nums">{money(pg.tranche_nous)}</span></li>
+              <li className="flex justify-between gap-2"><span>3. Le reste, {pct(data.part_des_gains.part_nous_pct, 0)} à nous</span><span className="tabular-nums">{money(pg.reste)}</span></li>
+              <li className="flex justify-between gap-2 border-t border-[var(--qg-border)] pt-1 font-semibold"><span>Nous ({pct(pg.pct_du_gain_nous, 0)} du gain)</span><b className="tabular-nums" style={{ color: C.part_des_gains }}>{money(pg.part_nous)}</b></li>
+              <li className="flex justify-between gap-2"><span>Par holding</span><span className="tabular-nums">{money(pg.par_holding)}</span></li>
+              <li className="flex justify-between gap-2"><span>Investisseurs</span><span className="tabular-nums">{money(pg.part_investisseurs)}</span></li>
             </ul>
           }
         />
       </div>
     </div>
-  );
-}
-
-function Lignes<T>({ lignes, rendu, vide }: { lignes: T[]; rendu: (l: T) => string; vide: string }) {
-  if (!lignes.length) return <p className={FAINT}>{vide}</p>;
-  return (
-    <ul className="space-y-1">
-      {lignes.map((l, i) => (
-        <li key={i}>{rendu(l)}</li>
-      ))}
-    </ul>
   );
 }
 
@@ -1133,11 +1243,10 @@ function DepensesTab({ data, res, referentiel, modifier }: { data: Data; res: Re
   const cats = referentiel?.categories_frais_fixes || [];
   const dep = res.depenses;
   const salairesPostes = dep.salaires.reduce((a, s) => a + s.total, 0);
+  const sousTraites = (Object.fromEntries(res.revenus.map((s) => [s.key, s])) as Record<string, SectionRevenu>).gestion?.sous_traites as string[] | undefined;
   return (
     <div className="space-y-4">
-      <Carte
-        id="sec-frais-fixes" titre="Frais fixes non refacturables" hex={C.frais_fixes} icon={Receipt} revenu={dep.total_frais_fixes}
-        note="Seulement ce qui n'est pas rechargé aux clients : adhésions et abonnements, activités, représentation, honoraires non refacturables, fournitures, déplacements, informatique."
+      <Carte id="sec-frais-fixes" titre="Frais fixes non refacturables" hex={C.frais_fixes} icon={Receipt} revenu={dep.total_frais_fixes} note="Seulement ce qui n'est pas rechargé aux clients : adhésions et abonnements, activités, représentation, honoraires non refacturables, fournitures, déplacements, informatique."
         hypotheses={
           <>
             <table className="w-full text-xs">
@@ -1159,15 +1268,13 @@ function DepensesTab({ data, res, referentiel, modifier }: { data: Data; res: Re
                         <Pastille hex={CAT_COULEURS[l.categorie] || "#94a3b8"} />
                         <select value={l.categorie} onChange={(e) => modifier((d) => { const x = d.depenses.frais_fixes.find((y) => y.id === l.id); if (x) x.categorie = e.target.value; })} className={`${INPUT} max-w-[260px]`}>
                           {cats.map((c) => (
-                            <option key={c.key} value={c.key}>
-                              {c.label}
-                            </option>
+                            <option key={c.key} value={c.key}>{c.label}</option>
                           ))}
                         </select>
                       </span>
                     </td>
                     <td className="py-1 pr-2"><input value={l.libelle} placeholder="Ex. CORPIQ, Microsoft 365…" onChange={(e) => modifier((d) => { const x = d.depenses.frais_fixes.find((y) => y.id === l.id); if (x) x.libelle = e.target.value; })} className={`${INPUT} w-full`} /></td>
-                    <td className="py-1 pr-2"><Num value={l.montant} onChange={(v) => modifier((d) => { const x = d.depenses.frais_fixes.find((y) => y.id === l.id); if (x) x.montant = v; })} className="w-28" suffixe="$" /></td>
+                    <td className="w-36 py-1 pr-2"><Num value={l.montant} onChange={(v) => modifier((d) => { const x = d.depenses.frais_fixes.find((y) => y.id === l.id); if (x) x.montant = v; })} suffixe="$" /></td>
                     <td className="py-1 pr-2">
                       <select value={l.periode} onChange={(e) => modifier((d) => { const x = d.depenses.frais_fixes.find((y) => y.id === l.id); if (x) x.periode = e.target.value as FraisFixe["periode"]; })} className={INPUT}>
                         <option value="mois">par mois</option>
@@ -1193,21 +1300,16 @@ function DepensesTab({ data, res, referentiel, modifier }: { data: Data; res: Re
                 <span className="tabular-nums">{money(c.montant)}</span>
               </li>
             ))}
-            <li className="flex justify-between border-t border-[var(--qg-border)] pt-1 font-semibold">
-              <span>Total</span>
-              <span className="tabular-nums" style={{ color: C.frais_fixes }}>{money(dep.total_frais_fixes)}</span>
-            </li>
+            <li className="flex justify-between border-t border-[var(--qg-border)] pt-1 font-semibold"><span>Total</span><span className="tabular-nums" style={{ color: C.frais_fixes }}>{money(dep.total_frais_fixes)}</span></li>
           </ul>
         }
       />
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <Carte
-          id="sec-salaires" titre="Salaires des postes" hex={C.salaires} icon={Users} revenu={salairesPostes}
-          note={referentiel?.charges_sociales_note}
+        <Carte id="sec-salaires" titre="Salaires des postes" hex={C.salaires} icon={Users} revenu={salairesPostes} note={referentiel?.charges_sociales_note}
           hypotheses={
             <>
-              <Champ label="Charges sociales de l'employeur (en plus du salaire brut)"><Num value={data.depenses.charges_sociales_pct} step={0.5} onChange={(v) => modifier((d) => { d.depenses.charges_sociales_pct = v; })} className="max-w-[160px]" suffixe="%" /></Champ>
+              <Champ label="Charges sociales de l'employeur (en plus du salaire brut)" className="max-w-[220px]"><Num value={data.depenses.charges_sociales_pct} step={0.5} onChange={(v) => modifier((d) => { d.depenses.charges_sociales_pct = v; })} suffixe="%" /></Champ>
               <table className="mt-3 w-full text-xs">
                 <thead className={`text-left ${MUTED}`}>
                   <tr>
@@ -1220,7 +1322,7 @@ function DepensesTab({ data, res, referentiel, modifier }: { data: Data; res: Re
                   {data.depenses.salaires.map((s) => (
                     <tr key={s.id}>
                       <td className="py-1 pr-2"><input value={s.poste} onChange={(e) => modifier((d) => { const x = d.depenses.salaires.find((y) => y.id === s.id); if (x) x.poste = e.target.value; })} className={`${INPUT} w-full`} /></td>
-                      <td className="py-1 pr-1"><Num value={s.salaire_annuel} onChange={(v) => modifier((d) => { const x = d.depenses.salaires.find((y) => y.id === s.id); if (x) x.salaire_annuel = v; })} className="w-32" suffixe="$" /></td>
+                      <td className="w-40 py-1 pr-1"><Num value={s.salaire_annuel} onChange={(v) => modifier((d) => { const x = d.depenses.salaires.find((y) => y.id === s.id); if (x) x.salaire_annuel = v; })} suffixe="$" /></td>
                       <td className="py-1 text-right"><BoutonRetirer onClick={() => modifier((d) => { d.depenses.salaires = d.depenses.salaires.filter((y) => y.id !== s.id); })} /></td>
                     </tr>
                   ))}
@@ -1234,22 +1336,14 @@ function DepensesTab({ data, res, referentiel, modifier }: { data: Data; res: Re
           resultat={
             <ul className="space-y-1">
               {dep.salaires.map((s, i) => (
-                <li key={i} className="flex justify-between gap-2">
-                  <span className="truncate">{s.poste || "Poste"}</span>
-                  <span className="tabular-nums">{money(s.brut)} + {money(s.charges)} = <b>{money(s.total)}</b></span>
-                </li>
+                <li key={i} className="flex justify-between gap-2"><span className="truncate">{s.poste || "Poste"}</span><span className="tabular-nums">{money(s.brut)} + {money(s.charges)} = <b>{money(s.total)}</b></span></li>
               ))}
-              <li className="flex justify-between border-t border-[var(--qg-border)] pt-1 font-semibold">
-                <span>Total (avec charges)</span>
-                <span className="tabular-nums" style={{ color: C.salaires }}>{money(salairesPostes)}</span>
-              </li>
+              <li className="flex justify-between border-t border-[var(--qg-border)] pt-1 font-semibold"><span>Total (avec charges)</span><span className="tabular-nums" style={{ color: C.salaires }}>{money(salairesPostes)}</span></li>
             </ul>
           }
         />
 
-        <Carte
-          id="sec-associes" titre="Associés : salaire et dividendes" hex={C.associes} icon={PiggyBank} revenu={dep.total_associes_salaires}
-          note="Le salaire (avec charges) est une dépense ; les dividendes sont une distribution prise sur le bénéfice, affichée à part dans le tableau de bord."
+        <Carte id="sec-associes" titre="Associés : salaire et dividendes" hex={C.associes} icon={PiggyBank} revenu={dep.total_associes_salaires} note="Le salaire (avec charges) est une dépense ; les dividendes sont une distribution prise sur le bénéfice, affichée à part dans le tableau de bord."
           hypotheses={
             <table className="w-full text-xs">
               <thead className={`text-left ${MUTED}`}>
@@ -1263,8 +1357,8 @@ function DepensesTab({ data, res, referentiel, modifier }: { data: Data; res: Re
                 {data.depenses.associes.map((a) => (
                   <tr key={a.id}>
                     <td className="py-1 pr-2"><input value={a.nom} onChange={(e) => modifier((d) => { const x = d.depenses.associes.find((y) => y.id === a.id); if (x) x.nom = e.target.value; })} className={`${INPUT} w-full`} /></td>
-                    <td className="py-1 pr-2"><Num value={a.salaire_annuel} onChange={(v) => modifier((d) => { const x = d.depenses.associes.find((y) => y.id === a.id); if (x) x.salaire_annuel = v; })} className="w-32" suffixe="$" /></td>
-                    <td className="py-1"><Num value={a.dividendes_annuels} onChange={(v) => modifier((d) => { const x = d.depenses.associes.find((y) => y.id === a.id); if (x) x.dividendes_annuels = v; })} className="w-32" suffixe="$" /></td>
+                    <td className="w-40 py-1 pr-2"><Num value={a.salaire_annuel} onChange={(v) => modifier((d) => { const x = d.depenses.associes.find((y) => y.id === a.id); if (x) x.salaire_annuel = v; })} suffixe="$" /></td>
+                    <td className="w-40 py-1"><Num value={a.dividendes_annuels} onChange={(v) => modifier((d) => { const x = d.depenses.associes.find((y) => y.id === a.id); if (x) x.dividendes_annuels = v; })} suffixe="$" /></td>
                   </tr>
                 ))}
               </tbody>
@@ -1273,32 +1367,29 @@ function DepensesTab({ data, res, referentiel, modifier }: { data: Data; res: Re
           resultat={
             <ul className="space-y-1">
               {dep.associes.map((a, i) => (
-                <li key={i} className="flex justify-between gap-2">
-                  <span>{a.nom}</span>
-                  <span className="tabular-nums">salaire {money(a.cout_salaire)} · <span style={{ color: C.dividendes }}>dividendes {money(a.dividendes)}</span></span>
-                </li>
+                <li key={i} className="flex justify-between gap-2"><span>{a.nom}</span><span className="tabular-nums">salaire {money(a.cout_salaire)} · <span style={{ color: C.dividendes }}>dividendes {money(a.dividendes)}</span></span></li>
               ))}
-              <li className="flex justify-between border-t border-[var(--qg-border)] pt-1 font-semibold">
-                <span>Salaires (dépense)</span>
-                <span className="tabular-nums" style={{ color: C.associes }}>{money(dep.total_associes_salaires)}</span>
-              </li>
-              <li className="flex justify-between font-semibold">
-                <span>Dividendes (sur le bénéfice)</span>
-                <span className="tabular-nums" style={{ color: C.dividendes }}>{money(dep.total_dividendes)}</span>
-              </li>
+              <li className="flex justify-between border-t border-[var(--qg-border)] pt-1 font-semibold"><span>Salaires (dépense)</span><span className="tabular-nums" style={{ color: C.associes }}>{money(dep.total_associes_salaires)}</span></li>
+              <li className="flex justify-between font-semibold"><span>Dividendes (sur le bénéfice)</span><span className="tabular-nums" style={{ color: C.dividendes }}>{money(dep.total_dividendes)}</span></li>
+            </ul>
+          }
+        />
+
+        <Carte id="sec-sous-traitance" titre="Sous-traitant de gestion" hex={C.sous_traitance} icon={Home} revenu={dep.sous_traitance_gestion} note="Pour les immeubles marqués « gestion sous-traitée » dans leur fiche : on paie le sous-traitant un pourcentage de leurs loyers bruts."
+          hypotheses={<Champ label="Rémunération du sous-traitant (des loyers bruts des immeubles sous-traités)" className="max-w-[260px]"><Num value={data.depenses.sous_traitance_gestion_pct} step={0.5} onChange={(v) => modifier((d) => { d.depenses.sous_traitance_gestion_pct = v; })} suffixe="%" /></Champ>}
+          resultat={
+            <ul className="space-y-1">
+              <li>Immeubles sous-traités : {sousTraites?.length ? sousTraites.join(", ") : "aucun"}</li>
+              <li>Loyers bruts : {money(dep.loyers_sous_traites_annuels)} / an × {pct(data.depenses.sous_traitance_gestion_pct)} = <b style={{ color: C.sous_traitance }}>{money(dep.sous_traitance_gestion)}</b></li>
             </ul>
           }
         />
       </div>
 
       <div className={`${CARD} flex flex-wrap items-center justify-between gap-3 p-4 text-sm`} style={{ borderLeft: `4px solid ${C.depenses}` }}>
-        <span className="flex items-center gap-2 font-semibold">
-          <Wallet className="h-4 w-4" style={{ color: C.depenses }} /> Total des dépenses
-        </span>
+        <span className="flex items-center gap-2 font-semibold"><Wallet className="h-4 w-4" style={{ color: C.depenses }} /> Total des dépenses</span>
         <span className="text-lg font-bold tabular-nums" style={{ color: C.depenses }}>{money(dep.total)} / an</span>
-        <span className={`text-xs ${MUTED}`}>
-          frais fixes {money(dep.total_frais_fixes)} · masse salariale {money(dep.total_masse_salariale)} (dont charges {money(dep.total_charges_sociales)})
-        </span>
+        <span className={`text-xs ${MUTED}`}>frais fixes {money(dep.total_frais_fixes)} · masse salariale {money(dep.total_masse_salariale)} (dont charges {money(dep.total_charges_sociales)}) · sous-traitant {money(dep.sous_traitance_gestion)}</span>
       </div>
     </div>
   );
