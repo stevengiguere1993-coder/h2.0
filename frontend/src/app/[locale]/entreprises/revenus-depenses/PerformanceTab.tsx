@@ -1,25 +1,24 @@
 "use client";
 
 /**
- * Gestion d'entreprise → Performance du fonds (2026-11-05, v1).
+ * Revenus et dépenses → onglet « Performance du fonds » (2026-11-05, v1).
  *
  * Phil : « commençons par ça ! au début pas de registre d'investisseurs, mais
- * surtout les rendements par projet et ceux du fonds ».
+ * surtout les rendements par projet et ceux du fonds » ; « je la veux dans
+ * Revenus et dépenses, à côté de Revenus et Dépenses ».
  *
- * PRÉVU = la fiche de l'immeuble dans un scénario Revenus et dépenses ;
- * RÉEL = Kratos (prix et date d'achat, loyers de toutes les unités, dépenses
- * réelles, rapport / taux de cap, dette du jour, hypothèques). Tout est
- * calculé côté serveur (`GET /entreprises/revenus-depenses/performance`).
- * Lecture seule, admins seulement.
+ * PRÉVU = la fiche de l'immeuble dans le scénario courant ; RÉEL = Kratos
+ * (prix et date d'achat, loyers de toutes les unités, dépenses réelles,
+ * rapport / taux de cap, dette du jour, hypothèques). Calculé côté serveur
+ * (`GET /entreprises/revenus-depenses/performance`), lecture seule.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertTriangle, Building2, ChevronDown, ChevronRight, Landmark, PiggyBank, TrendingUp, Wallet } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
-import { QGTopbar } from "../layout";
 
-const RD = "/entreprises/revenus-depenses";
+const RD = "/api/v1/entreprises/revenus-depenses";
 const CARD = "rounded-2xl border border-[var(--qg-border)] bg-[var(--qg-card-bg)]";
 const MUTED = "text-[var(--qg-text-muted)]";
 const FAINT = "text-[var(--qg-text-faint)]";
@@ -40,7 +39,6 @@ type Fonds = {
   regles: { seuil_investisseurs_pct: number; tranche_nous_pct: number; part_nous_pct: number };
 };
 type Performance = { projets: Projet[]; fonds: Fonds; aujourd_hui: string; annee_scenario: number; scenario: { id: number; nom: string } };
-type ScenarioResume = { id: number; nom: string; is_default: boolean };
 
 function money(n: number | null | undefined, decimals = 0): string {
   return n == null ? "—" : new Intl.NumberFormat("fr-CA", { style: "currency", currency: "CAD", maximumFractionDigits: decimals }).format(n);
@@ -65,7 +63,7 @@ function signe(n: number | null | undefined): string {
   return n > 0 ? "text-emerald-400" : n < 0 ? "text-rose-400" : "";
 }
 
-const C = { fonds: "#8b5cf6", projet: "#0ea5e9", gain: "#10b981", cash: "#f59e0b", dette: "#f43f5e" };
+const C = { fonds: "#8b5cf6", projet: "#0ea5e9", gain: "#10b981", cash: "#f59e0b" };
 
 function KPI({ label, valeur, sous, hex, icon: Icon }: { label: string; valeur: string; sous?: string; hex: string; icon: React.ComponentType<{ className?: string }> }) {
   return (
@@ -159,63 +157,43 @@ function CarteProjet({ p }: { p: Projet }) {
   );
 }
 
-export default function PerformanceFondsPage() {
-  const [scenarios, setScenarios] = useState<ScenarioResume[]>([]);
-  const [courant, setCourant] = useState<number | null>(null);
+export function PerformanceTab({ scenarioId, version }: { scenarioId: number | null; version: string | null }) {
   const [perf, setPerf] = useState<Performance | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [charge, setCharge] = useState(true);
 
-  const charger = useCallback(async (id: number | null) => {
-    setCharge(true);
-    try {
-      const r = await authedFetch(`${RD}/performance${id != null ? `?scenario_id=${id}` : ""}`);
-      if (r.status === 403) throw new Error("Réservé aux administrateurs.");
-      if (!r.ok) throw new Error(`Erreur ${r.status}`);
-      const d = (await r.json()) as Performance;
-      setPerf(d);
-      setCourant(d.scenario.id);
-      setErr(null);
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setCharge(false);
-    }
-  }, []);
-
   useEffect(() => {
+    let actif = true;
     void (async () => {
+      setCharge(true);
       try {
-        const r = await authedFetch(`${RD}/scenarios`);
-        if (r.ok) setScenarios(((await r.json()) as { items: ScenarioResume[] }).items);
-      } catch {
-        /* liste facultative */
+        const r = await authedFetch(`${RD}/performance${scenarioId != null ? `?scenario_id=${scenarioId}` : ""}`);
+        if (r.status === 403) throw new Error("Réservé aux administrateurs.");
+        if (!r.ok) throw new Error(`Erreur ${r.status}`);
+        const d = (await r.json()) as Performance;
+        if (!actif) return;
+        setPerf(d);
+        setErr(null);
+      } catch (e) {
+        if (actif) setErr((e as Error).message);
+      } finally {
+        if (actif) setCharge(false);
       }
-      await charger(null);
     })();
-  }, [charger]);
+    return () => {
+      actif = false;
+    };
+  }, [scenarioId, version]);
 
   const f = perf?.fonds;
-  const sousTitre = perf ? `Scénario « ${perf.scenario.nom} » (${perf.annee_scenario}) · réel au ${dateFr(perf.aujourd_hui)}` : "Rendements réels des projets et du fonds";
-
   return (
-    <div className="space-y-5">
-      <QGTopbar
-        greeting="Performance du fonds"
-        subtitle={sousTitre}
-        rightSlot={
-          scenarios.length > 1 ? (
-            <select value={courant ?? ""} onChange={(e) => void charger(Number(e.target.value))} className="rounded-lg border border-[var(--qg-border)] bg-[var(--qg-bg)] px-2.5 py-1.5 text-sm outline-none">
-              {scenarios.map((s) => <option key={s.id} value={s.id}>{s.nom}</option>)}
-            </select>
-          ) : undefined
-        }
-      />
+    <div className="space-y-4">
       {err ? <p className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">{err}</p> : null}
       {charge && !perf ? <p className={`text-sm ${MUTED}`}>Chargement…</p> : null}
       {perf && f ? (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+          <p className={`text-xs ${MUTED}`}>Réel au {dateFr(perf.aujourd_hui)} · prévu = scénario « {perf.scenario.nom} » ({perf.annee_scenario}).{charge ? " Mise à jour…" : ""}</p>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <KPI label="Capital investi" valeur={money(f.capital_investi)} sous={`${f.nb_immeubles} immeuble${f.nb_immeubles > 1 ? "s" : ""} dans le fonds (${f.nb_reels} réel${f.nb_reels > 1 ? "s" : ""}, ${f.nb_prevus} prévu${f.nb_prevus > 1 ? "s" : ""})`} hex={C.projet} icon={Building2} />
             <KPI label="VAN du fonds" valeur={money(f.van)} sous={`${money(f.valeur)} − ${money(f.dettes)} + cash ${money(f.cash)}`} hex={C.fonds} icon={Landmark} />
             <KPI label="Gain" valeur={money(f.gain)} sous="VAN − capital investi" hex={C.gain} icon={TrendingUp} />
@@ -235,7 +213,7 @@ export default function PerformanceFondsPage() {
             <div className="space-y-3 p-4">
               {perf.projets.map((p) => <CarteProjet key={p.id} p={p} />)}
               {!perf.projets.length ? <p className={`text-sm ${FAINT}`}>Aucun immeuble dans ce scénario.</p> : null}
-              {perf.projets.length && !f.nb_immeubles ? <p className={`rounded-xl border border-dashed border-[var(--qg-border)] px-4 py-3 text-xs ${MUTED}`}>Aucun immeuble n&apos;est « dans le fonds » dans ce scénario : le bloc Fonds reste à zéro. Coche « Dans le fonds » dans Revenus et dépenses pour les immeubles que le fonds détient.</p> : null}
+              {perf.projets.length && !f.nb_immeubles ? <p className={`rounded-xl border border-dashed border-[var(--qg-border)] px-4 py-3 text-xs ${MUTED}`}>Aucun immeuble n&apos;est « dans le fonds » dans ce scénario : le bloc Fonds reste à zéro. Coche « Dans le fonds » dans l&apos;onglet Revenus pour les immeubles que le fonds détient.</p> : null}
             </div>
           </section>
 
