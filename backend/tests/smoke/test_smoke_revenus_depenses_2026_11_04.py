@@ -412,6 +412,9 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
             await s.flush()
             s.add(Evaluation(immeuble_id=cap.id, kind="appraisal", valeur=835_000.0, taux_cap=5.35, date_evaluation=date(2025, 6, 18),
                              created_at=datetime.now(timezone.utc)))
+            # Hypothèque sans balance saisie : la dette du jour est la balance CALCULÉE (amortie un an), pas le montant initial.
+            s.add(Hypotheque(immeuble_id=cap.id, preteur="Banque Cap", montant_initial=500_000.0, balance_actuelle=None, taux_pct=5.0,
+                             amortissement_mois=300, date_debut=date.today() - timedelta(days=400), status=HypothequeStatus.ACTIVE.value))
             await s.commit()
             return cap.id
 
@@ -441,6 +444,7 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
     cp = next(x for x in r.json()["items"] if x["kratos_immeuble_id"] == cap_id)
     assert cp["nb_logements"] == 4 and cp["nb_logements_en_chambres"] == 1 and cp["nb_chambres"] == 4 and cp["taux_cap_pct"] == 5.35
     assert not any("Taux de cap" in n or "en chambres sans nombre" in n for n in cp["notes_import"])
+    assert 470_000 < cp["dette"] < 500_000, cp["dette"]   # balance calculée du jour, comme la fiche de l'immeuble
 
     # Hydratation (Phil : « prendre toutes les informations disponibles ») : un immeuble du scénario
     # qui « suit Kratos » reprend les valeurs à jour à chaque enregistrement, lecture et calcul ;
