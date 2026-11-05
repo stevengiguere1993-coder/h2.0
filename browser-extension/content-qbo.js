@@ -1,4 +1,4 @@
-// Content script QuickBooks en ligne (*.qbo.intuit.com) — 1.3.0, Steven
+// Content script QuickBooks en ligne (*.qbo.intuit.com) — 1.3.3, Steven
 // 2026-10-14 : « trouve-moi une solution pour convertir un sous-client en
 // projet » sans le palier partenaire Silver qu'exige l'API Projets.
 //
@@ -39,7 +39,11 @@
   // Une tentative automatique par liste et par page chargée : si elle
   // échoue, on ne recommence pas en boucle (sessionStorage).
   const AUTO_FAIT_KEY = "h2_qbo_auto_fait";
-  const RE_MENU_CONVERTIR = /convertir.*sous[\s-]?client|convert.*sub[\s-]?customer/i;
+  // QuickBooks en français (Canada) dit « Convertir à partir d'un client
+  // rattaché » (2026-11-05 : l'extension s'arrêtait sur « introuvable ») ;
+  // « sous-client » et l'anglais « sub-customer » restent reconnus.
+  const RE_MENU_CONVERTIR =
+    /convertir.*(sous[\s-]?client|client[\s-]+rattach)|convert.*sub[\s-]?customer/i;
   const RE_NOUVEAU_PROJET = /nouveau projet|new project/i;
   const RE_TOUT = /^(tout|tous|toutes|all|select all|tout s[ée]lectionner|s[ée]lectionner tout)/i;
   const RE_ANNULER = /annuler|cancel|fermer|close/i;
@@ -638,7 +642,7 @@
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       await dormir(300);
     }
-    throw new Error("« Convertir depuis un sous-client » introuvable dans le menu « Nouveau projet »");
+    throw new Error("« Convertir à partir d'un client rattaché » introuvable dans le menu « Nouveau projet »");
   }
 
   function etiquetteCase(cb, conteneur) {
@@ -707,7 +711,7 @@
     const resultats = [];
     let dialogue = null;
     try {
-      // 1) Menu → « Convertir depuis un sous-client »
+      // 1) Menu → « Convertir à partir d'un client rattaché »
       const item = await ouvrirMenuConvertir();
       // Le menu ouvert fait partie de l'« avant » : la nouveauté sera la
       // fenêtre de sélection, pas le menu.
@@ -731,7 +735,7 @@
           return n.length ? n : null;
         }, 2000);
         if (!nouvellesCases) {
-          throw new Error("la fenêtre « Convertir depuis un sous-client » ne s'est pas ouverte");
+          throw new Error("la fenêtre « Convertir à partir d'un client rattaché » ne s'est pas ouverte");
         }
       }
       await dormir(400);
@@ -757,7 +761,7 @@
             project_id: it.project_id,
             ok: false,
             detail:
-              "absent de la liste « Convertir depuis un sous-client » (déjà converti ? pas « facturer avec le client parent » ?)",
+              "absent de la liste « Convertir à partir d'un client rattaché » (déjà converti ? pas « facturer avec le client parent » ?)",
           });
         }
       }
