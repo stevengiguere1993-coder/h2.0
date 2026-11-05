@@ -157,7 +157,7 @@ type Resultats = {
     total: number;
     charges_sociales_pct: number;
   };
-  totaux: { revenus: number; revenus_avec_projection: number; depenses: number; benefice: number; marge_pct: number | null; dividendes: number; benefice_retenu: number; revenus_mensuels: number; depenses_mensuelles: number };
+  totaux: { revenus: number; revenus_avec_projection: number; depenses: number; benefice: number; benefice_avant_associes: number; salaires_associes_charges_incluses: number; marge_pct: number | null; dividendes: number; benefice_retenu: number; revenus_mensuels: number; depenses_mensuelles: number };
   point_mort: { couvert: boolean; van_necessaire: number; van_actuelle: number; loyers_mensuels_sous_gestion_necessaires: number; loyers_mensuels_sous_gestion_actuels: number };
   avertissements: string[];
 };
@@ -794,9 +794,10 @@ export default function RevenusDepensesPage() {
         ))}
 
         {/* Tableau de bord */}
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <KPI label="Revenus annuels" valeur={money(t.revenus)} sous={`${money(t.revenus_mensuels)} / mois${data.gestion.inclure_projection ? "" : ` · ${money(t.revenus_avec_projection)} avec la projection`}`} hex={C.revenus} icon={TrendingUp} />
           <KPI label="Dépenses annuelles" valeur={money(t.depenses)} sous={`${money(t.depenses_mensuelles)} / mois`} hex={C.depenses} icon={Wallet} />
+          <KPI label="Bénéfice avant salaires des associés et dividendes" valeur={money(t.benefice_avant_associes)} sous={`salaires des associés (charges incluses) ${money(t.salaires_associes_charges_incluses)}`} hex={C.benefice} icon={Calculator} alerte={t.benefice_avant_associes < 0} />
           <KPI label="Bénéfice avant dividendes" valeur={money(t.benefice)} sous={t.marge_pct != null ? `marge ${pct(t.marge_pct)}` : "aucun revenu saisi"} hex={C.benefice} icon={Calculator} alerte={t.benefice < 0} />
           <KPI label="Dividendes des associés" valeur={money(t.dividendes)} sous={`bénéfice retenu ${money(t.benefice_retenu)}`} hex={C.dividendes} icon={Users} alerte={t.benefice_retenu < 0} />
           <KPI label="VAN du fonds" valeur={money(res.parc.van)} sous={`${money(res.parc.valeur)} d'immeubles + ${money(res.parc.cash)} de cash − ${money(res.parc.dettes)} de dettes · ${money(res.parc.van_a_terme)} à terme`} hex={C.fonds} icon={Landmark} alerte={res.parc.van < 0} />

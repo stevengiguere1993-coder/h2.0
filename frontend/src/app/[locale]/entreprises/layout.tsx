@@ -297,6 +297,8 @@ export default function EntreprisesLayout({
     // Revenus et dépenses de la société de gestion — simulation du fonds
     // (Phil 2026-11-04), admins seulement (registre d'accès).
     { href: "/entreprises/revenus-depenses", label: "Revenus et dépenses", icon: Calculator },
+    // Performance réelle des projets et du fonds (Phil 2026-11-05), admins seulement.
+    { href: "/entreprises/performance-fonds", label: "Performance du fonds", icon: TrendingUp },
     { href: "/entreprises/kratos", label: "Kratos · Cerveau", icon: Brain },
     { href: "/entreprises/rencontres", label: "Rencontres", icon: Calendar },
     { href: "/entreprises/feuille-de-temps", label: "Feuille de temps", icon: Clock },
