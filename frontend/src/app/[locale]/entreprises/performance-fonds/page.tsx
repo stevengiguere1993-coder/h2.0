@@ -29,6 +29,7 @@ type Reel = {
   prix_achat: number; date_achat: string | null; annees: number | null; travaux_et_frais: number; cout_projet: number; hypotheque_initiale: number;
   mise_de_fonds: number | null; valeur: number; methode_valeur: string; revenus_nets: number | null; service_dette: number; cash_flow: number | null;
   dette: number; equite: number; gain: number | null; rendement_total_pct: number | null; cash_on_cash_pct: number | null; annualise_pct: number | null;
+  capital_recupere: boolean;
 };
 type Ecart = { valeur: number; revenus_nets: number | null; dette: number; equite: number };
 type Projet = { id: string; nom: string; kratos_immeuble_id: number | null; dans_le_fonds: boolean; phase: string; prevu: Prevu; reel: Reel | null; ecart: Ecart | null; notes: string[] };
@@ -105,10 +106,10 @@ function CarteProjet({ p }: { p: Projet }) {
         {r ? (
           <>
             <span className={`text-xs ${MUTED}`}>acquis {dateFr(r.date_achat)}{r.annees ? ` · ${nb(r.annees, 1)} an${r.annees >= 2 ? "s" : ""}` : ""}</span>
-            <span className="text-xs">mise <b className="tabular-nums">{money(r.mise_de_fonds)}</b></span>
+            <span className="text-xs">mise <b className="tabular-nums">{money(r.mise_de_fonds)}</b>{r.capital_recupere ? <span className={FAINT}> (récupérée)</span> : null}</span>
             <span className="text-xs">équité <b className={`tabular-nums ${signe(r.equite)}`}>{money(r.equite)}</b></span>
             <span className="text-xs">cash-flow <b className={`tabular-nums ${signe(r.cash_flow)}`}>{money(r.cash_flow)}</b></span>
-            <span className="text-xs">rendement <b className={`tabular-nums ${signe(r.rendement_total_pct)}`}>{pct(r.rendement_total_pct)}</b>{r.annualise_pct != null ? <span className={FAINT}> · {pct(r.annualise_pct)} / an</span> : null}</span>
+            {r.capital_recupere ? <span className={`text-xs ${FAINT}`}>capital récupéré · gain = équité</span> : <span className="text-xs">rendement <b className={`tabular-nums ${signe(r.rendement_total_pct)}`}>{pct(r.rendement_total_pct)}</b>{r.annualise_pct != null ? <span className={FAINT}> · {pct(r.annualise_pct)} / an</span> : null}</span>}
           </>
         ) : (
           <span className={`text-xs ${FAINT}`}>prévu seulement · valeur {money(p.prevu.valeur)} · équité {money(p.prevu.equite)}</span>
@@ -234,6 +235,7 @@ export default function PerformanceFondsPage() {
             <div className="space-y-3 p-4">
               {perf.projets.map((p) => <CarteProjet key={p.id} p={p} />)}
               {!perf.projets.length ? <p className={`text-sm ${FAINT}`}>Aucun immeuble dans ce scénario.</p> : null}
+              {perf.projets.length && !f.nb_immeubles ? <p className={`rounded-xl border border-dashed border-[var(--qg-border)] px-4 py-3 text-xs ${MUTED}`}>Aucun immeuble n&apos;est « dans le fonds » dans ce scénario : le bloc Fonds reste à zéro. Coche « Dans le fonds » dans Revenus et dépenses pour les immeubles que le fonds détient.</p> : null}
             </div>
           </section>
 
