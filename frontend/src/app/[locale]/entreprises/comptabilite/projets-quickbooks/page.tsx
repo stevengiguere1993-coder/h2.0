@@ -414,7 +414,7 @@ export default function ProjetsQuickBooksPage() {
         <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-[var(--qg-text)]">
           <li>Menu de gauche → <strong>Projets</strong>.</li>
           <li>
-            Flèche du bouton <strong>« Nouveau projet ▾ »</strong> → <strong>« Convertir depuis un sous-client »</strong>.
+            Flèche du bouton <strong>« Nouveau projet ▾ »</strong> → <strong>« Convertir à partir d&apos;un client rattaché »</strong>.
           </li>
           <li>Cocher le sous-client (nom exact ci-dessus, bouton Copier) → <strong>Convertir</strong>.</li>
           <li>

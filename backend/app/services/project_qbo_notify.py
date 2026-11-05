@@ -131,7 +131,7 @@ def construire_courriel(
       « Facturer avec le client parent ».</li>
     <li>Menu de gauche → <strong>Projets</strong>.</li>
     <li>Flèche du bouton <strong>« Nouveau projet ▾ »</strong> →
-      <strong>« Convertir depuis un sous-client »</strong>.</li>
+      <strong>« Convertir à partir d'un client rattaché »</strong>.</li>
     <li>Choisir <strong>{subcustomer}</strong> → confirmer.</li>
   </ol>
   <p style="font-size:13px;color:#555">Les transactions du sous-client
