@@ -94,7 +94,15 @@ def _projet(i: Dict[str, Any], item: Optional[Dict[str, Any]], hypo: Optional[Di
             taux_cap_pct=taux_cap, dette=float(item.get("dette") or 0.0),
         )
         fr = svc.valeur_immeuble(r, bareme)
+        if i["phase"] == "stabilisation":
+            # En rénovation : les loyers ne sont pas stabilisés, la valeur par les revenus ne veut rien dire.
+            # Réel = dernier rapport d'évaluation, sinon le coût du projet.
+            rapport = float(item.get("valeur_rapport") or 0.0)
+            fr = dict(fr, valeur=_r(rapport) if rapport > 0 else _r(prix + travaux),
+                      methode=("en rénovation : dernier rapport d'évaluation" + (f" ({item.get('annee_rapport')})" if item.get("annee_rapport") else ""))
+                      if rapport > 0 else "en rénovation : coût du projet (aucun rapport)")
         hyp_init = float((hypo or {}).get("initial") or 0.0)
+        refinance = cout_reel > 0 and hyp_init >= cout_reel
         service_dette = float((hypo or {}).get("paiement_annuel") or 0.0)
         mise = max(cout_reel - hyp_init, 0.0) if cout_reel > 0 else None
         revenus_nets = fr.get("revenus_nets")
@@ -111,7 +119,13 @@ def _projet(i: Dict[str, Any], item: Optional[Dict[str, Any]], hypo: Optional[Di
             "rendement_total_pct": (_pct(gain, mise) if gain is not None and mise else None),
             "cash_on_cash_pct": (_pct(cash_flow, mise) if cash_flow is not None and mise else None),
             "annualise_pct": (_annualise(equite / mise, annees) if mise else None),
+            "capital_recupere": refinance,
         }
+        if refinance:
+            notes.append("Hypothèque actuelle ≥ coût du projet : la mise de fonds a été entièrement récupérée (refinancement). "
+                         "Rendements sur mise non calculables — le gain est l'équité d'aujourd'hui.")
+        if i["phase"] == "stabilisation":
+            notes.append("En rénovation : valeur réelle = dernier rapport (les loyers ne sont pas stabilisés) ; revenus nets réels indicatifs.")
         if prix <= 0:
             notes.append("Prix d'achat absent dans Kratos (fiche de l'immeuble) : mise de fonds et rendements réels impossibles.")
         if not date_achat:
