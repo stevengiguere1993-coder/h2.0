@@ -137,6 +137,11 @@ class Immeuble(Base, TimestampUpdateMixin):
     )
     annee_construction: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     nb_logements: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    #: Fonds / revenus et dépenses (Phil 2026-11-05) : combien de ces logements sont
+    #: loués à la chambre, et combien de chambres ils créent. Colonnes additives
+    #: (cf. db/session.py ensure_critical_columns).
+    nb_logements_en_chambres: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    nb_chambres: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     superficie_terrain: Mapped[Optional[float]] = mapped_column(
         Numeric(12, 2), nullable=True
     )
@@ -1243,6 +1248,10 @@ class Evaluation(Base):
     date_evaluation: Mapped[date] = mapped_column(
         Date, nullable=False, index=True
     )
+
+    #: Taux de capitalisation retenu par l'évaluateur (%). Repris par la page
+    #: Revenus et dépenses (valeur = revenus nets ÷ taux de cap). Colonne additive.
+    taux_cap: Mapped[Optional[float]] = mapped_column(Numeric(6, 3), nullable=True)
 
     source: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

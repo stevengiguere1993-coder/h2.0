@@ -276,12 +276,12 @@ def test_moteur_moyennes_par_logement_construction_location_et_agents():
     ]
     r = svc.calculer(d)
     rev = {s["key"]: s for s in r["revenus"]}
-    # Refacturation : logements internes (8 + 6 + 4 = 18) × 300 + 3 immeubles × 1 000 + 2 000 précis = 10 400 × 10 %.
-    assert rev["refacturation"]["logements_base"] == 18 and rev["refacturation"]["avance_logements"] == 5_400
-    assert rev["refacturation"]["avance_immeubles"] == 3_000 and rev["refacturation"]["avance_lignes"] == 2_000 and rev["refacturation"]["revenu"] == 1_040
-    # Maintenance : 18 × 3 h = 54 h × (75 − 50) = 1 350 ; 18 × 100 $ = 1 800 × 10 % = 180.
-    assert rev["maintenance"]["heures_total"] == 54 and rev["maintenance"]["marge_heures"] == 1_350
-    assert rev["maintenance"]["materiaux_total"] == 1_800 and rev["maintenance"]["revenu"] == 1_530
+    # Refacturation : TOUS les logements (8 + 12 + 6 + 4 = 30) × 300 + 4 immeubles × 1 000 + 2 000 précis = 15 000 × 10 %.
+    assert rev["refacturation"]["logements_base"] == 30 and rev["refacturation"]["avance_logements"] == 9_000
+    assert rev["refacturation"]["avance_immeubles"] == 4_000 and rev["refacturation"]["avance_lignes"] == 2_000 and rev["refacturation"]["revenu"] == 1_500
+    # Maintenance : 30 × 3 h = 90 h × (75 − 50) = 2 250 ; 30 × 100 $ = 3 000 × 10 % = 300.
+    assert rev["maintenance"]["heures_total"] == 90 and rev["maintenance"]["marge_heures"] == 2_250
+    assert rev["maintenance"]["materiaux_total"] == 3_000 and rev["maintenance"]["revenu"] == 2_550
     # Construction : seulement C (acquis cette année) ; E signalé ; stabilisés A et B listés.
     c = rev["construction"]
     assert c["travaux_stabilisation"] == 200_000 and c["revenu_stabilisation"] == 20_000
@@ -292,6 +292,11 @@ def test_moteur_moyennes_par_logement_construction_location_et_agents():
     assert rev["location"]["relocations_logements"] == 8 and rev["location"]["relocations_chambres"] == 5 and rev["location"]["revenu"] == 8 * 600 + 5 * 400
     # Agents de location : 8 × 250 + 5 × 100 = 2 500 en dépense.
     assert r["depenses"]["agents_location"] == 2_500 and r["depenses"]["relocations_logements"] == 8 and r["depenses"]["total"] == 2_500
+    # Roulement distinct pour les chambres : 10 chambres × 30 % = 3 (les logements restent à 50 % → 8).
+    d["location"]["taux_roulement_chambres_pct"] = 30
+    rl = {s["key"]: s for s in svc.calculer(d)["revenus"]}["location"]
+    assert rl["relocations_chambres"] == 3 and rl["relocations_logements"] == 8 and rl["revenu"] == 8 * 600 + 3 * 400
+    assert svc.normaliser({"location": {"taux_roulement_pct": 35}})["location"]["taux_roulement_chambres_pct"] == 35
     # Développement même hors fonds (Phil : « j'ai le frais de dev même si l'immeuble n'est pas dans le fonds ») + montant forcé.
     d["immeubles"].append(_imm(id="h", nom="H (hors fonds, acquis)", dans_le_fonds=False, phase="stabilise", acquisition_cette_annee=True,
                               prix_acquisition=1_000_000, valeur_rapport=1_000_000))
@@ -398,17 +403,30 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
             return ext.id
 
     ext_id = run(_seed_externe())
+
+    async def _seed_cap():
+        async with TestSessionLocal() as s:
+            cap = Immeuble(name="Immeuble RD Cap", address="4 rue du Cap", city="Sorel", is_active=True,
+                           nb_logements=4, nb_logements_en_chambres=1, nb_chambres=4)
+            s.add(cap)
+            await s.flush()
+            s.add(Evaluation(immeuble_id=cap.id, kind="appraisal", valeur=835_000.0, taux_cap=5.35, date_evaluation=date(2025, 6, 18),
+                             created_at=datetime.now(timezone.utc)))
+            await s.commit()
+            return cap.id
+
+    cap_id = run(_seed_cap())
     assert client.get(f"{RD}/immeubles-kratos", headers=employee_headers).status_code == 403
     r = client.get(f"{RD}/immeubles-kratos", headers=auth_headers)
     assert r.status_code == 200, r.text
     it = next(x for x in r.json()["items"] if x["kratos_immeuble_id"] == imm_id)
-    assert it["nom"] == "Immeuble RD Kratos" and it["nb_logements"] == 2 and it["nb_chambres"] == 3
+    # Nb logements déclaré sur la fiche (6) prime sur les unités créées (2) ; chambres calculées à défaut (3).
+    assert it["nom"] == "Immeuble RD Kratos" and it["nb_logements"] == 6 and it["nb_chambres"] == 3
     assert it["loyers_bruts_mensuels"] == 2_200 and it["gestion_externe"] is False     # baux terminé et parallèle ignorés
     assert it["dette"] == 450_000                                                    # hypothèque active seulement
     assert it["valeur_rapport"] == 1_200_000 and it["annee_rapport"] == 2025 and it["source_rapport"] == "appraisal"
     assert it["taxes_municipales"] == 6_000 and it["taxes_scolaires"] == 0 and it["assurances"] == 2_400 and it["energie"] == 500 and it["autres_depenses"] == 0
-    # Portes = logements actifs (le hors location est exclu, comme la liste des immeubles).
-    assert it["nb_logements"] == 2
+    assert it["nb_logements_en_chambres"] == 1 and it["taux_cap_pct"] == 0
     # Alertes : taxes scolaires absentes, taux de cap à saisir — rien sur les loyers, le rapport ou l'hypothèque.
     assert any("taxes scolaires" in n and "taxes municipales" not in n for n in it["notes_import"])
     assert any("Taux de cap" in n for n in it["notes_import"])
@@ -419,6 +437,10 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
     assert ex["gestion_externe"] is True and ex["loyers_bruts_mensuels"] == 2_900 and ex["nb_logements"] == 3 and ex["nb_chambres"] == 0
     assert ex["nb_logements_en_chambres"] == 1 and it["nb_logements_en_chambres"] == 1
     assert any("en chambres sans nombre de chambres" in n for n in ex["notes_import"])
+    # Fiche complète : compteurs déclarés (4 logements dont 1 en chambres, 4 chambres) et taux de cap du rapport, sans alerte.
+    cp = next(x for x in r.json()["items"] if x["kratos_immeuble_id"] == cap_id)
+    assert cp["nb_logements"] == 4 and cp["nb_logements_en_chambres"] == 1 and cp["nb_chambres"] == 4 and cp["taux_cap_pct"] == 5.35
+    assert not any("Taux de cap" in n or "en chambres sans nombre" in n for n in cp["notes_import"])
 
     # Hydratation (Phil : « prendre toutes les informations disponibles ») : un immeuble du scénario
     # qui « suit Kratos » reprend les valeurs à jour à chaque enregistrement, lecture et calcul ;
@@ -434,8 +456,9 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
     r = client.put(f"{RD}/scenarios/{sid}", json={"data": data}, headers=auth_headers)
     assert r.status_code == 200, r.text
     suivi, fige = r.json()["data"]["immeubles"]
-    # Les compteurs ne sont pas hydratés (ils restent à la main) : chambres 0 comme saisi.
-    assert suivi["loyers_bruts_mensuels"] == 2_200 and suivi["nb_chambres"] == 0 and suivi["taxes_municipales"] == 6_000 and suivi["dette"] == 450_000
+    # Compteurs repris de la fiche (6 logements déclarés, 1 en chambres, 3 chambres) ; taux de cap absent → inchangé.
+    assert suivi["loyers_bruts_mensuels"] == 2_200 and suivi["nb_chambres"] == 3 and suivi["taxes_municipales"] == 6_000 and suivi["dette"] == 450_000
+    assert suivi["nb_logements"] == 6 and suivi["nb_logements_en_chambres"] == 1
     assert suivi["gestion_interne"] is True and suivi["valeur_rapport"] == 1_200_000 and suivi["notes_ignorees"] == [cap_note]
     assert not any("Taux de cap" in n for n in suivi["notes_import"]) and any("taxes scolaires" in n for n in suivi["notes_import"])
     assert fige["loyers_bruts_mensuels"] == 1 and fige["nb_chambres"] == 0

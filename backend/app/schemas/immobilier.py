@@ -24,6 +24,8 @@ class ImmeubleBase(BaseModel):
     type: str = Field(default="residentiel", max_length=32)
     annee_construction: Optional[int] = Field(default=None, ge=1700, le=2100)
     nb_logements: Optional[int] = Field(default=None, ge=0)
+    nb_logements_en_chambres: Optional[int] = Field(default=None, ge=0)
+    nb_chambres: Optional[int] = Field(default=None, ge=0)
     superficie_terrain: Optional[float] = Field(default=None, ge=0)
     superficie_batiment: Optional[float] = Field(default=None, ge=0)
     matricule: Optional[str] = Field(default=None, max_length=64)
@@ -68,6 +70,8 @@ class ImmeubleUpdate(BaseModel):
     type: Optional[str] = Field(default=None, max_length=32)
     annee_construction: Optional[int] = Field(default=None, ge=1700, le=2100)
     nb_logements: Optional[int] = Field(default=None, ge=0)
+    nb_logements_en_chambres: Optional[int] = Field(default=None, ge=0)
+    nb_chambres: Optional[int] = Field(default=None, ge=0)
     superficie_terrain: Optional[float] = Field(default=None, ge=0)
     superficie_batiment: Optional[float] = Field(default=None, ge=0)
     matricule: Optional[str] = Field(default=None, max_length=64)
@@ -772,6 +776,8 @@ class EvaluationBase(BaseModel):
     immeuble_id: int
     kind: str = Field(default="marchande", max_length=16)
     valeur: float = Field(..., ge=0)
+    #: Taux de capitalisation retenu par l'évaluateur (%), optionnel.
+    taux_cap: Optional[float] = Field(default=None, ge=0, le=100)
     date_evaluation: date
     source: Optional[str] = Field(default=None, max_length=128)
     notes: Optional[str] = None
@@ -789,6 +795,7 @@ class EvaluationUpdate(BaseModel):
     # de modifier une évaluation ») — exclude_unset côté endpoint.
     kind: Optional[str] = Field(default=None, max_length=16)
     valeur: Optional[float] = Field(default=None, ge=0)
+    taux_cap: Optional[float] = Field(default=None, ge=0, le=100)
     date_evaluation: Optional[date] = None
     source: Optional[str] = Field(default=None, max_length=128)
     notes: Optional[str] = None
