@@ -61,6 +61,7 @@ import {
 import { authedFetch } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { QGTopbar } from "../layout";
+import { PerformanceTab } from "./PerformanceTab";
 
 const RD = "/api/v1/entreprises/revenus-depenses";
 
@@ -528,7 +529,7 @@ export default function RevenusDepensesPage() {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [data, setData] = useState<Data | null>(null);
   const [res, setRes] = useState<Resultats | null>(null);
-  const [onglet, setOnglet] = useState<"revenus" | "depenses">("revenus");
+  const [onglet, setOnglet] = useState<"revenus" | "depenses" | "performance">("revenus");
   const [etat, setEtat] = useState<"charge" | "sale" | "sauvegarde" | "ok" | "erreur">("charge");
   const [err, setErr] = useState<string | null>(null);
   const [renomme, setRenomme] = useState<string | null>(null);
@@ -838,10 +839,12 @@ export default function RevenusDepensesPage() {
         <div className="flex flex-wrap gap-2">
           {(
             [
-              ["revenus", "Revenus", t.revenus, C.revenus, TrendingUp],
-              ["depenses", "Dépenses", t.depenses, C.depenses, Wallet]
-            ] as ["revenus" | "depenses", string, number, string, React.ComponentType<{ className?: string }>][]
-          ).map(([k, label, total, hex, Icon]) => (
+              ["revenus", "Revenus", `${money(t.revenus)} / an`, C.revenus, TrendingUp],
+              ["depenses", "Dépenses", `${money(t.depenses)} / an`, C.depenses, Wallet],
+              // Phil 2026-11-05 : « Performance du fonds, je la veux dans Revenus et dépenses, à côté de Revenus et Dépenses ».
+              ["performance", "Performance du fonds", "prévu vs réel", C.fonds, PiggyBank]
+            ] as ["revenus" | "depenses" | "performance", string, string, string, React.ComponentType<{ className?: string }>][]
+          ).map(([k, label, sous, hex, Icon]) => (
             <button key={k} onClick={() => setOnglet(k)} className={`${CARD} flex items-center gap-3 px-4 py-2.5 text-left transition`} style={onglet === k ? { borderColor: hex, background: teinte(hex, "14") } : undefined}>
               <span className="flex h-8 w-8 items-center justify-center rounded-lg" style={{ background: teinte(hex, "33"), color: hex }}>
                 <Icon className="h-4 w-4" />
@@ -849,7 +852,7 @@ export default function RevenusDepensesPage() {
               <span>
                 <span className={`block text-[10px] uppercase tracking-wider ${FAINT}`}>{label}</span>
                 <span className="block text-sm font-bold tabular-nums" style={{ color: hex }}>
-                  {money(total)} / an
+                  {sous}
                 </span>
               </span>
             </button>
@@ -858,7 +861,7 @@ export default function RevenusDepensesPage() {
 
         <EditionCtx.Provider value={edition}>
           <style>{`fieldset:disabled button, fieldset:disabled [role="switch"] { opacity: .45; cursor: not-allowed; }`}</style>
-          {onglet === "revenus" ? <RevenusTab data={data} res={res} rev={rev} modifier={modifier} referentiel={detail?.referentiel} /> : <DepensesTab data={data} res={res} referentiel={detail?.referentiel} modifier={modifier} />}
+          {onglet === "revenus" ? <RevenusTab data={data} res={res} rev={rev} modifier={modifier} referentiel={detail?.referentiel} /> : onglet === "depenses" ? <DepensesTab data={data} res={res} referentiel={detail?.referentiel} modifier={modifier} /> : <PerformanceTab scenarioId={courant} version={detail?.updated_at ?? null} />}
         </EditionCtx.Provider>
       </div>
     </>
