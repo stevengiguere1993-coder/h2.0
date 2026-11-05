@@ -148,7 +148,12 @@ async def facture_kratos_liee(db: AsyncSession, qb_invoice_id: str) -> Optional[
 
 
 def _est_de_kratos(inv: Dict[str, Any]) -> bool:
-    return "kratos" in str(inv.get("PrivateNote") or "").lower()
+    """L'Invoice QB porte la signature d'une facture Kratos (« Kratos
+    facture #12 »). Les factures mensuelles QB (« Créé par Kratos —
+    facture mensuelle ») n'en sont PAS : elles ne sont liées à aucune
+    facture Kratos et ne doivent jamais être reprises (ni écrasées) par
+    l'une d'elles."""
+    return _RE_MEMO_KRATOS.search(str(inv.get("PrivateNote") or "")) is not None
 
 
 def _meme_facture(
@@ -318,13 +323,10 @@ async def numero_pris_hors_kratos(
 _FACTURES_QB_RELUES = 1000
 
 
-async def plus_haut_numero_facture_qb() -> Optional[int]:
-    """Le plus haut numéro de facture (DocNumber numérique) parmi les
-    factures les plus récentes de QuickBooks, Kratos ou pas. None si QB
-    n'est pas configuré ou ne répond pas (on ne bloque jamais la
-    numérotation pour ça). Sert à garder le compteur de Kratos au-dessus
-    des factures créées directement dans QB (Steven 2026-10-17 : « le
-    compteur doit toujours être 1 plus haut que QB ou Kratos »)."""
+async def numeros_factures_qb() -> Optional[list[int]]:
+    """Les numéros de facture (DocNumber numériques) des factures les plus
+    récentes de QuickBooks, Kratos ou pas. None si QB n'est pas configuré
+    ou ne répond pas (on ne bloque jamais la numérotation pour ça)."""
     try:
         qbo = get_qbo()
         await qbo._load_refresh_from_db()
@@ -337,11 +339,21 @@ async def plus_haut_numero_facture_qb() -> Optional[int]:
     except Exception as exc:  # noqa: BLE001
         log.warning("Lecture du plus haut numéro de facture QB impossible : %s", exc)
         return None
-    nums = [
+    return [
         int(str(r.get("DocNumber")).strip())
         for r in rows
         if str(r.get("DocNumber") or "").strip().isdigit()
     ]
+
+
+async def plus_haut_numero_facture_qb() -> Optional[int]:
+    """Le plus haut numéro de facture (DocNumber numérique) parmi les
+    factures les plus récentes de QuickBooks. None si QB ne répond pas.
+    Attention : brut, sans écarter les numéros hors série — le compteur
+    passe par numbering.cible_compteur_factures."""
+    nums = await numeros_factures_qb()
+    if nums is None:
+        return None
     return max(nums) if nums else 0
 
 

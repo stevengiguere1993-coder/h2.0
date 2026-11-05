@@ -160,6 +160,7 @@ def test_aligner_retourne_le_detail(faux_qb, run):
         "kratos_max": b + 160,
         "qb_max": b + 170,
         "qb_consulte": True,
+        "qb_hors_serie": [],
     }
     assert _compteur(run) == b + 171
 

@@ -376,11 +376,15 @@ def test_la_boucle_continue_tant_que_le_numero_est_pris(faux_qb, run):
     assert faux_qb.invoices[fa.qbo_invoice_id]["DocNumber"] == str(b + 156)
     assert res["reference"] == str(b + 156)
 
-    # Une facture 1152 saisie dans QB entre-temps : la suivante est 1153.
+    # Une facture 160 saisie dans QB entre-temps : la suivante est 161.
+    # Un numéro HORS SÉRIE (1152, autre numérotation) ne fait plus sauter
+    # le compteur (Steven 2026-11-05 : 171 → 1043, « je ne devrais pas
+    # être dans les 10.. »).
+    faux_qb.ajouter(str(b + 160))
     faux_qb.ajouter(str(b + 1152))
     fid2 = _seed(run, faux_qb, reference=f"BR-{uuid.uuid4().hex[:6]}", compteur=b + 157)
     _sync(run, fid2)
-    assert _facture(run, fid2).reference == str(b + 1153)
+    assert _facture(run, fid2).reference == str(b + 161)
 
 
 def test_doublon_refuse_par_qb_sans_etre_visible_renumerote(faux_qb, run):
