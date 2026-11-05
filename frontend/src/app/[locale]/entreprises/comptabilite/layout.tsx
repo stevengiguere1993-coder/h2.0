@@ -40,7 +40,12 @@ const ONGLETS: Array<{
     precision: "(Drive)"
   },
   // Sous-clients QuickBooks à convertir en projet (Steven 2026-10-14).
-  { href: "/entreprises/comptabilite/projets-quickbooks", label: "Projets QB" }
+  { href: "/entreprises/comptabilite/projets-quickbooks", label: "Projets QB" },
+  // Clients en double dans chaque QuickBooks connecté (Steven 2026-10-18).
+  {
+    href: "/entreprises/comptabilite/clients-en-double",
+    label: "Clients en double"
+  }
 ];
 
 export default function ComptabiliteLayout({

@@ -153,6 +153,11 @@ def immeuble_vide(**kw: Any) -> Dict[str, Any]:
         "date_acquisition": None,
         #: Alertes de l'import Kratos (loyers ou rapport manquants…), effaçables.
         "notes_import": [],
+        #: Importé de Kratos et « suit Kratos » : loyers, portes, chambres, rapport, dette et
+        #: dépenses réelles sont repris à jour à chaque lecture (faux dès qu'on les ajuste à la main).
+        "suivre_kratos": False,
+        #: Alertes d'import fermées par l'utilisateur (ne reviennent pas à l'hydratation).
+        "notes_ignorees": [],
     }
     base.update(kw)
     return base
@@ -231,7 +236,9 @@ def normaliser(data: Any) -> Dict[str, Any]:
             dette=_pos(i.get("dette")), date_acquisition=_date_iso(i.get("date_acquisition")),
             taxes_municipales=_pos(i.get("taxes_municipales")), taxes_scolaires=_pos(i.get("taxes_scolaires")),
             assurances=_pos(i.get("assurances")), energie=_pos(i.get("energie")), autres_depenses=_pos(i.get("autres_depenses")),
-            notes_import=[str(n)[:200] for n in (i.get("notes_import") if isinstance(i.get("notes_import"), list) else [])][:6],
+            notes_import=[str(n)[:200] for n in (i.get("notes_import") if isinstance(i.get("notes_import"), list) else [])][:10],
+            suivre_kratos=bool(i.get("suivre_kratos", False)),
+            notes_ignorees=[str(n)[:200] for n in (i.get("notes_ignorees") if isinstance(i.get("notes_ignorees"), list) else [])][:30],
         ))
 
     refact = d.get("refacturation") if isinstance(d.get("refacturation"), dict) else {}
@@ -481,7 +488,7 @@ def calculer(data: Dict[str, Any], bareme: Optional[Dict[str, Any]] = None) -> D
                        **v, "dette": _r(i["dette"]), "equite": _r(equite),
                        "part_annee": _r(100.0 * pa["part"]), "jours": pa["jours"], "jours_annee": pa["jours_annee"],
                        "date_acquisition": pa["date"], "acquise_cette_annee": pa["acquise_cette_annee"],
-                       "notes_import": list(i.get("notes_import") or [])})
+                       "notes_import": list(i.get("notes_import") or []), "suivre_kratos": bool(i.get("suivre_kratos"))})
         if i["dans_le_fonds"] and pa["part"] > 0:
             valeur_parc += v["valeur"]
             dettes += i["dette"]
