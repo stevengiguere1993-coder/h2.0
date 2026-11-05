@@ -235,6 +235,9 @@ PAGES: list[PageEntry] = [
     # (Phil 2026-11-04) : admins seulement.
     _p("entreprises.revenus_depenses", "Revenus et dépenses", "entreprises",
        "admin", "/entreprises/revenus-depenses"),
+    # Performance réelle des projets et du fonds (Phil 2026-11-05) : admins seulement.
+    _p("entreprises.performance_fonds", "Performance du fonds", "entreprises",
+       "admin", "/entreprises/performance-fonds"),
     _p("entreprises.dashboards", "Tableaux de bord", "entreprises", "admin",
        "/entreprises/dashboards"),
     # Vue d'ensemble des dépenses de la construction et coût à l'heure

@@ -729,6 +729,9 @@ def calculer(data: Dict[str, Any], bareme: Optional[Dict[str, Any]] = None) -> D
             "revenus_avec_projection": _r(total_revenus_avec_projection),
             "depenses": _r(total_depenses),
             "benefice": _r(benefice),
+            #: Avant les salaires (et charges) des associés ET les dividendes — Phil 2026-11-05 : « voir les 2 ».
+            "benefice_avant_associes": _r(benefice + total_associes_salaires + total_associes_charges),
+            "salaires_associes_charges_incluses": _r(total_associes_salaires + total_associes_charges),
             "marge_pct": _r(100.0 * benefice / total_revenus) if total_revenus > 0 else None,
             "dividendes": _r(total_dividendes),
             "benefice_retenu": _r(benefice_retenu),

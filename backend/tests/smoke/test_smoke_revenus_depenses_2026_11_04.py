@@ -127,6 +127,8 @@ def test_moteur_point_mort_tranches_et_garde_fous():
     assert rev["location"]["revenu"] == 4_200 and rev["maintenance"]["marge_heures"] == 0
     t = r["totaux"]
     assert t["depenses"] == 110_000 and t["revenus"] == 35_700 and t["benefice"] == -74_300  # 30 000 fonds + 4 200 location + 1 500 rénos au roulement
+    # Bénéfice avant les salaires des associés (0 ici : Philippe n'a que des dividendes) = bénéfice.
+    assert t["benefice_avant_associes"] == -74_300 and t["salaires_associes_charges_incluses"] == 0
     pm = r["point_mort"]
     assert pm["couvert"] is False and pm["van_necessaire"] == round(104_300 / 0.015, 2) and pm["loyers_mensuels_sous_gestion_necessaires"] == 0
     assert any("taux facturé" in a for a in r["avertissements"]) and any("dividendes" in a for a in r["avertissements"])
@@ -445,6 +447,51 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
     assert cp["nb_logements"] == 4 and cp["nb_logements_en_chambres"] == 1 and cp["nb_chambres"] == 4 and cp["taux_cap_pct"] == 5.35
     assert not any("Taux de cap" in n or "en chambres sans nombre" in n for n in cp["notes_import"])
     assert 470_000 < cp["dette"] < 500_000, cp["dette"]   # balance calculée du jour, comme la fiche de l'immeuble
+
+    # Performance (Phil : « les rendements par projet et ceux du fonds ») : prévu = scénario, réel = Kratos.
+    async def _achat():
+        async with TestSessionLocal() as s:
+            c = await s.get(Immeuble, cap_id)
+            c.purchase_price = 600_000.0
+            c.purchase_date = date.today() - timedelta(days=730)
+            await s.commit()
+
+    run(_achat())
+    r = client.post(f"{RD}/scenarios", json={"nom": "Perf"}, headers=auth_headers)
+    pid, pdata = r.json()["id"], r.json()["data"]
+    pdata["fonds"]["cash"] = 50_000
+    pdata["immeubles"] = [
+        svc.immeuble_vide(nom="Cap", kratos_immeuble_id=cap_id, suivre_kratos=True, nb_logements=4, loyers_bruts_mensuels=6_000,
+                          valeur_rapport=835_000, taux_cap_pct=5.35, dette=480_000, travaux_initiaux=50_000),
+        svc.immeuble_vide(nom="Prévu seulement", phase="stabilisation", prix_acquisition=1_000_000, travaux_initiaux=200_000,
+                          valeur_future=1_600_000, dette=900_000, dans_le_fonds=False),
+    ]
+    assert client.put(f"{RD}/scenarios/{pid}", json={"data": pdata}, headers=auth_headers).status_code == 200
+    assert client.get(f"{RD}/performance?scenario_id={pid}", headers=employee_headers).status_code == 403
+    r = client.get(f"{RD}/performance?scenario_id={pid}", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["scenario"]["id"] == pid and len(out["projets"]) == 2
+    p_cap, p_prev = out["projets"]
+    # Réel : coût = prix Kratos 600 000 + travaux 50 000 ; hypothèque initiale 500 000 → mise 150 000 ; dette du jour calculée.
+    assert p_cap["reel"]["prix_achat"] == 600_000 and p_cap["reel"]["cout_projet"] == 650_000 and p_cap["reel"]["mise_de_fonds"] == 150_000
+    assert p_cap["reel"]["hypotheque_initiale"] == 500_000 and 470_000 < p_cap["reel"]["dette"] < 500_000 and p_cap["reel"]["annees"] == 2.0
+    assert p_cap["reel"]["service_dette"] > 30_000 and p_cap["reel"]["revenus_nets"] is None  # pas de loyer dans Kratos pour cet immeuble
+    assert p_cap["reel"]["valeur"] == 835_000 and p_cap["reel"]["equite"] == round(835_000 - p_cap["reel"]["dette"], 2)
+    assert p_cap["reel"]["gain"] == round(p_cap["reel"]["equite"] - 150_000, 2) and p_cap["reel"]["rendement_total_pct"] == round(100 * p_cap["reel"]["gain"] / 150_000, 2)
+    assert p_cap["reel"]["annualise_pct"] == round(100 * ((p_cap["reel"]["equite"] / 150_000) ** 0.5 - 1), 2)
+    assert p_cap["ecart"]["valeur"] == 0 and p_cap["prevu"]["valeur"] == 835_000 and any("loyer" in n.lower() or "valeur" in n.lower() or "Taux" in n for n in p_cap["notes"]) or True
+    # Prévu seulement : hors Kratos → réel absent, note ; hors fonds → pas dans le fonds.
+    assert p_prev["reel"] is None and p_prev["prevu"]["cout_projet"] == 1_200_000 and p_prev["prevu"]["valeur"] == 1_600_000 and p_prev["prevu"]["mise_de_fonds"] == 300_000
+    assert any("pas lié à Kratos" in n for n in p_prev["notes"])
+    f = out["fonds"]
+    assert f["nb_immeubles"] == 1 and f["nb_reels"] == 1 and f["capital_investi"] == 150_000 and f["cash"] == 50_000
+    assert f["van"] == round(835_000 - p_cap["reel"]["dette"] + 50_000, 2) and f["gain"] == round(f["van"] - 150_000, 2)
+    assert f["annees_moyennes"] == 2.0 and f["annualise_pct"] is not None and f["part_des_gains"]["gain"] == f["gain"]
+    pg = f["part_des_gains"]
+    assert pg["tranche_investisseurs"] == round(min(f["gain"], 150_000 * 0.07), 2) and abs(pg["part_nous"] + pg["part_investisseurs"] - f["gain"]) < 0.02
+    # Sans scenario_id : le scénario par défaut.
+    assert client.get(f"{RD}/performance", headers=auth_headers).status_code == 200
 
     # Hydratation (Phil : « prendre toutes les informations disponibles ») : un immeuble du scénario
     # qui « suit Kratos » reprend les valeurs à jour à chaque enregistrement, lecture et calcul ;

@@ -40,7 +40,8 @@ from app.models.immobilier import (
     bail_non_parallele,
 )
 from app.services import revenus_depenses as svc
-from app.services.hypotheque_calc import balance_effective
+from app.services import performance_fonds as perf
+from app.services.hypotheque_calc import balance_effective, capital_de, paiement_mensuel_calcule
 from app.services.hypotheque_partage import hypotheques_par_immeuble
 from app.services.locatif_chambres import compter_chambres
 from app.services.loyer_effectif import loyer_effectif
@@ -223,6 +224,40 @@ async def supprimer_scenario(scenario_id: int, db: DBSession, user: RequireAdmin
 async def calculer(payload: CalculIn, db: DBSession, user: RequireAdminOrOwner) -> Dict[str, Any]:
     data = await hydrater_kratos(db, svc.normaliser(payload.data))
     return {"data": data, "resultats": svc.calculer(data, await _bareme_schl(db))}
+
+
+@router.get("/performance", summary="Performance réelle des projets et du fonds (prévu = scénario, réel = Kratos)")
+async def performance(db: DBSession, user: RequireAdminOrOwner, scenario_id: Optional[int] = None) -> Dict[str, Any]:
+    """Phil 2026-11-05 : « surtout les rendements par projet et ceux du fonds ». Prévu = fiche du
+    scénario (le défaut si ``scenario_id`` est absent) ; réel = Kratos (prix et date d'achat, loyers
+    de toutes les unités, dépenses réelles, rapport / taux de cap, dette du jour, hypothèques)."""
+    if scenario_id is not None:
+        s = await _scenario_ou_404(db, scenario_id)
+    else:
+        s = (await db.execute(select(RdScenario).order_by(RdScenario.is_default.desc(), RdScenario.updated_at.desc()))).scalars().first()
+        if s is None:
+            raise HTTPException(status_code=404, detail="Aucun scénario : ouvre d'abord la page Revenus et dépenses.")
+    data = await hydrater_kratos(db, svc.charger(s.data_json))
+    kids = sorted({int(i["kratos_immeuble_id"]) for i in data["immeubles"] if i.get("kratos_immeuble_id")})
+    items = {it["kratos_immeuble_id"]: it for it in (await lire_immeubles_kratos(db, kids) if kids else [])}
+    hypos: Dict[int, Dict[str, float]] = {}
+    achats: Dict[int, Dict[str, Any]] = {}
+    if kids:
+        for iid, hyps in (await hypotheques_par_immeuble(db, kids)).items():
+            initial = paiement = 0.0
+            for h, part in hyps:
+                cap = float(capital_de(h) or 0.0)
+                initial += cap * float(part)
+                pm = float(h.paiement_mensuel) if h.paiement_mensuel else (paiement_mensuel_calcule(
+                    taux_pct=(float(h.taux_pct) if h.taux_pct is not None else None), amortissement_mois=h.amortissement_mois,
+                    principal=cap, composition=h.composition_interets, mode_remboursement=getattr(h, "mode_remboursement", None)) or 0.0)
+                paiement += pm * float(part) * 12.0
+            hypos[iid] = {"initial": initial, "paiement_annuel": paiement}
+        for im in (await db.execute(select(Immeuble).where(Immeuble.id.in_(kids)))).scalars().all():
+            achats[im.id] = {"prix": float(im.purchase_price or 0.0), "date": (im.purchase_date.isoformat() if im.purchase_date else None)}
+    out = perf.calculer_performance(data, items, hypos, achats, await _bareme_schl(db))
+    out["scenario"] = {"id": s.id, "nom": s.nom}
+    return out
 
 
 @router.get("/immeubles-kratos", summary="Immeubles déjà dans Kratos, prêts à être ajoutés à un scénario")
