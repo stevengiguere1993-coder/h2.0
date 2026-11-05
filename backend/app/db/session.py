@@ -390,6 +390,11 @@ async def ensure_critical_columns() -> None:
         ("imm_logements", "locataire_externe_depuis", "DATE"),
         ("imm_immeubles", "gestionnaire_externe_nom", "VARCHAR(255)"),
         ("imm_immeubles", "gestionnaire_externe_contact", "VARCHAR(255)"),
+        # Fonds / revenus et dépenses (2026-11-05) : logements loués en chambres et
+        # chambres créées sur la fiche ; taux de cap du rapport d'évaluation.
+        ("imm_immeubles", "nb_logements_en_chambres", "INTEGER"),
+        ("imm_immeubles", "nb_chambres", "INTEGER"),
+        ("imm_evaluations", "taux_cap", "NUMERIC(6, 3)"),
         # Gestion externe mais maintenance par NOS hommes (2026-07-22).
         (
             "imm_immeubles",

@@ -235,9 +235,11 @@ async def immeubles_kratos(db: DBSession, user: RequireAdminOrOwner) -> Dict[str
 
 
 #: Champs d'un immeuble du scénario qui viennent de Kratos (repris à jour tant que « suivre_kratos »).
-#: Les compteurs (logements, en chambres, chambres) sont repris à l'import puis restent à la main (Phil 2026-11-05).
-CHAMPS_KRATOS = ("loyers_bruts_mensuels", "gestion_interne", "valeur_rapport", "annee_rapport", "dette",
-                 "taxes_municipales", "taxes_scolaires", "assurances", "energie")
+#: Compteurs repris de la fiche de l'immeuble (Nb logements, dont loués en chambres, chambres) — Phil 2026-11-05 :
+#: « va falloir que j'aille rentrer ça dans Gestion immobilière ». Le taux de cap vient de l'évaluation s'il y est.
+#: « Gestion à l'interne / sous-traitée » reste un choix du scénario (pas hydraté ; repris de Kratos à l'import seulement).
+CHAMPS_KRATOS = ("nb_logements", "nb_logements_en_chambres", "nb_chambres", "loyers_bruts_mensuels",
+                 "valeur_rapport", "annee_rapport", "dette", "taxes_municipales", "taxes_scolaires", "assurances", "energie")
 _log = logging.getLogger(__name__)
 
 
@@ -262,6 +264,8 @@ async def hydrater_kratos(db, data: Dict[str, Any]) -> Dict[str, Any]:
             continue
         for k in CHAMPS_KRATOS:
             i[k] = (not it["gestion_externe"]) if k == "gestion_interne" else it[k]
+        if it.get("taux_cap_pct"):
+            i["taux_cap_pct"] = it["taux_cap_pct"]
         ignorees = set(i.get("notes_ignorees") or [])
         i["notes_import"] = [n for n in it["notes_import"] if n not in ignorees]
         if (i.get("taux_cap_pct") or 0) > 0:
@@ -378,7 +382,7 @@ async def lire_immeubles_kratos(db, ids_filtre: Optional[List[int]] = None) -> L
         notes: List[str] = []
         if not nb_log.get(i.id):
             notes.append("Aucun logement dans Kratos pour cet immeuble : logements et chambres à saisir.")
-        if sans_chambres.get(i.id):
+        if sans_chambres.get(i.id) and getattr(i, "nb_chambres", None) is None:
             notes.append(f"{sans_chambres[i.id]} logement(s) loué(s) en chambres sans nombre de chambres dans Kratos (fiche de l'immeuble → logements) : "
                          f"Kratos ne compte que les baux actifs ({nb_ch.get(i.id, 0)} chambre(s)) — ajuste les chambres ici ou dans la fiche.")
         if loyers.get(i.id, 0.0) <= 0:
@@ -398,8 +402,8 @@ async def lire_immeubles_kratos(db, ids_filtre: Optional[List[int]] = None) -> L
                          "valeur à saisir ici, ou taux de cap pour la calculer des revenus nets SCHL.")
         elif ev.kind != "appraisal":
             notes.append(f"Pas de rapport d'évaluateur dans Kratos : valeur reprise de l'évaluation « {ev.kind} » ({ev.date_evaluation.year if ev.date_evaluation else '?'}).")
-        if ev is not None:
-            notes.append("Taux de cap du rapport à saisir ici (Kratos ne le conserve pas) : la valeur suivra alors les revenus nets SCHL ÷ taux de cap.")
+        if ev is not None and not getattr(ev, "taux_cap", None):
+            notes.append("Taux de cap du rapport absent dans Kratos (fiche de l'immeuble → Évaluations) : saisis-le là ou ici, la valeur suivra les revenus nets SCHL ÷ taux de cap.")
         if not dettes.get(i.id):
             notes.append("Aucune hypothèque active dans Kratos : dette à 0 $, à vérifier.")
         items.append({
@@ -407,15 +411,18 @@ async def lire_immeubles_kratos(db, ids_filtre: Optional[List[int]] = None) -> L
             "nom": i.name,
             "adresse": i.address,
             "ville": i.city,
-            "nb_logements": nb_log.get(i.id) or int(i.nb_logements or 0),
-            "nb_logements_en_chambres": nb_log_ch.get(i.id, 0),
-            "nb_chambres": nb_ch.get(i.id, 0),
+            # Fiche de l'immeuble d'abord (Nb logements déclaré, dont en chambres, chambres — Phil
+            # 2026-11-05 : « va falloir que j'aille rentrer ça dans Gestion immobilière »), sinon les unités.
+            "nb_logements": int(i.nb_logements or 0) or nb_log.get(i.id, 0),
+            "nb_logements_en_chambres": (int(i.nb_logements_en_chambres) if getattr(i, "nb_logements_en_chambres", None) is not None else nb_log_ch.get(i.id, 0)),
+            "nb_chambres": (int(i.nb_chambres) if getattr(i, "nb_chambres", None) is not None else nb_ch.get(i.id, 0)),
             "loyers_bruts_mensuels": round(loyers.get(i.id, 0.0), 2),
             "gestion_externe": bool(getattr(i, "gestion_externe", False)),
             "dette": round(dettes.get(i.id, 0.0), 2),
             "valeur_rapport": round(float(ev.valeur), 2) if ev else 0.0,
             "annee_rapport": ev.date_evaluation.year if ev and ev.date_evaluation else None,
             "source_rapport": (ev.kind if ev else None),
+            "taux_cap_pct": (float(ev.taux_cap) if ev is not None and getattr(ev, "taux_cap", None) else 0.0),
             "taxes_municipales": round(dep.get("taxes_municipales", 0.0), 2),
             "taxes_scolaires": round(dep.get("taxes_scolaires", 0.0), 2),
             "assurances": round(dep.get("assurances", 0.0), 2),

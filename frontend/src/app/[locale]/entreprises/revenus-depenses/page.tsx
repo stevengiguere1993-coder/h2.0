@@ -116,7 +116,7 @@ type Data = {
   construction: { marge_pct: number; pct_logements_renoves_par_an: number; cout_reno_logement: number };
   maintenance: { heures_par_logement: number; materiaux_par_logement: number; heures_par_an: number; cout_horaire: number; taux_facture: number; materiaux_annuels: number; marge_materiaux_pct: number };
   gestion: { taux_pct: number; facturer_sous_traites: boolean; loyers_additionnels_mensuels: number; inclure_projection: boolean };
-  location: { frais_logement: number; frais_chambre: number; taux_roulement_pct: number; nb_relocations_logements: number | null; nb_relocations_chambres: number | null };
+  location: { frais_logement: number; frais_chambre: number; taux_roulement_pct: number; taux_roulement_chambres_pct: number; nb_relocations_logements: number | null; nb_relocations_chambres: number | null };
   part_des_gains: { rendement_pct: number; seuil_investisseurs_pct: number; tranche_nous_pct: number; part_nous_pct: number };
   depenses: { frais_fixes: FraisFixe[]; charges_sociales_pct: number; salaires: Salaire[]; associes: Associe[]; sous_traitance_gestion_pct: number; agents_location: { par_logement: number; par_chambre: number } };
 };
@@ -164,7 +164,7 @@ type Resultats = {
 type Referentiel = { categories_frais_fixes: { key: string; label: string }[]; charges_sociales_note: string; valorisation_note: string; prorata_note: string; schl_note: string };
 type ScenarioResume = { id: number; nom: string; is_default: boolean; updated_at: string | null; resume: Record<string, number | null> };
 type Detail = ScenarioResume & { data: Data; resultats: Resultats; referentiel: Referentiel };
-type ImmeubleKratos = { kratos_immeuble_id: number; nom: string; adresse: string | null; ville: string | null; nb_logements: number; nb_logements_en_chambres: number; nb_chambres: number; loyers_bruts_mensuels: number; gestion_externe: boolean; dette: number; valeur_rapport: number; annee_rapport: number | null; source_rapport: string | null; notes_import: string[]; taxes_municipales: number; taxes_scolaires: number; assurances: number; energie: number; autres_depenses: number };
+type ImmeubleKratos = { kratos_immeuble_id: number; nom: string; adresse: string | null; ville: string | null; nb_logements: number; nb_logements_en_chambres: number; nb_chambres: number; loyers_bruts_mensuels: number; gestion_externe: boolean; dette: number; valeur_rapport: number; annee_rapport: number | null; source_rapport: string | null; taux_cap_pct: number; notes_import: string[]; taxes_municipales: number; taxes_scolaires: number; assurances: number; energie: number; autres_depenses: number };
 
 // ─── Couleurs ────────────────────────────────────────────────────────────
 
@@ -889,8 +889,10 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
       const it = j.items.find((x) => x.kratos_immeuble_id === im.kratos_immeuble_id);
       if (!it) throw new Error("introuvable");
       set((x) => {
+        x.nb_logements = it.nb_logements; x.nb_logements_en_chambres = it.nb_logements_en_chambres; x.nb_chambres = it.nb_chambres;
         x.loyers_bruts_mensuels = it.loyers_bruts_mensuels;
-        x.gestion_interne = !it.gestion_externe; x.valeur_rapport = it.valeur_rapport; x.annee_rapport = it.annee_rapport; x.dette = it.dette;
+        if (it.taux_cap_pct) x.taux_cap_pct = it.taux_cap_pct;
+        x.valeur_rapport = it.valeur_rapport; x.annee_rapport = it.annee_rapport; x.dette = it.dette;
         x.taxes_municipales = it.taxes_municipales; x.taxes_scolaires = it.taxes_scolaires; x.assurances = it.assurances; x.energie = it.energie;
         x.autres_depenses = it.autres_depenses; x.notes_import = it.notes_import.filter((n) => !x.notes_ignorees.includes(n));
         x.suivre_kratos = true;
@@ -946,11 +948,11 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
           {im.kratos_immeuble_id ? <p className={`text-[11px] leading-snug ${FAINT}`}>{im.suivre_kratos ? "Valeurs de Kratos, reprises à jour à chaque ouverture de la page." : "Valeurs ajustées à la main : « Actualiser » pour revenir à celles de Kratos."}</p> : null}
           <Champ label="Loyers bruts par mois"><Num value={im.loyers_bruts_mensuels} onChange={(v) => setK((x) => { x.loyers_bruts_mensuels = v; })} suffixe="$" /></Champ>
           <div className="grid grid-cols-2 gap-2">
-            <Champ label="Logements (total)" hint="Toutes les unités de l'immeuble : ce nombre sert aux dépenses normalisées SCHL, à la maintenance et aux dépenses refacturées. Repris de Kratos à l'import, puis à toi."><Num value={im.nb_logements} step={1} onChange={(v) => set((x) => { x.nb_logements = Math.round(v); x.nb_logements_en_chambres = Math.min(x.nb_logements_en_chambres, x.nb_logements); })} /></Champ>
-            <Champ label="dont loués en chambres" hint="Nombre de ces logements loués à la chambre"><Num value={im.nb_logements_en_chambres} step={1} onChange={(v) => set((x) => { x.nb_logements_en_chambres = Math.max(0, Math.min(Math.round(v), x.nb_logements)); })} /></Champ>
+            <Champ label="Logements (total)" hint="Toutes les unités de l'immeuble : ce nombre sert aux dépenses normalisées SCHL, à la maintenance et aux dépenses refacturées. Repris de la fiche de l'immeuble dans Kratos (Nb logements)."><Num value={im.nb_logements} step={1} onChange={(v) => setK((x) => { x.nb_logements = Math.round(v); x.nb_logements_en_chambres = Math.min(x.nb_logements_en_chambres, x.nb_logements); })} /></Champ>
+            <Champ label="dont loués en chambres" hint="Nombre de ces logements loués à la chambre (fiche de l'immeuble dans Kratos)"><Num value={im.nb_logements_en_chambres} step={1} onChange={(v) => setK((x) => { x.nb_logements_en_chambres = Math.max(0, Math.min(Math.round(v), x.nb_logements)); })} /></Champ>
           </div>
           {im.nb_logements_en_chambres > 0 ? (
-            <Champ label="Chambres créées par ces logements" hint="Pour les frais de location : logements hors chambres + chambres"><Num value={im.nb_chambres} step={1} onChange={(v) => set((x) => { x.nb_chambres = Math.round(v); })} /></Champ>
+            <Champ label="Chambres créées par ces logements" hint="Pour les frais de location : logements hors chambres + chambres (fiche de l'immeuble dans Kratos)"><Num value={im.nb_chambres} step={1} onChange={(v) => setK((x) => { x.nb_chambres = Math.round(v); })} /></Champ>
           ) : null}
         </div>
         {/* Statut et valeur */}
@@ -1010,7 +1012,7 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
                   <input type="number" min={1990} max={2100} step={1} value={im.annee_rapport ?? ""} placeholder="2026" onChange={(e) => setK((x) => { x.annee_rapport = e.target.value === "" ? null : Math.round(Number(e.target.value)); })} className={`${INPUT} w-full text-right tabular-nums`} />
                 </Champ>
               </div>
-              <Champ label="Taux de cap du rapport" hint="Avec des loyers, la valeur suit les revenus nets SCHL ÷ taux de cap (elle s'ajuste quand les loyers ou les dépenses bougent). Sans taux, la valeur reste celle du rapport."><Num value={im.taux_cap_pct} step={0.1} onChange={(v) => set((x) => { x.taux_cap_pct = v; })} suffixe="%" /></Champ>
+              <Champ label="Taux de cap du rapport" hint="Repris de l'évaluation dans Kratos (fiche de l'immeuble → Évaluations) quand il y est saisi. Avec des loyers, la valeur suit les revenus nets SCHL ÷ taux de cap ; sans taux, la valeur reste celle du rapport."><Num value={im.taux_cap_pct} step={0.1} onChange={(v) => setK((x) => { x.taux_cap_pct = v; })} suffixe="%" /></Champ>
               <p className="flex items-center gap-2 pt-1 text-[10px] font-semibold uppercase tracking-wider" style={{ color: C.construction }}>
                 <Pastille hex={C.construction} /> Dépenses réelles par an
               </p>
@@ -1021,7 +1023,7 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
                 <Champ label="Énergie"><Num value={im.energie} onChange={(v) => setK((x) => { x.energie = v; })} suffixe="$" /></Champ>
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <Champ label="Revenus nets saisis" hint="Optionnel : laisse à 0 pour le calcul SCHL automatique (loyers bruts − dépenses normalisées). Une valeur saisie prime."><Num value={im.revenus_nets_annuels} onChange={(v) => set((x) => { x.revenus_nets_annuels = v; })} suffixe="$/an" /></Champ>
+                {im.kratos_immeuble_id ? null : <Champ label="Revenus nets saisis" hint="Optionnel : laisse à 0 pour le calcul SCHL automatique (loyers bruts − dépenses normalisées). Une valeur saisie prime."><Num value={im.revenus_nets_annuels} onChange={(v) => set((x) => { x.revenus_nets_annuels = v; })} suffixe="$/an" /></Champ>}
               </div>
               {ds ? (
                 <details className={`rounded-xl border border-[var(--qg-border)] px-3 py-2 text-xs ${MUTED}`}>
@@ -1269,7 +1271,7 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
           onAjouter={(items) => {
             modifier((d) => {
               for (const it of items) {
-                d.immeubles.push(immeubleVide({ nom: it.nom, kratos_immeuble_id: it.kratos_immeuble_id, nb_logements: it.nb_logements, nb_logements_en_chambres: it.nb_logements_en_chambres, nb_chambres: it.nb_chambres, loyers_bruts_mensuels: it.loyers_bruts_mensuels, gestion_interne: !it.gestion_externe, phase: "stabilise", valeur_rapport: it.valeur_rapport, annee_rapport: it.annee_rapport, dette: it.dette, taxes_municipales: it.taxes_municipales, taxes_scolaires: it.taxes_scolaires, assurances: it.assurances, energie: it.energie, autres_depenses: it.autres_depenses, notes_import: it.notes_import, suivre_kratos: true }));
+                d.immeubles.push(immeubleVide({ nom: it.nom, kratos_immeuble_id: it.kratos_immeuble_id, nb_logements: it.nb_logements, nb_logements_en_chambres: it.nb_logements_en_chambres, nb_chambres: it.nb_chambres, loyers_bruts_mensuels: it.loyers_bruts_mensuels, gestion_interne: !it.gestion_externe, phase: "stabilise", valeur_rapport: it.valeur_rapport, annee_rapport: it.annee_rapport, taux_cap_pct: it.taux_cap_pct, dette: it.dette, taxes_municipales: it.taxes_municipales, taxes_scolaires: it.taxes_scolaires, assurances: it.assurances, energie: it.energie, autres_depenses: it.autres_depenses, notes_import: it.notes_import, suivre_kratos: true }));
               }
             });
             setImportOuvert(false);
@@ -1360,7 +1362,7 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
           hypotheses={
             <>
               <div className="grid gap-3 sm:grid-cols-3">
-                <Champ label="Moyenne avancée par logement par an" hint="Sur les logements des immeubles gérés à l'interne, au prorata de l'année"><Num value={data.refacturation.par_logement_annuel} onChange={(v) => modifier((d) => { d.refacturation.par_logement_annuel = v; })} suffixe="$" /></Champ>
+                <Champ label="Moyenne avancée par logement par an" hint="Sur tous les logements du scénario, au prorata de l'année"><Num value={data.refacturation.par_logement_annuel} onChange={(v) => modifier((d) => { d.refacturation.par_logement_annuel = v; })} suffixe="$" /></Champ>
                 <Champ label="Moyenne avancée par immeuble par an"><Num value={data.refacturation.par_immeuble_annuel} onChange={(v) => modifier((d) => { d.refacturation.par_immeuble_annuel = v; })} suffixe="$" /></Champ>
                 <Champ label="Marge"><Num value={data.refacturation.marge_pct} step={0.5} onChange={(v) => modifier((d) => { d.refacturation.marge_pct = v; })} suffixe="%" /></Champ>
               </div>
@@ -1383,7 +1385,7 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
           }
           resultat={
             <ul className="space-y-1">
-              <li>{nb(rev.refacturation?.logements_base as number, 1)} logements gérés à l&apos;interne × {money(data.refacturation.par_logement_annuel)} = {money(rev.refacturation?.avance_logements as number)}</li>
+              <li>{nb(rev.refacturation?.logements_base as number, 1)} logements × {money(data.refacturation.par_logement_annuel)} = {money(rev.refacturation?.avance_logements as number)}</li>
               {data.refacturation.par_immeuble_annuel ? <li>{nb(rev.refacturation?.immeubles_base as number, 1)} immeubles × {money(data.refacturation.par_immeuble_annuel)} = {money(rev.refacturation?.avance_immeubles as number)}</li> : null}
               {(rev.refacturation?.avance_lignes as number) ? <li>Montants précis : {money(rev.refacturation?.avance_lignes as number)}</li> : null}
               <li>Avancé par année : {money(rev.refacturation?.montant_avance as number)} × {pct(data.refacturation.marge_pct)} = <b style={{ color: C.refacturation }}>{money(rev.refacturation?.revenu)}</b></li>
@@ -1420,7 +1422,7 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
         <Carte id="sec-maintenance" num="6." titre="Maintenance et appels de service" hex={C.maintenance} icon={ICONES.maintenance} revenu={rev.maintenance?.revenu} note="On paie le gars à l'heure et on recharge un taux plus élevé ; les matériaux sont rechargés avec une marge."
           hypotheses={
             <div className="grid gap-3 sm:grid-cols-3">
-              <Champ label="Heures par logement par an" hint="Sur les logements des immeubles gérés à l'interne, au prorata de l'année"><Num value={data.maintenance.heures_par_logement} step={0.5} onChange={(v) => modifier((d) => { d.maintenance.heures_par_logement = v; })} suffixe="h" /></Champ>
+              <Champ label="Heures par logement par an" hint="Sur tous les logements du scénario, au prorata de l'année"><Num value={data.maintenance.heures_par_logement} step={0.5} onChange={(v) => modifier((d) => { d.maintenance.heures_par_logement = v; })} suffixe="h" /></Champ>
               <Champ label="Matériaux par logement par an"><Num value={data.maintenance.materiaux_par_logement} onChange={(v) => modifier((d) => { d.maintenance.materiaux_par_logement = v; })} suffixe="$" /></Champ>
               <Champ label="Coût horaire payé"><Num value={data.maintenance.cout_horaire} step={0.5} onChange={(v) => modifier((d) => { d.maintenance.cout_horaire = v; })} suffixe="$/h" /></Champ>
               <Champ label="Taux facturé"><Num value={data.maintenance.taux_facture} step={0.5} onChange={(v) => modifier((d) => { d.maintenance.taux_facture = v; })} suffixe="$/h" /></Champ>
@@ -1473,7 +1475,8 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
             <div className="grid gap-3 sm:grid-cols-3">
               <Champ label="Frais par logement"><Num value={data.location.frais_logement} onChange={(v) => modifier((d) => { d.location.frais_logement = v; })} suffixe="$" /></Champ>
               <Champ label="Frais par chambre"><Num value={data.location.frais_chambre} onChange={(v) => modifier((d) => { d.location.frais_chambre = v; })} suffixe="$" /></Champ>
-              <Champ label="Taux de roulement par an"><Num value={data.location.taux_roulement_pct} step={1} onChange={(v) => modifier((d) => { d.location.taux_roulement_pct = v; })} suffixe="%" /></Champ>
+              <Champ label="Roulement des logements par an"><Num value={data.location.taux_roulement_pct} step={1} onChange={(v) => modifier((d) => { d.location.taux_roulement_pct = v; })} suffixe="%" /></Champ>
+              <Champ label="Roulement des chambres par an"><Num value={data.location.taux_roulement_chambres_pct} step={1} onChange={(v) => modifier((d) => { d.location.taux_roulement_chambres_pct = v; })} suffixe="%" /></Champ>
               <Champ label={`Relocations de logements (calculé : ${rev.location?.relocations_logements_calculees as number})`} hint="Laisse vide pour utiliser le calcul au roulement">
                 <input type="number" min={0} step={1} value={data.location.nb_relocations_logements ?? ""} placeholder={String(rev.location?.relocations_logements_calculees ?? 0)} onChange={(e) => modifier((d) => { d.location.nb_relocations_logements = e.target.value === "" ? null : Math.max(0, Math.round(Number(e.target.value))); })} className={`${INPUT} w-full text-right tabular-nums`} />
               </Champ>
@@ -1631,6 +1634,8 @@ function DepensesTab({ data, res, referentiel, modifier }: { data: Data; res: Re
                   <th className="py-1">Associé</th>
                   <th className="py-1 text-right">Salaire brut / an</th>
                   <th className="py-1 text-right">Dividendes / an</th>
+                  <th className="py-1 text-right">Charges ({pct(data.depenses.charges_sociales_pct)})</th>
+                  <th className="py-1 text-right">Coût salaire</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--qg-border)]">
@@ -1639,6 +1644,8 @@ function DepensesTab({ data, res, referentiel, modifier }: { data: Data; res: Re
                     <td className="py-1 pr-2"><input value={a.nom} onChange={(e) => modifier((d) => { const x = d.depenses.associes.find((y) => y.id === a.id); if (x) x.nom = e.target.value; })} className={`${INPUT} w-full`} /></td>
                     <td className="w-40 py-1 pr-2"><Num value={a.salaire_annuel} onChange={(v) => modifier((d) => { const x = d.depenses.associes.find((y) => y.id === a.id); if (x) x.salaire_annuel = v; })} suffixe="$" /></td>
                     <td className="w-40 py-1"><Num value={a.dividendes_annuels} onChange={(v) => modifier((d) => { const x = d.depenses.associes.find((y) => y.id === a.id); if (x) x.dividendes_annuels = v; })} suffixe="$" /></td>
+                    <td className={`py-1 text-right tabular-nums ${MUTED}`}>{money(a.salaire_annuel * data.depenses.charges_sociales_pct / 100)}</td>
+                    <td className="py-1 text-right font-semibold tabular-nums">{money(a.salaire_annuel * (1 + data.depenses.charges_sociales_pct / 100))}</td>
                   </tr>
                 ))}
               </tbody>
