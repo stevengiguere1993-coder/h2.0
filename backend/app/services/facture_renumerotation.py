@@ -105,11 +105,145 @@ async def _factures_qb_hors_serie(
                 "client": (r.get("CustomerRef") or {}).get("name"),
                 "date": r.get("TxnDate"),
                 "total": r.get("TotalAmt"),
+                "solde": r.get("Balance"),
                 "cree_le": (r.get("MetaData") or {}).get("CreateTime"),
                 "memo": r.get("PrivateNote"),
+                "lignes": lignes_invoice_qb(r),
             }
         )
     return sorted(out, key=lambda x: int(x["numero"]))
+
+
+def lignes_invoice_qb(inv: Dict[str, Any]) -> list[Dict[str, Any]]:
+    """Les lignes d'une Invoice QB, lisibles : produit, description,
+    quantité, prix unitaire, montant (lignes de total exclues)."""
+    out = []
+    for li in inv.get("Line") or []:
+        if li.get("DetailType") not in ("SalesItemLineDetail", "DescriptionOnly"):
+            continue
+        det = li.get("SalesItemLineDetail") or {}
+        out.append(
+            {
+                "produit": (det.get("ItemRef") or {}).get("name"),
+                "description": li.get("Description"),
+                "quantite": det.get("Qty"),
+                "prix_unitaire": det.get("UnitPrice"),
+                "montant": li.get("Amount"),
+            }
+        )
+    return out
+
+
+async def renumeroter_facture_qb_seule(
+    db: AsyncSession, *, qbo_invoice_id: str, numero: Optional[str] = None
+) -> Dict[str, Any]:
+    """Donne un numéro de la série de Kratos à une facture QuickBooks qui
+    N'EST PAS dans Kratos (faite à la main dans QuickBooks, ex. 1044 du
+    2026-10-27). ``numero`` vide = prochain numéro du compteur (consommé) ;
+    sinon le numéro demandé, s'il est libre dans Kratos et QuickBooks, et
+    le compteur passe au-dessus. Mise à jour « sparse » du DocNumber sur
+    le SyncToken relu. Committe."""
+    from app.services.audit import log_action
+    from app.services.numbering import (
+        attribuer_numero_libre,
+        numero_pris_dans_kratos,
+    )
+
+    qbo = await _qbo_pret()
+    if qbo is None:
+        raise RuntimeError("QuickBooks n'est pas connecté.")
+    lie = (
+        await db.execute(
+            select(Facture.id, Facture.reference).where(
+                Facture.qbo_invoice_id == str(qbo_invoice_id)
+            )
+        )
+    ).first()
+    if lie is not None:
+        raise ValueError(
+            f"Cette Invoice QuickBooks est la facture Kratos {lie[1]} (#{lie[0]}) : "
+            "renuméroter la facture Kratos, pas l'Invoice."
+        )
+    cur = await qbo.get_invoice(str(qbo_invoice_id))
+    cur = cur.get("Invoice") or cur
+    if not cur.get("Id"):
+        raise ValueError(f"Invoice QuickBooks {qbo_invoice_id} introuvable.")
+    ancien = str(cur.get("DocNumber") or "")
+    if numero:
+        numero = str(numero).strip()
+        if not numero.isdigit():
+            raise ValueError("Le numéro doit être un nombre.")
+        if await numero_pris_dans_kratos(db, numero) is not None:
+            raise ValueError(f"Le numéro {numero} est déjà porté par une facture Kratos.")
+        autre = await qbo.find_invoice_by_docnumber(numero)
+        if autre and str(autre.get("Id")) != str(cur["Id"]):
+            raise ValueError(
+                f"Le numéro {numero} est déjà pris dans QuickBooks "
+                f"({(autre.get('CustomerRef') or {}).get('name')})."
+            )
+    else:
+        # Prochain numéro libre de la série, via un porteur jetable (pas de
+        # facture Kratos à créer).
+        class _Porteur:
+            id = None
+            reference = None
+
+        porteur = _Porteur()
+        await attribuer_numero_libre(db, porteur)
+        numero = str(porteur.reference)
+    rep = await qbo.create_invoice(
+        {
+            "Id": str(cur["Id"]),
+            "SyncToken": str(cur.get("SyncToken") or "0"),
+            "sparse": True,
+            "DocNumber": numero[:21],
+        }
+    )
+    inv = rep.get("Invoice") or rep
+    nouveau = str(inv.get("DocNumber") or "")
+    if nouveau != numero:
+        await db.rollback()
+        raise RuntimeError(f"QuickBooks a gardé le numéro {nouveau or ancien}.")
+    # Compteur au-dessus du numéro donné.
+    row = (
+        await db.execute(
+            select(NumberingCounter.next_facture_number).where(NumberingCounter.id == 1)
+        )
+    ).scalar_one_or_none()
+    if row is None or int(row) <= int(numero):
+        await db.execute(
+            update(NumberingCounter)
+            .where(NumberingCounter.id == 1)
+            .values(next_facture_number=int(numero) + 1)
+        )
+    await log_action(
+        db,
+        user=None,
+        action="facture.qb_renumerotee",
+        entity_type="facture",
+        entity_id=None,
+        details={
+            "qbo_invoice_id": str(cur["Id"]),
+            "ancien": ancien,
+            "nouveau": numero,
+            "client": (cur.get("CustomerRef") or {}).get("name"),
+            "total": cur.get("TotalAmt"),
+        },
+    )
+    await db.commit()
+    compteur = (
+        await db.execute(
+            select(NumberingCounter.next_facture_number).where(NumberingCounter.id == 1)
+        )
+    ).scalar_one_or_none()
+    return {
+        "qbo_invoice_id": str(cur["Id"]),
+        "ancien": ancien,
+        "nouveau": numero,
+        "client": (cur.get("CustomerRef") or {}).get("name"),
+        "total": cur.get("TotalAmt"),
+        "compteur": compteur,
+    }
 
 
 async def renumeroter_factures_hors_serie(
