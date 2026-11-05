@@ -29,6 +29,9 @@ def _imm(**kw):
 def _scenario_test() -> dict:
     d = svc.scenario_defaut()
     d["annee"] = 2027
+    d["refacturation"]["par_logement_annuel"] = 0
+    d["maintenance"]["heures_par_logement"] = 0
+    d["maintenance"]["materiaux_par_logement"] = 0
     d["fonds"] = {"cash": 1_000_000, "taux_pct": 1.5}
     d["immeubles"] = [
         _imm(id="a", nom="A", nb_logements=20, loyers_bruts_mensuels=25_000, phase="stabilisation",
@@ -43,9 +46,9 @@ def _scenario_test() -> dict:
         _imm(id="d", nom="D (hors fonds)", dans_le_fonds=False, nb_logements=8, loyers_bruts_mensuels=9_000,
              phase="stabilise", valeur_rapport=2_000_000, dette=1_000_000),
     ]
-    d["refacturation"] = {"marge_pct": 10, "lignes": [{"id": "r1", "libelle": "Avocat", "montant_annuel": 120_000}]}
+    d["refacturation"] = {"marge_pct": 10, "par_logement_annuel": 0, "lignes": [{"id": "r1", "libelle": "Avocat", "montant_annuel": 120_000}]}
     d["construction"] = {"marge_pct": 10, "pct_logements_renoves_par_an": 10, "cout_reno_logement": 15_000}
-    d["maintenance"] = {"heures_par_an": 1_000, "cout_horaire": 50, "taux_facture": 75, "materiaux_annuels": 50_000, "marge_materiaux_pct": 10}
+    d["maintenance"] = {"heures_par_logement": 0, "materiaux_par_logement": 0, "heures_par_an": 1_000, "cout_horaire": 50, "taux_facture": 75, "materiaux_annuels": 50_000, "marge_materiaux_pct": 10}
     d["gestion"] = {"taux_pct": 10, "facturer_sous_traites": True, "loyers_additionnels_mensuels": 100_000, "inclure_projection": False}
     d["location"] = {"frais_logement": 600, "frais_chambre": 400, "taux_roulement_pct": 20, "nb_relocations_logements": None, "nb_relocations_chambres": None}
     d["part_des_gains"] = {"rendement_pct": 15, "seuil_investisseurs_pct": 7, "tranche_nous_pct": 3, "part_nous_pct": 30}
@@ -115,6 +118,8 @@ def test_moteur_point_mort_tranches_et_garde_fous():
     d["location"] = {"frais_logement": 600, "frais_chambre": 400, "taux_roulement_pct": 20, "nb_relocations_logements": 7, "nb_relocations_chambres": 0}
     d["maintenance"]["taux_facture"] = 40  # plus bas que le coût horaire
     d["maintenance"]["heures_par_an"] = 100
+    d["maintenance"]["materiaux_par_logement"] = 0
+    d["refacturation"]["par_logement_annuel"] = 0
     d["gestion"]["taux_pct"] = 0  # pas de gestion locative dans ce scénario
     r = svc.calculer(d)
     rev = {s["key"]: s for s in r["revenus"]}
@@ -252,6 +257,62 @@ def test_moteur_revenus_nets_schl_et_taux_de_cap():
     assert n["immeubles"][0]["taxes_municipales"] == 0 and n["immeubles"][0]["energie"] == 1_200
 
 
+def test_moteur_moyennes_par_logement_construction_location_et_agents():
+    """Phil 2026-11-05 : refacturation et maintenance en moyenne par logement, construction « en rénovation »
+    seulement si acquis cette année (immeubles nommés), location = logements hors unités en chambres + chambres,
+    agents de location payés par logement / chambre loué(e)."""
+    d = svc.scenario_defaut()
+    d["annee"] = 2027
+    d["refacturation"] = {"marge_pct": 10, "par_logement_annuel": 300, "par_immeuble_annuel": 1_000, "lignes": [{"libelle": "Avocat", "montant_annuel": 2_000}]}
+    d["maintenance"] = {"heures_par_logement": 3, "materiaux_par_logement": 100, "heures_par_an": 0, "cout_horaire": 50, "taux_facture": 75,
+                        "materiaux_annuels": 0, "marge_materiaux_pct": 10}
+    d["location"] = {"frais_logement": 600, "frais_chambre": 400, "taux_roulement_pct": 50, "nb_relocations_logements": None, "nb_relocations_chambres": None}
+    d["depenses"]["agents_location"] = {"par_logement": 250, "par_chambre": 100}
+    d["immeubles"] = [
+        _imm(id="a", nom="A", nb_logements=8, nb_logements_en_chambres=2, nb_chambres=10, loyers_bruts_mensuels=8_000, phase="stabilise", valeur_rapport=1_000_000),
+        _imm(id="b", nom="B (sous-traité)", gestion_interne=False, nb_logements=12, loyers_bruts_mensuels=12_000, phase="stabilise", valeur_rapport=1_500_000),
+        _imm(id="c", nom="C (réno, acquis)", nb_logements=6, phase="stabilisation", acquisition_cette_annee=True, prix_acquisition=900_000, travaux_initiaux=200_000),
+        _imm(id="e", nom="E (réno, pas acquis)", nb_logements=4, phase="stabilisation", travaux_initiaux=500_000),
+    ]
+    r = svc.calculer(d)
+    rev = {s["key"]: s for s in r["revenus"]}
+    # Refacturation : logements internes (8 + 6 + 4 = 18) × 300 + 3 immeubles × 1 000 + 2 000 précis = 10 400 × 10 %.
+    assert rev["refacturation"]["logements_base"] == 18 and rev["refacturation"]["avance_logements"] == 5_400
+    assert rev["refacturation"]["avance_immeubles"] == 3_000 and rev["refacturation"]["avance_lignes"] == 2_000 and rev["refacturation"]["revenu"] == 1_040
+    # Maintenance : 18 × 3 h = 54 h × (75 − 50) = 1 350 ; 18 × 100 $ = 1 800 × 10 % = 180.
+    assert rev["maintenance"]["heures_total"] == 54 and rev["maintenance"]["marge_heures"] == 1_350
+    assert rev["maintenance"]["materiaux_total"] == 1_800 and rev["maintenance"]["revenu"] == 1_530
+    # Construction : seulement C (acquis cette année) ; E signalé ; stabilisés A et B listés.
+    c = rev["construction"]
+    assert c["travaux_stabilisation"] == 200_000 and c["revenu_stabilisation"] == 20_000
+    assert [x["nom"] for x in c["immeubles_renovation"]] == ["C (réno, acquis)"] and c["immeubles_renovation_ignores"] == ["E (réno, pas acquis)"]
+    assert [x["nom"] for x in c["immeubles_stabilises"]] == ["A", "B (sous-traité)"] and c["logements_stabilises"] == 20
+    # Location : A interne = 8 − 2 = 6 logements + 10 chambres ; C et E = 10 logements ; 50 % → 8 et 5.
+    assert rev["location"]["logements_location"] == 16 and rev["location"]["chambres_internes"] == 10
+    assert rev["location"]["relocations_logements"] == 8 and rev["location"]["relocations_chambres"] == 5 and rev["location"]["revenu"] == 8 * 600 + 5 * 400
+    # Agents de location : 8 × 250 + 5 × 100 = 2 500 en dépense.
+    assert r["depenses"]["agents_location"] == 2_500 and r["depenses"]["relocations_logements"] == 8 and r["depenses"]["total"] == 2_500
+    # Développement même hors fonds (Phil : « j'ai le frais de dev même si l'immeuble n'est pas dans le fonds ») + montant forcé.
+    d["immeubles"].append(_imm(id="h", nom="H (hors fonds, acquis)", dans_le_fonds=False, phase="stabilise", acquisition_cette_annee=True,
+                              prix_acquisition=1_000_000, valeur_rapport=1_000_000))
+    r2 = svc.calculer(d)
+    dev2 = {l["immeuble"]: l for l in {s["key"]: s for s in r2["revenus"]}["developpement"]["lignes"]}
+    assert dev2["H (hors fonds, acquis)"]["frais"] == 50_000 and dev2["H (hors fonds, acquis)"]["override"] is False
+    d["immeubles"][-1]["frais_developpement_override"] = 12_345
+    r3 = svc.calculer(d)
+    rev3 = {s["key"]: s for s in r3["revenus"]}
+    l3 = {l["immeuble"]: l for l in rev3["developpement"]["lignes"]}["H (hors fonds, acquis)"]
+    assert l3["frais"] == 12_345 and l3["frais_calcule"] == 50_000 and l3["override"] is True and rev3["developpement"]["revenu"] == 45_000 + 12_345
+    assert svc.normaliser({"immeubles": [{"nom": "X", "frais_developpement_override": ""}]})["immeubles"][0]["frais_developpement_override"] is None
+    # SCHL sur TOUS les logements (8), sans « autres dépenses ».
+    fa = next(f for f in r["parc"]["immeubles"] if f["nom"] == "A")
+    assert fa["nb_logements"] == 8 and fa["nb_logements_en_chambres"] == 2 and fa["depenses_schl"]["concierge"] == 215 * 8 and "autres" not in fa["depenses_schl"]
+    # Normalisation : logements en chambres plafonnés au nombre de logements ; agents de location par défaut à 0.
+    n = svc.normaliser({"immeubles": [{"nom": "X", "nb_logements": 3, "nb_logements_en_chambres": 9}]})
+    assert n["immeubles"][0]["nb_logements_en_chambres"] == 3 and n["depenses"]["agents_location"] == {"par_logement": 0.0, "par_chambre": 0.0}
+    assert n["refacturation"]["par_logement_annuel"] == 300 and n["maintenance"]["heures_par_logement"] == 3 and n["maintenance"]["materiaux_par_logement"] == 100
+
+
 def test_api_scenarios_admins_seulement(client, auth_headers, employee_headers):
     assert client.get(f"{RD}/scenarios", headers=employee_headers).status_code == 403
     r = client.get(f"{RD}/scenarios", headers=auth_headers)
@@ -354,7 +415,9 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
     assert not any("Aucun loyer" in n or "Aucun rapport" in n or "hypothèque" in n for n in it["notes_import"])
     # Gestion externe : même total que la liste des immeubles de Kratos (loyer saisi des unités louées), alertes claires.
     ex = next(x for x in r.json()["items"] if x["kratos_immeuble_id"] == ext_id)
-    assert ex["gestion_externe"] is True and ex["loyers_bruts_mensuels"] == 1_500 and ex["nb_logements"] == 3 and ex["nb_chambres"] == 0
+    # Toutes unités : A occupé 1 500 + B vacant 1 400 (loyer saisi) ; C en chambres sans loyer → rien.
+    assert ex["gestion_externe"] is True and ex["loyers_bruts_mensuels"] == 2_900 and ex["nb_logements"] == 3 and ex["nb_chambres"] == 0
+    assert ex["nb_logements_en_chambres"] == 1 and it["nb_logements_en_chambres"] == 1
     assert any("en chambres sans nombre de chambres" in n for n in ex["notes_import"])
 
     # Hydratation (Phil : « prendre toutes les informations disponibles ») : un immeuble du scénario
@@ -371,7 +434,8 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
     r = client.put(f"{RD}/scenarios/{sid}", json={"data": data}, headers=auth_headers)
     assert r.status_code == 200, r.text
     suivi, fige = r.json()["data"]["immeubles"]
-    assert suivi["loyers_bruts_mensuels"] == 2_200 and suivi["nb_chambres"] == 3 and suivi["taxes_municipales"] == 6_000 and suivi["dette"] == 450_000
+    # Les compteurs ne sont pas hydratés (ils restent à la main) : chambres 0 comme saisi.
+    assert suivi["loyers_bruts_mensuels"] == 2_200 and suivi["nb_chambres"] == 0 and suivi["taxes_municipales"] == 6_000 and suivi["dette"] == 450_000
     assert suivi["gestion_interne"] is True and suivi["valeur_rapport"] == 1_200_000 and suivi["notes_ignorees"] == [cap_note]
     assert not any("Taux de cap" in n for n in suivi["notes_import"]) and any("taxes scolaires" in n for n in suivi["notes_import"])
     assert fige["loyers_bruts_mensuels"] == 1 and fige["nb_chambres"] == 0

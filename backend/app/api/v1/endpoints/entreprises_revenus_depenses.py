@@ -41,7 +41,7 @@ from app.models.immobilier import (
 )
 from app.services import revenus_depenses as svc
 from app.services.locatif_chambres import compter_chambres
-from app.services.loyer_effectif import loyer_effectif_loue
+from app.services.loyer_effectif import loyer_effectif
 from app.services.audit import log_action
 
 log = logging.getLogger(__name__)
@@ -235,8 +235,9 @@ async def immeubles_kratos(db: DBSession, user: RequireAdminOrOwner) -> Dict[str
 
 
 #: Champs d'un immeuble du scénario qui viennent de Kratos (repris à jour tant que « suivre_kratos »).
-CHAMPS_KRATOS = ("nb_logements", "nb_chambres", "loyers_bruts_mensuels", "gestion_interne", "valeur_rapport", "annee_rapport", "dette",
-                 "taxes_municipales", "taxes_scolaires", "assurances", "energie", "autres_depenses")
+#: Les compteurs (logements, en chambres, chambres) sont repris à l'import puis restent à la main (Phil 2026-11-05).
+CHAMPS_KRATOS = ("loyers_bruts_mensuels", "gestion_interne", "valeur_rapport", "annee_rapport", "dette",
+                 "taxes_municipales", "taxes_scolaires", "assurances", "energie")
 _log = logging.getLogger(__name__)
 
 
@@ -297,9 +298,13 @@ async def lire_immeubles_kratos(db, ids_filtre: Optional[List[int]] = None) -> L
         ).all()
         for lid, loyer in baux:
             loyer_bail[lid] = loyer_bail.get(lid, 0.0) + float(loyer or 0.0)
+    # Phil 2026-11-05 : « prends vraiment les revenus de toutes les unités, pas les actuels » → loyer effectif de
+    # CHAQUE unité hors location exclue (loué ou vacant), comme « toutes unités » dans l'en-tête de l'immeuble.
     loyers: Dict[int, float] = {}
     for l in logements:
-        m = loyer_effectif_loue(l, loyer_bail.get(l.id), gestion_externe=externe_par_imm.get(l.immeuble_id, False))
+        if l.status == LogementStatus.HORS_LOC.value:
+            continue
+        m = loyer_effectif(l, loyer_bail.get(l.id), externe_par_imm.get(l.immeuble_id, False))
         if m is not None:
             loyers[l.immeuble_id] = loyers.get(l.immeuble_id, 0.0) + float(m)
     # Portes et chambres : mêmes règles que la liste des immeubles (hors
@@ -309,7 +314,9 @@ async def lire_immeubles_kratos(db, ids_filtre: Optional[List[int]] = None) -> L
         if l.status == LogementStatus.HORS_LOC.value:
             continue
         nb_log[l.immeuble_id] = nb_log.get(l.immeuble_id, 0) + 1
-    nb_ch: Dict[int, int] = {iid: int(c.get("tot", 0)) for iid, c in (await compter_chambres(db, immeubles)).items()}
+    chambres_par_imm = await compter_chambres(db, immeubles)
+    nb_ch: Dict[int, int] = {iid: int(c.get("tot", 0)) for iid, c in chambres_par_imm.items()}
+    nb_log_ch: Dict[int, int] = {iid: int(c.get("log", 0)) for iid, c in chambres_par_imm.items()}
     # Logements loués en chambres SANS nombre de chambres dans Kratos (Phil :
     # « il semble pas reconnaître les chambres comme sur Saint-Clément ») :
     # Kratos n'en compte alors que les baux actifs — à signaler.
@@ -322,8 +329,9 @@ async def lire_immeubles_kratos(db, ids_filtre: Optional[List[int]] = None) -> L
     # annuel × 1, ponctuel des 12 derniers mois. Taxes, assurances, énergie et
     # autres alimentent les revenus nets SCHL ; entretien, conciergerie et
     # gestion sont NORMALISÉS par le barème (pas repris : double compte).
+    # Phil 2026-11-05 : seules taxes, assurances et énergie entrent dans les revenus nets SCHL (pas d'« autres »).
     _CAT = {"taxes_municipales": "taxes_municipales", "taxes_scolaires": "taxes_scolaires", "assurances": "assurances",
-            "energie": "energie", "deneigement": "autres_depenses", "autre": "autres_depenses"}
+            "energie": "energie"}
     depenses: Dict[int, Dict[str, float]] = {}
     depuis = date.today() - timedelta(days=365)
     for dp in (await db.execute(select(DepenseImmeuble).where(DepenseImmeuble.immeuble_id.in_(ids)))).scalars().all():
@@ -400,6 +408,7 @@ async def lire_immeubles_kratos(db, ids_filtre: Optional[List[int]] = None) -> L
             "adresse": i.address,
             "ville": i.city,
             "nb_logements": nb_log.get(i.id) or int(i.nb_logements or 0),
+            "nb_logements_en_chambres": nb_log_ch.get(i.id, 0),
             "nb_chambres": nb_ch.get(i.id, 0),
             "loyers_bruts_mensuels": round(loyers.get(i.id, 0.0), 2),
             "gestion_externe": bool(getattr(i, "gestion_externe", False)),

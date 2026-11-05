@@ -114,6 +114,12 @@ def _pos(v: Any, defaut: float = 0.0) -> float:
     return max(0.0, _f(v, defaut))
 
 
+def _agents_location(v: Any) -> Dict[str, float]:
+    """Agents de location payés par logement / chambre loué(e) (Phil 2026-11-05)."""
+    a = v if isinstance(v, dict) else {}
+    return {"par_logement": _pos(a.get("par_logement")), "par_chambre": _pos(a.get("par_chambre"))}
+
+
 def _opt_int(v: Any) -> Optional[int]:
     if v in (None, ""):
         return None
@@ -136,10 +142,14 @@ def immeuble_vide(**kw: Any) -> Dict[str, Any]:
     base: Dict[str, Any] = {
         "id": uuid.uuid4().hex[:12], "nom": "", "kratos_immeuble_id": None,
         "dans_le_fonds": True, "gestion_interne": True,
-        "nb_logements": 0, "nb_chambres": 0, "loyers_bruts_mensuels": 0.0,
+        #: Logements = toutes les unités (SCHL, maintenance, refacturation) ; « dont loués en chambres »
+        #: et les chambres qu'ils créent servent aux frais de location (Phil 2026-11-05).
+        "nb_logements": 0, "nb_logements_en_chambres": 0, "nb_chambres": 0, "loyers_bruts_mensuels": 0.0,
         "phase": "stabilise",
         # Rénovation / acquisition.
         "acquisition_cette_annee": False, "prix_acquisition": 0.0, "prospecte_par_nous": True,
+        #: Frais de développement forcé pour cet immeuble (None = calcul par tranches).
+        "frais_developpement_override": None,
         "travaux_initiaux": 0.0, "frais_connexes": 0.0, "valeur_future": 0.0,
         "mois_prevus": 24, "mois_ecoules": 0,
         # Stabilisé.
@@ -171,10 +181,10 @@ def scenario_defaut() -> Dict[str, Any]:
         "developpement": {"paliers": [dict(p) for p in PALIERS_DEV_DEFAUT]},
         "prospection": {"taux_pct": 2.0},
         "immeubles": [],
-        "refacturation": {"marge_pct": 10.0, "lignes": []},
+        "refacturation": {"marge_pct": 10.0, "par_logement_annuel": 300.0, "par_immeuble_annuel": 0.0, "lignes": []},
         "construction": {"marge_pct": 10.0, "pct_logements_renoves_par_an": 10.0, "cout_reno_logement": 15000},
-        "maintenance": {"heures_par_an": 0, "cout_horaire": 50.0, "taux_facture": 75.0,
-                        "materiaux_annuels": 0, "marge_materiaux_pct": 10.0},
+        "maintenance": {"heures_par_logement": 3.0, "materiaux_par_logement": 100.0, "heures_par_an": 0, "cout_horaire": 50.0,
+                        "taux_facture": 75.0, "materiaux_annuels": 0, "marge_materiaux_pct": 10.0},
         "gestion": {"taux_pct": 10.0, "facturer_sous_traites": True, "loyers_additionnels_mensuels": 0, "inclure_projection": False},
         "location": {"frais_logement": 600, "frais_chambre": 400, "taux_roulement_pct": 20.0,
                      "nb_relocations_logements": None, "nb_relocations_chambres": None},
@@ -185,6 +195,7 @@ def scenario_defaut() -> Dict[str, Any]:
             "salaires": [{"poste": p, "salaire_annuel": 0} for p in POSTES_DEFAUT],
             "associes": [{"nom": n, "salaire_annuel": 0, "dividendes_annuels": 0} for n in ASSOCIES_DEFAUT],
             "sous_traitance_gestion_pct": 0.0,
+            "agents_location": {"par_logement": 0.0, "par_chambre": 0.0},
         },
     })
 
@@ -225,6 +236,7 @@ def normaliser(data: Any) -> Dict[str, Any]:
             id=_id(i.get("id")), nom=str(i.get("nom") or "")[:120], kratos_immeuble_id=kid,
             dans_le_fonds=bool(i.get("dans_le_fonds", True)), gestion_interne=bool(interne),
             nb_logements=int(_pos(i.get("nb_logements"))), nb_chambres=int(_pos(i.get("nb_chambres"))),
+            nb_logements_en_chambres=min(int(_pos(i.get("nb_logements_en_chambres"))), int(_pos(i.get("nb_logements")))),
             loyers_bruts_mensuels=_pos(i.get("loyers_bruts_mensuels")), phase=phase,
             acquisition_cette_annee=bool(i.get("acquisition_cette_annee", False)),
             prix_acquisition=_pos(i.get("prix_acquisition")), prospecte_par_nous=bool(i.get("prospecte_par_nous", True)),
@@ -234,6 +246,7 @@ def normaliser(data: Any) -> Dict[str, Any]:
             valeur_rapport=_pos(i.get("valeur_rapport")), annee_rapport=annee if annee and annee > 1900 else None,
             taux_cap_pct=_pos(i.get("taux_cap_pct")), revenus_nets_annuels=_pos(i.get("revenus_nets_annuels")),
             dette=_pos(i.get("dette")), date_acquisition=_date_iso(i.get("date_acquisition")),
+            frais_developpement_override=(None if i.get("frais_developpement_override") in (None, "") else _pos(i.get("frais_developpement_override"))),
             taxes_municipales=_pos(i.get("taxes_municipales")), taxes_scolaires=_pos(i.get("taxes_scolaires")),
             assurances=_pos(i.get("assurances")), energie=_pos(i.get("energie")), autres_depenses=_pos(i.get("autres_depenses")),
             notes_import=[str(n)[:200] for n in (i.get("notes_import") if isinstance(i.get("notes_import"), list) else [])][:10],
@@ -285,13 +298,15 @@ def normaliser(data: Any) -> Dict[str, Any]:
         "developpement": {"paliers": paliers},
         "prospection": {"taux_pct": _pos(prosp.get("taux_pct"), 2.0)},
         "immeubles": immeubles,
-        "refacturation": {"marge_pct": _pos(refact.get("marge_pct"), 10.0), "lignes": lignes_refact},
+        "refacturation": {"marge_pct": _pos(refact.get("marge_pct"), 10.0), "par_logement_annuel": _pos(refact.get("par_logement_annuel"), 300.0),
+                          "par_immeuble_annuel": _pos(refact.get("par_immeuble_annuel")), "lignes": lignes_refact},
         "construction": {
             "marge_pct": _pos(constr.get("marge_pct"), 10.0),
             "pct_logements_renoves_par_an": _pos(constr.get("pct_logements_renoves_par_an"), 10.0),
             "cout_reno_logement": _pos(constr.get("cout_reno_logement"), 15000),
         },
         "maintenance": {
+            "heures_par_logement": _pos(maint.get("heures_par_logement"), 3.0), "materiaux_par_logement": _pos(maint.get("materiaux_par_logement"), 100.0),
             "heures_par_an": _pos(maint.get("heures_par_an")), "cout_horaire": _pos(maint.get("cout_horaire"), 50.0),
             "taux_facture": _pos(maint.get("taux_facture"), 75.0), "materiaux_annuels": _pos(maint.get("materiaux_annuels")),
             "marge_materiaux_pct": _pos(maint.get("marge_materiaux_pct"), 10.0),
@@ -318,6 +333,7 @@ def normaliser(data: Any) -> Dict[str, Any]:
             "frais_fixes": frais_fixes, "charges_sociales_pct": _pos(dep.get("charges_sociales_pct"), 14.0),
             "salaires": salaires, "associes": associes,
             "sous_traitance_gestion_pct": _pos(dep.get("sous_traitance_gestion_pct")),
+            "agents_location": _agents_location(dep.get("agents_location")),
         },
     }
 
@@ -405,7 +421,7 @@ def depenses_normalisees(i: Dict[str, Any], bareme: Optional[Dict[str, Any]] = N
     d = compute_depenses_for_scenario(
         is_refi=False, is_aph=False, nb_log=int(i["nb_logements"]), revenus_totaux=revenus,
         taxes_municipales=i["taxes_municipales"], taxes_scolaires=i["taxes_scolaires"], assurances=i["assurances"],
-        energie_base=i["energie"], reduction_energie_pct=0.0, depenses_autres=i["autres_depenses"],
+        energie_base=i["energie"], reduction_energie_pct=0.0, depenses_autres=0.0,
         wifi_ajoute=False, nb_thermopompes_ajoutees=0, taux_inoccupation_pct=eff["taux_inoccupation"],
         bareme_overrides=((bareme or {}).get("overrides") or None), seuil_bascule_log=eff["seuil_log"],
     )
@@ -413,7 +429,7 @@ def depenses_normalisees(i: Dict[str, Any], bareme: Optional[Dict[str, Any]] = N
         "revenus_bruts_annuels": _r(revenus), "inoccupation": _r(d.inoccupation),
         "taxes_municipales": _r(d.taxes_municipales), "taxes_scolaires": _r(d.taxes_scolaires), "assurances": _r(d.assurances),
         "energie": _r(d.energie), "concierge": _r(d.concierge), "entretien": _r(d.entretien), "gestion": _r(d.gestion),
-        "autres": _r(d.autres), "autres_normalisations": _r(d.autres_normalisations), "total": _r(d.total),
+        "autres_normalisations": _r(d.autres_normalisations), "total": _r(d.total),
         "revenus_nets": _r(revenus - d.total),
     }
 
@@ -488,7 +504,8 @@ def calculer(data: Dict[str, Any], bareme: Optional[Dict[str, Any]] = None) -> D
                        **v, "dette": _r(i["dette"]), "equite": _r(equite),
                        "part_annee": _r(100.0 * pa["part"]), "jours": pa["jours"], "jours_annee": pa["jours_annee"],
                        "date_acquisition": pa["date"], "acquise_cette_annee": pa["acquise_cette_annee"],
-                       "notes_import": list(i.get("notes_import") or []), "suivre_kratos": bool(i.get("suivre_kratos"))})
+                       "notes_import": list(i.get("notes_import") or []), "suivre_kratos": bool(i.get("suivre_kratos")),
+                       "nb_logements": i["nb_logements"], "nb_logements_en_chambres": i["nb_logements_en_chambres"], "nb_chambres": i["nb_chambres"]})
         if i["dans_le_fonds"] and pa["part"] > 0:
             valeur_parc += v["valeur"]
             dettes += i["dette"]
@@ -505,58 +522,80 @@ def calculer(data: Dict[str, Any], bareme: Optional[Dict[str, Any]] = None) -> D
         avert.append("La valeur nette du fonds est négative : aucun frais de gestion du fonds.")
     rev_fonds = max(van_ponderee, 0.0) * fonds["taux_pct"] / 100.0
 
-    # 2-3. Développement (par tranches) et prospection, acquisitions de l'année dans le fonds.
+    # 2-3. Développement (par tranches, ou montant forcé par immeuble) et prospection : acquisitions de l'année,
+    # dans le fonds OU NON (Phil 2026-11-05 : « j'ai le frais de dev même si l'immeuble n'est pas dans le fonds »).
     lignes_dev, lignes_prosp = [], []
     rev_dev = rev_prosp = 0.0
     for i in immeubles:
-        if not i["dans_le_fonds"] or not parts[i["id"]]["acquise_cette_annee"] or i["prix_acquisition"] <= 0:
+        if not parts[i["id"]]["acquise_cette_annee"] or i["prix_acquisition"] <= 0:
             continue
         fd = frais_developpement(i["prix_acquisition"], dev["paliers"])
-        rev_dev += fd["total"]
-        lignes_dev.append({"immeuble": i["nom"] or "Sans nom", "prix": _r(i["prix_acquisition"]), "frais": fd["total"],
+        force = i["frais_developpement_override"]
+        fd_total = force if force is not None else fd["total"]
+        rev_dev += fd_total
+        lignes_dev.append({"id": i["id"], "immeuble": i["nom"] or "Sans nom", "prix": _r(i["prix_acquisition"]), "frais": _r(fd_total),
+                           "frais_calcule": _r(fd["total"]), "override": force is not None,
                            "taux_effectif_pct": fd["taux_effectif_pct"], "tranches": fd["tranches"]})
         if i["prospecte_par_nous"]:
             fp = i["prix_acquisition"] * prosp["taux_pct"] / 100.0
             rev_prosp += fp
             lignes_prosp.append({"immeuble": i["nom"] or "Sans nom", "prix": _r(i["prix_acquisition"]), "frais": _r(fp)})
 
-    # 4. Dépenses refacturées : marge seulement.
-    avance = sum(l["montant_annuel"] for l in d["refacturation"]["lignes"])
-    rev_refact = avance * d["refacturation"]["marge_pct"] / 100.0
+    # Base « par logement » des sections 4 et 6 : logements des immeubles gérés à l'interne, au prorata de l'année.
+    internes = [i for i in immeubles if i["gestion_interne"]]
+    sous_traites = [i for i in immeubles if not i["gestion_interne"]]
+    logements_internes = sum(i["nb_logements"] for i in internes)
+    logements_internes_ponderes = sum(i["nb_logements"] * parts[i["id"]]["part"] for i in internes)
+    nb_internes_ponderes = sum(parts[i["id"]]["part"] for i in internes)
 
-    # 5. Construction : rénovation (travaux initiaux) + parc stabilisé (rénovations au roulement), fonds ou hors fonds.
-    travaux_stab = sum(i["travaux_initiaux"] for i in immeubles if i["phase"] == "stabilisation")
-    logements_stabilises = sum(i["nb_logements"] for i in immeubles if i["phase"] == "stabilise")
-    logements_stabilises_ponderes = sum(i["nb_logements"] * parts[i["id"]]["part"] for i in immeubles if i["phase"] == "stabilise")
+    # 4. Dépenses refacturées : moyenne par logement et par immeuble (Phil 2026-11-05 : « je vais juste mettre
+    # 300 $/logement/année et le reste se calcule ») + montants précis ; la marge seulement est un revenu.
+    refact = d["refacturation"]
+    avance_lignes = sum(l["montant_annuel"] for l in refact["lignes"])
+    avance_logements = refact["par_logement_annuel"] * logements_internes_ponderes
+    avance_immeubles = refact["par_immeuble_annuel"] * nb_internes_ponderes
+    avance = avance_lignes + avance_logements + avance_immeubles
+    rev_refact = avance * refact["marge_pct"] / 100.0
+
+    # 5. Construction : travaux des immeubles en rénovation ACQUIS CETTE ANNÉE (Phil 2026-11-05 : « souvent on les
+    # fait juste la première année ») + rénovations au roulement du parc stabilisé ; fonds ou hors fonds.
+    renov = [i for i in immeubles if i["phase"] == "stabilisation" and parts[i["id"]]["acquise_cette_annee"]]
+    renov_ignores = [i["nom"] or "Sans nom" for i in immeubles if i["phase"] == "stabilisation" and not parts[i["id"]]["acquise_cette_annee"]]
+    travaux_stab = sum(i["travaux_initiaux"] for i in renov)
+    stabilises = [i for i in immeubles if i["phase"] == "stabilise"]
+    logements_stabilises = sum(i["nb_logements"] for i in stabilises)
+    logements_stabilises_ponderes = sum(i["nb_logements"] * parts[i["id"]]["part"] for i in stabilises)
     nb_renos = logements_stabilises_ponderes * constr["pct_logements_renoves_par_an"] / 100.0
     volume_renos = nb_renos * constr["cout_reno_logement"]
     rev_constr_stab = travaux_stab * constr["marge_pct"] / 100.0
     rev_constr_renos = volume_renos * constr["marge_pct"] / 100.0
     rev_constr = rev_constr_stab + rev_constr_renos
 
-    # 6. Maintenance : marge sur les heures + marge sur les matériaux.
-    marge_heures = maint["heures_par_an"] * max(maint["taux_facture"] - maint["cout_horaire"], 0.0)
+    # 6. Maintenance : heures et matériaux par logement par an (Phil 2026-11-05 : « 3 h par logement par année avec
+    # 100 $ de matériaux ») sur les logements gérés à l'interne, + volumes saisis en plus ; marge sur les deux.
+    heures_total = maint["heures_par_logement"] * logements_internes_ponderes + maint["heures_par_an"]
+    materiaux_total = maint["materiaux_par_logement"] * logements_internes_ponderes + maint["materiaux_annuels"]
+    marge_heures = heures_total * max(maint["taux_facture"] - maint["cout_horaire"], 0.0)
     if maint["taux_facture"] < maint["cout_horaire"]:
         avert.append("Maintenance : le taux facturé est plus bas que le coût horaire — marge horaire à zéro.")
-    marge_materiaux = maint["materiaux_annuels"] * maint["marge_materiaux_pct"] / 100.0
+    marge_materiaux = materiaux_total * maint["marge_materiaux_pct"] / 100.0
     rev_maint = marge_heures + marge_materiaux
-    volume_maint = maint["heures_par_an"] * maint["taux_facture"] + maint["materiaux_annuels"] * (1 + maint["marge_materiaux_pct"] / 100.0)
+    volume_maint = heures_total * maint["taux_facture"] + materiaux_total * (1 + maint["marge_materiaux_pct"] / 100.0)
 
     # 7. Gestion locative : loyers des immeubles gérés à l'interne (+ sous-traités si on les facture aussi).
-    internes = [i for i in immeubles if i["gestion_interne"]]
-    sous_traites = [i for i in immeubles if not i["gestion_interne"]]
     loyers_internes = sum(i["loyers_bruts_mensuels"] * parts[i["id"]]["part"] for i in internes) * 12.0
     loyers_sous_traites = sum(i["loyers_bruts_mensuels"] * parts[i["id"]]["part"] for i in sous_traites) * 12.0
     base_gestion = loyers_internes + (loyers_sous_traites if gest["facturer_sous_traites"] else 0.0)
     rev_gestion = base_gestion * gest["taux_pct"] / 100.0
     rev_projection = gest["loyers_additionnels_mensuels"] * 12.0 * gest["taux_pct"] / 100.0
 
-    # 8. Location : relocations sur les portes gérées à l'interne (roulement ou nombres saisis) × frais.
-    logements_internes = sum(i["nb_logements"] for i in internes)
+    # 8. Location : portes gérées à l'interne = logements hors unités louées en chambres, + chambres (Phil 2026-11-05 :
+    # « 8 logements dont 2 en chambres qui font 10 chambres : pour la location c'est 6 logements et 10 chambres »).
+    logements_location = sum(max(i["nb_logements"] - i["nb_logements_en_chambres"], 0) for i in internes)
     chambres_internes = sum(i["nb_chambres"] for i in internes)
-    logements_internes_ponderes = sum(i["nb_logements"] * parts[i["id"]]["part"] for i in internes)
+    logements_location_ponderes = sum(max(i["nb_logements"] - i["nb_logements_en_chambres"], 0) * parts[i["id"]]["part"] for i in internes)
     chambres_internes_ponderees = sum(i["nb_chambres"] * parts[i["id"]]["part"] for i in internes)
-    reloc_log_calc = int(round(logements_internes_ponderes * loc["taux_roulement_pct"] / 100.0))
+    reloc_log_calc = int(round(logements_location_ponderes * loc["taux_roulement_pct"] / 100.0))
     reloc_ch_calc = int(round(chambres_internes_ponderees * loc["taux_roulement_pct"] / 100.0))
     reloc_log = loc["nb_relocations_logements"] if loc["nb_relocations_logements"] is not None else reloc_log_calc
     reloc_ch = loc["nb_relocations_chambres"] if loc["nb_relocations_chambres"] is not None else reloc_ch_calc
@@ -566,12 +605,19 @@ def calculer(data: Dict[str, Any], bareme: Optional[Dict[str, Any]] = None) -> D
         {"key": "fonds", "revenu": _r(rev_fonds), "van": _r(van), "van_ponderee": _r(van_ponderee), "taux_pct": fonds["taux_pct"]},
         {"key": "developpement", "revenu": _r(rev_dev), "lignes": lignes_dev},
         {"key": "prospection", "revenu": _r(rev_prosp), "lignes": lignes_prosp, "taux_pct": prosp["taux_pct"]},
-        {"key": "refacturation", "revenu": _r(rev_refact), "montant_avance": _r(avance), "marge_pct": d["refacturation"]["marge_pct"]},
+        {"key": "refacturation", "revenu": _r(rev_refact), "montant_avance": _r(avance), "marge_pct": refact["marge_pct"],
+         "avance_lignes": _r(avance_lignes), "avance_logements": _r(avance_logements), "avance_immeubles": _r(avance_immeubles),
+         "logements_base": _r(logements_internes_ponderes), "immeubles_base": _r(nb_internes_ponderes)},
         {"key": "construction", "revenu": _r(rev_constr), "travaux_stabilisation": _r(travaux_stab),
          "revenu_stabilisation": _r(rev_constr_stab), "logements_stabilises": logements_stabilises,
-         "nb_renovations": _r(nb_renos), "volume_renovations": _r(volume_renos), "revenu_renovations": _r(rev_constr_renos)},
+         "nb_renovations": _r(nb_renos), "volume_renovations": _r(volume_renos), "revenu_renovations": _r(rev_constr_renos),
+         "immeubles_renovation": [{"nom": i["nom"] or "Sans nom", "travaux": _r(i["travaux_initiaux"]),
+                                   "revenu": _r(i["travaux_initiaux"] * constr["marge_pct"] / 100.0)} for i in renov],
+         "immeubles_renovation_ignores": renov_ignores,
+         "immeubles_stabilises": [{"nom": i["nom"] or "Sans nom", "nb_logements": i["nb_logements"]} for i in stabilises]},
         {"key": "maintenance", "revenu": _r(rev_maint), "marge_heures": _r(marge_heures), "marge_materiaux": _r(marge_materiaux),
-         "volume_facture": _r(volume_maint)},
+         "volume_facture": _r(volume_maint), "heures_total": _r(heures_total), "materiaux_total": _r(materiaux_total),
+         "logements_base": _r(logements_internes_ponderes)},
         {"key": "gestion", "revenu": _r(rev_gestion), "loyers_internes_annuels": _r(loyers_internes),
          "loyers_sous_traites_annuels": _r(loyers_sous_traites), "base_annuelle": _r(base_gestion),
          "nb_internes": len(internes), "nb_sous_traites": len(sous_traites),
@@ -580,7 +626,7 @@ def calculer(data: Dict[str, Any], bareme: Optional[Dict[str, Any]] = None) -> D
          "loyers_additionnels_annuels": _r(gest["loyers_additionnels_mensuels"] * 12.0)},
         {"key": "location", "revenu": _r(rev_location), "relocations_logements": reloc_log, "relocations_chambres": reloc_ch,
          "relocations_logements_calculees": reloc_log_calc, "relocations_chambres_calculees": reloc_ch_calc,
-         "logements_internes": logements_internes, "chambres_internes": chambres_internes},
+         "logements_internes": logements_internes, "logements_location": logements_location, "chambres_internes": chambres_internes},
     ]
     for s in revenus:
         s["label"] = SECTIONS_LABELS[s["key"]]
@@ -624,8 +670,10 @@ def calculer(data: Dict[str, Any], bareme: Optional[Dict[str, Any]] = None) -> D
         associes.append({"nom": a["nom"], "salaire_brut": _r(a["salaire_annuel"]), "charges": _r(charges),
                          "cout_salaire": _r(a["salaire_annuel"] + charges), "dividendes": _r(a["dividendes_annuels"])})
     sous_traitance = loyers_sous_traites * dep["sous_traitance_gestion_pct"] / 100.0
+    # Agents de location : payés par logement / chambre loué(e) (relocations de la section 8).
+    agents_location = reloc_log * dep["agents_location"]["par_logement"] + reloc_ch * dep["agents_location"]["par_chambre"]
     total_masse_salariale = total_salaires_bruts + total_charges + total_associes_salaires + total_associes_charges
-    total_depenses = total_frais_fixes + total_masse_salariale + sous_traitance
+    total_depenses = total_frais_fixes + total_masse_salariale + sous_traitance + agents_location
     benefice = total_revenus - total_depenses
     benefice_retenu = benefice - total_dividendes
     if total_dividendes > max(benefice, 0.0):
@@ -668,6 +716,7 @@ def calculer(data: Dict[str, Any], bareme: Optional[Dict[str, Any]] = None) -> D
             "total_masse_salariale": _r(total_masse_salariale),
             "sous_traitance_gestion": _r(sous_traitance),
             "loyers_sous_traites_annuels": _r(loyers_sous_traites),
+            "agents_location": _r(agents_location), "relocations_logements": reloc_log, "relocations_chambres": reloc_ch,
             "total_dividendes": _r(total_dividendes),
             "total": _r(total_depenses),
             "charges_sociales_pct": dep["charges_sociales_pct"],
@@ -722,7 +771,7 @@ def referentiel(bareme: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             f"inoccupation {eff['taux_inoccupation'] * 100:g} %, conciergerie {eff['concierge_lt12']:g} $ / {eff['concierge_gte12']:g} $ par logement "
             f"(moins de {eff['seuil_log']} logements / {eff['seuil_log']} et plus), entretien {eff['entretien']:g} $ par logement, "
             f"gestion {eff['gestion_lt12'] * 100:g} % / {eff['gestion_gte12'] * 100:g} % des revenus, autres normalisations {eff['autres_normalisations_pct'] * 100:g} %, "
-            "plus les taxes, assurances, énergie et autres dépenses réelles saisies. Valeur d'un immeuble stabilisé = revenus nets ÷ taux de cap du rapport."
+            "plus les taxes, assurances et énergie réelles. Valeur d'un immeuble stabilisé = revenus nets ÷ taux de cap du rapport."
         ),
         "prorata_note": (
             "Une acquisition conclue dans l'année est comptée au prorata des jours restants (ex. 3 avril → 273 jours sur 365) "
