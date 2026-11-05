@@ -113,6 +113,15 @@ bord droit ; ouvert à la main sans place libre, le panneau se replie au
 premier clic ailleurs. Le bouton **×** le ferme jusqu'au rechargement de
 la page. Pendant une conversion, il reste ouvert en bas à droite.
 
+**1.3.3** (Steven 2026-11-05 : « les BT restent en sous-client ») : dans
+QuickBooks en français, l'option du menu « Nouveau projet ▾ » s'appelle
+« Convertir à partir d'un client rattaché ». L'extension ne cherchait
+que « sous-client » et s'arrêtait (« introuvable dans le menu ») : plus
+rien n'était converti, BT ou projet. Les deux libellés, et l'anglais,
+sont reconnus. Mise à jour : `git pull` du dossier de l'extension, puis
+⟳ sur la carte de l'extension dans `chrome://extensions/`, puis recharger
+QuickBooks.
+
 ## Côté serveur
 
 Set la variable d'environnement `EXTENSION_API_KEY` sur le backend
