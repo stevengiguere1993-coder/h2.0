@@ -127,6 +127,8 @@ type Immeuble = {
   type: string;
   annee_construction?: number | null;
   nb_logements?: number | null;
+  nb_logements_en_chambres?: number | null;
+  nb_chambres?: number | null;
   matricule?: string | null;
   urgence_phone?: string | null;
   purchase_price?: number | null;
@@ -271,6 +273,7 @@ type Evaluation = {
   id: number;
   kind: string;
   valeur: number;
+  taux_cap?: number | null;
   date_evaluation: string;
   source?: string | null;
   notes?: string | null;
@@ -449,6 +452,8 @@ export default function ImmeubleDetailPage({
     type: "residentiel",
     annee_construction: "",
     nb_logements: "",
+    nb_logements_en_chambres: "",
+    nb_chambres: "",
     purchase_price: "",
     urgence_phone: "",
     //: Entreprise propriétaire (INC). Vit dans imm_immeuble_ownerships,
@@ -697,6 +702,8 @@ export default function ImmeubleDetailPage({
         ? String(immeuble.annee_construction)
         : "",
       nb_logements: immeuble.nb_logements ? String(immeuble.nb_logements) : "",
+      nb_logements_en_chambres: immeuble.nb_logements_en_chambres != null ? String(immeuble.nb_logements_en_chambres) : "",
+      nb_chambres: immeuble.nb_chambres != null ? String(immeuble.nb_chambres) : "",
       purchase_price: immeuble.purchase_price
         ? String(immeuble.purchase_price)
         : "",
@@ -733,6 +740,8 @@ export default function ImmeubleDetailPage({
         nb_logements: editForm.nb_logements
           ? parseNombre(editForm.nb_logements)
           : null,
+        nb_logements_en_chambres: editForm.nb_logements_en_chambres !== "" ? parseNombre(editForm.nb_logements_en_chambres) : null,
+        nb_chambres: editForm.nb_chambres !== "" ? parseNombre(editForm.nb_chambres) : null,
         purchase_price: editForm.purchase_price
           ? parseNombre(editForm.purchase_price)
           : null,
@@ -1577,6 +1586,15 @@ export default function ImmeubleDetailPage({
                   />
                 </EditField>
               </div>
+              <div className="grid grid-cols-2 gap-3">
+                <EditField label="dont loués en chambres">
+                  <input type="number" min={0} value={editForm.nb_logements_en_chambres} onChange={(e) => setEditForm((f) => ({ ...f, nb_logements_en_chambres: e.target.value }))} className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500" />
+                </EditField>
+                <EditField label="Chambres (total)">
+                  <input type="number" min={0} value={editForm.nb_chambres} onChange={(e) => setEditForm((f) => ({ ...f, nb_chambres: e.target.value }))} className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500" />
+                </EditField>
+              </div>
+              <p className="-mt-1 text-[11px] text-white/50">Nb logements = toutes les unités. « dont loués en chambres » et le nombre de chambres servent à la page Revenus et dépenses (frais de location).</p>
               <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 p-3">
                 <EditField label="Début de la collecte des loyers">
                   <input
@@ -2153,7 +2171,7 @@ function OverviewTab({
           </dd>
           <dt className="text-white/50">Logements (déclaré)</dt>
           <dd className="text-right text-white">
-            {immeuble.nb_logements ?? "—"}
+            {immeuble.nb_logements ?? "—"}{immeuble.nb_logements_en_chambres ? ` · ${immeuble.nb_logements_en_chambres} en chambres (${immeuble.nb_chambres ?? "?"} ch.)` : ""}
           </dd>
           <dt className="text-white/50">Logements (créés)</dt>
           <dd className="text-right text-white">{logementsCount}</dd>
@@ -5900,6 +5918,7 @@ function EvaluationForm({
   const [f, setF] = useState({
     kind: initial?.kind ?? "marchande",
     valeur: initial != null ? String(initial.valeur) : "",
+    taux_cap: initial?.taux_cap != null ? String(initial.taux_cap) : "",
     date_evaluation:
       initial?.date_evaluation ?? new Date().toISOString().slice(0, 10),
     source: initial?.source ?? "",
@@ -5920,6 +5939,7 @@ function EvaluationForm({
     onSubmit({
       kind: f.kind,
       valeur: parseNombre(f.valeur),
+      taux_cap: f.taux_cap.trim() ? parseNombre(f.taux_cap) : null,
       date_evaluation: f.date_evaluation,
       source: f.source.trim() || null,
       notes: f.notes.trim() || null
@@ -5971,6 +5991,17 @@ function EvaluationForm({
             value={f.date_evaluation}
             onChange={(e) => set("date_evaluation")(e.target.value)}
             className={inputCls}
+          />
+        </label>
+        <label className={labelCls}>
+          Taux de cap (%)
+          <input
+            inputMode="decimal"
+            value={f.taux_cap}
+            onChange={(e) => set("taux_cap")(e.target.value)}
+            placeholder="ex. 4.95"
+            className={inputCls}
+            title="Taux de capitalisation retenu par l'évaluateur — repris dans la page Revenus et dépenses"
           />
         </label>
         <label className={labelCls}>
@@ -6263,6 +6294,7 @@ function EvaluationsTab({
                   </td>
                   <td className="px-4 py-2 text-right font-mono text-sm font-bold text-white">
                     {fmtCurrency(e.valeur)}
+                    {e.taux_cap != null ? <div className="text-[10px] font-normal text-white/50" title="Taux de capitalisation retenu">cap {e.taux_cap} %</div> : null}
                   </td>
                   <td className="px-4 py-2 text-xs text-white/50">
                     {e.source || "—"}
