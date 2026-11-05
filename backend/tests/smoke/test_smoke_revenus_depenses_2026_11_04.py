@@ -490,6 +490,16 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
     assert f["annees_moyennes"] == 2.0 and f["annualise_pct"] is not None and f["part_des_gains"]["gain"] == f["gain"]
     pg = f["part_des_gains"]
     assert pg["tranche_investisseurs"] == round(min(f["gain"], 150_000 * 0.07), 2) and abs(pg["part_nous"] + pg["part_investisseurs"] - f["gain"]) < 0.02
+    # Refinancé (hypothèque ≥ coût) : capital récupéré, rendements non calculables ; en rénovation : valeur réelle = rapport.
+    pdata["immeubles"][0]["travaux_initiaux"] = 0          # coût 600 000 ; hypothèque 500 000 → mise 100 000
+    pdata["immeubles"][0]["phase"] = "stabilisation"
+    pdata["immeubles"][0]["prix_acquisition"] = 400_000     # coût réel = prix Kratos 600 000 (pas le scénario)
+    r = client.post(f"{RD}/calculer", json={"data": pdata}, headers=auth_headers)
+    assert r.status_code == 200
+    assert client.put(f"{RD}/scenarios/{pid}", json={"data": pdata}, headers=auth_headers).status_code == 200
+    pc = client.get(f"{RD}/performance?scenario_id={pid}", headers=auth_headers).json()["projets"][0]
+    assert pc["reel"]["valeur"] == 835_000 and "rapport" in pc["reel"]["methode_valeur"] and pc["reel"]["capital_recupere"] is False
+    assert any("En rénovation" in n for n in pc["notes"])
     # Sans scenario_id : le scénario par défaut.
     assert client.get(f"{RD}/performance", headers=auth_headers).status_code == 200
 
