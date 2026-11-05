@@ -19,7 +19,7 @@
   // pour savoir si elle peut compter sur le scraping auto (et sur la
   // collecte en lot à partir de 1.2.0).
   try {
-    window.__h2_extension = "1.3.2";
+    window.__h2_extension = "1.3.3";
   } catch (_) {}
 
   const BATCH_MESSAGES = {
