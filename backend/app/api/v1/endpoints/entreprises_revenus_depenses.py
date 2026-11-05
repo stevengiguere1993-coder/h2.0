@@ -40,6 +40,8 @@ from app.models.immobilier import (
     bail_non_parallele,
 )
 from app.services import revenus_depenses as svc
+from app.services.hypotheque_calc import balance_effective
+from app.services.hypotheque_partage import hypotheques_par_immeuble
 from app.services.locatif_chambres import compter_chambres
 from app.services.loyer_effectif import loyer_effectif
 from app.services.audit import log_action
@@ -357,15 +359,13 @@ async def lire_immeubles_kratos(db, ids_filtre: Optional[List[int]] = None) -> L
             continue
         bucket = depenses.setdefault(dp.immeuble_id, {})
         bucket[cat] = bucket.get(cat, 0.0) + annuel
+    # Dette DU JOUR, comme la fiche de l'immeuble et le portail investisseurs : balance saisie, sinon
+    # balance calculée (amortissement à aujourd'hui), sinon montant initial ; hypothèque conjointe =
+    # la part de l'immeuble (Phil 2026-11-05 : « prendre le montant de l'hypothèque du jour »).
     dettes: Dict[int, float] = {}
-    for iid, solde, initial in (
-        await db.execute(
-            select(Hypotheque.immeuble_id, Hypotheque.balance_actuelle, Hypotheque.montant_initial).where(
-                Hypotheque.immeuble_id.in_(ids), Hypotheque.status == HypothequeStatus.ACTIVE.value
-            )
-        )
-    ).all():
-        dettes[iid] = dettes.get(iid, 0.0) + float(solde if solde is not None else (initial or 0.0))
+    for iid, hyps in (await hypotheques_par_immeuble(db, ids)).items():
+        for h, part in hyps:
+            dettes[iid] = dettes.get(iid, 0.0) + balance_effective(h) * float(part)
     evals: Dict[int, Evaluation] = {}
     for ev in (
         await db.execute(select(Evaluation).where(Evaluation.immeuble_id.in_(ids)).order_by(Evaluation.date_evaluation.desc(), Evaluation.id.desc()))
