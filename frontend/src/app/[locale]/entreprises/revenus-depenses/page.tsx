@@ -1120,7 +1120,7 @@ function ImportKratosModal({ dejaPris, onClose, onAjouter }: { dejaPris: Set<num
             <X className="h-4 w-4" />
           </button>
         </div>
-        <p className={`px-4 pt-3 text-xs ${MUTED}`}>Logements, chambres, loyers (même total que la liste des immeubles : baux actifs, ou loyer saisi sur les logements en gestion externe), gestion externe, dette des hypothèques actives et dernier rapport d&apos;évaluation sont repris tels quels. Le triangle signale ce qui manque dans Kratos ; l&apos;alerte suit l&apos;immeuble dans sa fiche. Tu ajustes ensuite (statut, dans le fonds ou non…).</p>
+        <p className={`px-4 pt-3 text-xs ${MUTED}`}>Logements, chambres, loyers (même total que la liste des immeubles : baux actifs, ou loyer saisi sur les logements en gestion externe), dette du jour des hypothèques actives (comme la fiche de l&apos;immeuble) et dernier rapport d&apos;évaluation sont repris tels quels. « Gestion externe » dans Kratos n&apos;a rien à voir avec « sous-traitée » ici : chaque immeuble arrive en gestion à l&apos;interne, à toi de choisir. Le triangle signale ce qui manque dans Kratos ; l&apos;alerte suit l&apos;immeuble dans sa fiche. Tu ajustes ensuite (statut, dans le fonds ou non…).</p>
         <div className="max-h-[55vh] overflow-auto px-4 py-3">
           {items == null ? (
             <Loader2 className="h-5 w-5 animate-spin text-[var(--qg-accent)]" />
@@ -1135,7 +1135,6 @@ function ImportKratosModal({ dejaPris, onClose, onAjouter }: { dejaPris: Set<num
                   <th className="py-1 text-right">Logements</th>
                   <th className="py-1 text-right">Chambres</th>
                   <th className="py-1 text-right">Loyers / mois</th>
-                  <th className="py-1">Gestion</th>
                   <th className="py-1 text-right">Dette</th>
                   <th className="py-1 text-right">Rapport</th>
                   <th className="py-1" />
@@ -1154,7 +1153,6 @@ function ImportKratosModal({ dejaPris, onClose, onAjouter }: { dejaPris: Set<num
                       <td className="py-1.5 text-right tabular-nums">{it.nb_logements}</td>
                       <td className="py-1.5 text-right tabular-nums">{it.nb_chambres}</td>
                       <td className="py-1.5 text-right tabular-nums">{money(it.loyers_bruts_mensuels)}</td>
-                      <td className="py-1.5">{it.gestion_externe ? "externe" : "interne"}</td>
                       <td className="py-1.5 text-right tabular-nums">{money(it.dette)}</td>
                       <td className="py-1.5 text-right tabular-nums">{it.valeur_rapport ? `${money(it.valeur_rapport)}${it.annee_rapport ? ` (${it.annee_rapport})` : ""}` : "—"}</td>
                       <td className="py-1.5 pl-2">
@@ -1169,7 +1167,7 @@ function ImportKratosModal({ dejaPris, onClose, onAjouter }: { dejaPris: Set<num
                 })}
                 {items.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className={`py-4 text-center ${FAINT}`}>Aucun immeuble actif dans Kratos.</td>
+                    <td colSpan={8} className={`py-4 text-center ${FAINT}`}>Aucun immeuble actif dans Kratos.</td>
                   </tr>
                 ) : null}
               </tbody>
@@ -1271,7 +1269,7 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
           onAjouter={(items) => {
             modifier((d) => {
               for (const it of items) {
-                d.immeubles.push(immeubleVide({ nom: it.nom, kratos_immeuble_id: it.kratos_immeuble_id, nb_logements: it.nb_logements, nb_logements_en_chambres: it.nb_logements_en_chambres, nb_chambres: it.nb_chambres, loyers_bruts_mensuels: it.loyers_bruts_mensuels, gestion_interne: !it.gestion_externe, phase: "stabilise", valeur_rapport: it.valeur_rapport, annee_rapport: it.annee_rapport, taux_cap_pct: it.taux_cap_pct, dette: it.dette, taxes_municipales: it.taxes_municipales, taxes_scolaires: it.taxes_scolaires, assurances: it.assurances, energie: it.energie, autres_depenses: it.autres_depenses, notes_import: it.notes_import, suivre_kratos: true }));
+                d.immeubles.push(immeubleVide({ nom: it.nom, kratos_immeuble_id: it.kratos_immeuble_id, nb_logements: it.nb_logements, nb_logements_en_chambres: it.nb_logements_en_chambres, nb_chambres: it.nb_chambres, loyers_bruts_mensuels: it.loyers_bruts_mensuels, gestion_interne: true, phase: "stabilise", valeur_rapport: it.valeur_rapport, annee_rapport: it.annee_rapport, taux_cap_pct: it.taux_cap_pct, dette: it.dette, taxes_municipales: it.taxes_municipales, taxes_scolaires: it.taxes_scolaires, assurances: it.assurances, energie: it.energie, autres_depenses: it.autres_depenses, notes_import: it.notes_import, suivre_kratos: true }));
               }
             });
             setImportOuvert(false);
