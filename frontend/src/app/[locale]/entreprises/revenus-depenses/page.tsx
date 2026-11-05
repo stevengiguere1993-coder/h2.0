@@ -519,6 +519,18 @@ export default function RevenusDepensesPage() {
   };
   const skipSave = useRef(true);
   const timer = useRef<number | null>(null);
+  // Verrou optimiste : horodatage de la version chargée, renvoyé à chaque enregistrement.
+  const baseUpdatedAt = useRef<string | null>(null);
+  const appliquerConflit = (d: Detail & { message?: string }) => {
+    skipSave.current = true;
+    setDetail(d);
+    setData(d.data);
+    setRes(d.resultats);
+    baseUpdatedAt.current = d.updated_at;
+    setScenarios((prev) => prev.map((s) => (s.id === d.id ? { ...s, nom: d.nom, resume: d.resume, updated_at: d.updated_at } : s)));
+    setErr(d.message || "Le scénario a été modifié ailleurs : la version à jour a été rechargée.");
+    setEtat("ok");
+  };
 
   const chargerListe = useCallback(async (): Promise<ScenarioResume[]> => {
     const r = await authedFetch(`${RD}/scenarios`);
@@ -533,6 +545,7 @@ export default function RevenusDepensesPage() {
     if (!r.ok) throw new Error(`Erreur ${r.status}`);
     const d = (await r.json()) as Detail;
     skipSave.current = true;
+    baseUpdatedAt.current = d.updated_at;
     setDetail(d);
     setData(d.data);
     setRes(d.resultats);
@@ -564,9 +577,14 @@ export default function RevenusDepensesPage() {
     timer.current = window.setTimeout(async () => {
       setEtat("sauvegarde");
       try {
-        const r = await authedFetch(`${RD}/scenarios/${courant}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data }) });
+        const r = await authedFetch(`${RD}/scenarios/${courant}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data, base_updated_at: baseUpdatedAt.current }) });
+        if (r.status === 409) {
+          appliquerConflit((await r.json()) as Detail & { message?: string });
+          return;
+        }
         if (!r.ok) throw new Error(`Erreur ${r.status}`);
         const d = (await r.json()) as Detail;
+        baseUpdatedAt.current = d.updated_at;
         setRes(d.resultats);
         setScenarios((prev) => prev.map((s) => (s.id === d.id ? { ...s, resume: d.resume, updated_at: d.updated_at } : s)));
         setEtat("ok");
@@ -628,9 +646,14 @@ export default function RevenusDepensesPage() {
     setRenomme(null);
     if (!nom || nom === detail?.nom) return;
     try {
-      const r = await authedFetch(`${RD}/scenarios/${courant}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nom }) });
+      const r = await authedFetch(`${RD}/scenarios/${courant}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nom, base_updated_at: baseUpdatedAt.current }) });
+      if (r.status === 409) {
+        appliquerConflit((await r.json()) as Detail & { message?: string });
+        return;
+      }
       if (!r.ok) throw new Error(`Erreur ${r.status}`);
       const d = (await r.json()) as Detail;
+      baseUpdatedAt.current = d.updated_at;
       setDetail((prev) => (prev ? { ...prev, nom: d.nom } : prev));
       setScenarios((prev) => prev.map((s) => (s.id === d.id ? { ...s, nom: d.nom } : s)));
     } catch (e) {
