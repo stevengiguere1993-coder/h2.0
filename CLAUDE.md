@@ -344,3 +344,23 @@ dans la liste) et le cron quotidien (`verifier_pour_cron` →
 `alerter_attente`) envoie aux admins une notification
 `qbo_conversion_en_attente` quand un sous-client attend depuis plus de
 3 jours : au plus une fois par 7 jours, sauf nouveau retard.
+
+## Factures — numéros hors série (2026-11-05)
+
+Steven : « mes numéros de factures ont fait un bond […] après 171, je ne
+devrais pas être dans les 10.. ». Cause : le recalage du compteur (« plus
+haut numéro Kratos ou QB + 1 ») a suivi un numéro QuickBooks d'une autre
+série (1042) → 1043 et suivantes. Désormais `cible_compteur_factures`
+ignore tout numéro QB à plus de `ECART_MAX_QB` (100) au-dessus du plus
+haut numéro Kratos (`qb_hors_serie` dans la réponse de « Aligner ») ; un
+numéro précis reste évité un par un. Les factures mensuelles QB
+(`qbo_monthly_invoice`) prennent leur numéro dans le MÊME compteur
+(`numero_pour_facture_qb_hors_kratos`) quand c'est la compagnie QB des
+factures de Kratos, et ne sont plus prises pour une facture Kratos au
+lien perdu (`_est_de_kratos` = mémo « Kratos facture #id » seulement).
+Remise dans la suite : `GET/POST /settings/numbering/renumerotation-factures`
+(`facture_renumerotation.py`, simulation par défaut) — factures ≥ seuil
+en ordre d'envoi, numéros pris dans QB sautés, DocNumber QB mis à jour
+facture par facture, compteur ramené juste après. Le PDF de facture
+porte l'adresse et le téléphone d'Horizon (`COMPANY_ADDRESS`,
+`COMPANY_TEL` dans `soumission_pdf.py`).

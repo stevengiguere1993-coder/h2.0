@@ -16,8 +16,9 @@ Règles :
   QBO, on n'y touche plus : on en démarre une NOUVELLE pour la suite du
   mois (la ligne en table est remplacée).
 - Si elle a été supprimée dans QBO (404), on en recrée une.
-- DocNumber calculé à la CRÉATION seulement (max numérique récent + 1,
-  retry 6140) — même logique que les anciens flux.
+- DocNumber calculé à la CRÉATION seulement : compteur des factures de
+  Kratos si c'est la même compagnie QB (2026-11-05, une seule série),
+  sinon max numérique récent + 1 ; retry 6140.
 """
 from __future__ import annotations
 
@@ -59,13 +60,45 @@ async def _next_doc_number(qbo: QuickBooksClient) -> Optional[str]:
         return None
 
 
+async def _meme_compagnie_que_kratos(qbo: QuickBooksClient) -> bool:
+    """La compagnie QB de cette facture est-elle celle des factures de
+    Kratos (construction) ? Chez Horizon les scopes pointent la même."""
+    try:
+        from app.integrations.quickbooks import get_qbo
+
+        principal = get_qbo()
+        await principal._load_refresh_from_db()
+        realm = str(qbo.realm_id or "")
+        return bool(realm) and realm == str(principal.realm_id or "")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _numero_compteur_kratos(db, qbo: QuickBooksClient) -> Optional[str]:
+    """Numéro de la série de Kratos (compteur des factures) quand c'est la
+    même compagnie QB que les factures de Kratos ; None sinon."""
+    if db is None or not await _meme_compagnie_que_kratos(qbo):
+        return None
+    from app.services.numbering import numero_pour_facture_qb_hors_kratos
+
+    try:
+        return await numero_pour_facture_qb_hors_kratos(db, qbo)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Numéro de facture (compteur Kratos) impossible : %s", exc)
+        return None
+
+
 async def _create_monthly(
     qbo: QuickBooksClient,
     customer_id: str,
     lines: List[Dict[str, Any]],
     private_note: str,
+    db=None,
 ) -> Dict[str, Any]:
-    next_num = await _next_doc_number(qbo)
+    next_num = await _numero_compteur_kratos(db, qbo)
+    par_compteur = next_num is not None
+    if not par_compteur:
+        next_num = await _next_doc_number(qbo)
     base_payload: Dict[str, Any] = {
         "CustomerRef": {"value": str(customer_id)},
         "TxnDate": datetime.now(timezone.utc).date().isoformat(),
@@ -89,7 +122,9 @@ async def _create_monthly(
                 and ("6140" in msg or "uplicate" in msg or "double" in msg)
             ):
                 tries += 1
-                next_num = str(int(next_num) + 1)
+                next_num = (
+                    await _numero_compteur_kratos(db, qbo) if par_compteur else None
+                ) or str(int(next_num) + 1)
                 continue
             raise
     return inv.get("Invoice") or inv
@@ -133,8 +168,8 @@ async def create_separate_invoice(
 ) -> Dict[str, Any]:
     """Mode « facture distincte » (Réglages Facturation, 2026-11-03) : UNE
     nouvelle facture par envoi, jamais greffée sur celle du mois. Même
-    signature que ``add_lines_to_monthly_invoice`` (db/scope ignorés)."""
-    invoice = await _create_monthly(qbo, customer_id, lines, private_note)
+    signature que ``add_lines_to_monthly_invoice`` (scope ignoré)."""
+    invoice = await _create_monthly(qbo, customer_id, lines, private_note, db=db)
     return {
         "invoice_id": str(invoice.get("Id") or ""),
         "doc_number": str(invoice.get("DocNumber") or "") or None,
@@ -201,7 +236,7 @@ async def add_lines_to_monthly_invoice(
                 "pour %s", row.qbo_invoice_id, customer_id,
             )
 
-    invoice = await _create_monthly(qbo, customer_id, lines, private_note)
+    invoice = await _create_monthly(qbo, customer_id, lines, private_note, db=db)
     invoice_id = str(invoice.get("Id") or "")
     doc_number = str(invoice.get("DocNumber") or "") or None
     if row:

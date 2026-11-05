@@ -28,10 +28,12 @@ from app.models.soumission import Soumission
 from app.services.facture_echeance import jour_local
 from app.services.soumission_pdf import (
     ACCENT_HEX,
+    COMPANY_ADDRESS,
     COMPANY_EMAIL,
     COMPANY_NAME,
     COMPANY_RBQ,
     COMPANY_SITE,
+    COMPANY_TEL,
     DARK_HEX,
     LINE_HEX,
     MUTED_HEX,
@@ -636,7 +638,8 @@ def _render_bytes(
             log.warning("Could not embed logo in PDF: %s", exc)
     left_cell.extend([
         Paragraph(f"<b>{COMPANY_NAME}</b>", s["h2"]),
-        Paragraph(COMPANY_RBQ, s["small"]),
+        Paragraph(COMPANY_ADDRESS, s["small"]),
+        Paragraph(f"{COMPANY_TEL} &middot; {COMPANY_RBQ}", s["small"]),
         Paragraph(f"{COMPANY_SITE} &middot; {COMPANY_EMAIL}", s["small"]),
     ])
     if tax_gst:
@@ -902,7 +905,7 @@ def _render_bytes(
 
     story.append(Spacer(1, 16))
     story.append(Paragraph(
-        f"{COMPANY_NAME} &middot; {COMPANY_RBQ} &middot; {COMPANY_EMAIL}",
+        f"{COMPANY_NAME} &middot; {COMPANY_ADDRESS} &middot; {COMPANY_RBQ} &middot; {COMPANY_EMAIL}",
         s["small"],
     ))
 
@@ -1203,7 +1206,8 @@ def _render_statement_bytes(statement: Statement) -> bytes:
             log.warning("Could not embed logo in statement PDF: %s", exc)
     left_cell.extend([
         Paragraph(f"<b>{COMPANY_NAME}</b>", s["h2"]),
-        Paragraph(COMPANY_RBQ, s["small"]),
+        Paragraph(COMPANY_ADDRESS, s["small"]),
+        Paragraph(f"{COMPANY_TEL} &middot; {COMPANY_RBQ}", s["small"]),
         Paragraph(f"{COMPANY_SITE} &middot; {COMPANY_EMAIL}", s["small"]),
     ])
     right_cell: list = [
@@ -1344,7 +1348,7 @@ def _render_statement_bytes(statement: Statement) -> bytes:
     story.append(recap_wrap)
     story.append(Spacer(1, 16))
     story.append(Paragraph(
-        f"{COMPANY_NAME} &middot; {COMPANY_RBQ} &middot; {COMPANY_EMAIL}",
+        f"{COMPANY_NAME} &middot; {COMPANY_ADDRESS} &middot; {COMPANY_RBQ} &middot; {COMPANY_EMAIL}",
         s["small"],
     ))
 

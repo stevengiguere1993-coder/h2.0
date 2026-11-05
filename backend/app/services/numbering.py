@@ -172,24 +172,59 @@ async def plus_haut_numero_facture_kratos(db: AsyncSession) -> int:
 NUMERO_FACTURE_MAX = 999_999_999
 
 
+#: Écart maximal entre la série de Kratos et un numéro de QuickBooks pour
+#: que ce numéro fasse avancer le compteur. Au-delà, c'est une AUTRE série
+#: (ancienne numérotation, numéro tapé à la main, numéro de soumission
+#: repris…) : le compteur ne saute jamais dessus. Incident 2026-11-05 :
+#: après la 171, un numéro 1042 dans QuickBooks a fait passer la facture
+#: suivante à 1043 (Steven : « je ne devrais pas être dans les 10.. »).
+#: Un numéro hors série précis reste évité un par un à l'attribution
+#: (numero_pris_hors_kratos, refus de doublon de QuickBooks).
+ECART_MAX_QB = 100
+
+
+def plus_haut_dans_la_serie(
+    numeros: list[int], kratos_max: int, *, ecart: int = ECART_MAX_QB
+) -> tuple[int, list[int]]:
+    """(plus haut numéro QB dans la série de Kratos, numéros écartés).
+    Sans aucune facture Kratos (base neuve), QuickBooks donne la série."""
+    if kratos_max <= 0:
+        return (max(numeros) if numeros else 0), []
+    plafond = kratos_max + ecart
+    gardes = [n for n in numeros if n <= plafond]
+    ecartes = sorted({n for n in numeros if n > plafond})
+    return (max(gardes) if gardes else 0), ecartes
+
+
 async def cible_compteur_factures(
     db: AsyncSession, *, consulter_qb: bool = True
 ) -> dict:
     """Ce que devrait valoir au minimum le compteur de factures : plus
-    haut numéro existant (Kratos, et QuickBooks s'il répond) + 1. Lecture
-    seule."""
+    haut numéro existant (Kratos, et QuickBooks s'il répond) + 1. Les
+    numéros de QuickBooks hors de la série de Kratos (plus de
+    ECART_MAX_QB au-dessus) sont ignorés. Lecture seule."""
     kratos_max = min(await plus_haut_numero_facture_kratos(db), NUMERO_FACTURE_MAX)
     qb_max: Optional[int] = None
+    qb_ecartes: list[int] = []
     if consulter_qb:
-        from app.services.facture_qbo import plus_haut_numero_facture_qb
+        from app.services.facture_qbo import numeros_factures_qb
 
-        qb_max = await plus_haut_numero_facture_qb()
-        if qb_max is not None:
-            qb_max = min(qb_max, NUMERO_FACTURE_MAX)
+        nums = await numeros_factures_qb()
+        if nums is not None:
+            qb_max, qb_ecartes = plus_haut_dans_la_serie(
+                [min(n, NUMERO_FACTURE_MAX) for n in nums], kratos_max
+            )
+            if qb_ecartes:
+                log.warning(
+                    "Numéros de facture QuickBooks hors série ignorés par le "
+                    "compteur (série Kratos : %s) : %s",
+                    kratos_max, qb_ecartes[:20],
+                )
     return {
         "kratos_max": kratos_max,
         "qb_max": qb_max,
         "qb_consulte": qb_max is not None,
+        "qb_hors_serie": qb_ecartes,
         "cible": max(kratos_max, qb_max or 0) + 1,
     }
 
@@ -241,6 +276,7 @@ async def aligner_compteur_factures(
         "kratos_max": kratos_max,
         "qb_max": qb_max,
         "qb_consulte": qb_max is not None,
+        "qb_hors_serie": cible_info.get("qb_hors_serie") or [],
     }
 
 
@@ -331,6 +367,35 @@ async def attribuer_numero_libre(db: AsyncSession, fa) -> list[str]:
         NUMEROS_SAUTES[getattr(fa, "id", None)] = sautes
     await db.flush()
     return sautes
+
+
+async def numero_pour_facture_qb_hors_kratos(db: AsyncSession, qbo) -> str:
+    """Numéro de la SÉRIE de Kratos pour une facture que Kratos crée
+    directement dans QuickBooks sans fiche facture (facture mensuelle de
+    refacturation, frais de gestion) : même compteur que les factures,
+    en sautant les numéros déjà pris dans Kratos ou par n'importe quelle
+    facture de QuickBooks. Avant, ces factures prenaient « le plus haut
+    numéro QB + 1 », sans le compteur : elles prenaient les numéros que
+    Kratos allait donner (160 à 170 refusés en double le 2026-10-17) et
+    suivaient tout numéro hors série. Flush mais ne committe pas."""
+    try:
+        await aligner_compteur_factures(db)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Recalage du compteur de factures impossible : %s", exc)
+    for _ in range(MAX_SAUTS):
+        cand = await next_facture_number(db)
+        if await numero_pris_dans_kratos(db, cand) is not None:
+            continue
+        try:
+            pris = await qbo.find_invoice_by_docnumber(cand)
+        except Exception:  # noqa: BLE001
+            pris = None
+        if not pris:
+            return cand
+    raise ValueError(
+        f"Impossible d'attribuer un numéro de facture : {MAX_SAUTS} numéros "
+        "de suite déjà pris (Kratos ou QuickBooks)."
+    )
 
 
 async def apercu_prochain_numero_libre(
