@@ -43,8 +43,7 @@ log = logging.getLogger(__name__)
 
 # Coordonnées Horizon complètes (alignées avec le formulaire de
 # contrat côté frontend — components/contract-form.tsx).
-COMPANY_ADDRESS = "158 rue Maurice, Saint-Rémi (Québec) J0L 2L0"
-COMPANY_TEL = "514-654-4053"
+from app.services.soumission_pdf import COMPANY_ADDRESS, COMPANY_TEL  # noqa: E402,F401
 
 
 # ─── Clauses générales G1-G20 (transcrites du contrat APCHQ) ──────

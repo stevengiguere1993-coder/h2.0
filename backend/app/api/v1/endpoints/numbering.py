@@ -44,6 +44,8 @@ class AlignementFactures(BaseModel):
     #: Plus haut numéro dans QuickBooks ; None si QB n'a pas répondu.
     qb_max: Optional[int] = None
     qb_consulte: bool
+    #: Numéros QuickBooks ignorés : hors de la série de Kratos.
+    qb_hors_serie: list[int] = []
     compteurs: NumberingRead
 
 
@@ -67,6 +69,57 @@ async def aligner_factures(db: DBSession, _: CurrentAdmin) -> AlignementFactures
     return AlignementFactures(
         **res, compteurs=NumberingRead.model_validate(fresh)
     )
+
+
+class RenumerotationFactures(BaseModel):
+    """Remise dans la suite des factures numérotées hors série (10xx)."""
+
+    seuil: int = Field(default=1000, ge=2, le=999_999_999)
+    #: Premier numéro à donner ; vide = plus haut numéro sous le seuil + 1.
+    premier: Optional[int] = Field(default=None, ge=1, le=999_999_999)
+    simuler: bool = True
+
+
+@router.get(
+    "/renumerotation-factures",
+    summary="Aperçu : factures hors série (10xx) remises dans la suite, en ordre d'envoi",
+)
+async def apercu_renumerotation_factures(
+    db: DBSession,
+    _: CurrentAdmin,
+    seuil: int = 1000,
+    premier: Optional[int] = None,
+) -> dict:
+    """Lecture seule : le plan (ancien → nouveau numéro), les numéros
+    sautés parce que QuickBooks les a déjà, et les factures QuickBooks
+    hors série qui ne viennent pas de Kratos (cause du saut)."""
+    from app.services.facture_renumerotation import renumeroter_factures_hors_serie
+
+    return await renumeroter_factures_hors_serie(
+        db, seuil=seuil, premier=premier, simuler=True
+    )
+
+
+@router.post(
+    "/renumerotation-factures",
+    summary="Remet les factures hors série (10xx) dans la suite, Kratos et QuickBooks",
+)
+async def renumerotation_factures(
+    data: RenumerotationFactures, db: DBSession, _: CurrentAdmin
+) -> dict:
+    """``simuler`` vrai (défaut) : le plan seulement. Faux : chaque facture
+    prend son nouveau numéro dans Kratos puis dans QuickBooks (DocNumber),
+    dans l'ordre d'envoi, et le compteur repart juste après."""
+    from fastapi import HTTPException
+
+    from app.services.facture_renumerotation import renumeroter_factures_hors_serie
+
+    try:
+        return await renumeroter_factures_hors_serie(
+            db, seuil=data.seuil, premier=data.premier, simuler=data.simuler
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail={"message": str(exc)})
 
 
 @router.get("", response_model=NumberingRead)

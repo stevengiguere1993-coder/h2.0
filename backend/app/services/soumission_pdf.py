@@ -114,6 +114,9 @@ COMPANY_RBQ = "RBQ 5868-5991-01"
 COMPANY_INSURANCE = "Police d'assurance : SUM-CGL-44100-001"
 COMPANY_SITE = "immohorizon.com"
 COMPANY_EMAIL = "info@immohorizon.com"
+#: Adresse et téléphone d'Horizon (factures, relevés, contrats).
+COMPANY_ADDRESS = "158 rue Maurice, Saint-Rémi (Québec) J0L 2L0"
+COMPANY_TEL = "514-654-4053"
 
 
 def _multiline_markup(text_value: str) -> str:
