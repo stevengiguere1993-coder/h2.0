@@ -383,5 +383,17 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
     data["immeubles"] = [svc.immeuble_vide(nom="Fantôme", kratos_immeuble_id=999_999, suivre_kratos=True, loyers_bruts_mensuels=5)]
     r = client.post(f"{RD}/calculer", json={"data": data}, headers=auth_headers)
     assert r.json()["data"]["immeubles"][0]["loyers_bruts_mensuels"] == 5 and "introuvable" in r.json()["data"]["immeubles"][0]["notes_import"][0]
+    # Verrou optimiste : une page restée ouverte sur une vieille version ne peut plus écraser (409 + version à jour).
+    d = client.get(f"{RD}/scenarios/{sid}", headers=auth_headers).json()
+    r = client.put(f"{RD}/scenarios/{sid}", json={"data": d["data"], "base_updated_at": d["updated_at"]}, headers=auth_headers)
+    assert r.status_code == 200, r.text
+    r = client.put(f"{RD}/scenarios/{sid}", json={"data": d["data"], "base_updated_at": "2020-01-01T00:00:00+00:00"}, headers=auth_headers)
+    assert r.status_code == 409 and r.json()["conflit"] is True and "modifié ailleurs" in r.json()["message"]
+    assert r.json()["data"]["immeubles"][0]["nom"] == "Suivi" and r.json()["resultats"]["parc"] and r.json()["updated_at"]
+    # Sans horodatage (ancien client, MCP) : accepté. Taux de cap saisi → plus d'alerte « taux de cap ».
+    d["data"]["immeubles"][0]["taux_cap_pct"] = 5
+    d["data"]["immeubles"][0]["notes_ignorees"] = []
+    r = client.put(f"{RD}/scenarios/{sid}", json={"data": d["data"]}, headers=auth_headers)
+    assert r.status_code == 200 and not any("Taux de cap" in n for n in r.json()["data"]["immeubles"][0]["notes_import"])
     assert any("rapport d'évaluation" in n for n in ex["notes_import"]) and any("hypothèque" in n for n in ex["notes_import"])
     assert not any("loyer" in n.lower() for n in ex["notes_import"])

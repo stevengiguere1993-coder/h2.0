@@ -20,6 +20,8 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
@@ -56,6 +58,10 @@ class ScenarioIn(BaseModel):
 class ScenarioUpdate(BaseModel):
     nom: Optional[str] = Field(default=None, max_length=120)
     data: Optional[Dict[str, Any]] = None
+    #: Horodatage ``updated_at`` que le client a chargé : s'il ne correspond plus
+    #: (modifié ailleurs — autre onglet, mise à jour automatique), on refuse
+    #: d'écraser (409) et on renvoie la version à jour. Absent = pas de contrôle.
+    base_updated_at: Optional[str] = None
 
 
 class CalculIn(BaseModel):
@@ -64,6 +70,22 @@ class CalculIn(BaseModel):
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _meme_instant(base: Optional[str], courant: Optional[datetime]) -> bool:
+    """L'horodatage chargé par le client est-il celui du scénario (à la ms) ?"""
+    if not base or courant is None:
+        return True
+    try:
+        a = datetime.fromisoformat(base.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    b = courant
+    if a.tzinfo is None:
+        a = a.replace(tzinfo=timezone.utc)
+    if b.tzinfo is None:
+        b = b.replace(tzinfo=timezone.utc)
+    return abs((a - b).total_seconds()) < 0.001
 
 
 def _resume_scenario(s: RdScenario) -> Dict[str, Any]:
@@ -154,6 +176,14 @@ async def lire_scenario(scenario_id: int, db: DBSession, user: RequireAdminOrOwn
 @router.put("/scenarios/{scenario_id}", summary="Enregistrer les hypothèses et recalculer")
 async def enregistrer_scenario(scenario_id: int, payload: ScenarioUpdate, db: DBSession, user: RequireAdminOrOwner) -> Dict[str, Any]:
     s = await _scenario_ou_404(db, scenario_id)
+    if not _meme_instant(payload.base_updated_at, s.updated_at):
+        # Phil 2026-11-05 : sa page restée ouverte avait réécrit les anciennes valeurs
+        # par-dessus une mise à jour. On n'écrase plus : version à jour renvoyée.
+        return JSONResponse(status_code=409, content=jsonable_encoder({
+            "conflit": True,
+            "message": "Le scénario a été modifié ailleurs (autre onglet ou mise à jour automatique) : la version à jour a été rechargée, tes dernières modifications sont à refaire.",
+            **(await _detail(db, s)),
+        }))
     if payload.nom is not None:
         nom = payload.nom.strip()
         if not nom:
@@ -233,6 +263,8 @@ async def hydrater_kratos(db, data: Dict[str, Any]) -> Dict[str, Any]:
             i[k] = (not it["gestion_externe"]) if k == "gestion_interne" else it[k]
         ignorees = set(i.get("notes_ignorees") or [])
         i["notes_import"] = [n for n in it["notes_import"] if n not in ignorees]
+        if (i.get("taux_cap_pct") or 0) > 0:
+            i["notes_import"] = [n for n in i["notes_import"] if "Taux de cap" not in n]
     return data
 
 
