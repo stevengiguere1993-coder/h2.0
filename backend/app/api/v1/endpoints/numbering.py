@@ -122,6 +122,36 @@ async def renumerotation_factures(
         raise HTTPException(status_code=503, detail={"message": str(exc)})
 
 
+class RenumerotationFactureQb(BaseModel):
+    """Numéro de la série de Kratos pour une facture faite à la main dans
+    QuickBooks (absente de Kratos)."""
+
+    qbo_invoice_id: str = Field(min_length=1, max_length=32)
+    #: Vide = prochain numéro du compteur.
+    numero: Optional[str] = Field(default=None, max_length=21)
+
+
+@router.post(
+    "/renumerotation-facture-qb",
+    summary="Donne un numéro de la série de Kratos à une facture QuickBooks absente de Kratos",
+)
+async def renumerotation_facture_qb(
+    data: RenumerotationFactureQb, db: DBSession, _: CurrentAdmin
+) -> dict:
+    from fastapi import HTTPException
+
+    from app.services.facture_renumerotation import renumeroter_facture_qb_seule
+
+    try:
+        return await renumeroter_facture_qb_seule(
+            db, qbo_invoice_id=data.qbo_invoice_id, numero=data.numero
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail={"message": str(exc)})
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail={"message": str(exc)})
+
+
 @router.get("", response_model=NumberingRead)
 async def get_numbering(
     db: DBSession, _: CurrentAdmin

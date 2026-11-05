@@ -176,3 +176,72 @@ def test_adresse_entreprise_sur_la_facture():
 
     assert "158 rue Maurice" in COMPANY_ADDRESS
     assert "COMPANY_ADDRESS" in inspect.getsource(facture_pdf)
+
+
+# ── 5. Facture faite à la main dans QuickBooks (absente de Kratos) ───
+
+
+def test_renumerotation_facture_qb_seule(faux_qb, run):
+    from app.services.facture_renumerotation import renumeroter_facture_qb_seule
+
+    b = _base(run)
+    _seed(run, faux_qb, reference=str(b + 179), compteur=b + 180)
+    iid = faux_qb.ajouter(str(b + 1044), client="Millen & Legendre", total=1909.11)
+    faux_qb.invoices[iid]["Line"] = [
+        {
+            "DetailType": "SalesItemLineDetail",
+            "Amount": 1660.0,
+            "Description": "Main-d'œuvre",
+            "SalesItemLineDetail": {"ItemRef": {"name": "Services"}, "Qty": 20, "UnitPrice": 83.0},
+        },
+        {"DetailType": "SubTotalLineDetail", "Amount": 1660.0},
+    ]
+
+    async def _apercu() -> dict:
+        async with TestSessionLocal() as s:
+            return await renumeroter_factures_hors_serie(s, seuil=b + 1000, simuler=True)
+
+    hors = run(_apercu())["factures_qb_hors_serie"]
+    assert [x["numero"] for x in hors] == [str(b + 1044)]
+    assert hors[0]["lignes"] == [
+        {
+            "produit": "Services", "description": "Main-d'œuvre",
+            "quantite": 20, "prix_unitaire": 83.0, "montant": 1660.0,
+        }
+    ]
+
+    async def _go(numero=None) -> dict:
+        async with TestSessionLocal() as s:
+            return await renumeroter_facture_qb_seule(
+                s, qbo_invoice_id=iid, numero=numero
+            )
+
+    res = run(_go())
+    assert res["ancien"] == str(b + 1044) and res["nouveau"] == str(b + 180)
+    assert faux_qb.invoices[iid]["DocNumber"] == str(b + 180)
+    assert _compteur(run) == b + 181
+    # Plus rien hors série.
+    assert run(_apercu())["factures_qb_hors_serie"] == []
+
+
+def test_renumerotation_facture_qb_refus(faux_qb, run):
+    import pytest
+
+    from app.services.facture_renumerotation import renumeroter_facture_qb_seule
+
+    b = _base(run)
+    fid = _seed(run, faux_qb, reference=str(b + 179), compteur=b + 180)
+    iid = _lier(run, faux_qb, fid, envoyee=datetime(2026, 11, 5, tzinfo=timezone.utc))
+    autre = faux_qb.ajouter(str(b + 1044))
+
+    async def _go(i, numero=None):
+        async with TestSessionLocal() as s:
+            return await renumeroter_facture_qb_seule(s, qbo_invoice_id=i, numero=numero)
+
+    # Invoice d'une facture Kratos : refusée.
+    with pytest.raises(ValueError):
+        run(_go(iid))
+    # Numéro déjà porté dans Kratos : refusé.
+    with pytest.raises(ValueError):
+        run(_go(autre, numero=str(b + 179)))
+    assert faux_qb.invoices[autre]["DocNumber"] == str(b + 1044)
