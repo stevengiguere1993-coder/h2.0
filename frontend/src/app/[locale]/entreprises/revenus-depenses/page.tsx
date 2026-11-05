@@ -47,6 +47,7 @@ import {
   Plus,
   Receipt,
   RefreshCw,
+  RotateCcw,
   Search,
   Sparkles,
   TrendingUp,
@@ -73,7 +74,9 @@ type Immeuble = {
   dans_le_fonds: boolean;
   gestion_interne: boolean;
   nb_logements: number;
+  nb_logements_en_chambres: number;
   nb_chambres: number;
+  frais_developpement_override: number | null;
   loyers_bruts_mensuels: number;
   phase: "stabilisation" | "stabilise";
   acquisition_cette_annee: boolean;
@@ -109,16 +112,17 @@ type Data = {
   developpement: { paliers: Palier[] };
   prospection: { taux_pct: number };
   immeubles: Immeuble[];
-  refacturation: { marge_pct: number; lignes: LigneRefact[] };
+  refacturation: { marge_pct: number; par_logement_annuel: number; par_immeuble_annuel: number; lignes: LigneRefact[] };
   construction: { marge_pct: number; pct_logements_renoves_par_an: number; cout_reno_logement: number };
-  maintenance: { heures_par_an: number; cout_horaire: number; taux_facture: number; materiaux_annuels: number; marge_materiaux_pct: number };
+  maintenance: { heures_par_logement: number; materiaux_par_logement: number; heures_par_an: number; cout_horaire: number; taux_facture: number; materiaux_annuels: number; marge_materiaux_pct: number };
   gestion: { taux_pct: number; facturer_sous_traites: boolean; loyers_additionnels_mensuels: number; inclure_projection: boolean };
   location: { frais_logement: number; frais_chambre: number; taux_roulement_pct: number; nb_relocations_logements: number | null; nb_relocations_chambres: number | null };
   part_des_gains: { rendement_pct: number; seuil_investisseurs_pct: number; tranche_nous_pct: number; part_nous_pct: number };
-  depenses: { frais_fixes: FraisFixe[]; charges_sociales_pct: number; salaires: Salaire[]; associes: Associe[]; sous_traitance_gestion_pct: number };
+  depenses: { frais_fixes: FraisFixe[]; charges_sociales_pct: number; salaires: Salaire[]; associes: Associe[]; sous_traitance_gestion_pct: number; agents_location: { par_logement: number; par_chambre: number } };
 };
 type SectionRevenu = { key: string; label: string; revenu: number; part_pct: number; [k: string]: unknown };
-type DepensesSchl = { revenus_bruts_annuels: number; inoccupation: number; taxes_municipales: number; taxes_scolaires: number; assurances: number; energie: number; concierge: number; entretien: number; gestion: number; autres: number; autres_normalisations: number; total: number; revenus_nets: number };
+type LigneDev = { id: string; immeuble: string; prix: number; frais: number; frais_calcule: number; taux_effectif_pct: number; override: boolean };
+type DepensesSchl = { revenus_bruts_annuels: number; inoccupation: number; taxes_municipales: number; taxes_scolaires: number; assurances: number; energie: number; concierge: number; entretien: number; gestion: number; autres_normalisations: number; total: number; revenus_nets: number };
 const LIGNES_SCHL: [string, keyof DepensesSchl][] = [
   ["Inoccupation", "inoccupation"],
   ["Taxes municipales", "taxes_municipales"],
@@ -128,10 +132,9 @@ const LIGNES_SCHL: [string, keyof DepensesSchl][] = [
   ["Conciergerie (barème)", "concierge"],
   ["Entretien (barème)", "entretien"],
   ["Gestion (barème)", "gestion"],
-  ["Autres dépenses", "autres"],
   ["Autres normalisations (barème)", "autres_normalisations"]
 ];
-type FicheImmeuble = { id: string; nom: string; dans_le_fonds: boolean; phase: string; cout_projet: number; valeur: number; valeur_a_terme: number; plus_value_prevue: number; methode: string; dette: number; equite: number; part_annee: number; jours: number; jours_annee: number; date_acquisition: string | null; acquise_cette_annee: boolean; notes_import: string[]; suivre_kratos: boolean; revenus_nets: number | null; source_revenus_nets: "schl" | "saisis" | null; depenses_schl: DepensesSchl | null };
+type FicheImmeuble = { id: string; nom: string; dans_le_fonds: boolean; phase: string; cout_projet: number; valeur: number; valeur_a_terme: number; plus_value_prevue: number; methode: string; dette: number; equite: number; part_annee: number; jours: number; jours_annee: number; date_acquisition: string | null; acquise_cette_annee: boolean; notes_import: string[]; suivre_kratos: boolean; nb_logements: number; nb_logements_en_chambres: number; nb_chambres: number; revenus_nets: number | null; source_revenus_nets: "schl" | "saisis" | null; depenses_schl: DepensesSchl | null };
 type Resultats = {
   parc: { immeubles: FicheImmeuble[]; valeur: number; dettes: number; equite: number; cash: number; van: number; van_ponderee: number; valeur_a_terme: number; van_a_terme: number; nb_dans_le_fonds: number; nb_hors_fonds: number; nb_en_renovation: number; annee: number; nb_prorates: number; bareme_schl: { taux_inoccupation: number; seuil_log: number; concierge_lt12: number; concierge_gte12: number; entretien: number; gestion_lt12: number; gestion_gte12: number; autres_normalisations_pct: number } };
   revenus: SectionRevenu[];
@@ -146,6 +149,9 @@ type Resultats = {
     total_associes_salaires: number;
     total_masse_salariale: number;
     sous_traitance_gestion: number;
+    agents_location: number;
+    relocations_logements: number;
+    relocations_chambres: number;
     loyers_sous_traites_annuels: number;
     total_dividendes: number;
     total: number;
@@ -158,7 +164,7 @@ type Resultats = {
 type Referentiel = { categories_frais_fixes: { key: string; label: string }[]; charges_sociales_note: string; valorisation_note: string; prorata_note: string; schl_note: string };
 type ScenarioResume = { id: number; nom: string; is_default: boolean; updated_at: string | null; resume: Record<string, number | null> };
 type Detail = ScenarioResume & { data: Data; resultats: Resultats; referentiel: Referentiel };
-type ImmeubleKratos = { kratos_immeuble_id: number; nom: string; adresse: string | null; ville: string | null; nb_logements: number; nb_chambres: number; loyers_bruts_mensuels: number; gestion_externe: boolean; dette: number; valeur_rapport: number; annee_rapport: number | null; source_rapport: string | null; notes_import: string[]; taxes_municipales: number; taxes_scolaires: number; assurances: number; energie: number; autres_depenses: number };
+type ImmeubleKratos = { kratos_immeuble_id: number; nom: string; adresse: string | null; ville: string | null; nb_logements: number; nb_logements_en_chambres: number; nb_chambres: number; loyers_bruts_mensuels: number; gestion_externe: boolean; dette: number; valeur_rapport: number; annee_rapport: number | null; source_rapport: string | null; notes_import: string[]; taxes_municipales: number; taxes_scolaires: number; assurances: number; energie: number; autres_depenses: number };
 
 // ─── Couleurs ────────────────────────────────────────────────────────────
 
@@ -241,13 +247,13 @@ function fmtDateFr(iso: string | null | undefined): string {
 function immeubleVide(extra: Partial<Immeuble> = {}): Immeuble {
   return {
     id: uid(), nom: "", kratos_immeuble_id: null, dans_le_fonds: true, gestion_interne: true,
-    nb_logements: 0, nb_chambres: 0, loyers_bruts_mensuels: 0, phase: "stabilise",
+    nb_logements: 0, nb_logements_en_chambres: 0, nb_chambres: 0, loyers_bruts_mensuels: 0, phase: "stabilise",
     acquisition_cette_annee: false, prix_acquisition: 0, prospecte_par_nous: true,
     travaux_initiaux: 0, frais_connexes: 0, valeur_future: 0, mois_prevus: 24, mois_ecoules: 0,
     valeur_rapport: 0, annee_rapport: null, taux_cap_pct: 0, revenus_nets_annuels: 0, dette: 0,
     date_acquisition: null, notes_import: [],
     taxes_municipales: 0, taxes_scolaires: 0, assurances: 0, energie: 0, autres_depenses: 0,
-    suivre_kratos: false, notes_ignorees: [],
+    suivre_kratos: false, notes_ignorees: [], frais_developpement_override: null,
     ...extra
   };
 }
@@ -256,6 +262,17 @@ function immeubleVide(extra: Partial<Immeuble> = {}): Immeuble {
 // (Phil 2026-11-04 : « c'est trop facile en ce moment de modifier des infos »).
 type Edition = { actif: (k: string) => boolean; basculer: (k: string) => void; toutVerrouiller: () => void; nb: number };
 const EditionCtx = createContext<Edition>({ actif: () => true, basculer: () => {}, toutVerrouiller: () => {}, nb: 0 });
+
+// Vrai à l'intérieur d'une section verrouillée : les champs numériques s'affichent en montants lisibles.
+const VerrouCtx = createContext<boolean>(false);
+
+function fmtVal(v: number, suffixe?: string): string {
+  const dec = Number.isInteger(v) ? 0 : 2;
+  if (!suffixe) return nb(v, dec);
+  if (suffixe === "$") return money(v, dec);
+  if (suffixe.startsWith("$/")) return `${money(v, dec)}/${suffixe.slice(2)}`;
+  return `${nb(v, dec)} ${suffixe}`;
+}
 
 function BoutonModifier({ k, className = "" }: { k: string; className?: string }) {
   const ed = useContext(EditionCtx);
@@ -271,12 +288,17 @@ function Verrou({ k, children, className = "" }: { k: string; children: React.Re
   const ed = useContext(EditionCtx);
   return (
     <fieldset disabled={!ed.actif(k)} className={`m-0 min-w-0 border-0 p-0 ${className}`}>
-      {children}
+      <VerrouCtx.Provider value={!ed.actif(k)}>{children}</VerrouCtx.Provider>
     </fieldset>
   );
 }
 
 function Num({ value, onChange, className = "", placeholder, title, step, suffixe, verrouille }: { value: number | null | undefined; onChange: (v: number) => void; className?: string; placeholder?: string; title?: string; step?: number; suffixe?: string; verrouille?: boolean }) {
+  const verrouSection = useContext(VerrouCtx);
+  if (verrouSection) {
+    const v = value == null || Number.isNaN(value) ? 0 : value;
+    return <span className={`${INPUT} inline-flex w-full min-w-[110px] cursor-default items-center justify-end border-dashed opacity-80 tabular-nums ${className}`} title={title}>{fmtVal(v, suffixe)}</span>;
+  }
   return (
     <span className="relative inline-flex w-full items-center">
       <input
@@ -834,6 +856,7 @@ export default function RevenusDepensesPage() {
         </div>
 
         <EditionCtx.Provider value={edition}>
+          <style>{`fieldset:disabled button, fieldset:disabled [role="switch"] { opacity: .45; cursor: not-allowed; }`}</style>
           {onglet === "revenus" ? <RevenusTab data={data} res={res} rev={rev} modifier={modifier} referentiel={detail?.referentiel} /> : <DepensesTab data={data} res={res} referentiel={detail?.referentiel} modifier={modifier} />}
         </EditionCtx.Provider>
       </div>
@@ -866,7 +889,7 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
       const it = j.items.find((x) => x.kratos_immeuble_id === im.kratos_immeuble_id);
       if (!it) throw new Error("introuvable");
       set((x) => {
-        x.nb_logements = it.nb_logements; x.nb_chambres = it.nb_chambres; x.loyers_bruts_mensuels = it.loyers_bruts_mensuels;
+        x.loyers_bruts_mensuels = it.loyers_bruts_mensuels;
         x.gestion_interne = !it.gestion_externe; x.valeur_rapport = it.valeur_rapport; x.annee_rapport = it.annee_rapport; x.dette = it.dette;
         x.taxes_municipales = it.taxes_municipales; x.taxes_scolaires = it.taxes_scolaires; x.assurances = it.assurances; x.energie = it.energie;
         x.autres_depenses = it.autres_depenses; x.notes_import = it.notes_import.filter((n) => !x.notes_ignorees.includes(n));
@@ -895,7 +918,7 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
           </span>
         ) : null}
         <Verrou k={cle} className="inline-flex flex-wrap items-center gap-2">
-        <Interrupteur actif={im.dans_le_fonds} onChange={(v) => set((x) => { x.dans_le_fonds = v; })} hex={C.fonds} label={im.dans_le_fonds ? "Dans le fonds" : "Hors fonds"} hint="Dans le fonds : compte dans la valeur du parc, les dettes, la VAN, les frais de gestion du fonds et les frais de développement / prospection. Hors fonds : détenu ailleurs — rapporte seulement gestion locative, location, construction, maintenance." />
+        <Interrupteur actif={im.dans_le_fonds} onChange={(v) => set((x) => { x.dans_le_fonds = v; })} hex={C.fonds} label={im.dans_le_fonds ? "Dans le fonds" : "Hors fonds"} hint="Dans le fonds : compte dans la valeur du parc, les dettes, la VAN, les frais de gestion du fonds et les frais de développement / prospection. Hors fonds : détenu ailleurs — pas de VAN ni de frais du fonds, mais développement, prospection, gestion locative, location, construction et maintenance s'appliquent." />
         <Interrupteur actif={im.gestion_interne} onChange={(v) => setK((x) => { x.gestion_interne = v; })} hex={C.gestion} label={im.gestion_interne ? "Gestion à l'interne" : "Gestion sous-traitée"} hint="À l'interne : nos frais de location s'appliquent. Sous-traitée : les loyers de cet immeuble servent à calculer la dépense du sous-traitant de gestion (onglet Dépenses) ; les frais de gestion restent facturés si l'option est cochée dans la section 7." />
         <BoutonRetirer onClick={() => modifier((d) => { d.immeubles = d.immeubles.filter((y) => y.id !== im.id); })} title="Retirer cet immeuble du scénario" />
         </Verrou>
@@ -903,7 +926,7 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
       </div>
       {replie ? (
         <button type="button" onClick={onToggle} className={`flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2 text-left text-xs ${MUTED}`} title="Déplier la fiche">
-          <span>{im.nb_logements} log.{im.nb_chambres ? ` · ${im.nb_chambres} ch.` : ""}</span>
+          <span>{im.nb_logements} log.{im.nb_logements_en_chambres ? ` (${im.nb_logements_en_chambres} en chambres · ${im.nb_chambres} ch.)` : ""}</span>
           <span><b className="tabular-nums" style={{ color: C.gestion }}>{money(im.loyers_bruts_mensuels)}</b> / mois</span>
           <span>{im.phase === "stabilisation" ? "En rénovation" : "Stabilisé"}</span>
           {fiche ? <span>valeur <b className="tabular-nums">{money(fiche.valeur)}</b></span> : null}
@@ -923,9 +946,12 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
           {im.kratos_immeuble_id ? <p className={`text-[11px] leading-snug ${FAINT}`}>{im.suivre_kratos ? "Valeurs de Kratos, reprises à jour à chaque ouverture de la page." : "Valeurs ajustées à la main : « Actualiser » pour revenir à celles de Kratos."}</p> : null}
           <Champ label="Loyers bruts par mois"><Num value={im.loyers_bruts_mensuels} onChange={(v) => setK((x) => { x.loyers_bruts_mensuels = v; })} suffixe="$" /></Champ>
           <div className="grid grid-cols-2 gap-2">
-            <Champ label="Logements"><Num value={im.nb_logements} step={1} onChange={(v) => setK((x) => { x.nb_logements = Math.round(v); })} /></Champ>
-            <Champ label="Chambres" hint="Chambres louées à l'unité"><Num value={im.nb_chambres} step={1} onChange={(v) => setK((x) => { x.nb_chambres = Math.round(v); })} /></Champ>
+            <Champ label="Logements (total)" hint="Toutes les unités de l'immeuble : ce nombre sert aux dépenses normalisées SCHL, à la maintenance et aux dépenses refacturées. Repris de Kratos à l'import, puis à toi."><Num value={im.nb_logements} step={1} onChange={(v) => set((x) => { x.nb_logements = Math.round(v); x.nb_logements_en_chambres = Math.min(x.nb_logements_en_chambres, x.nb_logements); })} /></Champ>
+            <Champ label="dont loués en chambres" hint="Nombre de ces logements loués à la chambre"><Num value={im.nb_logements_en_chambres} step={1} onChange={(v) => set((x) => { x.nb_logements_en_chambres = Math.max(0, Math.min(Math.round(v), x.nb_logements)); })} /></Champ>
           </div>
+          {im.nb_logements_en_chambres > 0 ? (
+            <Champ label="Chambres créées par ces logements" hint="Pour les frais de location : logements hors chambres + chambres"><Num value={im.nb_chambres} step={1} onChange={(v) => set((x) => { x.nb_chambres = Math.round(v); })} /></Champ>
+          ) : null}
         </div>
         {/* Statut et valeur */}
         <div className="space-y-2">
@@ -995,7 +1021,6 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
                 <Champ label="Énergie"><Num value={im.energie} onChange={(v) => setK((x) => { x.energie = v; })} suffixe="$" /></Champ>
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <Champ label="Autres dépenses" hint="Déneigement, etc. Entretien, conciergerie et gestion sont normalisés par le barème SCHL : ne les saisis pas ici."><Num value={im.autres_depenses} onChange={(v) => setK((x) => { x.autres_depenses = v; })} suffixe="$" /></Champ>
                 <Champ label="Revenus nets saisis" hint="Optionnel : laisse à 0 pour le calcul SCHL automatique (loyers bruts − dépenses normalisées). Une valeur saisie prime."><Num value={im.revenus_nets_annuels} onChange={(v) => set((x) => { x.revenus_nets_annuels = v; })} suffixe="$/an" /></Champ>
               </div>
               {ds ? (
@@ -1172,9 +1197,6 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
   const parc = res.parc;
   const fiches = Object.fromEntries(parc.immeubles.map((x) => [x.id, x])) as Record<string, FicheImmeuble>;
   const immeubles = data.immeubles;
-  const internes = immeubles.filter((i) => i.gestion_interne);
-  const logementsInternes = internes.reduce((a, i) => a + i.nb_logements, 0);
-  const chambresInternes = internes.reduce((a, i) => a + i.nb_chambres, 0);
   const pg = res.part_des_gains;
   const sections: [string, string][] = [
     ["fonds", "1. Fonds"],
@@ -1247,7 +1269,7 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
           onAjouter={(items) => {
             modifier((d) => {
               for (const it of items) {
-                d.immeubles.push(immeubleVide({ nom: it.nom, kratos_immeuble_id: it.kratos_immeuble_id, nb_logements: it.nb_logements, nb_chambres: it.nb_chambres, loyers_bruts_mensuels: it.loyers_bruts_mensuels, gestion_interne: !it.gestion_externe, phase: "stabilise", valeur_rapport: it.valeur_rapport, annee_rapport: it.annee_rapport, dette: it.dette, taxes_municipales: it.taxes_municipales, taxes_scolaires: it.taxes_scolaires, assurances: it.assurances, energie: it.energie, autres_depenses: it.autres_depenses, notes_import: it.notes_import, suivre_kratos: true }));
+                d.immeubles.push(immeubleVide({ nom: it.nom, kratos_immeuble_id: it.kratos_immeuble_id, nb_logements: it.nb_logements, nb_logements_en_chambres: it.nb_logements_en_chambres, nb_chambres: it.nb_chambres, loyers_bruts_mensuels: it.loyers_bruts_mensuels, gestion_interne: !it.gestion_externe, phase: "stabilise", valeur_rapport: it.valeur_rapport, annee_rapport: it.annee_rapport, dette: it.dette, taxes_municipales: it.taxes_municipales, taxes_scolaires: it.taxes_scolaires, assurances: it.assurances, energie: it.energie, autres_depenses: it.autres_depenses, notes_import: it.notes_import, suivre_kratos: true }));
               }
             });
             setImportOuvert(false);
@@ -1278,25 +1300,28 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
         />
 
         {/* 2. Développement */}
-        <Carte id="sec-developpement" num="2." titre="Frais de développement" hex={C.developpement} icon={ICONES.developpement} revenu={rev.developpement?.revenu} note="Sur le prix d'achat, par tranches comme l'impôt : chaque taux s'applique à sa tranche seulement (document, p. 21). Pour les acquisitions conclues cette année, dans le fonds."
+        <Carte id="sec-developpement" num="2." titre="Frais de développement" hex={C.developpement} icon={ICONES.developpement} revenu={rev.developpement?.revenu} note="Sur le prix d'achat, par tranches comme l'impôt : chaque taux s'applique à sa tranche seulement (document, p. 21). Pour les acquisitions conclues cette année, dans le fonds ou non. Dans le résultat, tu peux forcer le montant d'un immeuble (Modifier) et revenir au calcul."
           hypotheses={
             <>
               <table className="w-full text-xs">
                 <thead className={`text-left ${MUTED}`}>
                   <tr>
-                    <th className="py-1">Tranche jusqu&apos;à</th>
+                    <th className="py-1">Tranche</th>
                     <th className="py-1 text-right">Taux</th>
                     <th />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--qg-border)]">
-                  {data.developpement.paliers.map((p, idx) => (
+                  {data.developpement.paliers.map((p, idx) => {
+                    const debut = idx === 0 ? 0 : (data.developpement.paliers[idx - 1].jusqua ?? 0);
+                    return (
                     <tr key={idx}>
-                      <td className="py-1 pr-2">{p.jusqua == null ? <span className={MUTED}>et plus</span> : <Num value={p.jusqua} onChange={(v) => modifier((d) => { d.developpement.paliers[idx].jusqua = v; })} className="w-40" suffixe="$" />}</td>
+                      <td className="py-1 pr-2"><span className="inline-flex items-center gap-2"><span className={`whitespace-nowrap ${MUTED}`}>{p.jusqua == null ? `${money(debut)} et plus` : `de ${money(debut)} à`}</span>{p.jusqua == null ? null : <Num value={p.jusqua} onChange={(v) => modifier((d) => { d.developpement.paliers[idx].jusqua = v; })} className="w-40" suffixe="$" />}</span></td>
                       <td className="py-1 text-right"><Num value={p.pct} step={0.1} onChange={(v) => modifier((d) => { d.developpement.paliers[idx].pct = v; })} className="w-24" suffixe="%" /></td>
                       <td className="py-1 text-right">{p.jusqua != null ? <BoutonRetirer title="Retirer cette tranche" onClick={() => modifier((d) => { d.developpement.paliers.splice(idx, 1); })} /> : null}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
               <button className="btn-secondary btn-sm mt-2" onClick={() => modifier((d) => { const dernier = d.developpement.paliers.filter((p) => p.jusqua != null).slice(-1)[0]; d.developpement.paliers.splice(d.developpement.paliers.length - 1, 0, { jusqua: (dernier?.jusqua || 0) + 5_000_000, pct: 3 }); })}>
@@ -1304,7 +1329,24 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
               </button>
             </>
           }
-          resultat={<Lignes lignes={(rev.developpement?.lignes as { immeuble: string; prix: number; frais: number; taux_effectif_pct: number }[]) || []} rendu={(l) => `${l.immeuble} : ${money(l.prix)} → ${money(l.frais)} (taux effectif ${pct(l.taux_effectif_pct, 2)})`} vide="Aucune acquisition conclue cette année dans le fonds." />}
+          resultat={
+            <Verrou k="sec-developpement">
+              <ul className="space-y-1.5">
+                {((rev.developpement?.lignes as LigneDev[]) || []).map((l) => (
+                  <li key={l.id} className="flex flex-wrap items-center gap-2">
+                    <span className="min-w-0 flex-1">{l.immeuble} : {money(l.prix)} → {l.override ? <span className="text-amber-300">montant forcé (calcul : {money(l.frais_calcule)})</span> : <span className={FAINT}>taux effectif {pct(l.taux_effectif_pct, 2)}</span>}</span>
+                    <Num value={l.frais} className="w-32" suffixe="$" title="Frais de développement de cet immeuble (modifiable)" onChange={(v) => modifier((d) => { const x = d.immeubles.find((y) => y.id === l.id); if (x) x.frais_developpement_override = v; })} />
+                    {l.override ? (
+                      <button type="button" className="btn-secondary btn-sm" title={`Revenir au calcul par tranches : ${money(l.frais_calcule)}`} onClick={() => modifier((d) => { const x = d.immeubles.find((y) => y.id === l.id); if (x) x.frais_developpement_override = null; })}>
+                        <RotateCcw className="h-3.5 w-3.5" /> Calcul
+                      </button>
+                    ) : null}
+                  </li>
+                ))}
+                {!((rev.developpement?.lignes as unknown[]) || []).length ? <li className={FAINT}>Aucune acquisition conclue cette année.</li> : null}
+              </ul>
+            </Verrou>
+          }
         />
 
         {/* 3. Prospection */}
@@ -1317,8 +1359,13 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
         <Carte id="sec-refacturation" num="4." titre="Dépenses refacturées (cost-plus)" hex={C.refacturation} icon={ICONES.refacturation} revenu={rev.refacturation?.revenu} note="On avance la dépense (ex. un avocat à 2 000 $) et on la recharge 2 200 $ à l'inc. de l'immeuble. Seule la marge est un revenu."
           hypotheses={
             <>
-              <Champ label="Marge" className="max-w-[180px]"><Num value={data.refacturation.marge_pct} step={0.5} onChange={(v) => modifier((d) => { d.refacturation.marge_pct = v; })} suffixe="%" /></Champ>
-              <table className="mt-3 w-full text-xs">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Champ label="Moyenne avancée par logement par an" hint="Sur les logements des immeubles gérés à l'interne, au prorata de l'année"><Num value={data.refacturation.par_logement_annuel} onChange={(v) => modifier((d) => { d.refacturation.par_logement_annuel = v; })} suffixe="$" /></Champ>
+                <Champ label="Moyenne avancée par immeuble par an"><Num value={data.refacturation.par_immeuble_annuel} onChange={(v) => modifier((d) => { d.refacturation.par_immeuble_annuel = v; })} suffixe="$" /></Champ>
+                <Champ label="Marge"><Num value={data.refacturation.marge_pct} step={0.5} onChange={(v) => modifier((d) => { d.refacturation.marge_pct = v; })} suffixe="%" /></Champ>
+              </div>
+              <p className={`mt-3 text-[11px] ${FAINT}`}>Montants précis en plus (optionnel) :</p>
+              <table className="w-full text-xs">
                 <tbody className="divide-y divide-[var(--qg-border)]">
                   {data.refacturation.lignes.map((l) => (
                     <tr key={l.id}>
@@ -1336,8 +1383,10 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
           }
           resultat={
             <ul className="space-y-1">
-              <li>Avancé par année : {money(rev.refacturation?.montant_avance as number)}</li>
-              <li>× {pct(data.refacturation.marge_pct)} = <b style={{ color: C.refacturation }}>{money(rev.refacturation?.revenu)}</b></li>
+              <li>{nb(rev.refacturation?.logements_base as number, 1)} logements gérés à l&apos;interne × {money(data.refacturation.par_logement_annuel)} = {money(rev.refacturation?.avance_logements as number)}</li>
+              {data.refacturation.par_immeuble_annuel ? <li>{nb(rev.refacturation?.immeubles_base as number, 1)} immeubles × {money(data.refacturation.par_immeuble_annuel)} = {money(rev.refacturation?.avance_immeubles as number)}</li> : null}
+              {(rev.refacturation?.avance_lignes as number) ? <li>Montants précis : {money(rev.refacturation?.avance_lignes as number)}</li> : null}
+              <li>Avancé par année : {money(rev.refacturation?.montant_avance as number)} × {pct(data.refacturation.marge_pct)} = <b style={{ color: C.refacturation }}>{money(rev.refacturation?.revenu)}</b></li>
             </ul>
           }
         />
@@ -1353,9 +1402,16 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
           }
           resultat={
             <ul className="space-y-1">
-              <li>En rénovation : travaux {money(rev.construction?.travaux_stabilisation as number)} × {pct(data.construction.marge_pct)} = <b>{money(rev.construction?.revenu_stabilisation as number)}</b></li>
-              <li>Stabilisé : {rev.construction?.logements_stabilises as number} logements × {pct(data.construction.pct_logements_renoves_par_an)} = {nb(rev.construction?.nb_renovations as number)} rénos × {money(data.construction.cout_reno_logement)} = {money(rev.construction?.volume_renovations as number)} × {pct(data.construction.marge_pct)} = <b>{money(rev.construction?.revenu_renovations as number)}</b></li>
-              <li>Total : <b style={{ color: C.construction }}>{money(rev.construction?.revenu)}</b></li>
+              <li className="font-semibold">En rénovation, acquis cette année :</li>
+              {((rev.construction?.immeubles_renovation as { nom: string; travaux: number; revenu: number }[]) || []).map((x) => (
+                <li key={x.nom} className="pl-3">{x.nom} : travaux {money(x.travaux)} × {pct(data.construction.marge_pct)} = {money(x.revenu)}</li>
+              ))}
+              {!((rev.construction?.immeubles_renovation as unknown[]) || []).length ? <li className={`pl-3 ${FAINT}`}>aucun</li> : null}
+              {((rev.construction?.immeubles_renovation_ignores as string[]) || []).length ? <li className={`pl-3 ${FAINT}`}>En rénovation mais pas acquis cette année (travaux déjà faits) : {(rev.construction?.immeubles_renovation_ignores as string[]).join(", ")}</li> : null}
+              <li>Sous-total rénovation : <b>{money(rev.construction?.revenu_stabilisation as number)}</b></li>
+              <li className="pt-1 font-semibold">Stabilisés ({((rev.construction?.immeubles_stabilises as { nom: string; nb_logements: number }[]) || []).map((x) => x.nom).join(", ") || "aucun"}) :</li>
+              <li className="pl-3">{rev.construction?.logements_stabilises as number} logements × {pct(data.construction.pct_logements_renoves_par_an)} = {nb(rev.construction?.nb_renovations as number)} rénos × {money(data.construction.cout_reno_logement)} = {money(rev.construction?.volume_renovations as number)} × {pct(data.construction.marge_pct)} = <b>{money(rev.construction?.revenu_renovations as number)}</b></li>
+              <li className="border-t border-[var(--qg-border)] pt-1">Total : <b style={{ color: C.construction }}>{money(rev.construction?.revenu)}</b></li>
             </ul>
           }
         />
@@ -1364,17 +1420,17 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
         <Carte id="sec-maintenance" num="6." titre="Maintenance et appels de service" hex={C.maintenance} icon={ICONES.maintenance} revenu={rev.maintenance?.revenu} note="On paie le gars à l'heure et on recharge un taux plus élevé ; les matériaux sont rechargés avec une marge."
           hypotheses={
             <div className="grid gap-3 sm:grid-cols-3">
-              <Champ label="Heures facturées par an"><Num value={data.maintenance.heures_par_an} onChange={(v) => modifier((d) => { d.maintenance.heures_par_an = v; })} suffixe="h" /></Champ>
+              <Champ label="Heures par logement par an" hint="Sur les logements des immeubles gérés à l'interne, au prorata de l'année"><Num value={data.maintenance.heures_par_logement} step={0.5} onChange={(v) => modifier((d) => { d.maintenance.heures_par_logement = v; })} suffixe="h" /></Champ>
+              <Champ label="Matériaux par logement par an"><Num value={data.maintenance.materiaux_par_logement} onChange={(v) => modifier((d) => { d.maintenance.materiaux_par_logement = v; })} suffixe="$" /></Champ>
               <Champ label="Coût horaire payé"><Num value={data.maintenance.cout_horaire} step={0.5} onChange={(v) => modifier((d) => { d.maintenance.cout_horaire = v; })} suffixe="$/h" /></Champ>
               <Champ label="Taux facturé"><Num value={data.maintenance.taux_facture} step={0.5} onChange={(v) => modifier((d) => { d.maintenance.taux_facture = v; })} suffixe="$/h" /></Champ>
-              <Champ label="Matériaux par an"><Num value={data.maintenance.materiaux_annuels} onChange={(v) => modifier((d) => { d.maintenance.materiaux_annuels = v; })} suffixe="$" /></Champ>
               <Champ label="Marge sur matériaux"><Num value={data.maintenance.marge_materiaux_pct} step={0.5} onChange={(v) => modifier((d) => { d.maintenance.marge_materiaux_pct = v; })} suffixe="%" /></Champ>
             </div>
           }
           resultat={
             <ul className="space-y-1">
-              <li>Heures : {nb(data.maintenance.heures_par_an, 0)} h × ({money(data.maintenance.taux_facture, 2)} − {money(data.maintenance.cout_horaire, 2)}) = <b>{money(rev.maintenance?.marge_heures as number)}</b></li>
-              <li>Matériaux : {money(data.maintenance.materiaux_annuels)} × {pct(data.maintenance.marge_materiaux_pct)} = <b>{money(rev.maintenance?.marge_materiaux as number)}</b></li>
+              <li>{nb(rev.maintenance?.logements_base as number, 1)} logements × {nb(data.maintenance.heures_par_logement, 1)} h = {nb(rev.maintenance?.heures_total as number, 0)} h × ({money(data.maintenance.taux_facture, 2)} − {money(data.maintenance.cout_horaire, 2)}) = <b>{money(rev.maintenance?.marge_heures as number)}</b></li>
+              <li>Matériaux : {nb(rev.maintenance?.logements_base as number, 1)} × {money(data.maintenance.materiaux_par_logement)} = {money(rev.maintenance?.materiaux_total as number)} × {pct(data.maintenance.marge_materiaux_pct)} = <b>{money(rev.maintenance?.marge_materiaux as number)}</b></li>
               <li>Volume facturé : {money(rev.maintenance?.volume_facture as number)} · marge nette <b style={{ color: C.maintenance }}>{money(rev.maintenance?.revenu)}</b></li>
             </ul>
           }
@@ -1428,7 +1484,7 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
           }
           resultat={
             <ul className="space-y-1">
-              <li>{logementsInternes} logements et {chambresInternes} chambres gérés à l&apos;interne</li>
+              <li>{rev.location?.logements_location as number} logements (hors unités louées en chambres) et {rev.location?.chambres_internes as number} chambres, gérés à l&apos;interne</li>
               <li>{rev.location?.relocations_logements as number} × {money(data.location.frais_logement)} + {rev.location?.relocations_chambres as number} × {money(data.location.frais_chambre)} = <b style={{ color: C.location }}>{money(rev.location?.revenu)}</b></li>
             </ul>
           }
@@ -1591,9 +1647,9 @@ function DepensesTab({ data, res, referentiel, modifier }: { data: Data; res: Re
           resultat={
             <ul className="space-y-1">
               {dep.associes.map((a, i) => (
-                <li key={i} className="flex justify-between gap-2"><span>{a.nom}</span><span className="tabular-nums">salaire {money(a.cout_salaire)} · <span style={{ color: C.dividendes }}>dividendes {money(a.dividendes)}</span></span></li>
+                <li key={i} className="flex justify-between gap-2"><span>{a.nom}</span><span className="tabular-nums">salaire {money(a.salaire_brut)} + charges {money(a.charges)} = <b>{money(a.cout_salaire)}</b> · <span style={{ color: C.dividendes }}>dividendes {money(a.dividendes)}</span></span></li>
               ))}
-              <li className="flex justify-between border-t border-[var(--qg-border)] pt-1 font-semibold"><span>Salaires (dépense)</span><span className="tabular-nums" style={{ color: C.associes }}>{money(dep.total_associes_salaires)}</span></li>
+              <li className="flex justify-between border-t border-[var(--qg-border)] pt-1 font-semibold"><span>Salaires + charges sociales {pct(data.depenses.charges_sociales_pct)} (dépense)</span><span className="tabular-nums" style={{ color: C.associes }}>{money(dep.total_associes_salaires)}</span></li>
               <li className="flex justify-between font-semibold"><span>Dividendes (sur le bénéfice)</span><span className="tabular-nums" style={{ color: C.dividendes }}>{money(dep.total_dividendes)}</span></li>
             </ul>
           }
@@ -1608,12 +1664,25 @@ function DepensesTab({ data, res, referentiel, modifier }: { data: Data; res: Re
             </ul>
           }
         />
+        <Carte id="sec-agents-location" titre="Agents de location" hex={C.location} icon={KeyRound} revenu={dep.agents_location} note="Payés par logement ou chambre loué(e). Le nombre de relocations vient de la section 8 (Location) de l'onglet Revenus."
+          hypotheses={
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Champ label="Par logement loué"><Num value={data.depenses.agents_location.par_logement} onChange={(v) => modifier((d) => { d.depenses.agents_location.par_logement = v; })} suffixe="$" /></Champ>
+              <Champ label="Par chambre louée"><Num value={data.depenses.agents_location.par_chambre} onChange={(v) => modifier((d) => { d.depenses.agents_location.par_chambre = v; })} suffixe="$" /></Champ>
+            </div>
+          }
+          resultat={
+            <ul className="space-y-1">
+              <li>{dep.relocations_logements} logements × {money(data.depenses.agents_location.par_logement)} + {dep.relocations_chambres} chambres × {money(data.depenses.agents_location.par_chambre)} = <b style={{ color: C.location }}>{money(dep.agents_location)}</b></li>
+            </ul>
+          }
+        />
       </div>
 
       <div className={`${CARD} flex flex-wrap items-center justify-between gap-3 p-4 text-sm`} style={{ borderLeft: `4px solid ${C.depenses}` }}>
         <span className="flex items-center gap-2 font-semibold"><Wallet className="h-4 w-4" style={{ color: C.depenses }} /> Total des dépenses</span>
         <span className="text-lg font-bold tabular-nums" style={{ color: C.depenses }}>{money(dep.total)} / an</span>
-        <span className={`text-xs ${MUTED}`}>frais fixes {money(dep.total_frais_fixes)} · masse salariale {money(dep.total_masse_salariale)} (dont charges {money(dep.total_charges_sociales)}) · sous-traitant {money(dep.sous_traitance_gestion)}</span>
+        <span className={`text-xs ${MUTED}`}>frais fixes {money(dep.total_frais_fixes)} · masse salariale {money(dep.total_masse_salariale)} (dont charges {money(dep.total_charges_sociales)}) · sous-traitant {money(dep.sous_traitance_gestion)} · agents de location {money(dep.agents_location)}</span>
       </div>
     </div>
   );
