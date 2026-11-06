@@ -37,6 +37,7 @@ from app.models.user import (
     VALID_VOLETS,
 )
 from app.services.audit import log_action
+from app.services.revocation_acces import revoquer_acces
 
 log = logging.getLogger(__name__)
 
@@ -585,6 +586,9 @@ async def deactivate(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
     u.is_active = False
     await db.flush()
+    # 2026-11-06 : désactiver ne suffit pas — on retire aussi ce qui pouvait encore
+    # joindre le compte (push de ses appareils, clés d'API, jeton Drive, coffre).
+    revocation = await revoquer_acces(db, user_id)
     await db.refresh(u)
     await log_action(
         db,
@@ -592,9 +596,36 @@ async def deactivate(
         action="user.deactivated",
         entity_type="user",
         entity_id=user_id,
-        details={"target_email": u.email},
+        details={"target_email": u.email, **revocation},
     )
     return UserRead.model_validate(u)
+
+
+@router.post("/{user_id}/revoke-access", summary="Retirer tout ce qui peut encore joindre ou servir un compte (push, clés d'API, Drive, coffre)")
+async def revoke_access(
+    user_id: int,
+    db: DBSession,
+    owner: RequireOwner,
+) -> dict:
+    """Pour un compte déjà désactivé avant le correctif du 2026-11-06, ou pour refaire
+    le ménage. Idempotent. Refuse un compte encore actif (le désactiver d'abord)."""
+    if user_id == owner.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Tu ne peux pas révoquer tes propres accès.")
+    u = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if u is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    if u.is_active:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Désactive d'abord le compte.")
+    revocation = await revoquer_acces(db, user_id)
+    await log_action(
+        db,
+        user=owner,
+        action="user.access_revoked",
+        entity_type="user",
+        entity_id=user_id,
+        details={"target_email": u.email, **revocation},
+    )
+    return {"user_id": user_id, "email": u.email, "is_active": False, **revocation}
 
 
 @router.post("/{user_id}/activate", response_model=UserRead)
