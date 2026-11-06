@@ -31,6 +31,7 @@ from typing import Iterable, Optional
 from sqlalchemy import select
 
 from app.models.push_subscription import PushSubscription
+from app.services.revocation_acces import abonnements_actifs_seulement
 
 log = logging.getLogger(__name__)
 
@@ -80,11 +81,12 @@ async def push_to_user(
         if errors_out is not None:
             errors_out.append("VAPID non configuré sur le serveur.")
         return 0
+    # Comptes actifs seulement (2026-11-06) : un compte désactivé ne reçoit plus rien.
     subs = (
         await db.execute(
-            select(PushSubscription).where(
+            abonnements_actifs_seulement(select(PushSubscription).where(
                 PushSubscription.user_id == user_id
-            )
+            ))
         )
     ).scalars().all()
     if not subs:
@@ -115,9 +117,9 @@ async def push_to_users(
         return 0
     subs = (
         await db.execute(
-            select(PushSubscription).where(
+            abonnements_actifs_seulement(select(PushSubscription).where(
                 PushSubscription.user_id.in_(uids)
-            )
+            ))
         )
     ).scalars().all()
     if not subs:
