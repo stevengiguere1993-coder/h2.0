@@ -8,6 +8,7 @@ import {
   Loader2,
   Plus,
   ShieldCheck,
+  ShieldOff,
   UserPlus,
   UserX,
   Users,
@@ -127,6 +128,7 @@ export function UsersManager({
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [assignments, setAssignments] = useState<ProjectMini[]>([]);
   const [allProjects, setAllProjects] = useState<Project[]>([]);
@@ -362,7 +364,7 @@ export function UsersManager({
     const ok = await confirm({
       title: `${u.is_active ? "Désactiver" : "Réactiver"} ${u.email} ?`,
       description: u.is_active
-        ? "L'utilisateur ne pourra plus se connecter. Tu pourras le réactiver à tout moment."
+        ? "L'utilisateur ne pourra plus se connecter. Ses notifications push, clés d'API, jeton Google Drive et accès au coffre sont retirés du même coup. Tu pourras le réactiver à tout moment."
         : "L'utilisateur pourra à nouveau se connecter avec son mot de passe existant.",
       confirmLabel: u.is_active ? "Désactiver" : "Réactiver",
       destructive: u.is_active // rouge pour désactiver, accent pour réactiver
@@ -378,6 +380,61 @@ export function UsersManager({
       setUsers((xs) => xs.map((x) => (x.id === u.id ? updated : x)));
     } catch {
       setError("Action échouée.");
+    } finally {
+      setBusyUser(null);
+    }
+  }
+
+  // Ménage pour un compte DÉJÀ désactivé (2026-11-06) : retire ce qui pouvait
+  // encore le joindre ou le servir — abonnements push de ses appareils, clés
+  // d'API, jeton Google Drive, accès au coffre. Depuis le correctif, désactiver
+  // le fait automatiquement ; ce bouton couvre les comptes désactivés avant,
+  // et reste sans effet (0 partout) si tout est déjà retiré.
+  async function revoquerAcces(u: User) {
+    if (u.is_active || u.id === me?.id) return;
+    const ok = await confirm({
+      title: `Retirer les accès résiduels de ${u.email} ?`,
+      description:
+        "Supprime les abonnements aux notifications push de ses appareils, désactive ses clés d'API, retire son jeton Google Drive et ses accès au coffre. Sans effet si tout est déjà retiré.",
+      confirmLabel: "Retirer",
+      destructive: true
+    });
+    if (!ok) return;
+    setBusyUser(u.id);
+    setError(null);
+    setInfo(null);
+    try {
+      const res = await authedFetch(`/api/v1/users/${u.id}/revoke-access`, {
+        method: "POST"
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        let detail = "";
+        try {
+          detail = (JSON.parse(t) as { detail?: string }).detail ?? "";
+        } catch {
+          detail = t.slice(0, 200);
+        }
+        throw new Error(detail || `http_${res.status}`);
+      }
+      const r = (await res.json()) as {
+        push_supprimes: number;
+        cles_api_desactivees: number;
+        jetons_drive_supprimes: number;
+        acces_coffre_retires: number;
+      };
+      const total =
+        r.push_supprimes +
+        r.cles_api_desactivees +
+        r.jetons_drive_supprimes +
+        r.acces_coffre_retires;
+      setInfo(
+        total === 0
+          ? `${u.email} : rien à retirer, aucun accès résiduel (push, clés d'API, Drive, coffre).`
+          : `${u.email} : ${r.push_supprimes} abonnement(s) push supprimé(s), ${r.cles_api_desactivees} clé(s) d'API désactivée(s), ${r.jetons_drive_supprimes} jeton(s) Drive retiré(s), ${r.acces_coffre_retires} accès au coffre retiré(s).`
+      );
+    } catch (e) {
+      setError(`Retrait des accès échoué : ${(e as Error).message}`);
     } finally {
       setBusyUser(null);
     }
@@ -597,6 +654,11 @@ export function UsersManager({
             {error}
           </p>
         ) : null}
+        {info ? (
+          <p className="mb-4 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-200">
+            {info}
+          </p>
+        ) : null}
 
         {loading ? (
           <div className="flex min-h-[30vh] items-center justify-center">
@@ -769,6 +831,18 @@ export function UsersManager({
                         >
                           <Eye className="h-3.5 w-3.5" />
                           Voir comme
+                        </button>
+                      ) : null}
+                      {!selectedUser.is_active && selectedUser.id !== me?.id ? (
+                        <button
+                          type="button"
+                          onClick={() => void revoquerAcces(selectedUser)}
+                          disabled={busyUser === selectedUser.id}
+                          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-500/20 disabled:opacity-60"
+                          title="Retirer ce qui pourrait encore joindre ce compte désactivé : notifications push, clés d'API, jeton Drive, accès au coffre"
+                        >
+                          <ShieldOff className="h-3.5 w-3.5" />
+                          Retirer les accès résiduels
                         </button>
                       ) : null}
                       {selectedUser.id !== me?.id ? (
