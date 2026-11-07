@@ -1730,6 +1730,14 @@ async def ensure_invest_portal_tables() -> None:
                     "EXISTS drive_folder_url VARCHAR(1000)"
                 )
             )
+            # Cascade des participations (2026-11-07) : « masque »
+            # remplace l'interrupteur de publication is_visible.
+            await conn.execute(
+                _text(
+                    "ALTER TABLE inv_participations ADD COLUMN IF NOT "
+                    "EXISTS masque BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+            )
     except Exception as exc:  # noqa: BLE001
         log.warning("ensure_invest_portal_tables failed: %s", exc)
 

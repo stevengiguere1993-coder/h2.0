@@ -89,10 +89,17 @@ class InvestParticipation(Base, TimestampUpdateMixin):
     statut: Mapped[str] = mapped_column(
         String(16), nullable=False, default="actif", server_default="actif"
     )
-    #: Interrupteur de publication : False = l'investisseur ne voit pas
-    #: (encore) ce projet dans son portail.
+    #: HISTORIQUE (avant la cascade du 2026-11-07) : interrupteur de
+    #: publication. Plus lu : un projet est visible dès que la personne
+    #: figure dans « Parts & actionnaires » (directement ou à travers
+    #: une compagnie). Colonne conservée pour les bases existantes.
     is_visible: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
+    )
+    #: Exception par l'admin : True = ce projet est caché à cet
+    #: investisseur malgré ses parts (seule façon de le masquer).
+    masque: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
     )
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

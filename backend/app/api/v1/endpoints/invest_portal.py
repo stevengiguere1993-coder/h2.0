@@ -4,9 +4,14 @@
     GET /invest/me/projets/{entreprise_id}    fiche projet
     GET /invest/me/documents/{doc_id}/pdf     document partagé
 
-Un investisseur ne voit QUE les compagnies où il a une participation
-`is_visible`. Les assembleurs `build_portefeuille` / `build_projet`
-sont partagés avec la console admin (« voir comme lui »).
+Un investisseur voit TOUTES les compagnies où il détient des parts
+selon « Parts & actionnaires » des fiches entreprise — directement ou à
+travers une de nos compagnies (cascade, `app/services/invest_cascade.py`,
+Steven 2026-11-07) — sauf celles que l'admin a MASQUÉES
+(`InvestParticipation.masque`). La participation persistée ne sert plus
+qu'à porter les flux (apports, remboursements), le statut et l'exception
+« masqué ». Les assembleurs `build_portefeuille` / `build_projet` sont
+partagés avec la console admin (« voir comme lui »).
 
 Registered avec DEP_INVESTISSEUR (volet investisseur).
 """
@@ -31,12 +36,19 @@ from app.models.invest_portal import (
     InvestFlux,
     InvestParticipation,
 )
+from app.models.user import User
+from app.services.invest_cascade import (
+    Detention,
+    Graphe,
+    Identite,
+    charger_graphe,
+    detentions_de,
+)
 from app.services.invest_portfolio import (
     ajuster_capital_avec_soldes_qbo,
     avances_par_actionnaire,
     budget_ligne_transactions,
     budget_optimisation_data,
-    effective_parts_pct,
     entreprise_snapshot,
     flux_signes,
     get_or_default_profil,
@@ -62,26 +74,36 @@ router = APIRouter(prefix="/invest", tags=["invest-portal"])
 # ─────────────────────────────────────────────────────────────────────
 
 
-async def _participations_visibles(
+async def identite_de_user(db: AsyncSession, user_id: int) -> Identite:
+    u = await db.get(User, user_id)
+    if u is None:
+        return Identite(user_id=user_id)
+    return Identite.de_user(u)
+
+
+async def _participations_de(
     db: AsyncSession, user_id: int
-) -> list[InvestParticipation]:
-    return list(
-        (
+) -> dict[int, InvestParticipation]:
+    """Participations PERSISTÉES de ce compte : {entreprise_id: part}."""
+    if not user_id:
+        return {}
+    return {
+        p.entreprise_id: p
+        for p in (
             await db.execute(
                 select(InvestParticipation)
-                .where(
-                    InvestParticipation.user_id == user_id,
-                    InvestParticipation.is_visible.is_(True),
-                )
+                .where(InvestParticipation.user_id == user_id)
                 .order_by(InvestParticipation.id)
             )
         ).scalars()
-    )
+    }
 
 
 async def _flux_of(
     db: AsyncSession, participation_id: int
 ) -> list[InvestFlux]:
+    if not participation_id:
+        return []
     return list(
         (
             await db.execute(
@@ -93,36 +115,166 @@ async def _flux_of(
     )
 
 
+def _part_virtuelle(user_id: int, entreprise_id: int, pct: float) -> InvestParticipation:
+    """Participation NON persistée (id=0, aucun flux) : la personne
+    détient des parts selon la fiche entreprise mais aucune ligne
+    n'existe encore (compte pas créé, ou jamais synchronisé)."""
+    part = InvestParticipation(
+        user_id=user_id, entreprise_id=entreprise_id, parts_pct=pct
+    )
+    part.id = 0
+    part.statut = "actif"
+    part.masque = False
+    return part
+
+
+async def projets_de(
+    db: AsyncSession,
+    ident: Identite,
+    *,
+    inclure_masques: bool = False,
+    graphe: Optional[Graphe] = None,
+) -> list[tuple[InvestParticipation, Optional[Detention], float]]:
+    """Ce que cette identité voit : [(participation (réelle ou
+    virtuelle), détention en cascade ou None, % effectif)].
+
+    - compagnies où la personne détient des parts (cascade) ;
+    - + participations persistées sans ligne d'actionnaire (ajout
+      manuel dans la console) au % saisi ;
+    - − celles que l'admin a masquées (sauf ``inclure_masques``).
+    Les holdings purs (sans immeuble ni participation persistée, qui ne
+    font que détenir d'autres compagnies) sont écartés par
+    ``build_portefeuille`` : ``compagnies_intermediaires`` les décrit."""
+    dets = await detentions_de(db, ident, graphe)
+    parts = await _participations_de(db, ident.user_id or 0)
+    ids = list(dets.keys()) + [e for e in parts if e not in dets]
+    out: list[tuple[InvestParticipation, Optional[Detention], float]] = []
+    for eid in ids:
+        part = parts.get(eid)
+        if part is not None and part.masque and not inclure_masques:
+            continue
+        det = dets.get(eid)
+        pct = det.pct_total if det is not None else float(part.parts_pct)
+        if part is None:
+            part = _part_virtuelle(ident.user_id or 0, eid, pct)
+        out.append((part, det, pct))
+    return out
+
+
+async def compagnies_intermediaires(
+    db: AsyncSession,
+    dets: dict[int, Detention],
+    projets_ids: set[int],
+    graphe: Graphe,
+) -> list[dict]:
+    """Les compagnies PAR LESQUELLES la personne détient ses projets
+    (holdings) : sa part dans chacune, la valeur de la compagnie (ses
+    immeubles + ses participations dans d'autres compagnies) et sa
+    valeur personnelle dedans. Steven : « Vincent peut voir la valeur
+    du projet dans la compagnie X et sa valeur personnelle »."""
+    holdings: dict[int, float] = {}
+    for det in dets.values():
+        for ch in det.chemins:
+            for m in ch.maillons[:-1]:
+                holdings.setdefault(m.entreprise_id, 0.0)
+    if not holdings:
+        return []
+    for hid in holdings:
+        d = dets.get(hid)
+        holdings[hid] = d.pct_total if d is not None else 0.0
+
+    cache_equite: dict[int, float] = {}
+
+    async def _equite(eid: int, deja: frozenset) -> float:
+        if eid in cache_equite:
+            return cache_equite[eid]
+        snap = await entreprise_snapshot(db, eid)
+        total = float(snap["equite"])
+        for (cible, q) in graphe.detient.get(eid, []):
+            if cible in deja or q <= 0:
+                continue
+            total += q / 100.0 * await _equite(cible, deja | {cible})
+        cache_equite[eid] = round(total, 2)
+        return cache_equite[eid]
+
+    out: list[dict] = []
+    for hid, mon_pct in holdings.items():
+        ent = await db.get(Entreprise, hid)
+        if ent is None:
+            continue
+        valeur = await _equite(hid, frozenset({hid}))
+        detenues = [
+            {
+                "entreprise_id": cible,
+                "name": graphe.noms.get(cible, ""),
+                "pct": round(q, 3),
+                "est_projet": cible in projets_ids,
+            }
+            for (cible, q) in graphe.detient.get(hid, [])
+        ]
+        out.append(
+            {
+                "entreprise_id": hid,
+                "name": ent.name,
+                "color_accent": ent.color_accent,
+                "mon_pct": round(mon_pct, 3),
+                "valeur": valeur,
+                "ma_valeur": round(valeur * mon_pct / 100.0, 2),
+                "detient": detenues,
+            }
+        )
+    out.sort(key=lambda c: -c["ma_valeur"])
+    return out
+
+
+def _carte_detention(det: Optional[Detention], pct: float) -> dict:
+    if det is None:
+        return {
+            "pct_direct": round(pct, 3),
+            "pct_indirect": 0.0,
+            "chemins": [],
+        }
+    return {
+        "pct_direct": det.pct_direct,
+        "pct_indirect": det.pct_indirect,
+        "chemins": [c.to_dict() for c in det.chemins],
+    }
+
+
 async def build_portefeuille(
     db: AsyncSession,
     user_id: int,
-    parts_virtuelles: Optional[list[InvestParticipation]] = None,
+    identite: Optional[Identite] = None,
 ) -> dict:
-    #: ``parts_virtuelles`` : participations NON persistées (id=0, aucun
-    #: flux) — l'aperçu « avant création du compte » de la console
-    #: admin passe par ici avec le % de la fiche entreprise.
-    parts = (
-        parts_virtuelles
-        if parts_virtuelles is not None
-        else await _participations_visibles(db, user_id)
-    )
-    pairs: list[tuple[InvestParticipation, list[InvestFlux]]] = []
+    """Portefeuille d'une identité : ``identite`` (aperçu d'un
+    actionnaire sans compte) sinon celle du compte ``user_id``."""
+    ident = identite or await identite_de_user(db, user_id)
+    graphe = await charger_graphe(db)
+    dets = await detentions_de(db, ident, graphe)
+    triples = await projets_de(db, ident, graphe=graphe)
+
+    pairs: list[tuple[InvestParticipation, list[InvestFlux], float]] = []
     projets: list[dict] = []
     tot_capital_actuel = 0.0
     tot_capital_total = 0.0
     tot_retours = 0.0
     tot_valeur_parts = 0.0
+    tot_valeur_projets = 0.0
     flux_global: list[tuple[date, float]] = []
 
-    for part in parts:
+    for part, det, pct_eff in triples:
         ent = await db.get(Entreprise, part.entreprise_id)
-        if ent is None:
+        if ent is None or not ent.is_active:
             continue
-        flux = await _flux_of(db, part.id)
-        pairs.append((part, flux))
         snap = await entreprise_snapshot(db, part.entreprise_id)
-        directory = await partner_directory(db, part.entreprise_id)
-        pct_eff = effective_parts_pct(part, directory)
+        if (
+            not snap["immeubles"]
+            and part.id == 0
+            and graphe.detient.get(part.entreprise_id)
+        ):
+            continue  # holding pur : décrit dans « compagnies »
+        flux = await _flux_of(db, part.id)
+        pairs.append((part, flux, pct_eff))
         pct = pct_eff / 100.0
         valeur_parts = round(snap["equite"] * pct, 2)
         k = kpis_participation(flux, valeur_parts)
@@ -152,8 +304,13 @@ async def build_portefeuille(
                     if snap["immeubles"]
                     else None
                 ),
-                "parts_pct": pct_eff,
+                "parts_pct": round(pct_eff, 3),
                 "valeur_parts": valeur_parts,
+                # Valeur GLOBALE du projet (toute la compagnie).
+                "valeur_totale": snap["valeur_totale"],
+                "hypotheque_totale": snap["hypotheque_totale"],
+                "equite": snap["equite"],
+                **_carte_detention(det, pct_eff),
                 "cashflow_moyen_part": cash_part,
                 "statut": part.statut,
                 **k,
@@ -163,10 +320,12 @@ async def build_portefeuille(
         tot_capital_total += k["capital_investi_total"]
         tot_retours += k["capital_rembourse"] + k["distributions_recues"]
         tot_valeur_parts += valeur_parts
+        tot_valeur_projets += float(snap["valeur_totale"] or 0)
         flux_global.extend(flux_signes(flux))
         if valeur_parts:
             flux_global.append((date.today(), valeur_parts))
 
+    projets.sort(key=lambda p: (-p["valeur_parts"], p["entreprise_name"]))
     tri_global = xirr(flux_global)
     tvpi_global = (
         round((tot_retours + tot_valeur_parts) / tot_capital_total, 4)
@@ -174,6 +333,9 @@ async def build_portefeuille(
         else None
     )
     serie_valeur = await serie_valeur_totale(db, pairs)
+    compagnies = await compagnies_intermediaires(
+        db, dets, {p["entreprise_id"] for p in projets}, graphe
+    )
 
     return {
         "capital_actuel": round(tot_capital_actuel, 2),
@@ -185,41 +347,59 @@ async def build_portefeuille(
             sum(p["distributions_recues"] for p in projets), 2
         ),
         "valeur_parts": round(tot_valeur_parts, 2),
+        "valeur_projets": round(tot_valeur_projets, 2),
         "tri_pct": round(tri_global * 100, 1)
         if tri_global is not None
         else None,
         "tvpi": tvpi_global,
         "serie_valeur": serie_valeur,
         "projets": projets,
+        "compagnies": compagnies,
     }
+
+
+async def acces_projet(
+    db: AsyncSession,
+    user_id: int,
+    entreprise_id: int,
+    identite: Optional[Identite] = None,
+) -> Optional[tuple[InvestParticipation, Optional[Detention], float]]:
+    """La personne voit-elle ce projet ? (participation réelle ou
+    virtuelle, détention, % effectif) — None sinon (masqué, aucune
+    part, compagnie inactive)."""
+    ident = identite or await identite_de_user(db, user_id)
+    for part, det, pct in await projets_de(db, ident):
+        if part.entreprise_id == entreprise_id:
+            return part, det, pct
+    return None
+
+
+async def _acces_projet_ou_404(
+    db: AsyncSession, user_id: int, entreprise_id: int
+) -> tuple[InvestParticipation, Optional[Detention], float]:
+    acces = await acces_projet(db, user_id, entreprise_id)
+    if acces is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Projet introuvable."
+        )
+    return acces
 
 
 async def build_projet(
     db: AsyncSession,
     user_id: int,
     entreprise_id: int,
-    part_virtuelle: Optional[InvestParticipation] = None,
-    me_nom: Optional[str] = None,
+    identite: Optional[Identite] = None,
 ) -> dict:
-    #: ``part_virtuelle`` + ``me_nom`` : fiche telle que la VERRAIT un
-    #: actionnaire de la fiche entreprise SANS compte investisseur —
-    #: % de la fiche, aucun flux ; ``me_nom`` marque sa ligne « (vous) »
-    #: dans la liste des actionnaires.
-    part = part_virtuelle
-    if part is None:
-        part = (
-            await db.execute(
-                select(InvestParticipation).where(
-                    InvestParticipation.user_id == user_id,
-                    InvestParticipation.entreprise_id == entreprise_id,
-                    InvestParticipation.is_visible.is_(True),
-                )
-            )
-        ).scalar_one_or_none()
-    if part is None:
+    """Fiche projet telle que la voit ``identite`` (aperçu d'un
+    actionnaire sans compte) ou le compte ``user_id``."""
+    ident = identite or await identite_de_user(db, user_id)
+    acces = await acces_projet(db, user_id, entreprise_id, ident)
+    if acces is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "Projet introuvable."
         )
+    part, det, pct_eff = acces
     ent = await db.get(Entreprise, entreprise_id)
     if ent is None:
         raise HTTPException(
@@ -235,7 +415,6 @@ async def build_projet(
 
     snap = await entreprise_snapshot(db, entreprise_id)
     directory = await partner_directory(db, entreprise_id)
-    pct_eff = effective_parts_pct(part, directory)
     pct = pct_eff / 100.0
     valeur_parts = round(snap["equite"] * pct, 2)
     flux = await _flux_of(db, part.id)
@@ -247,18 +426,35 @@ async def build_projet(
     # Co-actionnaires de CETTE compagnie : la liste RÉELLE de « Parts &
     # actionnaires » (fiche entreprise) — noms et % tels que saisis là,
     # jamais de ligne inventée. `is_me` = l'actionnaire apparié au
-    # compte connecté.
+    # compte connecté ; `via_moi_pct` = ma part dans une compagnie
+    # actionnaire (ex. « Compagnie X — 50 % (dont vous : 15 %) »).
     actionnaires: list[dict] = []
     if show_actionnaires:
-        for row in directory["rows"]:
+        graphe = await charger_graphe(db)
+        mes_dets = await detentions_de(db, ident, graphe)
+        from app.services.invest_cascade import feuille_est
+
+        for pr, row in zip(directory["partners"], directory["rows"]):
+            holding = pr.partner_entreprise_id
+            via_moi = None
+            if holding is not None and holding in mes_dets and row[
+                "ownership_pct"
+            ]:
+                via_moi = round(
+                    mes_dets[holding].pct_total
+                    * float(row["ownership_pct"])
+                    / 100.0,
+                    3,
+                )
             actionnaires.append(
                 {
                     "name": row["name"],
                     "parts_pct": row["ownership_pct"],
-                    "is_me": row["user_id"] == user_id
-                    or (
-                        me_nom is not None and row["name"] == me_nom
+                    "is_me": (
+                        holding is None and feuille_est(graphe, pr, ident)
                     ),
+                    "entreprise_id": holding,
+                    "via_moi_pct": via_moi,
                 }
             )
         actionnaires.sort(
@@ -324,8 +520,9 @@ async def build_projet(
             serie["cashflow_moyen"] if show_cashflow else None
         ),
         "timeline": timeline,
-        "parts_pct": pct_eff,
+        "parts_pct": round(pct_eff, 3),
         "valeur_parts": valeur_parts,
+        **_carte_detention(det, pct_eff),
         **k,
         "flux": [
             {
@@ -453,19 +650,7 @@ async def my_projet_qbo_reels(
     l'investisseur a une participation visible. Respecte les réglages
     de publication : masqué si `show_cashflow` est décoché ; le détail
     par compte est retiré si `show_depenses` est décoché."""
-    part = (
-        await db.execute(
-            select(InvestParticipation.id).where(
-                InvestParticipation.user_id == user.id,
-                InvestParticipation.entreprise_id == entreprise_id,
-                InvestParticipation.is_visible.is_(True),
-            )
-        )
-    ).scalar_one_or_none()
-    if part is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Projet introuvable."
-        )
+    await _acces_projet_ou_404(db, user.id, entreprise_id)
     profil = await get_or_default_profil(db, entreprise_id)
     if profil is not None and not profil.show_cashflow:
         return {"statut": "masque"}
@@ -481,22 +666,10 @@ async def my_projet_qbo_reels(
 async def _ma_participation_ou_404(
     db: AsyncSession, user_id: int, entreprise_id: int
 ) -> None:
-    """Garde des routes de détail QBO : participation visible requise,
-    et les interrupteurs de publication du projet respectés (pas de
+    """Garde des routes de détail QBO : des parts dans le projet (cascade)
+    requises, et les interrupteurs de publication du projet respectés (pas de
     détail des dépenses si l'admin les masque)."""
-    part = (
-        await db.execute(
-            select(InvestParticipation.id).where(
-                InvestParticipation.user_id == user_id,
-                InvestParticipation.entreprise_id == entreprise_id,
-                InvestParticipation.is_visible.is_(True),
-            )
-        )
-    ).scalar_one_or_none()
-    if part is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Projet introuvable."
-        )
+    await _acces_projet_ou_404(db, user_id, entreprise_id)
     profil = await get_or_default_profil(db, entreprise_id)
     if profil is not None and (
         not profil.show_cashflow or not profil.show_depenses
@@ -592,19 +765,7 @@ async def my_projet_avances(
     actionnaires de la fiche — la liste « Capital encore investi par
     actionnaire » de la carte Ma participation. Respecte
     ``show_actionnaires``."""
-    part = (
-        await db.execute(
-            select(InvestParticipation.id).where(
-                InvestParticipation.user_id == user.id,
-                InvestParticipation.entreprise_id == entreprise_id,
-                InvestParticipation.is_visible.is_(True),
-            )
-        )
-    ).scalar_one_or_none()
-    if part is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Projet introuvable."
-        )
+    await _acces_projet_ou_404(db, user.id, entreprise_id)
     profil = await get_or_default_profil(db, entreprise_id)
     if profil is not None and not profil.show_actionnaires:
         return {"statut": "masque"}
@@ -621,19 +782,7 @@ async def my_projet_budget(
 ) -> dict:
     """« Où va l'argent » : les enveloppes du projet d'optimisation
     avec le dépensé réel QuickBooks. Respecte ``show_budget``."""
-    part = (
-        await db.execute(
-            select(InvestParticipation.id).where(
-                InvestParticipation.user_id == user.id,
-                InvestParticipation.entreprise_id == entreprise_id,
-                InvestParticipation.is_visible.is_(True),
-            )
-        )
-    ).scalar_one_or_none()
-    if part is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Projet introuvable."
-        )
+    await _acces_projet_ou_404(db, user.id, entreprise_id)
     profil = await get_or_default_profil(db, entreprise_id)
     if profil is not None and not profil.show_budget:
         return {"statut": "masque"}
@@ -647,19 +796,7 @@ async def my_projet_budget(
 async def my_projet_budget_txns(
     entreprise_id: int, ligne_id: int, db: DBSession, user: CurrentUser
 ) -> list:
-    part = (
-        await db.execute(
-            select(InvestParticipation.id).where(
-                InvestParticipation.user_id == user.id,
-                InvestParticipation.entreprise_id == entreprise_id,
-                InvestParticipation.is_visible.is_(True),
-            )
-        )
-    ).scalar_one_or_none()
-    if part is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Projet introuvable."
-        )
+    await _acces_projet_ou_404(db, user.id, entreprise_id)
     profil = await get_or_default_profil(db, entreprise_id)
     if profil is not None and not profil.show_budget:
         raise HTTPException(
@@ -726,16 +863,7 @@ async def my_document_pdf(
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "Document introuvable."
         )
-    part = (
-        await db.execute(
-            select(InvestParticipation.id).where(
-                InvestParticipation.user_id == user.id,
-                InvestParticipation.entreprise_id == doc.entreprise_id,
-                InvestParticipation.is_visible.is_(True),
-            )
-        )
-    ).scalar_one_or_none()
-    if part is None:
+    if await acces_projet(db, user.id, doc.entreprise_id) is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "Document introuvable."
         )

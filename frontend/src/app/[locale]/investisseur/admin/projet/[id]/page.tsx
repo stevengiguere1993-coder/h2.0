@@ -67,7 +67,7 @@ type ParticipationRow = {
   parts_pct: number;
   parts_source: "fiche" | "manuel";
   statut: string;
-  is_visible: boolean;
+  masque: boolean;
   notes: string | null;
   valeur_parts: number;
   capital_investi_total: number;
@@ -135,6 +135,7 @@ type AdminProjet = {
   cashflow_moyen: number;
   timeline: TimelineEvent[];
   partenaires: PartenaireT[];
+  detenteurs?: DetenteurT[];
   participations: ParticipationRow[];
   jalons: {
     id: number;
@@ -170,7 +171,26 @@ type PartenaireT = {
   has_account: boolean;
   deja_participant: boolean;
   participation_id: number | null;
-  is_visible: boolean;
+  masque: boolean;
+  /** Compagnie actionnaire liée à une fiche Kratos (arête de la cascade). */
+  personne_morale_liee: number | null;
+};
+
+type DetenteurT = {
+  cle: string;
+  name: string;
+  email: string | null;
+  user_id: number | null;
+  has_account: boolean;
+  pct_total: number;
+  pct_direct: number;
+  pct_indirect: number;
+  chemins: {
+    pct: number;
+    direct: boolean;
+    label: string;
+    maillons: { entreprise_id: number; name: string; pct: number }[];
+  }[];
 };
 
 const FLUX_LABELS: Record<string, string> = {
@@ -252,9 +272,8 @@ export default function AdminProjetPage() {
       }
       if (body?.invitation_sent) {
         setBanner(
-          `Compte créé et invitation envoyée à ${pa.email}. Le projet ` +
-            "reste masqué pour lui — activez « Visible dans son " +
-            "portail » quand vous êtes prêt."
+          `Compte créé et invitation envoyée à ${pa.email}. Il voit ` +
+            "ce projet d'office (cochez « Masquer » pour l'exclure)."
         );
       } else if (body?.temp_password) {
         setBanner(
@@ -893,17 +912,31 @@ export default function AdminProjetPage() {
                           </span>
                         </div>
                         <div className="shrink-0">
-                          {pa.deja_participant ? (
+                          {pa.personne_morale_liee ? (
+                            <span
+                              className="inline-flex items-center gap-1 rounded-full border border-sky-500/50 bg-sky-500/10 px-2 py-0.5 text-[10.5px] font-bold text-sky-400"
+                              title="Compagnie du groupe : ses actionnaires voient ce projet à travers elle (cascade)"
+                            >
+                              Compagnie du groupe · cascade
+                            </span>
+                          ) : pa.deja_participant ? (
                             <span
                               className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-bold ${
-                                pa.is_visible
+                                !pa.masque
                                   ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-400"
                                   : "border-amber-500/50 bg-amber-500/10 text-amber-400"
                               }`}
                             >
-                              {pa.is_visible
-                                ? "✓ Visible dans son portail"
-                                : "Activé · masqué"}
+                              {!pa.masque
+                                ? "✓ Dans son portail"
+                                : "Masqué par l'admin"}
+                            </span>
+                          ) : pa.has_account ? (
+                            <span
+                              className="inline-flex items-center gap-1 rounded-full border border-emerald-500/50 bg-emerald-500/10 px-2 py-0.5 text-[10.5px] font-bold text-emerald-400"
+                              title="A un compte et des parts : il voit déjà ce projet. « Activer » crée sa participation pour y rattacher ses apports."
+                            >
+                              ✓ Dans son portail
                             </span>
                           ) : (
                             <button
@@ -917,8 +950,8 @@ export default function AdminProjetPage() {
                                 pa.missing_email && !pa.has_account
                                   ? "Ajoutez d'abord son courriel dans la fiche entreprise"
                                   : pa.has_account
-                                  ? "Crée sa participation (masquée) sur ce projet"
-                                  : "Crée son compte (invitation courriel) + sa participation masquée"
+                                  ? "Crée sa participation sur ce projet (pour ses apports)"
+                                  : "Crée son compte (invitation courriel) + sa participation"
                               }
                               className="btn-outline-accent btn-xs disabled:opacity-40"
                             >
@@ -936,10 +969,89 @@ export default function AdminProjetPage() {
                     ))}
                   </ul>
                   <p className="mt-2 text-[10px] text-white/35">
-                    Synchronisé depuis la fiche entreprise. Après
-                    activation : « Synchroniser QuickBooks » pour ses
-                    apports, puis « Visible dans son portail ».
+                    Synchronisé depuis la fiche entreprise. Un
+                    actionnaire voit ce projet dès qu&apos;il a un compte
+                    (directement, ou à travers une compagnie du groupe
+                    qu&apos;il détient). Après création du compte :
+                    « Synchroniser QuickBooks » pour ses apports.
                   </p>
+                </div>
+              ) : null}
+
+              {/* Cascade : qui est réellement derrière ce projet */}
+              {(data.detenteurs?.length ?? 0) > 0 ? (
+                <div className="mb-3 rounded-xl border border-brand-800 bg-brand-950/60 p-3">
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                    Détenteurs en cascade (personnes derrière les
+                    compagnies)
+                  </p>
+                  <ul className="space-y-1.5">
+                    {(data.detenteurs ?? []).map((d) => (
+                      <li key={d.cle} className="text-sm">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="min-w-0 font-medium text-white">
+                            {d.name}
+                            {d.has_account ? (
+                              <span className="ml-1.5 text-[10px] text-emerald-400">
+                                ✓ compte
+                              </span>
+                            ) : (
+                              <span className="ml-1.5 text-[10px] text-amber-400">
+                                sans compte
+                              </span>
+                            )}
+                          </span>
+                          <span className="font-bold tabular-nums text-white">
+                            {d.pct_total.toLocaleString("fr-CA", {
+                              maximumFractionDigits: 2
+                            })}{" "}
+                            %
+                            {d.pct_indirect > 0 ? (
+                              <span className="ml-1 text-[10px] font-normal text-white/45">
+                                ({d.pct_direct.toLocaleString("fr-CA", {
+                                  maximumFractionDigits: 2
+                                })}{" "}
+                                direct +{" "}
+                                {d.pct_indirect.toLocaleString("fr-CA", {
+                                  maximumFractionDigits: 2
+                                })}{" "}
+                                via compagnie)
+                              </span>
+                            ) : null}
+                          </span>
+                        </div>
+                        {d.chemins.some((c) => !c.direct) ? (
+                          <ul className="ml-3 mt-0.5 space-y-0.5 text-[11px] text-white/50">
+                            {d.chemins
+                              .filter((c) => !c.direct)
+                              .map((c, i) => (
+                                <li key={i}>
+                                  {c.maillons.map((m, j) => (
+                                    <span key={m.entreprise_id}>
+                                      {j > 0 ? " → " : ""}
+                                      {m.name}{" "}
+                                      <span className="tabular-nums">
+                                        ({m.pct.toLocaleString("fr-CA", {
+                                          maximumFractionDigits: 2
+                                        })}{" "}
+                                        %)
+                                      </span>
+                                    </span>
+                                  ))}{" "}
+                                  ={" "}
+                                  <b className="tabular-nums text-white/75">
+                                    {c.pct.toLocaleString("fr-CA", {
+                                      maximumFractionDigits: 2
+                                    })}{" "}
+                                    %
+                                  </b>
+                                </li>
+                              ))}
+                          </ul>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               ) : null}
 
@@ -1324,10 +1436,10 @@ function ParticipationCard({
         <label className="flex items-center gap-1.5 text-white/60">
           <input
             type="checkbox"
-            checked={p.is_visible}
-            onChange={(e) => void patch({ is_visible: e.target.checked })}
+            checked={p.masque}
+            onChange={(e) => void patch({ masque: e.target.checked })}
           />
-          Visible dans son portail
+          Masquer ce projet dans son portail
         </label>
         <label className="flex items-center gap-1.5 text-white/60">
           Statut

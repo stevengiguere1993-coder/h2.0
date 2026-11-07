@@ -24,7 +24,9 @@ import { authedFetch } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { InvestisseurTopbar } from "./layout";
 import {
+  CheminsDetention,
   fmtMoney,
+  fmtPct,
   PhaseBadge,
   Portefeuille,
   useApercu,
@@ -208,7 +210,7 @@ export default function PortefeuillePage() {
                 Vue globale — toutes les compagnies du pôle
               </option>
               <option value="me">
-                Mes participations — mes projets activés à mon nom
+                Mes participations — les projets où je détiens des parts
               </option>
               {investisseurs.some((i) => i.user_id !== null) ? (
                 <optgroup label="Voir comme un investisseur">
@@ -286,15 +288,15 @@ export default function PortefeuillePage() {
               {isGlobal
                 ? "Aucune compagnie dans le pôle"
                 : mode === "me"
-                ? "Aucun projet activé à votre nom"
+                ? "Aucun projet à votre nom"
                 : "Aucun investissement pour l'instant"}
             </h2>
             <p className="mx-auto mt-2 max-w-md text-sm text-white/60">
               {isGlobal
                 ? "La vue globale montre toutes les compagnies qui ont des immeubles (pôle locatif) — liez un immeuble à une compagnie et elle apparaîtra ici."
                 : mode === "me" && isAdmin
-                ? "« Mes participations » ne montre que les projets où VOUS êtes activé comme actionnaire (console admin → projet → activez-vous, puis « Visible dans son portail »). Vos compagnies restent toutes visibles dans la vue globale."
-                : "Vos projets apparaîtront ici dès qu'une participation vous sera attribuée."}
+                ? "« Mes participations » montre les projets où VOUS figurez dans « Parts & actionnaires » d'une compagnie (directement ou à travers une de vos compagnies). Vos compagnies restent toutes visibles dans la vue globale."
+                : "Vos projets apparaissent ici dès que vous figurez dans « Parts & actionnaires » d'une compagnie du groupe, directement ou à travers une compagnie que vous détenez."}
             </p>
             {isAdmin ? (
               <button
@@ -454,6 +456,22 @@ export default function PortefeuillePage() {
                           }`
                         : ""}
                     </p>
+                    {!isGlobal && p.valeur_totale !== undefined ? (
+                      <p className="mt-2 text-[11px] text-white/55 tabular-nums">
+                        Valeur du projet{" "}
+                        <b className="text-white/85">
+                          {fmtMoney(p.valeur_totale)}
+                        </b>
+                        {p.hypotheque_totale ? (
+                          <>
+                            {" "}
+                            · dette {fmtMoney(p.hypotheque_totale)}
+                          </>
+                        ) : null}
+                        {" "}· équité{" "}
+                        <b className="text-white/85">{fmtMoney(p.equite)}</b>
+                      </p>
+                    ) : null}
                     <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 tabular-nums">
                       <div className="border-t border-brand-800 pt-2">
                         <p className="text-[10px] uppercase tracking-wider text-white/40">
@@ -465,6 +483,18 @@ export default function PortefeuillePage() {
                           })}{" "}
                           %
                         </p>
+                        {!isGlobal &&
+                        (p.pct_indirect ?? 0) > 0 &&
+                        (p.pct_direct ?? 0) > 0 ? (
+                          <p className="text-[10px] text-white/45">
+                            {fmtPct(p.pct_direct)} direct +{" "}
+                            {fmtPct(p.pct_indirect)} via compagnie
+                          </p>
+                        ) : !isGlobal && (p.pct_indirect ?? 0) > 0 ? (
+                          <p className="text-[10px] text-white/45">
+                            via compagnie interposée
+                          </p>
+                        ) : null}
                       </div>
                       <div className="border-t border-brand-800 pt-2">
                         <p className="text-[10px] uppercase tracking-wider text-white/40">
@@ -495,10 +525,85 @@ export default function PortefeuillePage() {
                         </p>
                       </div>
                     </div>
+                    {!isGlobal ? (
+                      <CheminsDetention
+                        chemins={p.chemins}
+                        className="mt-3 border-t border-brand-800 pt-2"
+                      />
+                    ) : null}
                   </div>
                 </button>
               ))}
             </div>
+
+            {/* Compagnies par lesquelles la personne détient ses projets */}
+            {!isGlobal && (data.compagnies?.length ?? 0) > 0 ? (
+              <>
+                <div className="mb-3 mt-8 flex items-baseline justify-between">
+                  <h2 className="font-display text-lg font-bold tracking-tight text-white">
+                    Mes compagnies
+                  </h2>
+                  <span className="text-xs text-white/40">
+                    celles par lesquelles vous détenez des projets
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  {(data.compagnies ?? []).map((c) => (
+                    <div
+                      key={c.entreprise_id}
+                      className="rounded-2xl border border-brand-800 bg-brand-900 p-4"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <h3 className="font-display text-base font-bold text-white">
+                          {c.name}
+                        </h3>
+                        <span className="inline-flex shrink-0 items-center rounded-full border border-accent-500/50 bg-accent-500/10 px-2.5 py-0.5 text-[11px] font-bold tabular-nums text-accent-500">
+                          {fmtPct(c.mon_pct)} à vous
+                        </span>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 tabular-nums">
+                        <div className="border-t border-brand-800 pt-2">
+                          <p className="text-[10px] uppercase tracking-wider text-white/40">
+                            Valeur de la compagnie
+                          </p>
+                          <p className="text-sm font-bold text-white">
+                            {fmtMoney(c.valeur)}
+                          </p>
+                          <p className="text-[10px] text-white/45">
+                            ses immeubles + ses participations
+                          </p>
+                        </div>
+                        <div className="border-t border-brand-800 pt-2">
+                          <p className="text-[10px] uppercase tracking-wider text-white/40">
+                            Ma valeur dedans
+                          </p>
+                          <p className="text-sm font-bold text-white">
+                            {fmtMoney(c.ma_valeur)}
+                          </p>
+                          <p className="text-[10px] text-white/45">
+                            valeur × {fmtPct(c.mon_pct)}
+                          </p>
+                        </div>
+                      </div>
+                      {c.detient.length > 0 ? (
+                        <p className="mt-3 border-t border-brand-800 pt-2 text-[11px] text-white/60">
+                          Détient :{" "}
+                          {c.detient.map((d, i) => (
+                            <span key={d.entreprise_id}>
+                              {i > 0 ? ", " : ""}
+                              <b className="text-white/85">{d.name}</b>{" "}
+                              <span className="tabular-nums">
+                                ({fmtPct(d.pct)})
+                              </span>
+                            </span>
+                          ))}
+                        </p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : null}
           </>
         )}
       </div>

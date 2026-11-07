@@ -21,6 +21,7 @@ import {
 import { authedFetch } from "@/lib/auth";
 import { InvestisseurTopbar } from "../../layout";
 import {
+  CheminsDetention,
   BudgetOptimisationPanel,
   fmtDate,
   fmtMoney,
@@ -422,6 +423,16 @@ export default function ProjetPage() {
                         {a.is_me ? (
                           <span className="text-white/40"> (vous)</span>
                         ) : null}
+                        {a.via_moi_pct ? (
+                          <span className="text-white/40">
+                            {" "}
+                            (dont vous : {a.via_moi_pct.toLocaleString(
+                              "fr-CA",
+                              { maximumFractionDigits: 1 }
+                            )}{" "}
+                            %)
+                          </span>
+                        ) : null}
                       </span>
                       <span className="font-bold tabular-nums text-white">
                         {a.parts_pct !== null
@@ -620,8 +631,10 @@ function ParticipationHero({
             maximumFractionDigits: 1
           })}{" "}
           % de la compagnie
+          {(data.pct_indirect ?? 0) > 0 ? " (direct + via compagnie)" : ""}
         </span>
       </div>
+      <CheminsDetention chemins={data.chemins} className="-mt-2 mb-4" />
 
       {/* Les chiffres qui comptent */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
