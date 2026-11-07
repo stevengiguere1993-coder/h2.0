@@ -203,11 +203,17 @@ class InvestProjetProfil(Base, TimestampUpdateMixin):
 
 
 class InvestDocument(Base, TimestampMixin):
-    """Document partagé aux investisseurs d'une compagnie.
+    """Document de l'espace investisseur d'une compagnie.
 
-    Deux sources : téléversement direct, ou fichier COCHÉ dans le Drive
-    (dont on stocke une copie au moment du partage — l'investisseur ne
-    touche jamais au Drive lui-même).
+    Sources : téléversement par l'admin (``upload``), fichier COCHÉ dans
+    le Drive (``drive`` — copie au moment du partage, l'investisseur ne
+    touche jamais au Drive), ou DÉPÔT par l'investisseur lui-même
+    (``investisseur``, Steven 2026-11-07 : « déposer des documents dans
+    leur espace »).
+
+    ``destinataire_user_id`` NULL = partagé à tous les investisseurs de
+    la compagnie ; sinon PRIVÉ à cet investisseur (relevé, convention,
+    feuillet fiscal, ou son propre dépôt).
     """
 
     __tablename__ = "inv_documents"
@@ -224,10 +230,18 @@ class InvestDocument(Base, TimestampMixin):
     )
 
     title: Mapped[str] = mapped_column(String(255), nullable=False)
-    #: upload | drive
+    #: upload | drive | investisseur
     source: Mapped[str] = mapped_column(
         String(16), nullable=False, default="upload", server_default="upload"
     )
+    #: NULL = partagé à toute la compagnie ; sinon privé à ce compte.
+    #: Colonne additive (ensure_invest_portal_tables).
+    destinataire_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    #: Mot laissé avec le document (dépôt par l'investisseur, ou
+    #: consigne de l'admin). Colonne additive.
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     drive_file_id: Mapped[Optional[str]] = mapped_column(
         String(128), nullable=True
     )

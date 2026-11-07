@@ -1738,6 +1738,20 @@ async def ensure_invest_portal_tables() -> None:
                     "EXISTS masque BOOLEAN NOT NULL DEFAULT FALSE"
                 )
             )
+            # Documents privés / déposés par l'investisseur (2026-11-07).
+            await conn.execute(
+                _text(
+                    "ALTER TABLE inv_documents ADD COLUMN IF NOT EXISTS "
+                    "destinataire_user_id INTEGER REFERENCES users(id) "
+                    "ON DELETE CASCADE"
+                )
+            )
+            await conn.execute(
+                _text(
+                    "ALTER TABLE inv_documents ADD COLUMN IF NOT EXISTS "
+                    "note TEXT"
+                )
+            )
             # Rôle « investisseur » (2026-11-07) : les comptes créés par
             # le pôle étaient des employés au seul volet investisseur →
             # ils prennent le nouveau rôle. Idempotent (plus aucune

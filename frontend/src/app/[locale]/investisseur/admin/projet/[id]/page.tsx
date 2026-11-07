@@ -36,6 +36,9 @@ import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { InvestisseurTopbar } from "../../../layout";
 import {
+  DOC_ACCEPT,
+  DocumentRow,
+  docTypeLabel,
   DepenseCategorie,
   fmtDate,
   fmtMoney,
@@ -144,12 +147,7 @@ type AdminProjet = {
     description: string | null;
     kind: string;
   }[];
-  documents: {
-    id: number;
-    title: string;
-    source: string;
-    size_bytes: number;
-  }[];
+  documents: DocumentRow[];
 };
 
 type DriveFileT = {
@@ -402,11 +400,18 @@ export default function AdminProjetPage() {
     if (res.ok) await load();
   }
 
+  //: Document PRIVÉ à un investisseur (NULL = partagé à la compagnie) +
+  //: mot d'accompagnement (Steven 2026-11-07).
+  const [docDestinataire, setDocDestinataire] = useState<string>("");
+  const [docNote, setDocNote] = useState("");
+
   async function uploadDocument(file: File) {
     setUploadBusy(true);
     try {
       const fd = new FormData();
       fd.append("file", file);
+      if (docDestinataire) fd.append("destinataire_user_id", docDestinataire);
+      if (docNote.trim()) fd.append("note", docNote.trim());
       const res = await authedFetch(
         `/api/v1/invest/admin/projets/${entrepriseId}/documents`,
         { method: "POST", body: fd }
@@ -420,6 +425,7 @@ export default function AdminProjetPage() {
         );
         return;
       }
+      setDocNote("");
       await load();
     } finally {
       setUploadBusy(false);
@@ -436,6 +442,21 @@ export default function AdminProjetPage() {
     window.open(url, "_blank", "noopener");
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
+
+  //: Comptes investisseurs pouvant recevoir un document privé : les
+  //: détenteurs (cascade) qui ont un compte + les participations.
+  const destinatairesPossibles = (() => {
+    const vus = new Map<number, string>();
+    for (const d of data?.detenteurs ?? []) {
+      if (d.user_id !== null && d.has_account) vus.set(d.user_id, d.name);
+    }
+    for (const p of data?.participations ?? []) {
+      if (!vus.has(p.user_id)) vus.set(p.user_id, p.user_name);
+    }
+    return Array.from(vus.entries())
+      .map(([user_id, name]) => ({ user_id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, "fr"));
+  })();
 
   if (loading) {
     return (
@@ -1246,7 +1267,7 @@ export default function AdminProjetPage() {
               </div>
               <div className="mb-2 flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-white">
-                  Documents partagés
+                  Documents de l&apos;espace investisseur
                 </h2>
                 <div className="flex items-center gap-1.5">
                   <button
@@ -1276,10 +1297,10 @@ export default function AdminProjetPage() {
                     ) : (
                       <Paperclip className="h-3 w-3" />
                     )}
-                    PDF
+                    Fichier
                     <input
                       type="file"
-                      accept="application/pdf"
+                      accept={DOC_ACCEPT}
                       className="hidden"
                       disabled={uploadBusy}
                       onChange={(e) => {
@@ -1291,9 +1312,41 @@ export default function AdminProjetPage() {
                   </label>
                 </div>
               </div>
+              <div className="mb-2 grid gap-1.5 sm:grid-cols-2">
+                <label className="text-[11px] text-white/55">
+                  Pour qui
+                  <select
+                    value={docDestinataire}
+                    onChange={(e) => setDocDestinataire(e.target.value)}
+                    className="input mt-0.5 w-full text-xs"
+                  >
+                    <option value="">
+                      Tous les investisseurs de la compagnie
+                    </option>
+                    {destinatairesPossibles.map((d) => (
+                      <option key={d.user_id} value={String(d.user_id)}>
+                        Privé — {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-[11px] text-white/55">
+                  Mot d&apos;accompagnement (facultatif)
+                  <input
+                    type="text"
+                    value={docNote}
+                    onChange={(e) => setDocNote(e.target.value)}
+                    maxLength={2000}
+                    placeholder="ex. Relevé 2025 à signer"
+                    className="input mt-0.5 w-full text-xs"
+                  />
+                </label>
+              </div>
               <p className="mb-2 text-[11px] text-white/35">
                 Les investisseurs ne voient QUE cette liste — jamais le
-                Drive complet de l&apos;immeuble.
+                Drive complet de l&apos;immeuble. PDF, image, Word ou Excel ;
+                un document privé n&apos;est vu que par son destinataire ;
+                un dépôt fait par un investisseur arrive ici avec son nom.
               </p>
               {data.documents.length === 0 ? (
                 <p className="py-3 text-center text-xs text-white/40">
@@ -1315,13 +1368,26 @@ export default function AdminProjetPage() {
                         <span className="min-w-0">
                           <span className="block truncate text-sm text-white">
                             {d.title}
+                            {d.prive ? (
+                              <span className="ml-1.5 inline-flex items-center rounded-full border border-violet-500/40 bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-bold text-violet-300">
+                                Privé · {d.destinataire_name || "?"}
+                              </span>
+                            ) : null}
                           </span>
-                          <span className="text-[11px] text-white/40">
+                          <span className="block text-[11px] text-white/40">
                             {d.source === "drive"
                               ? "copié du Drive"
+                              : d.source === "investisseur"
+                              ? `déposé par ${d.depose_par_name || "l'investisseur"}`
                               : "téléversé"}{" "}
-                            · {(d.size_bytes / 1024 / 1024).toFixed(1)} Mo
+                            · {docTypeLabel(d)}
+                            {d.created_at ? ` · ${fmtDate(d.created_at)}` : ""}
                           </span>
+                          {d.note ? (
+                            <span className="block truncate text-[11px] text-white/55">
+                              {d.note}
+                            </span>
+                          ) : null}
                         </span>
                       </button>
                       <button

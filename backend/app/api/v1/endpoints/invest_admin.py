@@ -34,7 +34,7 @@ import re
 from datetime import date
 from typing import List, Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
@@ -61,6 +61,13 @@ from app.services.invest_cascade import (
     Identite,
     charger_graphe,
     detenteurs_de,
+)
+from app.services.invest_documents import (
+    document_payload,
+    entetes_inline,
+    lire_fichier,
+    titre_de,
+    type_de,
 )
 from app.services.invest_invite import (
     InvestInviteError,
@@ -94,7 +101,6 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/invest/admin", tags=["invest-admin"])
 
 _FLUX_TYPES = {t.value for t in InvestFluxType}
-_DOC_MAX_BYTES = 25 * 1024 * 1024
 
 
 # ─────────────────────────── Schemas ───────────────────────────
@@ -157,6 +163,9 @@ class JalonCreate(BaseModel):
 class FromDriveRequest(BaseModel):
     file_id: str = Field(..., min_length=3, max_length=128)
     title: Optional[str] = Field(default=None, max_length=255)
+    #: Privé à cet investisseur (NULL = partagé à la compagnie).
+    destinataire_user_id: Optional[int] = None
+    note: Optional[str] = Field(default=None, max_length=2000)
 
 
 # ─────────────────────────── Helpers ───────────────────────────
@@ -794,12 +803,7 @@ async def get_projet(
             for j in jalons
         ],
         "documents": [
-            {
-                "id": d.id,
-                "title": d.title,
-                "source": d.source,
-                "size_bytes": d.size_bytes,
-            }
+            await document_payload(db, d, entreprise_name=ent.name)
             for d in docs
         ],
     }
@@ -1106,50 +1110,62 @@ async def delete_jalon(
 # ─────────────────────────── Documents ───────────────────────────
 
 
+async def _destinataire_ou_422(
+    db, entreprise_id: int, destinataire_user_id: Optional[int]
+) -> Optional[int]:
+    """Un document privé va à un compte qui VOIT ce projet (cascade ou
+    participation) — sinon personne ne le lirait jamais."""
+    if not destinataire_user_id:
+        return None
+    u = await db.get(User, destinataire_user_id)
+    if u is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Investisseur introuvable."
+        )
+    from app.api.v1.endpoints.invest_portal import acces_projet
+
+    if await acces_projet(db, u.id, entreprise_id) is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Cet investisseur ne voit pas ce projet (aucune part, ou "
+            "masqué) — le document privé lui serait invisible.",
+        )
+    return u.id
+
+
 @router.post(
     "/projets/{entreprise_id}/documents",
     status_code=status.HTTP_201_CREATED,
-    summary="Téléverse un document partagé (PDF)",
+    summary="Téléverse un document (PDF, image, Word, Excel) — partagé "
+    "à la compagnie ou privé à un investisseur",
 )
 async def upload_document(
     entreprise_id: int,
     db: DBSession,
     user: CurrentUser,
     file: UploadFile = File(...),
+    destinataire_user_id: Optional[int] = Form(default=None),
+    note: Optional[str] = Form(default=None, max_length=2000),
 ) -> dict:
-    await _load_entreprise(db, entreprise_id)
-    ct = (file.content_type or "").lower()
-    if ct != "application/pdf":
-        raise HTTPException(
-            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            "Seuls les fichiers PDF sont acceptés.",
-        )
-    blob = await file.read()
-    if not blob:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Fichier vide.")
-    if len(blob) > _DOC_MAX_BYTES:
-        raise HTTPException(
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            "Document trop volumineux (max 25 Mo).",
-        )
+    ent = await _load_entreprise(db, entreprise_id)
+    ct = type_de(file)
+    blob = await lire_fichier(file)
+    dest = await _destinataire_ou_422(db, entreprise_id, destinataire_user_id)
     doc = InvestDocument(
         entreprise_id=entreprise_id,
         uploaded_by_user_id=user.id,
-        title=(file.filename or "document.pdf").rsplit(".", 1)[0][:255],
+        title=titre_de(file.filename),
         source="upload",
-        content_type="application/pdf",
+        content_type=ct,
         size_bytes=len(blob),
         blob=blob,
+        destinataire_user_id=dest,
+        note=(note or "").strip() or None,
     )
     db.add(doc)
     await db.flush()
     await db.commit()
-    return {
-        "id": doc.id,
-        "title": doc.title,
-        "source": doc.source,
-        "size_bytes": doc.size_bytes,
-    }
+    return await document_payload(db, doc, entreprise_name=ent.name)
 
 
 @router.post(
@@ -1163,7 +1179,10 @@ async def document_from_drive(
     db: DBSession,
     user: CurrentUser,
 ) -> dict:
-    await _load_entreprise(db, entreprise_id)
+    ent = await _load_entreprise(db, entreprise_id)
+    dest = await _destinataire_ou_422(
+        db, entreprise_id, data.destinataire_user_id
+    )
     try:
         from app.services import drive_api
 
@@ -1184,14 +1203,14 @@ async def document_from_drive(
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "Fichier Drive vide."
         )
-    if len(blob) > _DOC_MAX_BYTES:
+    from app.services.invest_documents import DOC_MAX_BYTES
+
+    if len(blob) > DOC_MAX_BYTES:
         raise HTTPException(
             status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             "Document trop volumineux (max 25 Mo).",
         )
-    name = (data.title or meta.get("name") or "document").rsplit(
-        ".", 1
-    )[0][:255]
+    name = titre_de(data.title or meta.get("name"))
     doc = InvestDocument(
         entreprise_id=entreprise_id,
         uploaded_by_user_id=user.id,
@@ -1201,19 +1220,19 @@ async def document_from_drive(
         content_type=meta.get("mimeType") or "application/pdf",
         size_bytes=len(blob),
         blob=blob,
+        destinataire_user_id=dest,
+        note=(data.note or "").strip() or None,
     )
     db.add(doc)
     await db.flush()
     await db.commit()
-    return {
-        "id": doc.id,
-        "title": doc.title,
-        "source": doc.source,
-        "size_bytes": doc.size_bytes,
-    }
+    return await document_payload(db, doc, entreprise_name=ent.name)
 
 
-@router.get("/documents/{doc_id}/pdf", summary="Document partagé (admin)")
+@router.get(
+    "/documents/{doc_id}/pdf",
+    summary="Fichier d'un document de l'espace investisseur (admin)",
+)
 async def admin_document_pdf(
     doc_id: int, db: DBSession, user: CurrentUser
 ) -> Response:
@@ -1231,9 +1250,7 @@ async def admin_document_pdf(
     return Response(
         content=bytes(doc.blob),
         media_type=doc.content_type or "application/pdf",
-        headers={
-            "Content-Disposition": f'inline; filename="{doc.title}.pdf"'
-        },
+        headers=entetes_inline(doc),
     )
 
 

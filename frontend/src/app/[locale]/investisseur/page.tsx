@@ -15,7 +15,9 @@ import {
   Building2,
   Download,
   Eye,
+  FileText,
   Loader2,
+  Lock,
   Settings2,
   TrendingUp
 } from "lucide-react";
@@ -25,6 +27,9 @@ import { useCurrentUser } from "@/hooks/use-current-user";
 import { InvestisseurTopbar } from "./layout";
 import {
   CheminsDetention,
+  DocumentRow,
+  docTypeLabel,
+  fmtDate,
   fmtMoney,
   fmtPct,
   PhaseBadge,
@@ -119,6 +124,35 @@ export default function PortefeuillePage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  //: « Mes documents » : tous les documents de mes projets (partagés et
+  //: privés), portefeuille personnel seulement.
+  const [documents, setDocuments] = useState<DocumentRow[]>([]);
+  useEffect(() => {
+    if (mode !== "me") {
+      setDocuments([]);
+      return;
+    }
+    let cancelled = false;
+    authedFetch("/api/v1/invest/me/documents")
+      .then(async (res) => {
+        if (cancelled || !res.ok) return;
+        setDocuments((await res.json()) as DocumentRow[]);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, data]);
+
+  async function openDocument(id: number) {
+    const res = await authedFetch(`/api/v1/invest/me/documents/${id}/pdf`);
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank", "noopener");
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
 
   async function openReleve() {
     const year = new Date().getFullYear();
@@ -600,6 +634,54 @@ export default function PortefeuillePage() {
                         </p>
                       ) : null}
                     </div>
+                  ))}
+                </div>
+              </>
+            ) : null}
+
+            {/* Mes documents (portefeuille personnel) */}
+            {mode === "me" && documents.length > 0 ? (
+              <>
+                <div className="mb-3 mt-8 flex items-baseline justify-between">
+                  <h2 className="font-display text-lg font-bold tracking-tight text-white">
+                    Mes documents
+                  </h2>
+                  <span className="text-xs text-white/40">
+                    {documents.length} document
+                    {documents.length > 1 ? "s" : ""} · déposez-en depuis
+                    la fiche d&apos;un projet
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                  {documents.map((d) => (
+                    <button
+                      key={d.id}
+                      type="button"
+                      onClick={() => void openDocument(d.id)}
+                      className="group flex items-center gap-2.5 rounded-xl border border-brand-800 bg-brand-900 p-3 text-left transition hover:border-accent-500/60"
+                    >
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-500/15 text-accent-500">
+                        {d.prive ? (
+                          <Lock className="h-4 w-4" />
+                        ) : (
+                          <FileText className="h-4 w-4" />
+                        )}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium text-white group-hover:text-accent-500">
+                          {d.title}
+                        </span>
+                        <span className="block truncate text-[11px] text-white/45">
+                          {d.entreprise_name} · {docTypeLabel(d)} ·{" "}
+                          {fmtDate(d.created_at)}
+                          {d.depose_par_moi
+                            ? " · déposé par vous"
+                            : d.prive
+                            ? " · privé"
+                            : ""}
+                        </span>
+                      </span>
+                    </button>
                   ))}
                 </div>
               </>

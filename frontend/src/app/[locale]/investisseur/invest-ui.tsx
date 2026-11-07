@@ -218,8 +218,42 @@ export type ProjetDetail = {
   show_budget?: boolean;
   /** Dossier Google Drive partagé — affiché dans Documents. */
   drive_folder_url?: string | null;
-  documents: { id: number; title: string; size_bytes: number }[];
+  documents: DocumentRow[];
 };
+
+/** Document de l'espace investisseur (partagé à la compagnie, privé à
+ *  un investisseur, ou déposé par lui). */
+export type DocumentRow = {
+  id: number;
+  entreprise_id?: number;
+  entreprise_name?: string | null;
+  title: string;
+  source: string;
+  content_type?: string;
+  extension?: string;
+  size_bytes: number;
+  note?: string | null;
+  prive?: boolean;
+  destinataire_user_id?: number | null;
+  destinataire_name?: string | null;
+  depose_par_investisseur?: boolean;
+  depose_par_name?: string | null;
+  depose_par_moi?: boolean;
+  created_at?: string | null;
+};
+
+export const DOC_ACCEPT =
+  "application/pdf,image/jpeg,image/png,image/webp,image/heic," +
+  ".pdf,.jpg,.jpeg,.png,.webp,.heic,.doc,.docx,.xls,.xlsx," +
+  "application/msword," +
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document," +
+  "application/vnd.ms-excel," +
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+export function docTypeLabel(d: DocumentRow): string {
+  const ext = (d.extension || "pdf").toUpperCase();
+  return `${ext} · ${(d.size_bytes / 1024 / 1024).toFixed(1)} Mo`;
+}
 
 /* --------------------------- Formats --------------------------- */
 

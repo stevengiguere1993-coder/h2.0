@@ -1,8 +1,11 @@
 """Portail Investisseur v2 — endpoints CÔTÉ INVESTISSEUR (lecture seule).
 
-    GET /invest/me/portefeuille               vue d'ensemble
-    GET /invest/me/projets/{entreprise_id}    fiche projet
-    GET /invest/me/documents/{doc_id}/pdf     document partagé
+    GET    /invest/me/portefeuille               vue d'ensemble
+    GET    /invest/me/projets/{entreprise_id}    fiche projet
+    GET    /invest/me/documents                  tous mes documents
+    POST   /invest/me/projets/{eid}/documents    DÉPÔT d'un document
+    GET    /invest/me/documents/{doc_id}/pdf     fichier d'un document
+    DELETE /invest/me/documents/{doc_id}         retirer MON dépôt
 
 Un investisseur voit TOUTES les compagnies où il détient des parts
 selon « Parts & actionnaires » des fiches entreprise — directement ou à
@@ -22,7 +25,7 @@ import logging
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +46,16 @@ from app.services.invest_cascade import (
     Identite,
     charger_graphe,
     detentions_de,
+)
+from app.services.invest_documents import (
+    document_payload,
+    documents_visibles,
+    entetes_inline,
+    lire_fichier,
+    peut_voir,
+    prevenir_admins_du_depot,
+    titre_de,
+    type_de,
 )
 from app.services.invest_portfolio import (
     ajuster_capital_avec_soldes_qbo,
@@ -461,13 +474,8 @@ async def build_projet(
             key=lambda a: -(a["parts_pct"] or 0.0)
         )
 
-    docs = (
-        await db.execute(
-            select(InvestDocument)
-            .where(InvestDocument.entreprise_id == entreprise_id)
-            .order_by(InvestDocument.id.desc())
-        )
-    ).scalars().all()
+    # Partagés à la compagnie + privés destinés à CE compte.
+    docs = await documents_visibles(db, entreprise_id, ident.user_id or 0)
 
     immeubles = snap["immeubles"]
     for i in immeubles:
@@ -553,14 +561,9 @@ async def build_projet(
             profil.drive_folder_url if profil is not None else None
         ),
         "documents": [
-            {
-                "id": d.id,
-                "title": d.title,
-                "size_bytes": d.size_bytes,
-                "created_at": d.created_at.isoformat()
-                if d.created_at
-                else None,
-            }
+            await document_payload(
+                db, d, pour_user_id=ident.user_id, entreprise_name=ent.name
+            )
             for d in docs
         ],
     }
@@ -846,8 +849,99 @@ async def my_releve_pdf(
 
 
 @router.get(
+    "/me/documents",
+    summary="Tous mes documents (partagés et privés), tous projets",
+)
+async def my_documents(db: DBSession, user: CurrentUser) -> list[dict]:
+    """L'onglet « Mes documents » du portefeuille : chaque document
+    visible dans chacun de mes projets, le plus récent d'abord."""
+    ident = await identite_de_user(db, user.id)
+    out: list[dict] = []
+    users_cache: dict = {}
+    for part, _det, _pct in await projets_de(db, ident):
+        ent = await db.get(Entreprise, part.entreprise_id)
+        if ent is None or not ent.is_active:
+            continue
+        for d in await documents_visibles(db, part.entreprise_id, user.id):
+            out.append(
+                await document_payload(
+                    db,
+                    d,
+                    pour_user_id=user.id,
+                    entreprise_name=ent.name,
+                    users=users_cache,
+                )
+            )
+    out.sort(key=lambda d: (d["created_at"] or "", d["id"]), reverse=True)
+    return out
+
+
+@router.post(
+    "/me/projets/{entreprise_id}/documents",
+    status_code=status.HTTP_201_CREATED,
+    summary="Dépose un document dans MON espace (privé, signalé aux admins)",
+)
+async def my_document_upload(
+    entreprise_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+    note: Optional[str] = Form(default=None, max_length=2000),
+) -> dict:
+    """Steven (2026-11-07) : l'investisseur peut déposer lui-même
+    (convention signée, pièce d'identité, relevé…). Le dépôt est privé
+    à lui et aux admins, jamais vu des co-actionnaires."""
+    await _acces_projet_ou_404(db, user.id, entreprise_id)
+    ent = await db.get(Entreprise, entreprise_id)
+    ct = type_de(file)
+    blob = await lire_fichier(file)
+    doc = InvestDocument(
+        entreprise_id=entreprise_id,
+        uploaded_by_user_id=user.id,
+        destinataire_user_id=user.id,
+        title=titre_de(file.filename),
+        source="investisseur",
+        content_type=ct,
+        size_bytes=len(blob),
+        blob=blob,
+        note=(note or "").strip() or None,
+    )
+    db.add(doc)
+    await db.flush()
+    await prevenir_admins_du_depot(
+        db, doc=doc, deposant=user, entreprise_name=ent.name if ent else ""
+    )
+    await db.commit()
+    return await document_payload(
+        db, doc, pour_user_id=user.id, entreprise_name=ent.name if ent else None
+    )
+
+
+@router.delete(
+    "/me/documents/{doc_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Retire un document que J'AI déposé",
+)
+async def my_document_delete(
+    doc_id: int, db: DBSession, user: CurrentUser
+) -> Response:
+    doc = await db.get(InvestDocument, doc_id)
+    if (
+        doc is None
+        or doc.source != "investisseur"
+        or doc.uploaded_by_user_id != user.id
+    ):
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Document introuvable."
+        )
+    await db.delete(doc)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
     "/me/documents/{doc_id}/pdf",
-    summary="Document partagé (PDF inline)",
+    summary="Fichier d'un document de mon espace (inline)",
 )
 async def my_document_pdf(
     doc_id: int, db: DBSession, user: CurrentUser
@@ -859,7 +953,7 @@ async def my_document_pdf(
             .options(undefer(InvestDocument.blob))
         )
     ).scalar_one_or_none()
-    if doc is None:
+    if doc is None or not peut_voir(doc, user.id):
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "Document introuvable."
         )
@@ -870,7 +964,5 @@ async def my_document_pdf(
     return Response(
         content=bytes(doc.blob),
         media_type=doc.content_type or "application/pdf",
-        headers={
-            "Content-Disposition": f'inline; filename="{doc.title}.pdf"'
-        },
+        headers=entetes_inline(doc),
     )
