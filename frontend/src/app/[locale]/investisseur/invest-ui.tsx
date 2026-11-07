@@ -27,6 +27,14 @@ export type ProjetCard = {
   cover_photo_url: string | null;
   parts_pct: number;
   valeur_parts: number;
+  /** Valeur GLOBALE du projet (toute la compagnie). */
+  valeur_totale?: number;
+  hypotheque_totale?: number;
+  equite?: number;
+  /** Cascade : part directe, part par compagnie interposée, chemins. */
+  pct_direct?: number;
+  pct_indirect?: number;
+  chemins?: CheminDetention[];
   cashflow_moyen_part: number | null;
   statut: string;
   /** Vue globale admin seulement : nombre d'investisseurs au capital. */
@@ -39,16 +47,43 @@ export type ProjetCard = {
   tvpi: number | null;
 };
 
+/** Un chemin de détention : [compagnie détenue directement, …, projet],
+ *  chaque maillon avec le % détenu à ce niveau. */
+export type CheminDetention = {
+  pct: number;
+  direct: boolean;
+  label: string;
+  maillons: { entreprise_id: number; name: string; pct: number }[];
+};
+
+/** Compagnie PAR LAQUELLE la personne détient des projets (holding). */
+export type CompagnieIntermediaire = {
+  entreprise_id: number;
+  name: string;
+  color_accent: string | null;
+  mon_pct: number;
+  valeur: number;
+  ma_valeur: number;
+  detient: {
+    entreprise_id: number;
+    name: string;
+    pct: number;
+    est_projet: boolean;
+  }[];
+};
+
 export type Portefeuille = {
   capital_actuel: number;
   capital_investi_total: number;
   capital_rembourse: number;
   distributions_recues: number;
   valeur_parts: number;
+  valeur_projets?: number;
   tri_pct: number | null;
   tvpi: number | null;
   serie_valeur: { date: string; label: string; valeur: number }[];
   projets: ProjetCard[];
+  compagnies?: CompagnieIntermediaire[];
 };
 
 export type HypothequeRow = {
@@ -156,6 +191,9 @@ export type ProjetDetail = {
   timeline: TimelineEvent[];
   parts_pct: number;
   valeur_parts: number;
+  pct_direct?: number;
+  pct_indirect?: number;
+  chemins?: CheminDetention[];
   capital_investi_total: number;
   capital_rembourse: number;
   distributions_recues: number;
@@ -167,6 +205,10 @@ export type ProjetDetail = {
     name: string;
     parts_pct: number | null;
     is_me: boolean;
+    /** Compagnie actionnaire liée à une fiche Kratos. */
+    entreprise_id?: number | null;
+    /** Ma part dans ce projet À TRAVERS cet actionnaire (compagnie). */
+    via_moi_pct?: number | null;
   }[];
   apports_synchronises?: boolean;
   show_depenses: boolean;
@@ -176,8 +218,42 @@ export type ProjetDetail = {
   show_budget?: boolean;
   /** Dossier Google Drive partagé — affiché dans Documents. */
   drive_folder_url?: string | null;
-  documents: { id: number; title: string; size_bytes: number }[];
+  documents: DocumentRow[];
 };
+
+/** Document de l'espace investisseur (partagé à la compagnie, privé à
+ *  un investisseur, ou déposé par lui). */
+export type DocumentRow = {
+  id: number;
+  entreprise_id?: number;
+  entreprise_name?: string | null;
+  title: string;
+  source: string;
+  content_type?: string;
+  extension?: string;
+  size_bytes: number;
+  note?: string | null;
+  prive?: boolean;
+  destinataire_user_id?: number | null;
+  destinataire_name?: string | null;
+  depose_par_investisseur?: boolean;
+  depose_par_name?: string | null;
+  depose_par_moi?: boolean;
+  created_at?: string | null;
+};
+
+export const DOC_ACCEPT =
+  "application/pdf,image/jpeg,image/png,image/webp,image/heic," +
+  ".pdf,.jpg,.jpeg,.png,.webp,.heic,.doc,.docx,.xls,.xlsx," +
+  "application/msword," +
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document," +
+  "application/vnd.ms-excel," +
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+export function docTypeLabel(d: DocumentRow): string {
+  const ext = (d.extension || "pdf").toUpperCase();
+  return `${ext} · ${(d.size_bytes / 1024 / 1024).toFixed(1)} Mo`;
+}
 
 /* --------------------------- Formats --------------------------- */
 
@@ -189,6 +265,50 @@ export function fmtMoney(v: number | null | undefined): string {
 export function fmtPct(v: number | null | undefined): string {
   if (v === null || v === undefined) return "—";
   return `${v.toLocaleString("fr-CA", { maximumFractionDigits: 1 })} %`;
+}
+
+/** Détail des chemins de détention : « direct 30 % », « via Compagnie
+ *  X (30 %) → Projet (50 %) = 15 % ». Rien si tout est direct. */
+export function CheminsDetention({
+  chemins,
+  className
+}: {
+  chemins: CheminDetention[] | undefined;
+  className?: string;
+}) {
+  if (!chemins || chemins.length === 0) return null;
+  if (chemins.every((c) => c.direct)) return null;
+  return (
+    <ul className={`space-y-1 text-[11px] text-white/60 ${className ?? ""}`}>
+      {chemins.map((c, i) => (
+        <li key={i} className="flex flex-wrap items-baseline gap-x-1">
+          {c.direct ? (
+            <span>
+              Directement :{" "}
+              <b className="tabular-nums text-white/85">{fmtPct(c.pct)}</b>
+            </span>
+          ) : (
+            <span>
+              Via{" "}
+              {c.maillons.slice(0, -1).map((m, j) => (
+                <span key={m.entreprise_id}>
+                  {j > 0 ? " → " : ""}
+                  <b className="text-white/85">{m.name}</b>{" "}
+                  <span className="tabular-nums">({fmtPct(m.pct)})</span>
+                </span>
+              ))}
+              {" → "}
+              <span className="tabular-nums">
+                {fmtPct(c.maillons[c.maillons.length - 1].pct)} du projet
+              </span>{" "}
+              ={" "}
+              <b className="tabular-nums text-white/85">{fmtPct(c.pct)}</b>
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 export function fmtDate(iso: string | null | undefined): string {

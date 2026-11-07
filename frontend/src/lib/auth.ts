@@ -30,7 +30,12 @@ export function setToken(token: string | null) {
 }
 
 export type LoginResult = { access_token: string; token_type: string };
-export type UserRole = "owner" | "admin" | "manager" | "employee";
+export type UserRole =
+  | "owner"
+  | "admin"
+  | "manager"
+  | "employee"
+  | "investisseur";
 
 export type CurrentUser = {
   id: number;
@@ -68,7 +73,8 @@ const ROLE_RANK: Record<UserRole, number> = {
   owner: 4,
   admin: 3,
   manager: 2,
-  employee: 1
+  employee: 1,
+  investisseur: 0
 };
 
 /** True if `user` has at least `min` role privilege level. */

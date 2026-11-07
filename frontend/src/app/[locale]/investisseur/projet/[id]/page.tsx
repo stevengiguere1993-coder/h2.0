@@ -15,12 +15,18 @@ import {
   FileText,
   FolderOpen,
   Loader2,
+  Lock,
+  Trash2,
+  Upload,
   Users
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
 import { InvestisseurTopbar } from "../../layout";
 import {
+  CheminsDetention,
+  DOC_ACCEPT,
+  docTypeLabel,
   BudgetOptimisationPanel,
   fmtDate,
   fmtMoney,
@@ -93,6 +99,46 @@ export default function ProjetPage() {
     window.open(url, "_blank", "noopener");
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
     void title;
+  }
+
+  //: Dépôt d'un document par l'investisseur (Steven 2026-11-07) :
+  //: privé à lui et aux admins, qui en sont avertis.
+  const [depotBusy, setDepotBusy] = useState(false);
+  const [depotNote, setDepotNote] = useState("");
+  const [depotErreur, setDepotErreur] = useState<string | null>(null);
+
+  async function deposerDocument(file: File) {
+    setDepotBusy(true);
+    setDepotErreur(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (depotNote.trim()) fd.append("note", depotNote.trim());
+      const res = await authedFetch(
+        `/api/v1/invest/me/projets/${entrepriseId}/documents`,
+        { method: "POST", body: fd }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setDepotErreur(
+          typeof body?.detail === "string"
+            ? body.detail
+            : "Dépôt échoué. Réessayez."
+        );
+        return;
+      }
+      setDepotNote("");
+      await load();
+    } finally {
+      setDepotBusy(false);
+    }
+  }
+
+  async function retirerMonDocument(id: number) {
+    const res = await authedFetch(`/api/v1/invest/me/documents/${id}`, {
+      method: "DELETE"
+    });
+    if (res.ok) await load();
   }
 
   if (loading || !ready) {
@@ -422,6 +468,16 @@ export default function ProjetPage() {
                         {a.is_me ? (
                           <span className="text-white/40"> (vous)</span>
                         ) : null}
+                        {a.via_moi_pct ? (
+                          <span className="text-white/40">
+                            {" "}
+                            (dont vous : {a.via_moi_pct.toLocaleString(
+                              "fr-CA",
+                              { maximumFractionDigits: 1 }
+                            )}{" "}
+                            %)
+                          </span>
+                        ) : null}
                       </span>
                       <span className="font-bold tabular-nums text-white">
                         {a.parts_pct !== null
@@ -441,7 +497,9 @@ export default function ProjetPage() {
             ) : null}
 
             {/* Documents */}
-            {data.documents.length > 0 || data.drive_folder_url ? (
+            {data.documents.length > 0 ||
+            data.drive_folder_url ||
+            !enApercu ? (
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
                 <h2 className="mb-3 text-sm font-semibold text-white">
                   Documents
@@ -466,28 +524,111 @@ export default function ProjetPage() {
                     </span>
                   </a>
                 ) : null}
+                {data.documents.length === 0 ? (
+                  <p className="py-2 text-xs text-white/45">
+                    Aucun document pour l&apos;instant.
+                  </p>
+                ) : null}
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   {data.documents.map((d) => (
-                    <button
+                    <div
                       key={d.id}
-                      type="button"
-                      onClick={() => void openDocument(d.id, d.title)}
                       className="group flex items-center gap-2.5 rounded-xl border border-brand-800 bg-brand-950/50 p-3 text-left transition hover:border-accent-500/60"
                     >
-                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-500/15 text-accent-500">
-                        <FileText className="h-4 w-4" />
-                      </span>
-                      <span className="min-w-0">
-                        <span className="block truncate text-sm font-medium text-white group-hover:text-accent-500">
-                          {d.title}
+                      <button
+                        type="button"
+                        onClick={() => void openDocument(d.id, d.title)}
+                        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                      >
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-500/15 text-accent-500">
+                          {d.prive ? (
+                            <Lock className="h-4 w-4" />
+                          ) : (
+                            <FileText className="h-4 w-4" />
+                          )}
                         </span>
-                        <span className="text-[11px] text-white/40">
-                          PDF · {(d.size_bytes / 1024 / 1024).toFixed(1)} Mo
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium text-white group-hover:text-accent-500">
+                            {d.title}
+                          </span>
+                          <span className="block text-[11px] text-white/45">
+                            {docTypeLabel(d)}
+                            {d.depose_par_moi
+                              ? " · déposé par vous"
+                              : d.prive
+                              ? " · privé, pour vous"
+                              : ""}
+                          </span>
+                          {d.note ? (
+                            <span className="block truncate text-[11px] text-white/55">
+                              {d.note}
+                            </span>
+                          ) : null}
                         </span>
-                      </span>
-                    </button>
+                      </button>
+                      {d.depose_par_moi && !enApercu ? (
+                        <button
+                          type="button"
+                          onClick={() => void retirerMonDocument(d.id)}
+                          className="shrink-0 rounded p-1 text-white/40 hover:text-rose-400"
+                          aria-label="Retirer ce document"
+                          title="Retirer ce document"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      ) : null}
+                    </div>
                   ))}
                 </div>
+
+                {/* Dépôt par l'investisseur */}
+                {!enApercu ? (
+                  <div className="mt-3 rounded-xl border border-dashed border-brand-700 bg-brand-950/40 p-3">
+                    <p className="text-[11px] font-semibold text-white/70">
+                      Déposer un document
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-white/45">
+                      Convention signée, pièce d&apos;identité, relevé… Visible
+                      par vous et l&apos;équipe Horizon seulement (jamais par
+                      les autres actionnaires). PDF, image, Word ou Excel,
+                      25 Mo max.
+                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <input
+                        type="text"
+                        value={depotNote}
+                        onChange={(e) => setDepotNote(e.target.value)}
+                        placeholder="Mot d'accompagnement (facultatif)"
+                        maxLength={2000}
+                        className="input min-w-0 flex-1 text-xs"
+                      />
+                      <label className="btn-outline-accent btn-xs inline-flex cursor-pointer items-center gap-1">
+                        {depotBusy ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Upload className="h-3 w-3" />
+                        )}
+                        Choisir un fichier
+                        <input
+                          type="file"
+                          accept={DOC_ACCEPT}
+                          className="hidden"
+                          disabled={depotBusy}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) void deposerDocument(f);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                    </div>
+                    {depotErreur ? (
+                      <p className="mt-2 text-[11px] font-medium text-rose-400">
+                        {depotErreur}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -620,8 +761,10 @@ function ParticipationHero({
             maximumFractionDigits: 1
           })}{" "}
           % de la compagnie
+          {(data.pct_indirect ?? 0) > 0 ? " (direct + via compagnie)" : ""}
         </span>
       </div>
+      <CheminsDetention chemins={data.chemins} className="-mt-2 mb-4" />
 
       {/* Les chiffres qui comptent */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
