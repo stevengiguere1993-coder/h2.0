@@ -77,25 +77,21 @@ const ROLE_LABEL: Record<UserRole, string> = {
   owner: "Propriétaire",
   admin: "Administrateur",
   manager: "Gestionnaire",
-  employee: "Employé",
-  investisseur: "Investisseur"
+  employee: "Employé"
 };
 
 const ROLE_DESC: Record<UserRole, string> = {
   owner: "Accès total · gère les utilisateurs et leurs rôles",
   admin: "Accès total sauf gestion des rôles",
   manager: "CRM, clients, finances, approbations de congés",
-  employee: "Projets assignés, agenda et congés personnels",
-  investisseur:
-    "Actionnaire externe : son portefeuille et ses documents, rien d'autre"
+  employee: "Projets assignés, agenda et congés personnels"
 };
 
 const ROLE_CLASS: Record<UserRole, string> = {
   owner: "bg-accent-500/15 text-accent-500 border-accent-500/40",
   admin: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
   manager: "bg-sky-500/15 text-sky-300 border-sky-500/40",
-  employee: "bg-white/5 text-white/60 border-brand-800",
-  investisseur: "bg-violet-500/15 text-violet-300 border-violet-500/40"
+  employee: "bg-white/5 text-white/60 border-brand-800"
 };
 
 /** Rang des rôles (miroir de ROLE_RANK côté backend) : on ne peut « voir
@@ -104,8 +100,7 @@ const ROLE_RANK: Record<UserRole, number> = {
   owner: 4,
   admin: 3,
   manager: 2,
-  employee: 1,
-  investisseur: 0
+  employee: 1
 };
 
 /** Wrapper topbar pour le volet construction (utilise le contexte /app). */
@@ -879,8 +874,7 @@ export function UsersManager({
                             "owner",
                             "admin",
                             "manager",
-                            "employee",
-                            "investisseur"
+                            "employee"
                           ] as UserRole[]
                         ).map((r) => {
                           const active = selectedUser.role === r;
@@ -1475,15 +1469,7 @@ function AddUserModal({
         <div>
           <label className="label">Rôle</label>
           <div className="grid gap-2 sm:grid-cols-2">
-            {(
-              [
-                "investisseur",
-                "employee",
-                "manager",
-                "admin",
-                "owner"
-              ] as UserRole[]
-            ).map(
+            {(["employee", "manager", "admin", "owner"] as UserRole[]).map(
               (r) => (
                 <button
                   key={r}

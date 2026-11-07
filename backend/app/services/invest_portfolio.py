@@ -71,15 +71,13 @@ async def partner_directory(
     """Actionnaires déclarés dans la fiche entreprise (gestion
     d'entreprise) : la seule source des noms et des % de parts.
 
-    Retourne {"rows": [...], "partners": [EntreprisePartner…] (même
-    ordre), "by_user": {user_id: row}} où chaque row = {partner_id,
-    name, ownership_pct, email, user_id}. Le `partner_name` saisi
-    (souvent un holding) PRIME sur le nom du compte lié."""
+    Retourne {"rows": [...], "by_user": {user_id: row}} où chaque row =
+    {partner_id, name, ownership_pct, email, user_id}. Le `partner_name`
+    saisi (souvent un holding) PRIME sur le nom du compte lié."""
     from app.models.entreprise import EntreprisePartner
     from app.models.user import User
 
     rows: list[dict] = []
-    partners: list[EntreprisePartner] = []
     by_user: dict[int, dict] = {}
     for pr in (
         await db.execute(
@@ -121,10 +119,9 @@ async def partner_directory(
             "user_id": pu.id if pu else None,
         }
         rows.append(row)
-        partners.append(pr)
         if pu is not None and pu.id not in by_user:
             by_user[pu.id] = row
-    return {"rows": rows, "partners": partners, "by_user": by_user}
+    return {"rows": rows, "by_user": by_user}
 
 
 def effective_parts_pct(
@@ -831,23 +828,17 @@ async def _equite_at(
 
 async def serie_valeur_totale(
     db: AsyncSession,
-    participations: list,
+    participations: list[tuple[InvestParticipation, list[InvestFlux]]],
 ) -> list[dict]:
     """Points trimestriels : valeur des parts (approx. historique) +
-    retours cumulés — la « valeur totale créée » du portefeuille.
-
-    ``participations`` : [(part, flux)] (le % effectif vient alors de la
-    fiche entreprise) ou [(part, flux, pct_effectif)] (cascade)."""
-    triples = [
-        (t[0], t[1], t[2] if len(t) > 2 else None) for t in participations
-    ]
-    all_flux = [f for _, fl, _ in triples for f in fl]
+    retours cumulés — la « valeur totale créée » du portefeuille."""
+    all_flux = [f for _, fl in participations for f in fl]
     if not all_flux:
         return []
     # % effectifs (fiche entreprise) — annuaire par compagnie, une fois.
     directories: dict[int, dict] = {}
-    for part, _fl, pct_fixe in triples:
-        if pct_fixe is None and part.entreprise_id not in directories:
+    for part, _fl in participations:
+        if part.entreprise_id not in directories:
             directories[part.entreprise_id] = await partner_directory(
                 db, part.entreprise_id
             )
@@ -864,13 +855,9 @@ async def serie_valeur_totale(
     out: list[dict] = []
     for at in points:
         total = 0.0
-        for part, fl, pct_fixe in triples:
-            pct = (
-                pct_fixe
-                if pct_fixe is not None
-                else effective_parts_pct(
-                    part, directories.get(part.entreprise_id)
-                )
+        for part, fl in participations:
+            pct = effective_parts_pct(
+                part, directories.get(part.entreprise_id)
             ) / 100.0
             started = any(
                 f.date_flux <= at

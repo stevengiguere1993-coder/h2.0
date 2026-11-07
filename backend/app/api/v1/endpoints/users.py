@@ -139,7 +139,7 @@ def _validate_volets(volets: List[str]) -> List[str]:
 
 
 class RoleUpdate(BaseModel):
-    role: str = Field(..., pattern="^(owner|admin|manager|employee|investisseur)$")
+    role: str = Field(..., pattern="^(owner|admin|manager|employee)$")
 
 
 class VoletsUpdate(BaseModel):
@@ -163,7 +163,7 @@ class UserCreate(BaseModel):
     full_name: Optional[str] = Field(default=None, max_length=255)
     role: str = Field(
         default=UserRole.EMPLOYEE.value,
-        pattern="^(owner|admin|manager|employee|investisseur)$",
+        pattern="^(owner|admin|manager|employee)$",
     )
     volets: List[str] = Field(
         default_factory=lambda: list(DEFAULT_VOLETS),
@@ -249,11 +249,7 @@ async def create_user(
             "Un compte existe déjà pour ce courriel.",
         )
 
-    volets = (
-        ["investisseur"]
-        if data.role == UserRole.INVESTOR.value
-        else _validate_volets(data.volets)
-    )
+    volets = _validate_volets(data.volets)
 
     u = User(
         email=email_norm,
@@ -408,9 +404,6 @@ async def update_role(
         )
     old_role = u.role
     u.role = data.role
-    if data.role == UserRole.INVESTOR.value:
-        # Un investisseur n'a que son portail.
-        u.volets_json = json.dumps(["investisseur"])
     # Keep the legacy is_admin flag in sync so old code paths still work.
     u.is_admin = data.role in (UserRole.OWNER.value, UserRole.ADMIN.value)
     await db.flush()

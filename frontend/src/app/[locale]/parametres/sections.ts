@@ -39,12 +39,7 @@ import {
 import { canEnterVolet } from "@/lib/access";
 import { hasMinRole } from "@/lib/auth";
 
-export type Role =
-  | "investisseur"
-  | "employee"
-  | "manager"
-  | "admin"
-  | "owner";
+export type Role = "employee" | "manager" | "admin" | "owner";
 export type Card = {
   title: string;
   desc: string;

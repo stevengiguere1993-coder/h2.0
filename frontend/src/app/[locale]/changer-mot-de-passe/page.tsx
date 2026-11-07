@@ -109,9 +109,8 @@ export default function ChangePasswordPage() {
       // directement sur son portail — jamais sur l'app chantier /m.
       const acc = { access: me?.access || {} };
       const investisseurSeul =
-        me?.role === "investisseur" ||
-        (canEnterVolet(acc, "investisseur") &&
-          !POLES_OPERATIONNELS.some((p) => canEnterVolet(acc, p)));
+        canEnterVolet(acc, "investisseur") &&
+        !POLES_OPERATIONNELS.some((p) => canEnterVolet(acc, p));
       const dest = investisseurSeul
         ? "/investisseur"
         : me?.role === "employee" || me?.role === undefined

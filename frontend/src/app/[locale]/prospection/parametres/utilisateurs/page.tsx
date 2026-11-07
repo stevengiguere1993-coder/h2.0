@@ -36,8 +36,7 @@ const ROLE_LABEL: Record<UserRole, string> = {
   owner: "Propriétaire",
   admin: "Administrateur",
   manager: "Gestionnaire",
-  employee: "Employé",
-  investisseur: "Investisseur"
+  employee: "Employé"
 };
 
 const VOLET_LABEL: Record<Volet, string> = {

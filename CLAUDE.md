@@ -364,34 +364,3 @@ en ordre d'envoi, numéros pris dans QB sautés, DocNumber QB mis à jour
 facture par facture, compteur ramené juste après. Le PDF de facture
 porte l'adresse et le téléphone d'Horizon (`COMPANY_ADDRESS`,
 `COMPANY_TEL` dans `soumission_pdf.py`).
-
-## Espace investisseur — cascade, rôle, documents (2026-11-07)
-
-Steven : « Vincent ne voit aucun projet alors qu'il détient 30 % de
-9417-1287 et 9520-8955 […] il doit voir les projets des compagnies qu'il
-détient, la valeur globale et son % personnel ». Cause : participations
-« activées » mais jamais cochées « Visible dans son portail ».
-
-1. **Cascade** (`app/services/invest_cascade.py`) : la seule source des
-   parts est « Parts & actionnaires » de la fiche entreprise. Une
-   personne morale LIÉE à une fiche Kratos (`partner_entreprise_id`) est
-   une arête : % indirect = % dans le holding × % du holding dans le
-   projet, récursif (profondeur 6, sans boucle), chemins conservés. Un
-   projet est visible dès que la personne (compte, courriel, sinon nom
-   complet) détient des parts ; `InvestParticipation.masque` est la
-   SEULE exception (l'ancien `is_visible` n'est plus lu). La
-   participation ne porte que les flux, le statut et « masqué ». Une
-   personne listée à la fois en direct et via son holding dans la même
-   compagnie additionne les deux (afficher les chemins le montre).
-2. **Rôle `investisseur`** (rang 0, sous `employee`) : `User.volets`
-   renvoie toujours `["investisseur"]`, aucun accès opérationnel ; pages
-   Paramètres / Mon profil / Mon portefeuille au seuil `investisseur`.
-   Comptes du pôle créés avec ce rôle ; migration idempotente au
-   démarrage (`ensure_invest_portal_tables`). Un employé actionnaire
-   garde son rôle + volet investisseur (cohabitation).
-3. **Documents** (`app/services/invest_documents.py`) :
-   `destinataire_user_id` NULL = partagé à la compagnie, sinon privé ;
-   dépôt par l'investisseur (`source="investisseur"`, privé à lui,
-   notification `invest_document_depose` aux admins) ; PDF, images,
-   Word, Excel, 25 Mo ; `GET /invest/me/documents` = onglet « Mes
-   documents ».

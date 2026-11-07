@@ -4,10 +4,6 @@
     GET    /invest/admin/projets/{eid}                  détail complet
     PATCH  /invest/admin/projets/{eid}/profil           publication / description / phase
     POST   /invest/admin/participations                 lier (ou créer) un investisseur
-    (depuis le 2026-11-07, un projet est visible dès que la personne a
-    des parts selon « Parts & actionnaires », directement ou par une
-    compagnie — cascade ; la participation porte les flux et
-    l'exception « masqué »)
     PATCH  /invest/admin/participations/{id}
     DELETE /invest/admin/participations/{id}
     POST   /invest/admin/participations/{id}/flux       apport / remboursement / dividende
@@ -34,7 +30,7 @@ import re
 from datetime import date
 from typing import List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
@@ -55,19 +51,6 @@ from app.models.user import User
 from app.api.v1.endpoints.invest_portal import (
     build_portefeuille,
     build_projet,
-    projets_de,
-)
-from app.services.invest_cascade import (
-    Identite,
-    charger_graphe,
-    detenteurs_de,
-)
-from app.services.invest_documents import (
-    document_payload,
-    entetes_inline,
-    lire_fichier,
-    titre_de,
-    type_de,
 )
 from app.services.invest_invite import (
     InvestInviteError,
@@ -101,6 +84,7 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/invest/admin", tags=["invest-admin"])
 
 _FLUX_TYPES = {t.value for t in InvestFluxType}
+_DOC_MAX_BYTES = 25 * 1024 * 1024
 
 
 # ─────────────────────────── Schemas ───────────────────────────
@@ -131,8 +115,7 @@ class ParticipationCreate(BaseModel):
     user_id: Optional[int] = None
     new_investor: Optional[NewInvestor] = None
     parts_pct: float = Field(..., gt=0, le=100)
-    #: Exception : cacher ce projet à cet investisseur.
-    masque: bool = False
+    is_visible: bool = True
     #: Apport initial optionnel créé en même temps.
     apport_initial: Optional[float] = Field(default=None, gt=0)
     apport_date: Optional[date] = None
@@ -140,8 +123,7 @@ class ParticipationCreate(BaseModel):
 
 class ParticipationPatch(BaseModel):
     parts_pct: Optional[float] = Field(default=None, gt=0, le=100)
-    #: True = masqué dans son portail (exception admin).
-    masque: Optional[bool] = None
+    is_visible: Optional[bool] = None
     statut: Optional[str] = Field(default=None, max_length=16)
     notes: Optional[str] = Field(default=None, max_length=5000)
 
@@ -163,9 +145,6 @@ class JalonCreate(BaseModel):
 class FromDriveRequest(BaseModel):
     file_id: str = Field(..., min_length=3, max_length=128)
     title: Optional[str] = Field(default=None, max_length=255)
-    #: Privé à cet investisseur (NULL = partagé à la compagnie).
-    destinataire_user_id: Optional[int] = None
-    note: Optional[str] = Field(default=None, max_length=2000)
 
 
 # ─────────────────────────── Helpers ───────────────────────────
@@ -240,11 +219,10 @@ def _ensure_volet_investisseur(u: User) -> None:
     volet `investisseur` au compte SANS toucher à ses autres accès.
 
     - owner/admin : déjà tous les volets, rien à faire ;
-    - investisseur : son seul volet est déjà le portail ;
     - volets_json NULL = défauts implicites (construction, prospection,
       devlog) → on matérialise les défauts AVANT d'ajouter, sinon on
       les lui retirerait."""
-    if u.role in ("owner", "admin", "investisseur"):
+    if u.role in ("owner", "admin"):
         return
     import json as _json
 
@@ -307,7 +285,7 @@ async def _create_investor_account(
     user = User(
         email=email_norm,
         hashed_password=get_password_hash(pw),
-        role="investisseur",
+        role="employee",
         is_active=True,
         must_change_password=True,
         volets_json=investor_volets_json(),
@@ -332,10 +310,9 @@ async def _create_investor_account(
 async def _ensure_participation(
     db, user_id: int, entreprise_id: int, pct: Optional[float]
 ) -> tuple[InvestParticipation, bool]:
-    """Participation pour ce user/entreprise — créée au besoin, jamais
-    dupliquée, visible d'office (la cascade fait foi ; l'admin peut la
-    masquer). Le % vient de la fiche entreprise (Parts & actionnaires) ;
-    il ne sert qu'en repli quand la personne n'y figure plus."""
+    """Participation (INVISIBLE par défaut) pour ce user/entreprise —
+    créée au besoin, jamais dupliquée. Le % vient de la fiche
+    entreprise (Parts & actionnaires), ajustable ensuite."""
     part = (
         await db.execute(
             select(InvestParticipation).where(
@@ -350,6 +327,7 @@ async def _ensure_participation(
         user_id=user_id,
         entreprise_id=entreprise_id,
         parts_pct=pct if pct is not None else 0,
+        is_visible=False,
     )
     db.add(part)
     await db.flush()
@@ -397,7 +375,7 @@ async def _participation_payload(
         "parts_pct": pct_eff,
         "parts_source": "fiche" if dirrow else "manuel",
         "statut": part.statut,
-        "masque": bool(part.masque),
+        "is_visible": part.is_visible,
         "notes": part.notes,
         "valeur_parts": valeur_parts,
         **k,
@@ -578,7 +556,6 @@ async def list_projets(db: DBSession, user: CurrentUser) -> List[dict]:
         ).scalars().all():
             users_by_id[u.id] = u
 
-    graphe = await charger_graphe(db)
     out: List[dict] = []
     for ent in ents:
         snap = await entreprise_snapshot(db, ent.id)
@@ -616,15 +593,10 @@ async def list_projets(db: DBSession, user: CurrentUser) -> List[dict]:
                         else (_user_display(u) if u else "—")
                     ),
                     "parts_pct": effective_parts_pct(p, directory),
-                    "masque": bool(p.masque),
+                    "is_visible": p.is_visible,
                     "statut": p.statut,
                 }
             )
-        # Qui est RÉELLEMENT derrière la compagnie (cascade) — personnes
-        # directes et actionnaires des compagnies qui la détiennent.
-        detenteurs = [
-            d.to_dict() for d in await detenteurs_de(db, ent.id, graphe)
-        ]
         profil = await get_or_default_profil(db, ent.id)
         out.append(
             {
@@ -638,7 +610,6 @@ async def list_projets(db: DBSession, user: CurrentUser) -> List[dict]:
                 "equite": snap["equite"],
                 "capital_leve": round(capital_leve, 2),
                 "investisseurs": investisseurs,
-                "detenteurs": detenteurs,
             }
         )
     return out
@@ -726,13 +697,9 @@ async def get_projet(
                 "has_account": pu is not None,
                 "deja_participant": linked is not None,
                 "participation_id": linked.id if linked else None,
-                "masque": bool(linked.masque) if linked else False,
-                "personne_morale_liee": pr.partner_entreprise_id,
+                "is_visible": linked.is_visible if linked else False,
             }
         )
-    # Cascade : toutes les personnes derrière ce projet (directes et
-    # par compagnie interposée), avec leurs chemins et % cumulés.
-    detenteurs = [d.to_dict() for d in await detenteurs_de(db, entreprise_id)]
 
     # Dossier Drive de la compagnie : le MÊME que la section Documents
     # Drive de la fiche entreprise (DriveEntityLink), avec repli sur
@@ -788,7 +755,6 @@ async def get_projet(
         "cashflow_moyen": serie["cashflow_moyen"],
         "participations": participations,
         "partenaires": partenaires,
-        "detenteurs": detenteurs,
         "timeline": await timeline_projet(
             db, entreprise_id, all_flux, phase
         ),
@@ -803,7 +769,12 @@ async def get_projet(
             for j in jalons
         ],
         "documents": [
-            await document_payload(db, d, entreprise_name=ent.name)
+            {
+                "id": d.id,
+                "title": d.title,
+                "source": d.source,
+                "size_bytes": d.size_bytes,
+            }
             for d in docs
         ],
     }
@@ -891,7 +862,7 @@ async def create_participation(
             target_user = User(
                 email=email_norm,
                 hashed_password=get_password_hash(pw),
-                role="investisseur",
+                role="employee",
                 is_active=True,
                 must_change_password=True,
                 volets_json=investor_volets_json(),
@@ -939,7 +910,7 @@ async def create_participation(
         user_id=target_user.id,
         entreprise_id=data.entreprise_id,
         parts_pct=data.parts_pct,
-        masque=data.masque,
+        is_visible=data.is_visible,
     )
     db.add(part)
     await db.flush()
@@ -972,8 +943,8 @@ async def patch_participation(
         )
     if data.parts_pct is not None:
         part.parts_pct = data.parts_pct
-    if data.masque is not None:
-        part.masque = data.masque
+    if data.is_visible is not None:
+        part.is_visible = data.is_visible
     if data.statut is not None:
         if data.statut not in ("actif", "sorti"):
             raise HTTPException(
@@ -1110,62 +1081,50 @@ async def delete_jalon(
 # ─────────────────────────── Documents ───────────────────────────
 
 
-async def _destinataire_ou_422(
-    db, entreprise_id: int, destinataire_user_id: Optional[int]
-) -> Optional[int]:
-    """Un document privé va à un compte qui VOIT ce projet (cascade ou
-    participation) — sinon personne ne le lirait jamais."""
-    if not destinataire_user_id:
-        return None
-    u = await db.get(User, destinataire_user_id)
-    if u is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Investisseur introuvable."
-        )
-    from app.api.v1.endpoints.invest_portal import acces_projet
-
-    if await acces_projet(db, u.id, entreprise_id) is None:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Cet investisseur ne voit pas ce projet (aucune part, ou "
-            "masqué) — le document privé lui serait invisible.",
-        )
-    return u.id
-
-
 @router.post(
     "/projets/{entreprise_id}/documents",
     status_code=status.HTTP_201_CREATED,
-    summary="Téléverse un document (PDF, image, Word, Excel) — partagé "
-    "à la compagnie ou privé à un investisseur",
+    summary="Téléverse un document partagé (PDF)",
 )
 async def upload_document(
     entreprise_id: int,
     db: DBSession,
     user: CurrentUser,
     file: UploadFile = File(...),
-    destinataire_user_id: Optional[int] = Form(default=None),
-    note: Optional[str] = Form(default=None, max_length=2000),
 ) -> dict:
-    ent = await _load_entreprise(db, entreprise_id)
-    ct = type_de(file)
-    blob = await lire_fichier(file)
-    dest = await _destinataire_ou_422(db, entreprise_id, destinataire_user_id)
+    await _load_entreprise(db, entreprise_id)
+    ct = (file.content_type or "").lower()
+    if ct != "application/pdf":
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            "Seuls les fichiers PDF sont acceptés.",
+        )
+    blob = await file.read()
+    if not blob:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Fichier vide.")
+    if len(blob) > _DOC_MAX_BYTES:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            "Document trop volumineux (max 25 Mo).",
+        )
     doc = InvestDocument(
         entreprise_id=entreprise_id,
         uploaded_by_user_id=user.id,
-        title=titre_de(file.filename),
+        title=(file.filename or "document.pdf").rsplit(".", 1)[0][:255],
         source="upload",
-        content_type=ct,
+        content_type="application/pdf",
         size_bytes=len(blob),
         blob=blob,
-        destinataire_user_id=dest,
-        note=(note or "").strip() or None,
     )
     db.add(doc)
     await db.flush()
     await db.commit()
-    return await document_payload(db, doc, entreprise_name=ent.name)
+    return {
+        "id": doc.id,
+        "title": doc.title,
+        "source": doc.source,
+        "size_bytes": doc.size_bytes,
+    }
 
 
 @router.post(
@@ -1179,10 +1138,7 @@ async def document_from_drive(
     db: DBSession,
     user: CurrentUser,
 ) -> dict:
-    ent = await _load_entreprise(db, entreprise_id)
-    dest = await _destinataire_ou_422(
-        db, entreprise_id, data.destinataire_user_id
-    )
+    await _load_entreprise(db, entreprise_id)
     try:
         from app.services import drive_api
 
@@ -1203,14 +1159,14 @@ async def document_from_drive(
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "Fichier Drive vide."
         )
-    from app.services.invest_documents import DOC_MAX_BYTES
-
-    if len(blob) > DOC_MAX_BYTES:
+    if len(blob) > _DOC_MAX_BYTES:
         raise HTTPException(
             status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             "Document trop volumineux (max 25 Mo).",
         )
-    name = titre_de(data.title or meta.get("name"))
+    name = (data.title or meta.get("name") or "document").rsplit(
+        ".", 1
+    )[0][:255]
     doc = InvestDocument(
         entreprise_id=entreprise_id,
         uploaded_by_user_id=user.id,
@@ -1220,19 +1176,19 @@ async def document_from_drive(
         content_type=meta.get("mimeType") or "application/pdf",
         size_bytes=len(blob),
         blob=blob,
-        destinataire_user_id=dest,
-        note=(data.note or "").strip() or None,
     )
     db.add(doc)
     await db.flush()
     await db.commit()
-    return await document_payload(db, doc, entreprise_name=ent.name)
+    return {
+        "id": doc.id,
+        "title": doc.title,
+        "source": doc.source,
+        "size_bytes": doc.size_bytes,
+    }
 
 
-@router.get(
-    "/documents/{doc_id}/pdf",
-    summary="Fichier d'un document de l'espace investisseur (admin)",
-)
+@router.get("/documents/{doc_id}/pdf", summary="Document partagé (admin)")
 async def admin_document_pdf(
     doc_id: int, db: DBSession, user: CurrentUser
 ) -> Response:
@@ -1250,7 +1206,9 @@ async def admin_document_pdf(
     return Response(
         content=bytes(doc.blob),
         media_type=doc.content_type or "application/pdf",
-        headers=entetes_inline(doc),
+        headers={
+            "Content-Disposition": f'inline; filename="{doc.title}.pdf"'
+        },
     )
 
 
@@ -1432,7 +1390,7 @@ async def sync_qbo_avances(
 @router.post(
     "/projets/{entreprise_id}/partenaires/{partner_id}/activer",
     summary="Active un actionnaire comme investisseur du projet "
-    "(compte + participation, créés au besoin)",
+    "(compte + participation invisible, créés au besoin)",
 )
 async def activer_partenaire(
     entreprise_id: int,
@@ -1601,9 +1559,7 @@ async def list_investisseurs(db: DBSession, user: CurrentUser) -> List[dict]:
                 g["entreprises"].append(
                     {"id": ent.id, "name": ent.name, "pct": float(p.parts_pct)}
                 )
-        g["nb_projets_visibles"] = len(
-            await projets_de(db, Identite.de_user(pu))
-        )
+        g["nb_projets_visibles"] = sum(1 for p in plist if p.is_visible)
 
     out = list(groups.values())
     out.sort(key=lambda g: (not g["has_account"], g["name"].lower()))
@@ -1612,8 +1568,8 @@ async def list_investisseurs(db: DBSession, user: CurrentUser) -> List[dict]:
 
 @router.post(
     "/partenaires/{partner_id}/creer-compte",
-    summary="Crée le compte d'un actionnaire + participations dans "
-    "toutes ses compagnies, et envoie l'invitation",
+    summary="Crée le compte d'un actionnaire + participations "
+    "(invisibles) dans toutes ses compagnies, et envoie l'invitation",
 )
 async def creer_compte_partenaire(
     partner_id: int, db: DBSession, user: CurrentUser
@@ -1646,9 +1602,10 @@ async def creer_compte_partenaire(
             )
         )
     _ensure_volet_investisseur(pu)
-    # Participations dans toutes les compagnies où cette personne est
-    # actionnaire (même user ou même courriel) — elles portent les flux
-    # (sync QuickBooks) ; la visibilité vient de la cascade.
+    # Participations INVISIBLES dans toutes les compagnies où cette
+    # personne est actionnaire (même user ou même courriel) — le compte
+    # démarre avec 0 projet visible ; « Rendre visible » se fait
+    # projet par projet.
     all_rows = (
         await db.execute(
             select(EntreprisePartner).order_by(EntreprisePartner.id)
@@ -1831,6 +1788,45 @@ async def _identite_partenaire_ou_404(
     return nom, (email or "").strip().lower() or None
 
 
+async def _parts_virtuelles_du_partenaire(
+    db, nom: str, email: Optional[str]
+) -> list[InvestParticipation]:
+    """Une participation VIRTUELLE (jamais persistée : id=0, aucun
+    flux) par compagnie active où cette identité figure dans « Parts &
+    actionnaires » — même courriel, sinon même nom."""
+    out: list[InvestParticipation] = []
+    vues: set[int] = set()
+    for pr in (
+        await db.execute(
+            select(EntreprisePartner).order_by(EntreprisePartner.id)
+        )
+    ).scalars():
+        if pr.entreprise_id in vues:
+            continue
+        ent = await db.get(Entreprise, pr.entreprise_id)
+        if ent is None or not ent.is_active:
+            continue
+        pu = await _resolve_partner_user(db, pr)
+        n, e = _partner_identity(pr, pu)
+        meme = (
+            email is not None
+            and (e or "").strip().lower() == email
+        ) or _norm_ident(n) == _norm_ident(nom)
+        if not meme:
+            continue
+        part = InvestParticipation(
+            user_id=0,
+            entreprise_id=pr.entreprise_id,
+            parts_pct=float(pr.ownership_pct or 0),
+        )
+        part.id = 0
+        part.statut = "actif"
+        part.is_visible = True
+        out.append(part)
+        vues.add(pr.entreprise_id)
+    return out
+
+
 @router.get(
     "/apercu/{user_id}/releve/{year}/pdf",
     summary="Relevé annuel tel que VU par cet investisseur",
@@ -1886,9 +1882,8 @@ async def apercu_partenaire_releve_pdf(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "Année invalide."
         )
     nom, email = await _identite_partenaire_ou_404(db, partner_id)
-    portefeuille = await build_portefeuille(
-        db, 0, identite=Identite(email=email, nom=nom)
-    )
+    parts = await _parts_virtuelles_du_partenaire(db, nom, email)
+    portefeuille = await build_portefeuille(db, 0, parts_virtuelles=parts)
     from app.services.invest_releve_pdf import build_releve_pdf
 
     # User VIRTUEL (jamais persisté) : seul le nom sert au PDF ; son id
@@ -1924,9 +1919,8 @@ async def apercu_partenaire_portefeuille(
     % de Parts & actionnaires, aucun flux (les apports arriveront avec
     la sync QuickBooks une fois le compte créé)."""
     nom, email = await _identite_partenaire_ou_404(db, partner_id)
-    return await build_portefeuille(
-        db, 0, identite=Identite(email=email, nom=nom)
-    )
+    parts = await _parts_virtuelles_du_partenaire(db, nom, email)
+    return await build_portefeuille(db, 0, parts_virtuelles=parts)
 
 
 @router.get(
@@ -1941,17 +1935,19 @@ async def apercu_partenaire_projet(
     user: CurrentUser,
 ) -> dict:
     nom, email = await _identite_partenaire_ou_404(db, partner_id)
-    try:
-        return await build_projet(
-            db, 0, entreprise_id, identite=Identite(email=email, nom=nom)
+    parts = [
+        p
+        for p in await _parts_virtuelles_du_partenaire(db, nom, email)
+        if p.entreprise_id == entreprise_id
+    ]
+    if not parts:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "Cet actionnaire n'est pas au capital de cette compagnie.",
         )
-    except HTTPException as exc:
-        if exc.status_code == status.HTTP_404_NOT_FOUND:
-            raise HTTPException(
-                status.HTTP_404_NOT_FOUND,
-                "Cet actionnaire n'est pas au capital de cette compagnie.",
-            )
-        raise
+    return await build_projet(
+        db, 0, entreprise_id, part_virtuelle=parts[0], me_nom=nom
+    )
 
 
 @router.get(

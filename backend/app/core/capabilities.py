@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from app.models.user import ROLE_RANK
 
 #: Rôles valides, du plus bas au plus haut (pour l'UI + validation).
-ROLES_ASCENDING = ["investisseur", "employee", "manager", "admin", "owner"]
+ROLES_ASCENDING = ["employee", "manager", "admin", "owner"]
 
 
 @dataclass(frozen=True)

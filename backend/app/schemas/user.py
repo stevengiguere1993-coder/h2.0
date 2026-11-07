@@ -35,7 +35,7 @@ class UserCreate(UserBase):
     )
     role: Optional[str] = Field(
         default=None,
-        pattern="^(owner|admin|manager|employee|investisseur)$",
+        pattern="^(owner|admin|manager|employee)$",
         description=(
             "Rôle à assigner — si absent, l'employé par défaut; si "
             "`is_admin` est True et `role` vide, on fallback à 'admin'."

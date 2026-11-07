@@ -1730,39 +1730,6 @@ async def ensure_invest_portal_tables() -> None:
                     "EXISTS drive_folder_url VARCHAR(1000)"
                 )
             )
-            # Cascade des participations (2026-11-07) : « masque »
-            # remplace l'interrupteur de publication is_visible.
-            await conn.execute(
-                _text(
-                    "ALTER TABLE inv_participations ADD COLUMN IF NOT "
-                    "EXISTS masque BOOLEAN NOT NULL DEFAULT FALSE"
-                )
-            )
-            # Documents privés / déposés par l'investisseur (2026-11-07).
-            await conn.execute(
-                _text(
-                    "ALTER TABLE inv_documents ADD COLUMN IF NOT EXISTS "
-                    "destinataire_user_id INTEGER REFERENCES users(id) "
-                    "ON DELETE CASCADE"
-                )
-            )
-            await conn.execute(
-                _text(
-                    "ALTER TABLE inv_documents ADD COLUMN IF NOT EXISTS "
-                    "note TEXT"
-                )
-            )
-            # Rôle « investisseur » (2026-11-07) : les comptes créés par
-            # le pôle étaient des employés au seul volet investisseur →
-            # ils prennent le nouveau rôle. Idempotent (plus aucune
-            # ligne ne matche ensuite).
-            await conn.execute(
-                _text(
-                    "UPDATE users SET role = 'investisseur' "
-                    "WHERE role = 'employee' AND is_admin = FALSE "
-                    "AND volets_json = '[\"investisseur\"]'"
-                )
-            )
     except Exception as exc:  # noqa: BLE001
         log.warning("ensure_invest_portal_tables failed: %s", exc)
 

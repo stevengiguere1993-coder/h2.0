@@ -24,18 +24,12 @@ class UserRole(str, Enum):
     - manager: can approve leaves, see CRM/clients/factures/finances.
     - employee: field worker. Sees only assigned projects + own agenda
                 + own punches + own leave requests.
-    - investisseur: actionnaire externe (Steven, 2026-11-07). Sous
-                l'employé : AUCUN accès opérationnel, seul volet
-                `investisseur` (son portefeuille, ses documents). Un
-                employé / gestionnaire qui est aussi actionnaire garde
-                son rôle et reçoit le volet investisseur en plus.
     """
 
     OWNER = "owner"
     ADMIN = "admin"
     MANAGER = "manager"
     EMPLOYEE = "employee"
-    INVESTOR = "investisseur"
 
 
 #: Ordered role ranks — each level includes everything below it.
@@ -44,11 +38,7 @@ ROLE_RANK = {
     UserRole.ADMIN.value: 3,
     UserRole.MANAGER.value: 2,
     UserRole.EMPLOYEE.value: 1,
-    UserRole.INVESTOR.value: 0,
 }
-
-#: Expression régulière des rôles acceptés par l'API.
-ROLE_PATTERN = "^(owner|admin|manager|employee|investisseur)$"
 
 
 #: Volets disponibles dans le portail Horizon. Un user peut avoir
@@ -241,10 +231,6 @@ class User(Base, TimestampMixin):
         ``ensure_volets_whitelist_migration``)."""
         if self.role in (UserRole.OWNER.value, UserRole.ADMIN.value):
             return list(VALID_VOLETS)
-        if self.role == UserRole.INVESTOR.value:
-            # Un investisseur n'a JAMAIS d'autre volet, quoi que dise
-            # volets_json (garde-fou).
-            return ["investisseur"]
         if not self.volets_json:
             return list(DEFAULT_VOLETS)
         try:

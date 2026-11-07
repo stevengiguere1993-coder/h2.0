@@ -65,7 +65,6 @@ const RESOURCES_NAV: NavItem[] = [
 
 
 const ROLE_RANK: Record<UserRole, number> = {
-  investisseur: 0,
   owner: 4,
   admin: 3,
   manager: 2,

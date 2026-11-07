@@ -102,7 +102,7 @@ async def notify_role(
 
     from app.models.user import User
 
-    rank_map = {"owner": 4, "admin": 3, "manager": 2, "employee": 1, "investisseur": 0}
+    rank_map = {"owner": 4, "admin": 3, "manager": 2, "employee": 1}
     min_rank = rank_map.get(min_role, 99)
     users = (
         await db.execute(select(User).where(User.is_active.is_(True)))

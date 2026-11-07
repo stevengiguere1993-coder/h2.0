@@ -78,11 +78,9 @@ PAGES: list[PageEntry] = [
     # n'apparaît pas sous son pôle dans Paramètres → Permissions (bug
     # Tâches/Réglages QG, retour Phil 2026-07-24). /entreprises/taches et
     # /entreprises/reglages ont leur entrée entreprises.* plus bas.
-    # Seuil « investisseur » : un actionnaire externe doit pouvoir
-    # changer son mot de passe et son profil (rôle sous l'employé).
-    _p("general.parametres", "Paramètres", GENERAL, "investisseur",
+    _p("general.parametres", "Paramètres", GENERAL, "employee",
        "/parametres", "/app/parametres", "/prospection/parametres"),
-    _p("general.profil", "Mon profil", GENERAL, "investisseur", "/profil"),
+    _p("general.profil", "Mon profil", GENERAL, "employee", "/profil"),
     _p("general.mes_taches", "Mes tâches", GENERAL, "employee",
        "/mes-taches"),
     _p("general.utilisateurs", "Utilisateurs & rôles", GENERAL, "owner",
@@ -301,7 +299,7 @@ PAGES: list[PageEntry] = [
        "/entreprises/recus"),
     # ── Investisseurs ──
     _p("investisseur.portefeuille", "Mon portefeuille", "investisseur",
-       "investisseur", "/investisseur"),
+       "employee", "/investisseur"),
     # Console admin du pôle (gestion des investisseurs, participations,
     # publication) — direction seulement.
     _p("investisseur.admin", "Console admin (investisseurs)",

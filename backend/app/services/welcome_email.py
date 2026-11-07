@@ -56,7 +56,6 @@ async def send_welcome_email(
         "admin": "Administrateur",
         "manager": "Gestionnaire",
         "employee": "Employé",
-        "investisseur": "Investisseur",
     }.get(role or "", "Employé")
 
     html = f"""\
