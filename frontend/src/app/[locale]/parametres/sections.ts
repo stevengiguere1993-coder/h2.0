@@ -134,6 +134,16 @@ export const SECTIONS: Section[] = [
         minRole: "manager"
       },
       {
+        // Aussi sous « Entreprises & comptabilité » : les factures et les
+        // soumissions sont des documents de Construction, Steven les
+        // cherchait ici (2026-11-07).
+        title: "Numérotation des factures et soumissions",
+        desc: "Prochain numéro de facture, de soumission et de bon de commande ; alignement sur QuickBooks.",
+        href: "/parametres/numerotation",
+        icon: Hash,
+        minRole: "admin"
+      },
+      {
         title: "Agenda — rôles & types de RV",
         desc: "Rôles fonctionnels de l'équipe et types de rendez-vous.",
         href: "/app/agenda/parametres",
