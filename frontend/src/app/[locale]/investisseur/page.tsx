@@ -359,12 +359,37 @@ export default function PortefeuillePage() {
               </div>
             ) : null}
 
-            {/* KPIs et courbe : vue DIRECTION seulement — un
-                investisseur arrive directement sur ses projets, sans
-                statistiques financières globales (retour Phil
-                2026-08-25). */}
-            {isGlobal ? (
+            {/* Sommaire du portefeuille : vue direction ET portail de
+                l'investisseur (Steven, 2026-11-07 : « ils devraient avoir
+                accès à son portefeuille général et son investissement
+                initial »). Masqué pour l'investisseur depuis le retour de
+                Phil du 2026-08-25, rétabli à la demande de Steven. */}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
+                  {isGlobal
+                    ? "Capital investi au total"
+                    : "Mon investissement initial"}
+                </p>
+                <p className="mt-1.5 text-2xl font-bold tabular-nums text-white">
+                  {fmtMoney(data.capital_investi_total)}
+                </p>
+                <p className="mt-1 text-xs text-white/50">
+                  {data.capital_investi_total > 0 ? (
+                    <>
+                      dont{" "}
+                      <span className="font-semibold text-white/80 tabular-nums">
+                        {fmtMoney(data.capital_rembourse)}
+                      </span>{" "}
+                      remboursés
+                    </>
+                  ) : isGlobal ? (
+                    "aucun apport enregistré"
+                  ) : (
+                    "aucun apport enregistré pour l'instant"
+                  )}
+                </p>
+              </div>
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
                 <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
                   Capital actuellement investi
@@ -376,21 +401,6 @@ export default function PortefeuillePage() {
                   {isGlobal
                     ? "tous investisseurs confondus"
                     : "apports moins remboursements"}
-                </p>
-              </div>
-              <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
-                  Capital investi au total
-                </p>
-                <p className="mt-1.5 text-2xl font-bold tabular-nums text-white">
-                  {fmtMoney(data.capital_investi_total)}
-                </p>
-                <p className="mt-1 text-xs text-white/50">
-                  dont{" "}
-                  <span className="font-semibold text-white/80 tabular-nums">
-                    {fmtMoney(data.capital_rembourse)}
-                  </span>{" "}
-                  remboursés
                 </p>
               </div>
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
@@ -407,11 +417,29 @@ export default function PortefeuillePage() {
                   {isGlobal ? "leurs %" : "vos %"}
                 </p>
               </div>
+              <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
+                  {isGlobal ? "Distributions versées" : "Valeur de mes projets"}
+                </p>
+                <p className="mt-1.5 text-2xl font-bold tabular-nums text-white">
+                  {fmtMoney(
+                    isGlobal
+                      ? data.distributions_recues
+                      : data.valeur_projets ?? 0
+                  )}
+                </p>
+                <p className="mt-1 text-xs text-white/50">
+                  {isGlobal
+                    ? "à tous les investisseurs"
+                    : `valeur globale, toutes parts confondues · ${
+                        data.projets.length
+                      } compagnie${data.projets.length > 1 ? "s" : ""}`}
+                </p>
+              </div>
             </div>
-            ) : null}
 
             {/* Courbe valeur totale */}
-            {isGlobal && data.serie_valeur.length >= 2 ? (
+            {data.serie_valeur.length >= 2 ? (
               <div className="mt-5 rounded-2xl border border-brand-800 bg-brand-900 p-4 text-white">
                 <div className="mb-1 flex items-baseline justify-between gap-2">
                   <h2 className="text-sm font-semibold">
@@ -539,6 +567,24 @@ export default function PortefeuillePage() {
                         <p className="text-sm font-bold text-white">
                           {fmtMoney(p.valeur_parts)}
                         </p>
+                      </div>
+                      <div className="border-t border-brand-800 pt-2">
+                        <p className="text-[10px] uppercase tracking-wider text-white/40">
+                          {isGlobal
+                            ? "Capital investi"
+                            : "Mon investissement initial"}
+                        </p>
+                        <p className="text-sm font-bold text-white">
+                          {p.capital_investi_total > 0
+                            ? fmtMoney(p.capital_investi_total)
+                            : "—"}
+                        </p>
+                        {p.capital_rembourse > 0 ? (
+                          <p className="text-[10px] text-white/45">
+                            {fmtMoney(p.capital_rembourse)} remboursés ·
+                            capital actuel {fmtMoney(p.capital_actuel)}
+                          </p>
+                        ) : null}
                       </div>
                       <div className="border-t border-brand-800 pt-2">
                         <p className="text-[10px] uppercase tracking-wider text-white/40">
