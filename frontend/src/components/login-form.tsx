@@ -47,6 +47,7 @@ function fileVersInvestisseur(me: {
   volets?: unknown;
   access?: Record<string, boolean> | null;
 }): boolean {
+  if (me.role === "investisseur") return true;
   const access = me.access || {};
   if (Object.keys(access).length === 0) {
     const v = Array.isArray(me.volets) ? (me.volets as string[]) : [];

@@ -36,6 +36,9 @@ import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { InvestisseurTopbar } from "../../../layout";
 import {
+  DOC_ACCEPT,
+  DocumentRow,
+  docTypeLabel,
   DepenseCategorie,
   fmtDate,
   fmtMoney,
@@ -67,7 +70,7 @@ type ParticipationRow = {
   parts_pct: number;
   parts_source: "fiche" | "manuel";
   statut: string;
-  is_visible: boolean;
+  masque: boolean;
   notes: string | null;
   valeur_parts: number;
   capital_investi_total: number;
@@ -135,6 +138,7 @@ type AdminProjet = {
   cashflow_moyen: number;
   timeline: TimelineEvent[];
   partenaires: PartenaireT[];
+  detenteurs?: DetenteurT[];
   participations: ParticipationRow[];
   jalons: {
     id: number;
@@ -143,12 +147,7 @@ type AdminProjet = {
     description: string | null;
     kind: string;
   }[];
-  documents: {
-    id: number;
-    title: string;
-    source: string;
-    size_bytes: number;
-  }[];
+  documents: DocumentRow[];
 };
 
 type DriveFileT = {
@@ -170,7 +169,26 @@ type PartenaireT = {
   has_account: boolean;
   deja_participant: boolean;
   participation_id: number | null;
-  is_visible: boolean;
+  masque: boolean;
+  /** Compagnie actionnaire liée à une fiche Kratos (arête de la cascade). */
+  personne_morale_liee: number | null;
+};
+
+type DetenteurT = {
+  cle: string;
+  name: string;
+  email: string | null;
+  user_id: number | null;
+  has_account: boolean;
+  pct_total: number;
+  pct_direct: number;
+  pct_indirect: number;
+  chemins: {
+    pct: number;
+    direct: boolean;
+    label: string;
+    maillons: { entreprise_id: number; name: string; pct: number }[];
+  }[];
 };
 
 const FLUX_LABELS: Record<string, string> = {
@@ -252,9 +270,8 @@ export default function AdminProjetPage() {
       }
       if (body?.invitation_sent) {
         setBanner(
-          `Compte créé et invitation envoyée à ${pa.email}. Le projet ` +
-            "reste masqué pour lui — activez « Visible dans son " +
-            "portail » quand vous êtes prêt."
+          `Compte créé et invitation envoyée à ${pa.email}. Il voit ` +
+            "ce projet d'office (cochez « Masquer » pour l'exclure)."
         );
       } else if (body?.temp_password) {
         setBanner(
@@ -383,11 +400,18 @@ export default function AdminProjetPage() {
     if (res.ok) await load();
   }
 
+  //: Document PRIVÉ à un investisseur (NULL = partagé à la compagnie) +
+  //: mot d'accompagnement (Steven 2026-11-07).
+  const [docDestinataire, setDocDestinataire] = useState<string>("");
+  const [docNote, setDocNote] = useState("");
+
   async function uploadDocument(file: File) {
     setUploadBusy(true);
     try {
       const fd = new FormData();
       fd.append("file", file);
+      if (docDestinataire) fd.append("destinataire_user_id", docDestinataire);
+      if (docNote.trim()) fd.append("note", docNote.trim());
       const res = await authedFetch(
         `/api/v1/invest/admin/projets/${entrepriseId}/documents`,
         { method: "POST", body: fd }
@@ -401,6 +425,7 @@ export default function AdminProjetPage() {
         );
         return;
       }
+      setDocNote("");
       await load();
     } finally {
       setUploadBusy(false);
@@ -417,6 +442,21 @@ export default function AdminProjetPage() {
     window.open(url, "_blank", "noopener");
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
+
+  //: Comptes investisseurs pouvant recevoir un document privé : les
+  //: détenteurs (cascade) qui ont un compte + les participations.
+  const destinatairesPossibles = (() => {
+    const vus = new Map<number, string>();
+    for (const d of data?.detenteurs ?? []) {
+      if (d.user_id !== null && d.has_account) vus.set(d.user_id, d.name);
+    }
+    for (const p of data?.participations ?? []) {
+      if (!vus.has(p.user_id)) vus.set(p.user_id, p.user_name);
+    }
+    return Array.from(vus.entries())
+      .map(([user_id, name]) => ({ user_id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, "fr"));
+  })();
 
   if (loading) {
     return (
@@ -893,17 +933,31 @@ export default function AdminProjetPage() {
                           </span>
                         </div>
                         <div className="shrink-0">
-                          {pa.deja_participant ? (
+                          {pa.personne_morale_liee ? (
+                            <span
+                              className="inline-flex items-center gap-1 rounded-full border border-sky-500/50 bg-sky-500/10 px-2 py-0.5 text-[10.5px] font-bold text-sky-400"
+                              title="Compagnie du groupe : ses actionnaires voient ce projet à travers elle (cascade)"
+                            >
+                              Compagnie du groupe · cascade
+                            </span>
+                          ) : pa.deja_participant ? (
                             <span
                               className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-bold ${
-                                pa.is_visible
+                                !pa.masque
                                   ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-400"
                                   : "border-amber-500/50 bg-amber-500/10 text-amber-400"
                               }`}
                             >
-                              {pa.is_visible
-                                ? "✓ Visible dans son portail"
-                                : "Activé · masqué"}
+                              {!pa.masque
+                                ? "✓ Dans son portail"
+                                : "Masqué par l'admin"}
+                            </span>
+                          ) : pa.has_account ? (
+                            <span
+                              className="inline-flex items-center gap-1 rounded-full border border-emerald-500/50 bg-emerald-500/10 px-2 py-0.5 text-[10.5px] font-bold text-emerald-400"
+                              title="A un compte et des parts : il voit déjà ce projet. « Activer » crée sa participation pour y rattacher ses apports."
+                            >
+                              ✓ Dans son portail
                             </span>
                           ) : (
                             <button
@@ -917,8 +971,8 @@ export default function AdminProjetPage() {
                                 pa.missing_email && !pa.has_account
                                   ? "Ajoutez d'abord son courriel dans la fiche entreprise"
                                   : pa.has_account
-                                  ? "Crée sa participation (masquée) sur ce projet"
-                                  : "Crée son compte (invitation courriel) + sa participation masquée"
+                                  ? "Crée sa participation sur ce projet (pour ses apports)"
+                                  : "Crée son compte (invitation courriel) + sa participation"
                               }
                               className="btn-outline-accent btn-xs disabled:opacity-40"
                             >
@@ -936,10 +990,89 @@ export default function AdminProjetPage() {
                     ))}
                   </ul>
                   <p className="mt-2 text-[10px] text-white/35">
-                    Synchronisé depuis la fiche entreprise. Après
-                    activation : « Synchroniser QuickBooks » pour ses
-                    apports, puis « Visible dans son portail ».
+                    Synchronisé depuis la fiche entreprise. Un
+                    actionnaire voit ce projet dès qu&apos;il a un compte
+                    (directement, ou à travers une compagnie du groupe
+                    qu&apos;il détient). Après création du compte :
+                    « Synchroniser QuickBooks » pour ses apports.
                   </p>
+                </div>
+              ) : null}
+
+              {/* Cascade : qui est réellement derrière ce projet */}
+              {(data.detenteurs?.length ?? 0) > 0 ? (
+                <div className="mb-3 rounded-xl border border-brand-800 bg-brand-950/60 p-3">
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                    Détenteurs en cascade (personnes derrière les
+                    compagnies)
+                  </p>
+                  <ul className="space-y-1.5">
+                    {(data.detenteurs ?? []).map((d) => (
+                      <li key={d.cle} className="text-sm">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="min-w-0 font-medium text-white">
+                            {d.name}
+                            {d.has_account ? (
+                              <span className="ml-1.5 text-[10px] text-emerald-400">
+                                ✓ compte
+                              </span>
+                            ) : (
+                              <span className="ml-1.5 text-[10px] text-amber-400">
+                                sans compte
+                              </span>
+                            )}
+                          </span>
+                          <span className="font-bold tabular-nums text-white">
+                            {d.pct_total.toLocaleString("fr-CA", {
+                              maximumFractionDigits: 2
+                            })}{" "}
+                            %
+                            {d.pct_indirect > 0 ? (
+                              <span className="ml-1 text-[10px] font-normal text-white/45">
+                                ({d.pct_direct.toLocaleString("fr-CA", {
+                                  maximumFractionDigits: 2
+                                })}{" "}
+                                direct +{" "}
+                                {d.pct_indirect.toLocaleString("fr-CA", {
+                                  maximumFractionDigits: 2
+                                })}{" "}
+                                via compagnie)
+                              </span>
+                            ) : null}
+                          </span>
+                        </div>
+                        {d.chemins.some((c) => !c.direct) ? (
+                          <ul className="ml-3 mt-0.5 space-y-0.5 text-[11px] text-white/50">
+                            {d.chemins
+                              .filter((c) => !c.direct)
+                              .map((c, i) => (
+                                <li key={i}>
+                                  {c.maillons.map((m, j) => (
+                                    <span key={m.entreprise_id}>
+                                      {j > 0 ? " → " : ""}
+                                      {m.name}{" "}
+                                      <span className="tabular-nums">
+                                        ({m.pct.toLocaleString("fr-CA", {
+                                          maximumFractionDigits: 2
+                                        })}{" "}
+                                        %)
+                                      </span>
+                                    </span>
+                                  ))}{" "}
+                                  ={" "}
+                                  <b className="tabular-nums text-white/75">
+                                    {c.pct.toLocaleString("fr-CA", {
+                                      maximumFractionDigits: 2
+                                    })}{" "}
+                                    %
+                                  </b>
+                                </li>
+                              ))}
+                          </ul>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               ) : null}
 
@@ -1134,7 +1267,7 @@ export default function AdminProjetPage() {
               </div>
               <div className="mb-2 flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-white">
-                  Documents partagés
+                  Documents de l&apos;espace investisseur
                 </h2>
                 <div className="flex items-center gap-1.5">
                   <button
@@ -1164,10 +1297,10 @@ export default function AdminProjetPage() {
                     ) : (
                       <Paperclip className="h-3 w-3" />
                     )}
-                    PDF
+                    Fichier
                     <input
                       type="file"
-                      accept="application/pdf"
+                      accept={DOC_ACCEPT}
                       className="hidden"
                       disabled={uploadBusy}
                       onChange={(e) => {
@@ -1179,9 +1312,41 @@ export default function AdminProjetPage() {
                   </label>
                 </div>
               </div>
+              <div className="mb-2 grid gap-1.5 sm:grid-cols-2">
+                <label className="text-[11px] text-white/55">
+                  Pour qui
+                  <select
+                    value={docDestinataire}
+                    onChange={(e) => setDocDestinataire(e.target.value)}
+                    className="input mt-0.5 w-full text-xs"
+                  >
+                    <option value="">
+                      Tous les investisseurs de la compagnie
+                    </option>
+                    {destinatairesPossibles.map((d) => (
+                      <option key={d.user_id} value={String(d.user_id)}>
+                        Privé — {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-[11px] text-white/55">
+                  Mot d&apos;accompagnement (facultatif)
+                  <input
+                    type="text"
+                    value={docNote}
+                    onChange={(e) => setDocNote(e.target.value)}
+                    maxLength={2000}
+                    placeholder="ex. Relevé 2025 à signer"
+                    className="input mt-0.5 w-full text-xs"
+                  />
+                </label>
+              </div>
               <p className="mb-2 text-[11px] text-white/35">
                 Les investisseurs ne voient QUE cette liste — jamais le
-                Drive complet de l&apos;immeuble.
+                Drive complet de l&apos;immeuble. PDF, image, Word ou Excel ;
+                un document privé n&apos;est vu que par son destinataire ;
+                un dépôt fait par un investisseur arrive ici avec son nom.
               </p>
               {data.documents.length === 0 ? (
                 <p className="py-3 text-center text-xs text-white/40">
@@ -1203,13 +1368,26 @@ export default function AdminProjetPage() {
                         <span className="min-w-0">
                           <span className="block truncate text-sm text-white">
                             {d.title}
+                            {d.prive ? (
+                              <span className="ml-1.5 inline-flex items-center rounded-full border border-violet-500/40 bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-bold text-violet-300">
+                                Privé · {d.destinataire_name || "?"}
+                              </span>
+                            ) : null}
                           </span>
-                          <span className="text-[11px] text-white/40">
+                          <span className="block text-[11px] text-white/40">
                             {d.source === "drive"
                               ? "copié du Drive"
+                              : d.source === "investisseur"
+                              ? `déposé par ${d.depose_par_name || "l'investisseur"}`
                               : "téléversé"}{" "}
-                            · {(d.size_bytes / 1024 / 1024).toFixed(1)} Mo
+                            · {docTypeLabel(d)}
+                            {d.created_at ? ` · ${fmtDate(d.created_at)}` : ""}
                           </span>
+                          {d.note ? (
+                            <span className="block truncate text-[11px] text-white/55">
+                              {d.note}
+                            </span>
+                          ) : null}
                         </span>
                       </button>
                       <button
@@ -1324,10 +1502,10 @@ function ParticipationCard({
         <label className="flex items-center gap-1.5 text-white/60">
           <input
             type="checkbox"
-            checked={p.is_visible}
-            onChange={(e) => void patch({ is_visible: e.target.checked })}
+            checked={p.masque}
+            onChange={(e) => void patch({ masque: e.target.checked })}
           />
-          Visible dans son portail
+          Masquer ce projet dans son portail
         </label>
         <label className="flex items-center gap-1.5 text-white/60">
           Statut

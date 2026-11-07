@@ -36,8 +36,18 @@ type ProjetItem = {
     user_id: number;
     name: string;
     parts_pct: number;
-    is_visible: boolean;
+    masque: boolean;
     statut: string;
+  }[];
+  /** Cascade : toutes les personnes derrière la compagnie. */
+  detenteurs?: {
+    cle: string;
+    name: string;
+    user_id: number | null;
+    has_account: boolean;
+    pct_total: number;
+    pct_direct: number;
+    pct_indirect: number;
   }[];
 };
 
@@ -202,8 +212,8 @@ export default function InvestAdminPage() {
       }
       if (body?.invitation_sent) {
         setBanner(
-          `Compte créé et invitation envoyée à ${u.email}. Ses projets ` +
-            "restent masqués — activez « Visible » projet par projet."
+          `Compte créé et invitation envoyée à ${u.email}. Il voit ` +
+            "d'office les projets où il détient des parts."
         );
       } else if (body?.temp_password) {
         setBanner(
@@ -327,12 +337,12 @@ export default function InvestAdminPage() {
                                   <span
                                     key={inv.participation_id}
                                     className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
-                                      inv.is_visible
+                                      !inv.masque
                                         ? "border-brand-700 text-white/80"
                                         : "border-amber-500/50 text-amber-400"
                                     }`}
                                     title={
-                                      inv.is_visible
+                                      !inv.masque
                                         ? undefined
                                         : "Masqué pour cet investisseur"
                                     }
@@ -508,7 +518,8 @@ export default function InvestAdminPage() {
                               <Eye className="h-3 w-3" />
                               Voir comme lui
                             </button>
-                            {u.role === "employee" ? (
+                            {u.role === "employee" ||
+                            u.role === "investisseur" ? (
                               <>
                                 <button
                                   type="button"

@@ -3,8 +3,9 @@
 Contrairement aux comptes employés (mot de passe temporaire commun
 « Horizon »), un investisseur externe reçoit un mot de passe ALÉATOIRE
 généré à l'invitation, avec changement forcé à la première connexion.
-Le compte créé est volontairement minimal : rôle `employee`, volet
-`investisseur` UNIQUEMENT (pas de fiche Employé miroir).
+Le compte créé est volontairement minimal : rôle `investisseur` (sous
+l'employé, aucun accès opérationnel), volet `investisseur` UNIQUEMENT
+(pas de fiche Employé miroir).
 """
 
 from __future__ import annotations

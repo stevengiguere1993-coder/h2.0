@@ -80,6 +80,7 @@ type UserAccess = {
 type Override = { key: string; allow: boolean };
 
 const ROLE_LABELS: Record<string, string> = {
+  investisseur: "Investisseur",
   employee: "Employé",
   manager: "Gestionnaire",
   admin: "Administrateur",
