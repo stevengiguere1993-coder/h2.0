@@ -119,6 +119,7 @@ const PROSPECTION_SECTIONS: NavSection[] = [
 ];
 
 const ROLE_RANK: Record<UserRole, number> = {
+  investisseur: 0,
   employee: 1,
   manager: 2,
   admin: 3,

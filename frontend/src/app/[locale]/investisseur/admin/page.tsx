@@ -518,7 +518,8 @@ export default function InvestAdminPage() {
                               <Eye className="h-3 w-3" />
                               Voir comme lui
                             </button>
-                            {u.role === "employee" ? (
+                            {u.role === "employee" ||
+                            u.role === "investisseur" ? (
                               <>
                                 <button
                                   type="button"

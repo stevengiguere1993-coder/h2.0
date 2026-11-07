@@ -231,10 +231,11 @@ def _ensure_volet_investisseur(u: User) -> None:
     volet `investisseur` au compte SANS toucher à ses autres accès.
 
     - owner/admin : déjà tous les volets, rien à faire ;
+    - investisseur : son seul volet est déjà le portail ;
     - volets_json NULL = défauts implicites (construction, prospection,
       devlog) → on matérialise les défauts AVANT d'ajouter, sinon on
       les lui retirerait."""
-    if u.role in ("owner", "admin"):
+    if u.role in ("owner", "admin", "investisseur"):
         return
     import json as _json
 
@@ -297,7 +298,7 @@ async def _create_investor_account(
     user = User(
         email=email_norm,
         hashed_password=get_password_hash(pw),
-        role="employee",
+        role="investisseur",
         is_active=True,
         must_change_password=True,
         volets_json=investor_volets_json(),
@@ -886,7 +887,7 @@ async def create_participation(
             target_user = User(
                 email=email_norm,
                 hashed_password=get_password_hash(pw),
-                role="employee",
+                role="investisseur",
                 is_active=True,
                 must_change_password=True,
                 volets_json=investor_volets_json(),
