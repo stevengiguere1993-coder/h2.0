@@ -194,6 +194,78 @@ def test_creation_directe_d_un_investisseur(client, auth_headers):
     assert r.json()["volets"] == ["investisseur"]
 
 
+def test_portail_ouvert_meme_si_la_grille_dit_employe(client, role_ids, run):
+    """Steven, 2026-11-08 : Vincent (rôle investisseur, volet coché) voyait
+    « Accès refusé ». En prod, la grille avait été semée à « employé »
+    pour le portefeuille / le profil / les paramètres AVANT que le rôle
+    existe : la dérivation « volet = au moins une page » fermait tout.
+    Un seuil « employé » sur ces pages vaut « investisseur »."""
+    from app.models.role_permission import RolePermission
+    from app.services.permissions_service import (
+        get_min_role,
+        invalidate_permissions_cache,
+    )
+
+    async def _seed():
+        async with TestSessionLocal() as s:
+            for key in (
+                "page:investisseur.portefeuille",
+                "page:general.profil",
+                "page:general.parametres",
+            ):
+                s.add(RolePermission(capability=key, min_role="employee"))
+            await s.commit()
+
+    run(_seed())
+    invalidate_permissions_cache()
+    try:
+        assert run(get_min_role("page:investisseur.portefeuille")) == "investisseur"
+        # Un choix plus strict de l'owner est respecté.
+        async def _durcir():
+            async with TestSessionLocal() as s:
+                from sqlalchemy import update
+
+                await s.execute(
+                    update(RolePermission)
+                    .where(RolePermission.capability == "page:general.parametres")
+                    .values(min_role="manager")
+                )
+                await s.commit()
+
+        run(_durcir())
+        invalidate_permissions_cache()
+        assert run(get_min_role("page:general.parametres")) == "manager"
+
+        r = client.get("/api/v1/auth/me", headers=_h(role_ids["inv"]))
+        access = r.json()["access"]
+        assert access["volet:investisseur"] is True
+        assert access["page:investisseur.portefeuille"] is True
+        assert access["page:general.profil"] is True
+        assert access["page:general.parametres"] is False
+        r = client.get("/api/v1/invest/me/portefeuille", headers=_h(role_ids["inv"]))
+        assert r.status_code == 200, r.text
+    finally:
+        async def _clean():
+            async with TestSessionLocal() as s:
+                from sqlalchemy import delete
+
+                await s.execute(
+                    delete(RolePermission).where(
+                        RolePermission.capability.in_(
+                            [
+                                "page:investisseur.portefeuille",
+                                "page:general.profil",
+                                "page:general.parametres",
+                            ]
+                        )
+                    )
+                )
+                await s.commit()
+
+        run(_clean())
+        invalidate_permissions_cache()
+
+
 def test_grille_permissions_connait_le_role(client, auth_headers):
     r = client.get("/api/v1/permissions", headers=auth_headers)
     assert r.status_code == 200, r.text
