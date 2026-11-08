@@ -55,15 +55,29 @@ async def get_min_role(capability: str) -> str:
     if time.monotonic() - _cache_loaded_at > _CACHE_TTL_SECONDS:
         await _load_cache()
     stored = _cache.get(capability)
+    page = (
+        PAGES_BY_KEY.get(capability[len(PAGE_KEY_PREFIX):])
+        if capability.startswith(PAGE_KEY_PREFIX)
+        else None
+    )
     if stored:
+        # Pages ouvertes au rôle « investisseur » (portefeuille, profil,
+        # paramètres) : un seuil « employé » hérité d'un semis antérieur
+        # au rôle vaut « investisseur » — sinon le portail se ferme à
+        # l'actionnaire externe (Steven, 2026-11-08). Un seuil plus
+        # strict choisi par l'owner reste respecté.
+        if (
+            page is not None
+            and page.default_min_role == "investisseur"
+            and stored == "employee"
+        ):
+            return "investisseur"
         return stored
     cap = CAPABILITIES_BY_ID.get(capability)
     if cap:
         return cap.default_min_role
-    if capability.startswith(PAGE_KEY_PREFIX):
-        page = PAGES_BY_KEY.get(capability[len(PAGE_KEY_PREFIX):])
-        if page:
-            return page.default_min_role
+    if page:
+        return page.default_min_role
     # Sécurité par défaut : clé inconnue → on exige owner.
     return "owner"
 
