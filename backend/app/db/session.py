@@ -1763,6 +1763,26 @@ async def ensure_invest_portal_tables() -> None:
                     "AND volets_json = '[\"investisseur\"]'"
                 )
             )
+            # Seuils des pages ouvertes au rôle investisseur (Steven,
+            # 2026-11-08 : « Vincent n'a pas accès à investisseur ») : la
+            # grille avait été SEMÉE à « employé » (ON CONFLICT DO NOTHING)
+            # avant que le rôle existe → la dérivation « volet = au moins
+            # une page » fermait le portail à un investisseur. Un seuil
+            # « employé » sur une page dont le défaut est « investisseur »
+            # est ramené au défaut ; un choix plus strict de l'owner
+            # (gestionnaire, admin) est conservé.
+            from app.core.access_registry import PAGE_KEY_PREFIX, PAGES
+
+            for page in PAGES:
+                if page.default_min_role != "investisseur":
+                    continue
+                await conn.execute(
+                    _text(
+                        "UPDATE role_permissions SET min_role = 'investisseur' "
+                        "WHERE capability = :k AND min_role = 'employee'"
+                    ),
+                    {"k": f"{PAGE_KEY_PREFIX}{page.key}"},
+                )
     except Exception as exc:  # noqa: BLE001
         log.warning("ensure_invest_portal_tables failed: %s", exc)
 
