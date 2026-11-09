@@ -62,6 +62,8 @@ def _scenario_test() -> dict:
                      {"nom": "Michael", "salaire_annuel": 0, "dividendes_annuels": 0}],
         "sous_traitance_gestion_pct": 5,
     }
+    # Impôts de la société (2026-11-09) : hors de ce scénario historique, testés à part.
+    d["depenses"]["impots"] = {"taux_pct": 0, "plafond": 0, "taux_au_dela_pct": 0}
     return d
 
 

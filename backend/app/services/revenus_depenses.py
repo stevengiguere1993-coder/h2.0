@@ -205,6 +205,7 @@ def scenario_defaut() -> Dict[str, Any]:
             "associes": [{"nom": n, "salaire_annuel": 0, "dividendes_annuels": 0} for n in ASSOCIES_DEFAUT],
             "sous_traitance_gestion_pct": 0.0,
             "agents_location": {"par_logement": 0.0, "par_chambre": 0.0},
+            "impots": dict(IMPOTS_DEFAUT),
         },
     })
 
@@ -360,6 +361,7 @@ def normaliser(data: Any) -> Dict[str, Any]:
             "salaires": salaires, "associes": associes,
             "sous_traitance_gestion_pct": _pos(dep.get("sous_traitance_gestion_pct")),
             "agents_location": _agents_location(dep.get("agents_location")),
+            "impots": _impots(dep.get("impots")),
         },
     }
 
@@ -403,6 +405,39 @@ def part_annee(i: Dict[str, Any], annee: int) -> Dict[str, Any]:
         return {"part": 0.0, "jours": 0, "jours_annee": jours_annee, "acquise_cette_annee": False, "date": d.isoformat()}
     jours = (date(annee, 12, 31) - d).days + 1
     return {"part": jours / jours_annee, "jours": jours, "jours_annee": jours_annee, "acquise_cette_annee": True, "date": d.isoformat()}
+
+
+#: Impôts de la société (Phil 2026-11-09 : « rajoute les impôts… le taux marginal »). Deux paliers,
+#: tous visibles et modifiables : le taux des PME jusqu'au plafond, le taux général au-delà. Défauts =
+#: société au Québec en 2026 : 12,2 % (fédéral 9 % + Québec 3,2 %) jusqu'à 500 000 $ de revenu actif
+#: admissible, 26,5 % (15 % + 11,5 %) au-delà. Les dividendes se versent APRÈS l'impôt (non déductibles).
+IMPOTS_DEFAUT: Dict[str, Any] = {"taux_pct": 12.2, "plafond": 500000.0, "taux_au_dela_pct": 26.5}
+
+
+def _impots(v: Any) -> Dict[str, float]:
+    d = v if isinstance(v, dict) else {}
+    return {
+        "taux_pct": min(100.0, _pos(d.get("taux_pct"), IMPOTS_DEFAUT["taux_pct"])),
+        "plafond": _pos(d.get("plafond"), IMPOTS_DEFAUT["plafond"]),
+        "taux_au_dela_pct": min(100.0, _pos(d.get("taux_au_dela_pct"), IMPOTS_DEFAUT["taux_au_dela_pct"])),
+    }
+
+
+def calcul_impots(benefice: float, regles: Dict[str, float]) -> Dict[str, float]:
+    """Impôt sur le bénéfice avant impôts (jamais sur une perte) : ``taux_pct`` jusqu'au
+    ``plafond`` (0 = pas de plafond, un seul taux), ``taux_au_dela_pct`` sur l'excédent."""
+    base = max(float(benefice or 0.0), 0.0)
+    plafond = float(regles.get("plafond") or 0.0)
+    t1_base = min(base, plafond) if plafond > 0 else base
+    t2_base = max(base - plafond, 0.0) if plafond > 0 else 0.0
+    t1 = t1_base * regles["taux_pct"] / 100.0
+    t2 = t2_base * regles["taux_au_dela_pct"] / 100.0
+    total = t1 + t2
+    return {
+        "taux_pct": regles["taux_pct"], "plafond": _r(plafond), "taux_au_dela_pct": regles["taux_au_dela_pct"],
+        "base": _r(base), "tranche_1_base": _r(t1_base), "tranche_1": _r(t1), "tranche_2_base": _r(t2_base), "tranche_2": _r(t2),
+        "total": _r(total), "taux_effectif_pct": _r(100.0 * total / base) if base > 0 else 0.0,
+    }
 
 
 #: Taux d'inoccupation SCHL standard quand les Paramètres → Prospection n'en donnent pas.
@@ -713,9 +748,12 @@ def calculer(data: Dict[str, Any], bareme: Optional[Dict[str, Any]] = None) -> D
     total_masse_salariale = total_salaires_bruts + total_charges + total_associes_salaires + total_associes_charges
     total_depenses = total_frais_fixes + total_masse_salariale + sous_traitance + agents_location
     benefice = total_revenus - total_depenses
-    benefice_retenu = benefice - total_dividendes
-    if total_dividendes > max(benefice, 0.0):
-        avert.append("Les dividendes des associés dépassent le bénéfice : ils puiseraient dans les réserves.")
+    # Impôts de la société sur le bénéfice avant impôts ; les dividendes se versent sur ce qui reste (Phil 2026-11-09).
+    impots = calcul_impots(benefice, dep["impots"])
+    benefice_apres_impots = benefice - impots["total"]
+    benefice_retenu = benefice_apres_impots - total_dividendes
+    if total_dividendes > max(benefice_apres_impots, 0.0):
+        avert.append("Les dividendes des associés dépassent le bénéfice après impôts : ils puiseraient dans les réserves.")
 
     # Point mort : ce qu'il manque, converti en VAN du fonds ou en loyers sous gestion.
     reste_sans_fonds = total_depenses - (total_revenus - rev_fonds)
@@ -758,6 +796,7 @@ def calculer(data: Dict[str, Any], bareme: Optional[Dict[str, Any]] = None) -> D
             "total_dividendes": _r(total_dividendes),
             "total": _r(total_depenses),
             "charges_sociales_pct": dep["charges_sociales_pct"],
+            "impots": impots,
         },
         "totaux": {
             "revenus": _r(total_revenus),
@@ -768,6 +807,9 @@ def calculer(data: Dict[str, Any], bareme: Optional[Dict[str, Any]] = None) -> D
             "benefice_avant_associes": _r(benefice + total_associes_salaires + total_associes_charges),
             "salaires_associes_charges_incluses": _r(total_associes_salaires + total_associes_charges),
             "marge_pct": _r(100.0 * benefice / total_revenus) if total_revenus > 0 else None,
+            "impots": impots["total"],
+            "benefice_apres_impots": _r(benefice_apres_impots),
+            "marge_apres_impots_pct": _r(100.0 * benefice_apres_impots / total_revenus) if total_revenus > 0 else None,
             "dividendes": _r(total_dividendes),
             "benefice_retenu": _r(benefice_retenu),
             "revenus_mensuels": _r(total_revenus / 12.0),
@@ -789,7 +831,7 @@ def resume(resultats: Dict[str, Any]) -> Dict[str, Any]:
     t = resultats.get("totaux") or {}
     return {
         "revenus": t.get("revenus"), "depenses": t.get("depenses"), "benefice": t.get("benefice"),
-        "marge_pct": t.get("marge_pct"), "dividendes": t.get("dividendes"),
+        "marge_pct": t.get("marge_pct"), "impots": t.get("impots"), "benefice_apres_impots": t.get("benefice_apres_impots"), "dividendes": t.get("dividendes"),
         "van": (resultats.get("parc") or {}).get("van"),
         "van_necessaire": (resultats.get("point_mort") or {}).get("van_necessaire"),
     }
@@ -818,6 +860,13 @@ def referentiel(bareme: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             "Une acquisition conclue dans l'année est comptée au prorata des jours restants (ex. 3 avril → 273 jours sur 365) "
             "pour la gestion locative, les relocations, les rénovations au roulement, les frais du fonds et le sous-traitant. "
             "Les frais de développement et de prospection sont dus en entier à l'acquisition."
+        ),
+        "impots_note": (
+            "Impôt de la société sur le bénéfice avant impôts (revenus − dépenses déductibles : frais fixes, salaires et charges, "
+            "sous-traitant, agents de location). Deux paliers modifiables : le taux des PME jusqu'au plafond (au Québec en 2026 : "
+            "12,2 % = fédéral 9 % + Québec 3,2 % sur les premiers 500 000 $ de revenu actif admissible ; le taux québécois réduit exige "
+            "au moins 5 500 heures rémunérées, sinon 20,5 %), le taux général au-delà (26,5 %). Les dividendes ne sont pas déductibles : "
+            "ils se versent sur le bénéfice après impôts. À valider avec le comptable."
         ),
         "projection_note": (
             "Document du fonds : le gain d'une année = VAN de fin − VAN de début (p. 14 : loyers en hausse, capital remboursé, "
