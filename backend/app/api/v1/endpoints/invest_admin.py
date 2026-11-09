@@ -57,7 +57,6 @@ from app.api.v1.endpoints.invest_portal import (
     build_projet,
     projets_de,
 )
-from app.models.immobilier import Immeuble
 from app.services.invest_cascade import (
     Identite,
     charger_graphe,
@@ -86,6 +85,7 @@ from app.services.invest_portfolio import (
     entreprise_snapshot,
     flux_signes,
     get_or_default_profil,
+    immeubles_of_entreprise,
     kpis_participation,
     partner_directory,
     phase_projet,
@@ -1979,14 +1979,9 @@ async def _acces_investisseur(db, target: User) -> dict:
         ent = await db.get(Entreprise, eid)
         if ent is None:
             continue
-        nb_immeubles = (
-            await db.execute(
-                select(func.count(Immeuble.id)).where(
-                    Immeuble.owner_entreprise_id == eid,
-                    Immeuble.is_active.is_(True),
-                )
-            )
-        ).scalar() or 0
+        # Même règle que le portefeuille : `ImmeubleOwnership` + raccourci
+        # `owner_entreprise_id` (le premier seul donnait 0 partout en prod).
+        nb_immeubles = len(await immeubles_of_entreprise(db, eid))
         projets.append(
             {
                 "entreprise_id": eid,
