@@ -393,7 +393,18 @@ export default function InvestAdminPage() {
                     >
                       <div className="min-w-0">
                         <p className="flex flex-wrap items-center gap-2 font-medium text-white">
-                          {u.name}
+                          {u.has_account && u.user_id ? (
+                            <Link
+                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                              href={`/investisseur/admin/investisseur/${u.user_id}` as any}
+                              title="Contrôle des accès : ce qu'il voit ou pas"
+                              className="underline decoration-white/20 underline-offset-4 transition hover:text-accent-300 hover:decoration-accent-300"
+                            >
+                              {u.name}
+                            </Link>
+                          ) : (
+                            u.name
+                          )}
                           {u.has_account ? (
                             <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/50 bg-emerald-500/10 px-2 py-0.5 text-[10.5px] font-bold text-emerald-400">
                               ✓ Compte créé
