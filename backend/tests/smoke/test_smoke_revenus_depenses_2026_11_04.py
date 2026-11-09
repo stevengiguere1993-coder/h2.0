@@ -448,7 +448,7 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
     assert not any("Taux de cap" in n or "en chambres sans nombre" in n for n in cp["notes_import"])
     assert 470_000 < cp["dette"] < 500_000, cp["dette"]   # balance calculée du jour, comme la fiche de l'immeuble
 
-    # Performance (Phil : « les rendements par projet et ceux du fonds ») : prévu = scénario, réel = Kratos.
+    # Performance (2026-11-06, v2) : projection année par année du fonds selon le document.
     async def _achat():
         async with TestSessionLocal() as s:
             c = await s.get(Immeuble, cap_id)
@@ -459,7 +459,9 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
     run(_achat())
     r = client.post(f"{RD}/scenarios", json={"nom": "Perf"}, headers=auth_headers)
     pid, pdata = r.json()["id"], r.json()["data"]
+    assert pdata["projection"]["horizon_annees"] == 10 and pdata["projection"]["croissance_loyers_pct"] == 3.0
     pdata["fonds"]["cash"] = 50_000
+    pdata["projection"]["horizon_annees"] = 5
     pdata["immeubles"] = [
         svc.immeuble_vide(nom="Cap", kratos_immeuble_id=cap_id, suivre_kratos=True, nb_logements=4, loyers_bruts_mensuels=6_000,
                           valeur_rapport=835_000, taux_cap_pct=5.35, dette=480_000, travaux_initiaux=50_000),
@@ -471,35 +473,28 @@ def test_api_immeubles_deja_dans_kratos(client, auth_headers, employee_headers, 
     r = client.get(f"{RD}/performance?scenario_id={pid}", headers=auth_headers)
     assert r.status_code == 200, r.text
     out = r.json()
-    assert out["scenario"]["id"] == pid and len(out["projets"]) == 2
+    assert out["scenario"]["id"] == pid and out["horizon"] == 5 and len(out["projets"]) == 2 and len(out["fonds"]["annees"]) == 5
     p_cap, p_prev = out["projets"]
-    # Réel : coût = prix Kratos 600 000 + travaux 50 000 ; hypothèque initiale 500 000 → mise 150 000 ; dette du jour calculée.
-    assert p_cap["reel"]["prix_achat"] == 600_000 and p_cap["reel"]["cout_projet"] == 650_000 and p_cap["reel"]["mise_de_fonds"] == 150_000
-    assert p_cap["reel"]["hypotheque_initiale"] == 500_000 and 470_000 < p_cap["reel"]["dette"] < 500_000 and p_cap["reel"]["annees"] == 2.0
-    assert p_cap["reel"]["service_dette"] > 30_000 and p_cap["reel"]["revenus_nets"] is None  # pas de loyer dans Kratos pour cet immeuble
-    assert p_cap["reel"]["valeur"] == 835_000 and p_cap["reel"]["equite"] == round(835_000 - p_cap["reel"]["dette"], 2)
-    assert p_cap["reel"]["gain"] == round(p_cap["reel"]["equite"] - 150_000, 2) and p_cap["reel"]["rendement_total_pct"] == round(100 * p_cap["reel"]["gain"] / 150_000, 2)
-    assert p_cap["reel"]["annualise_pct"] == round(100 * ((p_cap["reel"]["equite"] / 150_000) ** 0.5 - 1), 2)
-    assert p_cap["ecart"]["valeur"] == 0 and p_cap["prevu"]["valeur"] == 835_000 and any("loyer" in n.lower() or "valeur" in n.lower() or "Taux" in n for n in p_cap["notes"]) or True
-    # Prévu seulement : hors Kratos → réel absent, note ; hors fonds → pas dans le fonds.
-    assert p_prev["reel"] is None and p_prev["prevu"]["cout_projet"] == 1_200_000 and p_prev["prevu"]["valeur"] == 1_600_000 and p_prev["prevu"]["mise_de_fonds"] == 300_000
-    assert any("pas lié à Kratos" in n for n in p_prev["notes"])
-    f = out["fonds"]
-    assert f["nb_immeubles"] == 1 and f["nb_reels"] == 1 and f["capital_investi"] == 150_000 and f["cash"] == 50_000
-    assert f["van"] == round(835_000 - p_cap["reel"]["dette"] + 50_000, 2) and f["gain"] == round(f["van"] - 150_000, 2)
-    assert f["annees_moyennes"] == 2.0 and f["annualise_pct"] is not None and f["part_des_gains"]["gain"] == f["gain"]
-    pg = f["part_des_gains"]
-    assert pg["tranche_investisseurs"] == round(min(f["gain"], 150_000 * 0.07), 2) and abs(pg["part_nous"] + pg["part_investisseurs"] - f["gain"]) < 0.02
-    # Refinancé (hypothèque ≥ coût) : capital récupéré, rendements non calculables ; en rénovation : valeur réelle = rapport.
-    pdata["immeubles"][0]["travaux_initiaux"] = 0          # coût 600 000 ; hypothèque 500 000 → mise 100 000
-    pdata["immeubles"][0]["phase"] = "stabilisation"
-    pdata["immeubles"][0]["prix_acquisition"] = 400_000     # coût réel = prix Kratos 600 000 (pas le scénario)
-    r = client.post(f"{RD}/calculer", json={"data": pdata}, headers=auth_headers)
-    assert r.status_code == 200
-    assert client.put(f"{RD}/scenarios/{pid}", json={"data": pdata}, headers=auth_headers).status_code == 200
-    pc = client.get(f"{RD}/performance?scenario_id={pid}", headers=auth_headers).json()["projets"][0]
-    assert pc["reel"]["valeur"] == 835_000 and "rapport" in pc["reel"]["methode_valeur"] and pc["reel"]["capital_recupere"] is False
-    assert any("En rénovation" in n for n in pc["notes"])
+    # Lié à Kratos : la dette et le prêt viennent de l'hypothèque Kratos (balance calculée du jour), pas de la fiche ;
+    # pas de loyer dans Kratos pour cet immeuble → revenus nets à zéro, dit clairement.
+    assert p_cap["depart"]["prets_kratos"] is True and p_cap["depart"]["nb_prets"] == 1 and 470_000 < p_cap["depart"]["dette"] < 500_000
+    assert p_cap["depart"]["valeur"] == 835_000 and p_cap["depart"]["equite"] == round(835_000 - p_cap["depart"]["dette"], 2)
+    a1 = p_cap["annees"][0]
+    assert a1["annee"] == pdata["annee"] and a1["service_dette"] > 30_000 and a1["capital_rembourse"] > 0 and a1["solde"] < p_cap["depart"]["dette"]
+    assert any("Aucun loyer" in n for n in p_cap["notes"])
+    # Hors Kratos et hors fonds : projeté quand même (dette aux conditions par défaut), exclu des totaux du fonds.
+    assert p_prev["dans_le_fonds"] is False and p_prev["depart"]["prets_kratos"] is False and p_prev["depart"]["equite"] == 300_000
+    assert any("Dette sans hypothèque Kratos" in n for n in p_prev["notes"])
+    f = out["fonds"]["sommaire"]
+    assert f["nb_immeubles"] == 1 and f["nb_hors_fonds"] == 1 and f["van_depart"] == round(p_cap["depart"]["equite"] + 50_000, 2)
+    assert f["parts_depart"] == round(f["van_depart"] / 10, 2)
+    fa = out["fonds"]["annees"][0]
+    assert fa["van_debut"] == f["van_depart"] and fa["frais_fonds"] == round(f["van_depart"] * 0.015, 2) and fa["capital_entre"] == 0
+    assert abs(fa["van"] - (fa["valeur"] + fa["cash"] - fa["dettes"])) < 0.02 and abs(fa["gain"] - (fa["van"] - fa["van_debut"])) < 0.02
+    # Historique (réel) : prix et date d'achat connus ; prêt commencé 400 jours après l'achat → refinancé, il manque le prêt initial et le cash sorti.
+    h = next(x for x in out["historique"] if x["kratos_immeuble_id"] == cap_id)
+    assert h["prix_achat"] == 600_000 and h["date_achat"] and h["nb_prets"] == 1 and h["refinance"] is True and h["complet"] is False
+    assert any("prêt initial" in m for m in h["manques"]) and any("travaux" in m for m in h["manques"])
     # Sans scenario_id : le scénario par défaut.
     assert client.get(f"{RD}/performance", headers=auth_headers).status_code == 200
 
