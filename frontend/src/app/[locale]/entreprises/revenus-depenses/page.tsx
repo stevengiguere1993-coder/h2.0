@@ -1557,16 +1557,36 @@ function HypothesesProjection({ data, modifier, referentiel }: { data: Data; mod
     <div className="mb-4">
       <Carte id="sec-projection" titre="Hypothèses de projection" hex={C.fonds} icon={TrendingUp} note={referentiel?.projection_note || "Année par année selon le document du fonds : gain = VAN de fin − VAN de début ; rendement du fonds = gain ÷ VAN de départ ; partage en parts. Détention simple, sans refinancement."}
         hypotheses={
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <Champ label="Croissance des loyers, par an" hint="Même défaut que le moteur de Prospection (3 %)"><Num value={p.croissance_loyers_pct} step={0.25} onChange={(v) => modifier((d) => { d.projection.croissance_loyers_pct = v; })} suffixe="%" /></Champ>
-            <Champ label="Croissance des dépenses, par an" hint="Taxes, assurances, énergie, conciergerie et entretien du barème ; inoccupation, gestion et autres normalisations suivent les loyers"><Num value={p.croissance_depenses_pct} step={0.25} onChange={(v) => modifier((d) => { d.projection.croissance_depenses_pct = v; })} suffixe="%" /></Champ>
-            <Champ label="Horizon" hint="De 1 à 30 ans à partir de l'année du scénario"><Num value={p.horizon_annees} step={1} onChange={(v) => modifier((d) => { d.projection.horizon_annees = Math.min(30, Math.max(1, Math.round(v))); })} suffixe="ans" /></Champ>
-            <Champ label="Taux de cap de sortie" hint="0 = le taux de cap du rapport de chaque immeuble"><Num value={p.taux_cap_sortie_pct} step={0.05} onChange={(v) => modifier((d) => { d.projection.taux_cap_sortie_pct = v; })} suffixe="%" /></Champ>
-            <Champ label="Taux au renouvellement des prêts" hint="Appliqué à l'échéance du terme de chaque prêt Kratos et aux prêts intérêts seulement convertis ; 0 = taux actuel conservé"><Num value={p.taux_renouvellement_pct} step={0.05} onChange={(v) => modifier((d) => { d.projection.taux_renouvellement_pct = v; })} suffixe="%" /></Champ>
-            <Champ label="Taux par défaut d'une dette sans prêt Kratos"><Num value={p.taux_dette_defaut_pct} step={0.05} onChange={(v) => modifier((d) => { d.projection.taux_dette_defaut_pct = v; })} suffixe="%" /></Champ>
-            <Champ label="Amortissement par défaut"><Num value={p.amortissement_defaut_ans} step={1} onChange={(v) => modifier((d) => { d.projection.amortissement_defaut_ans = Math.max(1, Math.round(v)); })} suffixe="ans" /></Champ>
-            <Champ label="Prix d'une part au départ" hint="Document p. 8 : 10 $ la part"><Num value={p.prix_part_depart} step={0.5} onChange={(v) => modifier((d) => { d.projection.prix_part_depart = v; })} suffixe="$" /></Champ>
-            <Champ label="Parts de nos holdings au départ" hint="Part de la VAN de départ détenue par nos 3 holdings comme investisseurs (p. 9 : leur argent est traité comme celui d'un investisseur)"><Num value={p.part_nos_holdings_depart_pct} step={1} onChange={(v) => modifier((d) => { d.projection.part_nos_holdings_depart_pct = Math.min(100, v); })} suffixe="%" /></Champ>
+          <div className="space-y-4">
+            <div>
+              <p className={`mb-2 text-[10px] font-semibold uppercase tracking-wider ${FAINT}`}>Chaque année</p>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Champ label="Les loyers montent de" hint="Appliqué à tous les immeubles, chaque année. Même défaut que le moteur de Prospection (3 %)."><Num value={p.croissance_loyers_pct} step={0.25} onChange={(v) => modifier((d) => { d.projection.croissance_loyers_pct = v; })} suffixe="% / an" /></Champ>
+                <Champ label="Les dépenses montent de" hint="Taxes, assurances, énergie, conciergerie et entretien du barème SCHL. Inoccupation, gestion et autres normalisations restent un % des loyers."><Num value={p.croissance_depenses_pct} step={0.25} onChange={(v) => modifier((d) => { d.projection.croissance_depenses_pct = v; })} suffixe="% / an" /></Champ>
+                <Champ label="Nombre d'années projetées" hint="De 1 à 30 ans à partir de l'année du scénario"><Num value={p.horizon_annees} step={1} onChange={(v) => modifier((d) => { d.projection.horizon_annees = Math.min(30, Math.max(1, Math.round(v))); })} suffixe="ans" /></Champ>
+              </div>
+            </div>
+            <div>
+              <p className={`mb-2 text-[10px] font-semibold uppercase tracking-wider ${FAINT}`}>Valeur des immeubles dans le futur</p>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Champ label="Taux de cap des années futures" hint="La valeur d'une année future = revenus nets de cette année ÷ ce taux. Laisse 0 pour garder le taux de cap du rapport de chaque immeuble. Mets par exemple 5,5 si tu penses que les taux de cap vont monter d'ici là (une valeur plus prudente)."><Num value={p.taux_cap_sortie_pct} step={0.05} onChange={(v) => modifier((d) => { d.projection.taux_cap_sortie_pct = v; })} suffixe="% (0 = rapport)" /></Champ>
+              </div>
+            </div>
+            <div>
+              <p className={`mb-2 text-[10px] font-semibold uppercase tracking-wider ${FAINT}`}>Prêts</p>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Champ label="Taux à l'échéance du terme" hint="Chaque hypothèque Kratos a un terme (ex. Desjardins 4,28 % jusqu'en mars 2028). À l'échéance, le prêt est renouvelé à ce taux-ci. Laisse 0 pour garder le taux actuel de chaque prêt."><Num value={p.taux_renouvellement_pct} step={0.05} onChange={(v) => modifier((d) => { d.projection.taux_renouvellement_pct = v; })} suffixe="% (0 = inchangé)" /></Champ>
+                <Champ label="Prêt inconnu : taux" hint="Pour une dette dont Kratos n'a pas l'hypothèque (ex. les acquisitions de l'année) et pour la suite d'un prêt à intérêts seulement, il faut un taux pour calculer le paiement. Tu peux aussi le saisir immeuble par immeuble dans sa fiche (onglet Revenus)."><Num value={p.taux_dette_defaut_pct} step={0.05} onChange={(v) => modifier((d) => { d.projection.taux_dette_defaut_pct = v; })} suffixe="%" /></Champ>
+                <Champ label="Prêt inconnu : amortissement" hint="Même chose pour la durée d'amortissement : sans elle, pas de paiement mensuel ni de capital remboursé. Saisissable aussi dans la fiche de l'immeuble."><Num value={p.amortissement_defaut_ans} step={1} onChange={(v) => modifier((d) => { d.projection.amortissement_defaut_ans = Math.max(1, Math.round(v)); })} suffixe="ans" /></Champ>
+              </div>
+            </div>
+            <div>
+              <p className={`mb-2 text-[10px] font-semibold uppercase tracking-wider ${FAINT}`}>Parts du fonds</p>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Champ label="Prix d'une part au départ" hint="Document p. 8 : 10 $ la part. Le nombre de parts de départ = VAN de départ ÷ ce prix."><Num value={p.prix_part_depart} step={0.5} onChange={(v) => modifier((d) => { d.projection.prix_part_depart = v; })} suffixe="$" /></Champ>
+                <Champ label="Parts de nos 3 holdings au départ" hint="Part de la VAN de départ qui appartient à nos holdings comme investisseurs (document p. 9 : leur argent est traité comme celui d'un investisseur). 100 % si les immeubles actuels sont apportés au fonds contre des parts ; 0 % comme dans les exemples du document."><Num value={p.part_nos_holdings_depart_pct} step={1} onChange={(v) => modifier((d) => { d.projection.part_nos_holdings_depart_pct = Math.min(100, v); })} suffixe="%" /></Champ>
+              </div>
+            </div>
           </div>
         }
       />
