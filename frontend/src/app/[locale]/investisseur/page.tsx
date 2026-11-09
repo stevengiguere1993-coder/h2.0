@@ -9,7 +9,7 @@
    investisseur (aperçu). ?apercu=<userId> présélectionne un
    investisseur (boutons « Voir comme lui » de la console). */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "@/i18n/navigation";
 import {
   Building2,
@@ -97,8 +97,16 @@ export default function PortefeuillePage() {
       .catch(() => undefined);
   }, [isAdmin]);
 
+  //: Numéro de la dernière requête lancée : une réponse plus ancienne
+  //: est ignorée. Sans ça, la vue globale (lente : toutes les
+  //: compagnies) finissait APRÈS la vue « comme Vincent » (rapide) et
+  //: l'écrasait — Steven, 2026-11-09 : « je me mets en vue comme
+  //: Vincent, je vois tous les projets ».
+  const requete = useRef(0);
   const load = useCallback(async () => {
     if (mode === null) return;
+    const id = ++requete.current;
+    const perimee = () => id !== requete.current;
     setLoading(true);
     setError(null);
     try {
@@ -112,12 +120,15 @@ export default function PortefeuillePage() {
           : `/api/v1/invest/admin/apercu-partenaire/${mode.slice(1)}/portefeuille`;
       const res = await authedFetch(url);
       if (!res.ok) throw new Error(`http_${res.status}`);
-      setData((await res.json()) as Portefeuille);
+      const json = (await res.json()) as Portefeuille;
+      if (perimee()) return;
+      setData(json);
     } catch {
+      if (perimee()) return;
       setData(null);
       setError("Chargement du portefeuille impossible. Réessayez.");
     } finally {
-      setLoading(false);
+      if (!perimee()) setLoading(false);
     }
   }, [mode]);
 
