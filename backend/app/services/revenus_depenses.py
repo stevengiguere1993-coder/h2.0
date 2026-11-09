@@ -168,6 +168,14 @@ def immeuble_vide(**kw: Any) -> Dict[str, Any]:
         "suivre_kratos": False,
         #: Alertes d'import fermées par l'utilisateur (ne reviennent pas à l'hydratation).
         "notes_ignorees": [],
+        # ── Projection (onglet Performance du fonds, 2026-11-06).
+        #: Loyers mensuels une fois les travaux finis (immeuble en rénovation) ; 0 = inconnus
+        #: (revenus nets stabilisés estimés = valeur future × taux de cap).
+        "loyers_stabilises_mensuels": 0.0,
+        #: Conditions de la dette quand l'immeuble n'est pas lié à Kratos ; 0 = défauts du scénario.
+        "taux_dette_pct": 0.0, "amortissement_ans": 0,
+        #: Prêt intérêts seulement (prêteur B, privé) : devient amorti à la stabilisation.
+        "interet_seulement": False,
     }
     base.update(kw)
     return base
@@ -189,6 +197,7 @@ def scenario_defaut() -> Dict[str, Any]:
         "location": {"frais_logement": 600, "frais_chambre": 400, "taux_roulement_pct": 20.0, "taux_roulement_chambres_pct": 20.0,
                      "nb_relocations_logements": None, "nb_relocations_chambres": None},
         "part_des_gains": {"rendement_pct": 15.0, "seuil_investisseurs_pct": 7.0, "tranche_nous_pct": 3.0, "part_nous_pct": 30.0},
+        "projection": dict(PROJECTION_DEFAUT),
         "depenses": {
             "frais_fixes": [{"categorie": c, "libelle": "", "montant": 0, "periode": "an"} for c, _ in CATEGORIES_FRAIS_FIXES if c != "autre"],
             "charges_sociales_pct": 14.0,
@@ -251,6 +260,9 @@ def normaliser(data: Any) -> Dict[str, Any]:
             assurances=_pos(i.get("assurances")), energie=_pos(i.get("energie")), autres_depenses=_pos(i.get("autres_depenses")),
             notes_import=[str(n)[:200] for n in (i.get("notes_import") if isinstance(i.get("notes_import"), list) else [])][:10],
             suivre_kratos=bool(i.get("suivre_kratos", False)),
+            loyers_stabilises_mensuels=_pos(i.get("loyers_stabilises_mensuels")),
+            taux_dette_pct=_pos(i.get("taux_dette_pct")), amortissement_ans=int(_pos(i.get("amortissement_ans"))),
+            interet_seulement=bool(i.get("interet_seulement", False)),
             notes_ignorees=[str(n)[:200] for n in (i.get("notes_ignorees") if isinstance(i.get("notes_ignorees"), list) else [])][:30],
         ))
 
@@ -266,6 +278,7 @@ def normaliser(data: Any) -> Dict[str, Any]:
     gest = d.get("gestion") if isinstance(d.get("gestion"), dict) else {}
     loc = d.get("location") if isinstance(d.get("location"), dict) else {}
     pg = d.get("part_des_gains") if isinstance(d.get("part_des_gains"), dict) else {}
+    proj = d.get("projection") if isinstance(d.get("projection"), dict) else {}
     dep = d.get("depenses") if isinstance(d.get("depenses"), dict) else {}
 
     frais_fixes = []
@@ -331,6 +344,17 @@ def normaliser(data: Any) -> Dict[str, Any]:
             "tranche_nous_pct": _pos(pg.get("tranche_nous_pct"), 3.0),
             "part_nous_pct": min(100.0, _pos(pg.get("part_nous_pct"), 30.0)),
         },
+        "projection": {
+            "croissance_loyers_pct": _pos(proj.get("croissance_loyers_pct"), PROJECTION_DEFAUT["croissance_loyers_pct"]),
+            "croissance_depenses_pct": _pos(proj.get("croissance_depenses_pct"), PROJECTION_DEFAUT["croissance_depenses_pct"]),
+            "horizon_annees": min(30, max(1, int(_pos(proj.get("horizon_annees"), PROJECTION_DEFAUT["horizon_annees"]) or PROJECTION_DEFAUT["horizon_annees"]))),
+            "taux_cap_sortie_pct": _pos(proj.get("taux_cap_sortie_pct")),
+            "taux_renouvellement_pct": _pos(proj.get("taux_renouvellement_pct")),
+            "taux_dette_defaut_pct": _pos(proj.get("taux_dette_defaut_pct"), PROJECTION_DEFAUT["taux_dette_defaut_pct"]),
+            "amortissement_defaut_ans": max(1, int(_pos(proj.get("amortissement_defaut_ans"), PROJECTION_DEFAUT["amortissement_defaut_ans"]) or PROJECTION_DEFAUT["amortissement_defaut_ans"])),
+            "prix_part_depart": _pos(proj.get("prix_part_depart"), PROJECTION_DEFAUT["prix_part_depart"]),
+            "part_nos_holdings_depart_pct": min(100.0, _pos(proj.get("part_nos_holdings_depart_pct"))),
+        },
         "depenses": {
             "frais_fixes": frais_fixes, "charges_sociales_pct": _pos(dep.get("charges_sociales_pct"), 14.0),
             "salaires": salaires, "associes": associes,
@@ -383,6 +407,17 @@ def part_annee(i: Dict[str, Any], annee: int) -> Dict[str, Any]:
 
 #: Taux d'inoccupation SCHL standard quand les Paramètres → Prospection n'en donnent pas.
 TAUX_INOCCUPATION_DEFAUT = 0.03
+
+#: Hypothèses de projection de l'onglet « Performance du fonds » (2026-11-06), toutes visibles et
+#: modifiables dans la page. Croissances = mêmes défauts que le moteur de Prospection (3 % / 3 %).
+#: 0 pour le taux de cap de sortie = celui du rapport de chaque immeuble ; 0 pour le taux de
+#: renouvellement = le taux actuel de chaque prêt est conservé.
+PROJECTION_DEFAUT: Dict[str, Any] = {
+    "croissance_loyers_pct": 3.0, "croissance_depenses_pct": 3.0, "horizon_annees": 10,
+    "taux_cap_sortie_pct": 0.0, "taux_renouvellement_pct": 0.0,
+    "taux_dette_defaut_pct": 5.0, "amortissement_defaut_ans": 25,
+    "prix_part_depart": 10.0, "part_nos_holdings_depart_pct": 0.0,
+}
 
 
 def bareme_effectif(bareme: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -783,6 +818,15 @@ def referentiel(bareme: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             "Une acquisition conclue dans l'année est comptée au prorata des jours restants (ex. 3 avril → 273 jours sur 365) "
             "pour la gestion locative, les relocations, les rénovations au roulement, les frais du fonds et le sous-traitant. "
             "Les frais de développement et de prospection sont dus en entier à l'acquisition."
+        ),
+        "projection_note": (
+            "Document du fonds : le gain d'une année = VAN de fin − VAN de début (p. 14 : loyers en hausse, capital remboursé, "
+            "cash gardé) ; rendement du fonds = gain ÷ VAN de départ ; partage en parts (p. 7-8) : les premiers % aux investisseurs, "
+            "les % suivants à nous, le reste partagé — les investisseurs gardent le même nombre de parts et le prix monte, "
+            "nous recevons de nouvelles parts. Frais de gestion du fonds payés en cash chaque année (p. 20). Détention simple : "
+            "aucun refinancement, un prêt intérêts seulement devient amorti à la fin de son terme ou à la stabilisation. "
+            "Revenus nets = barèmes SCHL indexés : loyers avec la croissance des loyers, taxes, assurances, énergie, conciergerie "
+            "et entretien avec celle des dépenses ; inoccupation, gestion et autres normalisations en % des loyers."
         ),
         "valorisation_note": (
             "Document du fonds (p. 11) : VAN = valeur des immeubles + cash − dettes. Stabilisé = valeur du dernier "

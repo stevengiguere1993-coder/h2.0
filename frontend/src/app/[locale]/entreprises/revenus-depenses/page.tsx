@@ -102,6 +102,11 @@ type Immeuble = {
   autres_depenses: number;
   suivre_kratos: boolean;
   notes_ignorees: string[];
+  // Projection (onglet Performance du fonds, 2026-11-06).
+  loyers_stabilises_mensuels: number;
+  taux_dette_pct: number;
+  amortissement_ans: number;
+  interet_seulement: boolean;
 };
 type LigneRefact = { id: string; libelle: string; montant_annuel: number };
 type FraisFixe = { id: string; categorie: string; libelle: string; montant: number; periode: "mois" | "an" };
@@ -119,6 +124,7 @@ type Data = {
   gestion: { taux_pct: number; facturer_sous_traites: boolean; loyers_additionnels_mensuels: number; inclure_projection: boolean };
   location: { frais_logement: number; frais_chambre: number; taux_roulement_pct: number; taux_roulement_chambres_pct: number; nb_relocations_logements: number | null; nb_relocations_chambres: number | null };
   part_des_gains: { rendement_pct: number; seuil_investisseurs_pct: number; tranche_nous_pct: number; part_nous_pct: number };
+  projection: { croissance_loyers_pct: number; croissance_depenses_pct: number; horizon_annees: number; taux_cap_sortie_pct: number; taux_renouvellement_pct: number; taux_dette_defaut_pct: number; amortissement_defaut_ans: number; prix_part_depart: number; part_nos_holdings_depart_pct: number };
   depenses: { frais_fixes: FraisFixe[]; charges_sociales_pct: number; salaires: Salaire[]; associes: Associe[]; sous_traitance_gestion_pct: number; agents_location: { par_logement: number; par_chambre: number } };
 };
 type SectionRevenu = { key: string; label: string; revenu: number; part_pct: number; [k: string]: unknown };
@@ -162,7 +168,7 @@ type Resultats = {
   point_mort: { couvert: boolean; van_necessaire: number; van_actuelle: number; loyers_mensuels_sous_gestion_necessaires: number; loyers_mensuels_sous_gestion_actuels: number };
   avertissements: string[];
 };
-type Referentiel = { categories_frais_fixes: { key: string; label: string }[]; charges_sociales_note: string; valorisation_note: string; prorata_note: string; schl_note: string };
+type Referentiel = { categories_frais_fixes: { key: string; label: string }[]; charges_sociales_note: string; valorisation_note: string; prorata_note: string; schl_note: string; projection_note?: string };
 type ScenarioResume = { id: number; nom: string; is_default: boolean; updated_at: string | null; resume: Record<string, number | null> };
 type Detail = ScenarioResume & { data: Data; resultats: Resultats; referentiel: Referentiel };
 type ImmeubleKratos = { kratos_immeuble_id: number; nom: string; adresse: string | null; ville: string | null; nb_logements: number; nb_logements_en_chambres: number; nb_chambres: number; loyers_bruts_mensuels: number; gestion_externe: boolean; dette: number; valeur_rapport: number; annee_rapport: number | null; source_rapport: string | null; taux_cap_pct: number; notes_import: string[]; taxes_municipales: number; taxes_scolaires: number; assurances: number; energie: number; autres_depenses: number };
@@ -255,6 +261,7 @@ function immeubleVide(extra: Partial<Immeuble> = {}): Immeuble {
     date_acquisition: null, notes_import: [],
     taxes_municipales: 0, taxes_scolaires: 0, assurances: 0, energie: 0, autres_depenses: 0,
     suivre_kratos: false, notes_ignorees: [], frais_developpement_override: null,
+    loyers_stabilises_mensuels: 0, taux_dette_pct: 0, amortissement_ans: 0, interet_seulement: false,
     ...extra
   };
 }
@@ -842,7 +849,7 @@ export default function RevenusDepensesPage() {
               ["revenus", "Revenus", `${money(t.revenus)} / an`, C.revenus, TrendingUp],
               ["depenses", "Dépenses", `${money(t.depenses)} / an`, C.depenses, Wallet],
               // Phil 2026-11-05 : « Performance du fonds, je la veux dans Revenus et dépenses, à côté de Revenus et Dépenses ».
-              ["performance", "Performance du fonds", "prévu vs réel", C.fonds, PiggyBank]
+              ["performance", "Performance du fonds", `projection ${data.projection?.horizon_annees ?? 10} ans`, C.fonds, PiggyBank]
             ] as ["revenus" | "depenses" | "performance", string, string, string, React.ComponentType<{ className?: string }>][]
           ).map(([k, label, sous, hex, Icon]) => (
             <button key={k} onClick={() => setOnglet(k)} className={`${CARD} flex items-center gap-3 px-4 py-2.5 text-left transition`} style={onglet === k ? { borderColor: hex, background: teinte(hex, "14") } : undefined}>
@@ -861,7 +868,7 @@ export default function RevenusDepensesPage() {
 
         <EditionCtx.Provider value={edition}>
           <style>{`fieldset:disabled button, fieldset:disabled [role="switch"] { opacity: .45; cursor: not-allowed; }`}</style>
-          {onglet === "revenus" ? <RevenusTab data={data} res={res} rev={rev} modifier={modifier} referentiel={detail?.referentiel} /> : onglet === "depenses" ? <DepensesTab data={data} res={res} referentiel={detail?.referentiel} modifier={modifier} /> : <PerformanceTab scenarioId={courant} version={detail?.updated_at ?? null} />}
+          {onglet === "revenus" ? <RevenusTab data={data} res={res} rev={rev} modifier={modifier} referentiel={detail?.referentiel} /> : onglet === "depenses" ? <DepensesTab data={data} res={res} referentiel={detail?.referentiel} modifier={modifier} /> : <><HypothesesProjection data={data} modifier={modifier} referentiel={detail?.referentiel} /><PerformanceTab scenarioId={courant} version={detail?.updated_at ?? null} /></>}
         </EditionCtx.Provider>
       </div>
     </>
@@ -1003,6 +1010,7 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
                 Coût du projet : <b>{money(coutProjet)}</b>
               </p>
               <Champ label="Valeur future (rapport au refi)"><Num value={im.valeur_future} onChange={(v) => set((x) => { x.valeur_future = v; })} suffixe="$" /></Champ>
+              <Champ label="Loyers stabilisés (par mois, après travaux)" hint="Pour la projection de l'onglet Performance : les loyers une fois les travaux finis. 0 = inconnus, les revenus nets stabilisés sont alors estimés par valeur future × taux de cap."><Num value={im.loyers_stabilises_mensuels} onChange={(v) => set((x) => { x.loyers_stabilises_mensuels = v; })} suffixe="$/mois" /></Champ>
               <div className="grid grid-cols-2 gap-2">
                 <Champ label="Durée du projet"><Num value={im.mois_prevus} step={1} onChange={(v) => set((x) => { x.mois_prevus = Math.max(1, Math.round(v)); })} suffixe="mois" /></Champ>
                 <Champ label="Mois écoulés" hint="Où on en est dans le projet : la plus-value se reconnaît en ligne droite, mois par mois"><Num value={im.mois_ecoules} step={1} onChange={(v) => set((x) => { x.mois_ecoules = Math.round(v); })} suffixe="mois" /></Champ>
@@ -1050,6 +1058,17 @@ function FicheImmeubleCarte({ im, fiche, modifier, replie, onToggle }: { im: Imm
             <Pastille hex={C.fonds} /> Dette et équité
           </p>
           <Champ label="Dette (solde du prêt)"><Num value={im.dette} onChange={(v) => setK((x) => { x.dette = v; })} suffixe="$" /></Champ>
+          {im.kratos_immeuble_id ? (
+            <p className={`text-[11px] ${FAINT}`}>Projection (onglet Performance) : les hypothèques de Kratos (taux, amortissement, paiement, échéance du terme).</p>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <Champ label="Taux du prêt" hint="Pour la projection ; 0 = taux par défaut de la section Projection (onglet Performance)"><Num value={im.taux_dette_pct} step={0.05} onChange={(v) => set((x) => { x.taux_dette_pct = v; })} suffixe="%" /></Champ>
+                <Champ label="Amortissement" hint="Pour la projection ; 0 = amortissement par défaut de la section Projection"><Num value={im.amortissement_ans} step={1} onChange={(v) => set((x) => { x.amortissement_ans = Math.max(0, Math.round(v)); })} suffixe="ans" /></Champ>
+              </div>
+              <Interrupteur actif={im.interet_seulement} onChange={(v) => set((x) => { x.interet_seulement = v; })} hex={C.fonds} label="Intérêts seulement (prêteur B, privé)" hint="Le prêt ne rembourse pas de capital ; il devient un prêt amorti à la stabilisation (immeuble en rénovation) ou dès l'an 2." />
+            </>
+          )}
           {fiche ? (
             <div className="rounded-xl p-3 text-xs" style={{ background: teinte(hex, "12"), border: `1px solid ${teinte(hex, "44")}` }}>
               <ul className="space-y-1">
@@ -1518,6 +1537,34 @@ function RevenusTab({ data, res, rev, modifier, referentiel }: { data: Data; res
           }
         />
       </div>
+    </div>
+  );
+}
+
+// ─── Onglet Performance : hypothèses de projection (2026-11-06) ──────────
+// Phil : « il faut que tout ça soit annualisé » — les hypothèses vivent dans le scénario (visibles,
+// modifiables avec « Modifier »), la projection est calculée côté serveur (PerformanceTab).
+
+function HypothesesProjection({ data, modifier, referentiel }: { data: Data; modifier: (fn: (d: Data) => void) => void; referentiel?: Referentiel }) {
+  const p = data.projection;
+  if (!p) return null;
+  return (
+    <div className="mb-4">
+      <Carte id="sec-projection" titre="Hypothèses de projection" hex={C.fonds} icon={TrendingUp} note={referentiel?.projection_note || "Année par année selon le document du fonds : gain = VAN de fin − VAN de début ; rendement du fonds = gain ÷ VAN de départ ; partage en parts. Détention simple, sans refinancement."}
+        hypotheses={
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <Champ label="Croissance des loyers, par an" hint="Même défaut que le moteur de Prospection (3 %)"><Num value={p.croissance_loyers_pct} step={0.25} onChange={(v) => modifier((d) => { d.projection.croissance_loyers_pct = v; })} suffixe="%" /></Champ>
+            <Champ label="Croissance des dépenses, par an" hint="Taxes, assurances, énergie, conciergerie et entretien du barème ; inoccupation, gestion et autres normalisations suivent les loyers"><Num value={p.croissance_depenses_pct} step={0.25} onChange={(v) => modifier((d) => { d.projection.croissance_depenses_pct = v; })} suffixe="%" /></Champ>
+            <Champ label="Horizon" hint="De 1 à 30 ans à partir de l'année du scénario"><Num value={p.horizon_annees} step={1} onChange={(v) => modifier((d) => { d.projection.horizon_annees = Math.min(30, Math.max(1, Math.round(v))); })} suffixe="ans" /></Champ>
+            <Champ label="Taux de cap de sortie" hint="0 = le taux de cap du rapport de chaque immeuble"><Num value={p.taux_cap_sortie_pct} step={0.05} onChange={(v) => modifier((d) => { d.projection.taux_cap_sortie_pct = v; })} suffixe="%" /></Champ>
+            <Champ label="Taux au renouvellement des prêts" hint="Appliqué à l'échéance du terme de chaque prêt Kratos et aux prêts intérêts seulement convertis ; 0 = taux actuel conservé"><Num value={p.taux_renouvellement_pct} step={0.05} onChange={(v) => modifier((d) => { d.projection.taux_renouvellement_pct = v; })} suffixe="%" /></Champ>
+            <Champ label="Taux par défaut d'une dette sans prêt Kratos"><Num value={p.taux_dette_defaut_pct} step={0.05} onChange={(v) => modifier((d) => { d.projection.taux_dette_defaut_pct = v; })} suffixe="%" /></Champ>
+            <Champ label="Amortissement par défaut"><Num value={p.amortissement_defaut_ans} step={1} onChange={(v) => modifier((d) => { d.projection.amortissement_defaut_ans = Math.max(1, Math.round(v)); })} suffixe="ans" /></Champ>
+            <Champ label="Prix d'une part au départ" hint="Document p. 8 : 10 $ la part"><Num value={p.prix_part_depart} step={0.5} onChange={(v) => modifier((d) => { d.projection.prix_part_depart = v; })} suffixe="$" /></Champ>
+            <Champ label="Parts de nos holdings au départ" hint="Part de la VAN de départ détenue par nos 3 holdings comme investisseurs (p. 9 : leur argent est traité comme celui d'un investisseur)"><Num value={p.part_nos_holdings_depart_pct} step={1} onChange={(v) => modifier((d) => { d.projection.part_nos_holdings_depart_pct = Math.min(100, v); })} suffixe="%" /></Champ>
+          </div>
+        }
+      />
     </div>
   );
 }

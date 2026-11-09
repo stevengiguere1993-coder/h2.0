@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
 from fastapi.encoders import jsonable_encoder
@@ -239,25 +239,58 @@ async def performance(db: DBSession, user: RequireAdminOrOwner, scenario_id: Opt
             raise HTTPException(status_code=404, detail="Aucun scénario : ouvre d'abord la page Revenus et dépenses.")
     data = await hydrater_kratos(db, svc.charger(s.data_json))
     kids = sorted({int(i["kratos_immeuble_id"]) for i in data["immeubles"] if i.get("kratos_immeuble_id")})
-    items = {it["kratos_immeuble_id"]: it for it in (await lire_immeubles_kratos(db, kids) if kids else [])}
-    hypos: Dict[int, Dict[str, float]] = {}
-    achats: Dict[int, Dict[str, Any]] = {}
-    if kids:
-        for iid, hyps in (await hypotheques_par_immeuble(db, kids)).items():
-            initial = paiement = 0.0
-            for h, part in hyps:
-                cap = float(capital_de(h) or 0.0)
-                initial += cap * float(part)
-                pm = float(h.paiement_mensuel) if h.paiement_mensuel else (paiement_mensuel_calcule(
-                    taux_pct=(float(h.taux_pct) if h.taux_pct is not None else None), amortissement_mois=h.amortissement_mois,
-                    principal=cap, composition=h.composition_interets, mode_remboursement=getattr(h, "mode_remboursement", None)) or 0.0)
-                paiement += pm * float(part) * 12.0
-            hypos[iid] = {"initial": initial, "paiement_annuel": paiement}
-        for im in (await db.execute(select(Immeuble).where(Immeuble.id.in_(kids)))).scalars().all():
-            achats[im.id] = {"prix": float(im.purchase_price or 0.0), "date": (im.purchase_date.isoformat() if im.purchase_date else None)}
-    out = perf.calculer_performance(data, items, hypos, achats, await _bareme_schl(db))
+    annee_depart = int(svc.normaliser(data)["annee"])
+    prets, achats = await prets_et_achats_kratos(db, kids, annee_depart)
+    out = perf.calculer_performance(data, prets, achats, await _bareme_schl(db))
     out["scenario"] = {"id": s.id, "nom": s.nom}
     return out
+
+
+async def prets_et_achats_kratos(db, kids: List[int], annee_depart: int) -> Tuple[Dict[int, List[Dict[str, Any]]], Dict[int, Dict[str, Any]]]:
+    """Pour la projection : les prêts ACTIFS de chaque immeuble (solde du jour à sa part, taux,
+    amortissement restant, paiement, composition, intérêts seulement, échéance du terme en
+    année de projection) ; pour l'historique : prix et date d'achat, et TOUS les prêts (y
+    compris refinancés) avec leur montant et leur date."""
+    prets: Dict[int, List[Dict[str, Any]]] = {}
+    achats: Dict[int, Dict[str, Any]] = {}
+    if not kids:
+        return prets, achats
+    auj = date.today()
+    tous = await hypotheques_par_immeuble(db, kids, actives_seulement=False)
+    for iid, hyps in tous.items():
+        liste: List[Dict[str, Any]] = []
+        histo: List[Dict[str, Any]] = []
+        for h, part in hyps:
+            cap = float(capital_de(h) or 0.0)
+            histo.append({"montant": cap * float(part), "date_debut": (h.date_debut.isoformat() if h.date_debut else None),
+                          "status": str(h.status or ""), "preteur": h.preteur})
+            if str(h.status or "") != "active":
+                continue
+            mode = getattr(h, "mode_remboursement", None) or "capital_interet"
+            io = mode == "interet_seulement" or not h.amortissement_mois
+            ecoules = 0
+            if h.date_debut:
+                ecoules = max((auj.year - h.date_debut.year) * 12 + (auj.month - h.date_debut.month), 0)
+            pm = float(h.paiement_mensuel) if h.paiement_mensuel else (paiement_mensuel_calcule(
+                taux_pct=(float(h.taux_pct) if h.taux_pct is not None else None), amortissement_mois=h.amortissement_mois,
+                principal=cap, composition=h.composition_interets, mode_remboursement=mode) or 0.0)
+            fin = h.date_fin_terme
+            fin_terme_annee = (fin.year - annee_depart + 1) if fin else None
+            if fin_terme_annee is not None and fin_terme_annee < 1:
+                fin_terme_annee = 0   # terme déjà échu : renouvellement dès l'an 1
+            liste.append({
+                "preteur": h.preteur, "solde": balance_effective(h) * float(part), "taux_pct": float(h.taux_pct or 0.0),
+                "mois_restants": max(int(h.amortissement_mois or 0) - ecoules, 0), "paiement_mensuel": pm * float(part),
+                "composition": h.composition_interets or "semi", "interet_seulement": io,
+                "conversion_annee": ((fin_terme_annee + 1) if fin_terme_annee is not None else 2) if io else None,
+                "fin_terme_annee": fin_terme_annee,
+            })
+        prets[iid] = liste
+        achats[iid] = {"prets": histo}
+    for im in (await db.execute(select(Immeuble).where(Immeuble.id.in_(kids)))).scalars().all():
+        achats.setdefault(im.id, {"prets": []}).update({"prix": float(im.purchase_price or 0.0),
+                                                        "date": (im.purchase_date.isoformat() if im.purchase_date else None)})
+    return prets, achats
 
 
 @router.get("/immeubles-kratos", summary="Immeubles déjà dans Kratos, prêts à être ajoutés à un scénario")
