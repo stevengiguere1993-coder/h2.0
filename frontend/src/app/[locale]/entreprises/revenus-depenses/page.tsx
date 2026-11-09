@@ -125,7 +125,7 @@ type Data = {
   location: { frais_logement: number; frais_chambre: number; taux_roulement_pct: number; taux_roulement_chambres_pct: number; nb_relocations_logements: number | null; nb_relocations_chambres: number | null };
   part_des_gains: { rendement_pct: number; seuil_investisseurs_pct: number; tranche_nous_pct: number; part_nous_pct: number };
   projection: { croissance_loyers_pct: number; croissance_depenses_pct: number; horizon_annees: number; taux_cap_sortie_pct: number; taux_renouvellement_pct: number; taux_dette_defaut_pct: number; amortissement_defaut_ans: number; prix_part_depart: number; part_nos_holdings_depart_pct: number };
-  depenses: { frais_fixes: FraisFixe[]; charges_sociales_pct: number; salaires: Salaire[]; associes: Associe[]; sous_traitance_gestion_pct: number; agents_location: { par_logement: number; par_chambre: number } };
+  depenses: { frais_fixes: FraisFixe[]; charges_sociales_pct: number; salaires: Salaire[]; associes: Associe[]; sous_traitance_gestion_pct: number; agents_location: { par_logement: number; par_chambre: number }; impots: { taux_pct: number; plafond: number; taux_au_dela_pct: number } };
 };
 type SectionRevenu = { key: string; label: string; revenu: number; part_pct: number; [k: string]: unknown };
 type LigneDev = { id: string; immeuble: string; prix: number; frais: number; frais_calcule: number; taux_effectif_pct: number; override: boolean };
@@ -162,13 +162,14 @@ type Resultats = {
     loyers_sous_traites_annuels: number;
     total_dividendes: number;
     total: number;
+    impots: { taux_pct: number; plafond: number; taux_au_dela_pct: number; base: number; tranche_1_base: number; tranche_1: number; tranche_2_base: number; tranche_2: number; total: number; taux_effectif_pct: number };
     charges_sociales_pct: number;
   };
-  totaux: { revenus: number; revenus_avec_projection: number; depenses: number; benefice: number; benefice_avant_associes: number; salaires_associes_charges_incluses: number; marge_pct: number | null; dividendes: number; benefice_retenu: number; revenus_mensuels: number; depenses_mensuelles: number };
+  totaux: { revenus: number; revenus_avec_projection: number; depenses: number; benefice: number; benefice_avant_associes: number; salaires_associes_charges_incluses: number; marge_pct: number | null; impots: number; benefice_apres_impots: number; marge_apres_impots_pct: number | null; dividendes: number; benefice_retenu: number; revenus_mensuels: number; depenses_mensuelles: number };
   point_mort: { couvert: boolean; van_necessaire: number; van_actuelle: number; loyers_mensuels_sous_gestion_necessaires: number; loyers_mensuels_sous_gestion_actuels: number };
   avertissements: string[];
 };
-type Referentiel = { categories_frais_fixes: { key: string; label: string }[]; charges_sociales_note: string; valorisation_note: string; prorata_note: string; schl_note: string; projection_note?: string };
+type Referentiel = { categories_frais_fixes: { key: string; label: string }[]; charges_sociales_note: string; valorisation_note: string; prorata_note: string; schl_note: string; projection_note?: string; impots_note?: string };
 type ScenarioResume = { id: number; nom: string; is_default: boolean; updated_at: string | null; resume: Record<string, number | null> };
 type Detail = ScenarioResume & { data: Data; resultats: Resultats; referentiel: Referentiel };
 type ImmeubleKratos = { kratos_immeuble_id: number; nom: string; adresse: string | null; ville: string | null; nb_logements: number; nb_logements_en_chambres: number; nb_chambres: number; loyers_bruts_mensuels: number; gestion_externe: boolean; dette: number; valeur_rapport: number; annee_rapport: number | null; source_rapport: string | null; taux_cap_pct: number; notes_import: string[]; taxes_municipales: number; taxes_scolaires: number; assurances: number; energie: number; autres_depenses: number };
@@ -192,6 +193,7 @@ const C: Record<string, string> = {
   associes: "#d946ef",
   sous_traitance: "#fb7185",
   dividendes: "#c084fc",
+  impots: "#fb923c",
   revenus: "#10b981",
   depenses: "#f43f5e",
   benefice: "#8b5cf6",
@@ -396,6 +398,8 @@ function Cascade({ t }: { t: Resultats["totaux"] }) {
     { label: "Revenus", valeur: t.revenus, hex: C.revenus },
     { label: "Dépenses", valeur: -t.depenses, hex: C.depenses },
     { label: "Bénéfice", valeur: t.benefice, hex: C.benefice },
+    { label: "Impôts", valeur: -t.impots, hex: C.impots },
+    { label: "Après impôts", valeur: t.benefice_apres_impots, hex: C.benefice },
     { label: "Dividendes", valeur: -t.dividendes, hex: C.dividendes },
     { label: "Retenu", valeur: t.benefice_retenu, hex: C.retenu }
   ];
@@ -415,7 +419,7 @@ function Cascade({ t }: { t: Resultats["totaux"] }) {
             <text x={i * bw + bw / 2} y={H + 14} textAnchor="middle" fontSize={10} fill="var(--qg-text-muted)">
               {e.label}
             </text>
-            <text x={i * bw + bw / 2} y={H + 28} textAnchor="middle" fontSize={10} fontWeight={700} fill={e.valeur < 0 && e.label !== "Dépenses" && e.label !== "Dividendes" ? "#f43f5e" : "var(--qg-text)"}>
+            <text x={i * bw + bw / 2} y={H + 28} textAnchor="middle" fontSize={10} fontWeight={700} fill={e.valeur < 0 && e.label !== "Dépenses" && e.label !== "Impôts" && e.label !== "Dividendes" ? "#f43f5e" : "var(--qg-text)"}>
               {money(e.valeur)}
             </text>
           </g>
@@ -806,8 +810,9 @@ export default function RevenusDepensesPage() {
           <KPI label="Revenus annuels" valeur={money(t.revenus)} sous={`${money(t.revenus_mensuels)} / mois${data.gestion.inclure_projection ? "" : ` · ${money(t.revenus_avec_projection)} avec la projection`}`} hex={C.revenus} icon={TrendingUp} />
           <KPI label="Dépenses annuelles" valeur={money(t.depenses)} sous={`${money(t.depenses_mensuelles)} / mois`} hex={C.depenses} icon={Wallet} />
           <KPI label="Bénéfice avant salaires des associés et dividendes" valeur={money(t.benefice_avant_associes)} sous={`salaires des associés (charges incluses) ${money(t.salaires_associes_charges_incluses)}`} hex={C.benefice} icon={Calculator} alerte={t.benefice_avant_associes < 0} />
-          <KPI label="Bénéfice avant dividendes" valeur={money(t.benefice)} sous={t.marge_pct != null ? `marge ${pct(t.marge_pct)}` : "aucun revenu saisi"} hex={C.benefice} icon={Calculator} alerte={t.benefice < 0} />
-          <KPI label="Dividendes des associés" valeur={money(t.dividendes)} sous={`bénéfice retenu ${money(t.benefice_retenu)}`} hex={C.dividendes} icon={Users} alerte={t.benefice_retenu < 0} />
+          <KPI label="Bénéfice avant impôts" valeur={money(t.benefice)} sous={t.marge_pct != null ? `marge ${pct(t.marge_pct)}` : "aucun revenu saisi"} hex={C.benefice} icon={Calculator} alerte={t.benefice < 0} />
+          <KPI label="Impôts de la société" valeur={money(t.impots)} sous={`bénéfice après impôts ${money(t.benefice_apres_impots)}${t.marge_apres_impots_pct != null ? ` · marge ${pct(t.marge_apres_impots_pct)}` : ""}`} hex={C.impots} icon={Landmark} alerte={t.benefice_apres_impots < 0} />
+          <KPI label="Dividendes des associés" valeur={money(t.dividendes)} sous={`sur le bénéfice après impôts · retenu ${money(t.benefice_retenu)}`} hex={C.dividendes} icon={Users} alerte={t.benefice_retenu < 0} />
           <KPI label="VAN du fonds" valeur={money(res.parc.van)} sous={`${money(res.parc.valeur)} d'immeubles + ${money(res.parc.cash)} de cash − ${money(res.parc.dettes)} de dettes · ${money(res.parc.van_a_terme)} à terme`} hex={C.fonds} icon={Landmark} alerte={res.parc.van < 0} />
           <KPI label="Point mort" valeur={pm.couvert ? "Couvert" : money(pm.van_necessaire)} sous={pm.couvert ? "les revenus couvrent les dépenses" : `VAN nécessaire (actuelle ${money(pm.van_actuelle)}) — ou ${money(pm.loyers_mensuels_sous_gestion_necessaires)} de loyers/mois sous gestion (actuels ${money(pm.loyers_mensuels_sous_gestion_actuels)})`} hex="#f59e0b" icon={Sparkles} alerte={!pm.couvert} />
         </div>
@@ -1675,7 +1680,7 @@ function DepensesTab({ data, res, referentiel, modifier }: { data: Data; res: Re
           }
         />
 
-        <Carte id="sec-associes" titre="Associés : salaire et dividendes" hex={C.associes} icon={PiggyBank} revenu={dep.total_associes_salaires} note="Le salaire (avec charges) est une dépense ; les dividendes sont une distribution prise sur le bénéfice, affichée à part dans le tableau de bord."
+        <Carte id="sec-associes" titre="Associés : salaire et dividendes" hex={C.associes} icon={PiggyBank} revenu={dep.total_associes_salaires} note="Le salaire (avec charges) est une dépense déductible ; les dividendes ne le sont pas : ils se versent sur le bénéfice après impôts (section suivante), affichés à part dans le tableau de bord."
           hypotheses={
             <table className="w-full text-xs">
               <thead className={`text-left ${MUTED}`}>
@@ -1706,7 +1711,29 @@ function DepensesTab({ data, res, referentiel, modifier }: { data: Data; res: Re
                 <li key={i} className="flex justify-between gap-2"><span>{a.nom}</span><span className="tabular-nums">salaire {money(a.salaire_brut)} + charges {money(a.charges)} = <b>{money(a.cout_salaire)}</b> · <span style={{ color: C.dividendes }}>dividendes {money(a.dividendes)}</span></span></li>
               ))}
               <li className="flex justify-between border-t border-[var(--qg-border)] pt-1 font-semibold"><span>Salaires + charges sociales {pct(data.depenses.charges_sociales_pct)} (dépense)</span><span className="tabular-nums" style={{ color: C.associes }}>{money(dep.total_associes_salaires)}</span></li>
-              <li className="flex justify-between font-semibold"><span>Dividendes (sur le bénéfice)</span><span className="tabular-nums" style={{ color: C.dividendes }}>{money(dep.total_dividendes)}</span></li>
+              <li className="flex justify-between font-semibold"><span>Dividendes (sur le bénéfice après impôts)</span><span className="tabular-nums" style={{ color: C.dividendes }}>{money(dep.total_dividendes)}</span></li>
+            </ul>
+          }
+        />
+
+        <Carte id="sec-impots" titre="Impôts de la société" hex={C.impots} icon={Landmark} revenu={dep.impots.total} revenuLabel="d'impôts par an" note={referentiel?.impots_note || "Impôt sur le bénéfice avant impôts, par paliers ; les dividendes se versent après."}
+          hypotheses={
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Champ label="Taux jusqu'au plafond" hint="Taux des PME : fédéral 9 % + Québec 3,2 % = 12,2 % si admissible (sinon 20,5 % au Québec)"><Num value={data.depenses.impots.taux_pct} step={0.1} onChange={(v) => modifier((d) => { d.depenses.impots.taux_pct = Math.min(100, v); })} suffixe="%" /></Champ>
+              <Champ label="Plafond du premier taux" hint="500 000 $ de revenu actif admissible ; 0 = un seul taux"><Num value={data.depenses.impots.plafond} step={1000} onChange={(v) => modifier((d) => { d.depenses.impots.plafond = v; })} suffixe="$" /></Champ>
+              <Champ label="Taux au-delà" hint="Taux général : fédéral 15 % + Québec 11,5 % = 26,5 %"><Num value={data.depenses.impots.taux_au_dela_pct} step={0.1} onChange={(v) => modifier((d) => { d.depenses.impots.taux_au_dela_pct = Math.min(100, v); })} suffixe="%" /></Champ>
+            </div>
+          }
+          resultat={
+            <ul className="space-y-1">
+              <li className="flex justify-between gap-2"><span>Bénéfice avant impôts (revenus − dépenses déductibles)</span><b className={`tabular-nums ${res.totaux.benefice < 0 ? "text-rose-400" : ""}`}>{money(res.totaux.benefice)}</b></li>
+              {res.totaux.benefice < 0 ? <li className={FAINT}>Perte : aucun impôt cette année.</li> : null}
+              <li className="flex justify-between gap-2"><span>{money(dep.impots.tranche_1_base)} × {pct(dep.impots.taux_pct)}</span><span className="tabular-nums">{money(dep.impots.tranche_1)}</span></li>
+              {dep.impots.tranche_2_base > 0 ? <li className="flex justify-between gap-2"><span>{money(dep.impots.tranche_2_base)} au-delà du plafond × {pct(dep.impots.taux_au_dela_pct)}</span><span className="tabular-nums">{money(dep.impots.tranche_2)}</span></li> : null}
+              <li className="flex justify-between gap-2 border-t border-[var(--qg-border)] pt-1 font-semibold"><span>Impôts (taux effectif {pct(dep.impots.taux_effectif_pct)})</span><span className="tabular-nums" style={{ color: C.impots }}>{money(dep.impots.total)}</span></li>
+              <li className="flex justify-between gap-2 font-semibold"><span>Bénéfice après impôts</span><span className={`tabular-nums ${res.totaux.benefice_apres_impots < 0 ? "text-rose-400" : ""}`}>{money(res.totaux.benefice_apres_impots)}</span></li>
+              <li className="flex justify-between gap-2"><span>− Dividendes des associés</span><span className="tabular-nums" style={{ color: C.dividendes }}>{money(res.totaux.dividendes)}</span></li>
+              <li className="flex justify-between gap-2 border-t border-[var(--qg-border)] pt-1 font-semibold"><span>Bénéfice retenu dans la société</span><span className={`tabular-nums ${res.totaux.benefice_retenu < 0 ? "text-rose-400" : ""}`}>{money(res.totaux.benefice_retenu)}</span></li>
             </ul>
           }
         />
