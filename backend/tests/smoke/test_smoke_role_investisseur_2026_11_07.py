@@ -270,3 +270,44 @@ def test_grille_permissions_connait_le_role(client, auth_headers):
     r = client.get("/api/v1/permissions", headers=auth_headers)
     assert r.status_code == 200, r.text
     assert r.json()["roles"][0] == "investisseur"
+
+
+def test_fiche_acces_investisseur_et_interrupteur(client, auth_headers, role_ids):
+    """Steven, 2026-11-09 : « quand je clique sur le nom de l'investisseur,
+    cela devrait m'amener à sa section du contrôle des accès de ce qu'il
+    peut voir ou pas ». GET = ce que la cascade lui donne, PUT = masque /
+    montre un projet sans toucher aux parts."""
+    uid, eid = role_ids["inv"], role_ids["ent"]
+    base = f"/api/v1/invest/admin/investisseurs/{uid}/acces"
+
+    r = client.get(base, headers=auth_headers)
+    assert r.status_code == 200, r.text
+    fiche = r.json()
+    assert fiche["user"]["id"] == uid
+    assert fiche["user"]["role"] == "investisseur"
+    ligne = next(p for p in fiche["projets"] if p["entreprise_id"] == eid)
+    assert ligne["pct_total"] == 40.0
+    assert ligne["source"] == "cascade"
+    assert ligne["visible"] is True
+
+    # Masquer : le projet disparaît du portail, la part reste.
+    r = client.put(f"{base}/{eid}", headers=auth_headers, json={"visible": False})
+    assert r.status_code == 200, r.text
+    ligne = next(p for p in r.json()["projets"] if p["entreprise_id"] == eid)
+    assert ligne["visible"] is False
+    assert ligne["pct_total"] == 40.0
+    r = client.get("/api/v1/invest/me/portefeuille", headers=_h(uid))
+    assert all(p["entreprise_id"] != eid for p in r.json()["projets"])
+
+    # Remontrer.
+    r = client.put(f"{base}/{eid}", headers=auth_headers, json={"visible": True})
+    assert r.status_code == 200, r.text
+    ligne = next(p for p in r.json()["projets"] if p["entreprise_id"] == eid)
+    assert ligne["visible"] is True
+    r = client.get("/api/v1/invest/me/portefeuille", headers=_h(uid))
+    assert any(p["entreprise_id"] == eid for p in r.json()["projets"])
+
+    # Utilisateur inconnu, et l'investisseur lui-même n'y a pas accès.
+    assert client.get("/api/v1/invest/admin/investisseurs/999999/acces", headers=auth_headers).status_code == 404
+    assert client.get(base, headers=_h(uid)).status_code == 403
+    assert client.put(f"{base}/{eid}", headers=auth_headers, json={}).status_code == 422

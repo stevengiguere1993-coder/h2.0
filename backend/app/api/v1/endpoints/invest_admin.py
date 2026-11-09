@@ -57,10 +57,12 @@ from app.api.v1.endpoints.invest_portal import (
     build_projet,
     projets_de,
 )
+from app.models.immobilier import Immeuble
 from app.services.invest_cascade import (
     Identite,
     charger_graphe,
     detenteurs_de,
+    detentions_de,
 )
 from app.services.invest_documents import (
     document_payload,
@@ -1952,6 +1954,112 @@ async def apercu_partenaire_projet(
                 "Cet actionnaire n'est pas au capital de cette compagnie.",
             )
         raise
+
+
+# ───────────── Fiche d'accès d'un investisseur (Steven, 2026-11-09) ─────────────
+#
+# « Quand je clique sur le nom de l'investisseur, cela devrait m'amener à
+# sa section du contrôle des accès de ce qu'il peut voir ou pas. » Une
+# page par compte : ce que la cascade lui donne (projets et compagnies du
+# groupe, % et chemins), les participations ajoutées à la main, et pour
+# chacune l'interrupteur « visible / masqué » (exception admin).
+
+
+class AccesProjetPatch(BaseModel):
+    visible: bool
+
+
+async def _acces_investisseur(db, target: User) -> dict:
+    graphe = await charger_graphe(db)
+    ident = Identite.de_user(target)
+    lignes = await projets_de(db, ident, inclure_masques=True, graphe=graphe)
+    projets: list[dict] = []
+    for part, det, pct in lignes:
+        eid = part.entreprise_id
+        ent = await db.get(Entreprise, eid)
+        if ent is None:
+            continue
+        nb_immeubles = (
+            await db.execute(
+                select(func.count(Immeuble.id)).where(
+                    Immeuble.owner_entreprise_id == eid,
+                    Immeuble.is_active.is_(True),
+                )
+            )
+        ).scalar() or 0
+        projets.append(
+            {
+                "entreprise_id": eid,
+                "name": ent.name,
+                "color_accent": ent.color_accent,
+                "nb_immeubles": int(nb_immeubles),
+                "holding": bool(graphe.detient.get(eid))
+                and int(nb_immeubles) == 0,
+                "pct_total": round(pct, 3),
+                "pct_direct": det.pct_direct if det is not None else round(pct, 3),
+                "pct_indirect": det.pct_indirect if det is not None else 0.0,
+                "chemins": [c.to_dict() for c in det.chemins] if det else [],
+                "source": "cascade" if det is not None else "manuel",
+                "participation_id": part.id or None,
+                "visible": not bool(part.masque),
+            }
+        )
+    projets.sort(key=lambda p: (p["holding"], -p["pct_total"], p["name"]))
+    nom = f"{target.first_name or ''} {target.last_name or ''}".strip()
+    return {
+        "user": {
+            "id": target.id,
+            "name": nom or target.email,
+            "email": target.email,
+            "role": target.role,
+            "is_active": bool(target.is_active),
+            "must_change_password": bool(target.must_change_password),
+        },
+        "projets": projets,
+        "nb_visibles": sum(
+            1 for p in projets if p["visible"] and not p["holding"]
+        ),
+    }
+
+
+@router.get(
+    "/investisseurs/{user_id}/acces",
+    summary="Fiche d'accès d'un investisseur : ce qu'il voit ou pas",
+)
+async def acces_investisseur(
+    user_id: int, db: DBSession, user: CurrentUser
+) -> dict:
+    target = await db.get(User, user_id)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Utilisateur introuvable.")
+    return await _acces_investisseur(db, target)
+
+
+@router.put(
+    "/investisseurs/{user_id}/acces/{entreprise_id}",
+    summary="Montre ou masque un projet dans le portail de cet investisseur",
+)
+async def patch_acces_investisseur(
+    user_id: int,
+    entreprise_id: int,
+    data: AccesProjetPatch,
+    db: DBSession,
+    user: CurrentUser,
+) -> dict:
+    target = await db.get(User, user_id)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Utilisateur introuvable.")
+    await _load_entreprise(db, entreprise_id)
+    graphe = await charger_graphe(db)
+    dets = await detentions_de(db, Identite.de_user(target), graphe)
+    det = dets.get(entreprise_id)
+    part, _ = await _ensure_participation(
+        db, target.id, entreprise_id, det.pct_total if det is not None else None
+    )
+    part.masque = not data.visible
+    await db.flush()
+    await db.commit()
+    return await _acces_investisseur(db, target)
 
 
 @router.get(
