@@ -314,9 +314,26 @@ export const SECTIONS: Section[] = [
     title: "Investisseurs",
     icon: TrendingUp,
     volet: "investisseur",
-    cards: [],
+    cards: [
+      {
+        title: "Accès — qui voit quoi",
+        desc: "Par rôle (seuil de chaque page du pôle) et par investisseur (projets visibles ou masqués dans son portail).",
+        href: "/parametres/investisseurs",
+        icon: ShieldCheck,
+        minRole: "admin"
+      },
+      {
+        title: "Console admin (investisseurs)",
+        desc: "Actionnaires et comptes, participations, documents, vue globale et « voir comme ».",
+        href: "/investisseur/admin",
+        icon: UserCog,
+        minRole: "admin"
+      }
+    ],
+    // Pour un investisseur ou un employé (cartes admin filtrées) : la
+    // section reste, avec ce mot.
     emptyNote:
-      "Aucun réglage pour ce pôle pour l'instant. Les réglages du volet Investisseurs apparaîtront ici."
+      "Les réglages d'accès de ce pôle sont réservés aux administrateurs."
   },
   {
     key: "devlogiciel",
