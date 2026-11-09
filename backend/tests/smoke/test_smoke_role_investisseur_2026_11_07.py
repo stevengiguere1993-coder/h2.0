@@ -272,13 +272,40 @@ def test_grille_permissions_connait_le_role(client, auth_headers):
     assert r.json()["roles"][0] == "investisseur"
 
 
-def test_fiche_acces_investisseur_et_interrupteur(client, auth_headers, role_ids):
+def test_fiche_acces_investisseur_et_interrupteur(
+    client, auth_headers, role_ids, run
+):
     """Steven, 2026-11-09 : « quand je clique sur le nom de l'investisseur,
     cela devrait m'amener à sa section du contrôle des accès de ce qu'il
     peut voir ou pas ». GET = ce que la cascade lui donne, PUT = masque /
     montre un projet sans toucher aux parts."""
     uid, eid = role_ids["inv"], role_ids["ent"]
     base = f"/api/v1/invest/admin/investisseurs/{uid}/acces"
+
+    # Un immeuble détenu par ImmeubleOwnership (pas le raccourci
+    # owner_entreprise_id) : il doit compter — en prod, 2026-11-09, les
+    # projets de Vincent sortaient à « 0 immeuble ».
+    from app.models.immobilier import Immeuble, ImmeubleOwnership
+
+    async def _immeuble():
+        async with TestSessionLocal() as s:
+            imm = Immeuble(
+                name="Imm Rôle Investisseur",
+                address="3 rue du Rôle",
+                city="Montréal",
+                is_active=True,
+                purchase_price=800_000,
+            )
+            s.add(imm)
+            await s.flush()
+            s.add(
+                ImmeubleOwnership(
+                    immeuble_id=imm.id, entreprise_id=eid, ownership_pct=100
+                )
+            )
+            await s.commit()
+
+    run(_immeuble())
 
     r = client.get(base, headers=auth_headers)
     assert r.status_code == 200, r.text
@@ -289,6 +316,8 @@ def test_fiche_acces_investisseur_et_interrupteur(client, auth_headers, role_ids
     assert ligne["pct_total"] == 40.0
     assert ligne["source"] == "cascade"
     assert ligne["visible"] is True
+    assert ligne["nb_immeubles"] == 1
+    assert ligne["holding"] is False
 
     # Masquer : le projet disparaît du portail, la part reste.
     r = client.put(f"{base}/{eid}", headers=auth_headers, json={"visible": False})
