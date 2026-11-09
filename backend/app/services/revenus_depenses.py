@@ -349,10 +349,8 @@ def normaliser(data: Any) -> Dict[str, Any]:
             "croissance_loyers_pct": _pos(proj.get("croissance_loyers_pct"), PROJECTION_DEFAUT["croissance_loyers_pct"]),
             "croissance_depenses_pct": _pos(proj.get("croissance_depenses_pct"), PROJECTION_DEFAUT["croissance_depenses_pct"]),
             "horizon_annees": min(30, max(1, int(_pos(proj.get("horizon_annees"), PROJECTION_DEFAUT["horizon_annees"]) or PROJECTION_DEFAUT["horizon_annees"]))),
-            "taux_cap_sortie_pct": _pos(proj.get("taux_cap_sortie_pct")),
-            "taux_renouvellement_pct": _pos(proj.get("taux_renouvellement_pct")),
-            "taux_dette_defaut_pct": _pos(proj.get("taux_dette_defaut_pct"), PROJECTION_DEFAUT["taux_dette_defaut_pct"]),
-            "amortissement_defaut_ans": max(1, int(_pos(proj.get("amortissement_defaut_ans"), PROJECTION_DEFAUT["amortissement_defaut_ans"]) or PROJECTION_DEFAUT["amortissement_defaut_ans"])),
+            "incertitude_points": min(10.0, _pos(proj.get("incertitude_points"), PROJECTION_DEFAUT["incertitude_points"])),
+            "refinancement": _refinancement(proj.get("refinancement")),
             "prix_part_depart": _pos(proj.get("prix_part_depart"), PROJECTION_DEFAUT["prix_part_depart"]),
             "part_nos_holdings_depart_pct": min(100.0, _pos(proj.get("part_nos_holdings_depart_pct"))),
         },
@@ -414,6 +412,18 @@ def part_annee(i: Dict[str, Any], annee: int) -> Dict[str, Any]:
 IMPOTS_DEFAUT: Dict[str, Any] = {"taux_pct": 12.2, "plafond": 500000.0, "taux_au_dela_pct": 26.5}
 
 
+def _refinancement(v: Any) -> Dict[str, Any]:
+    d = v if isinstance(v, dict) else {}
+    ref = PROJECTION_DEFAUT["refinancement"]
+    return {
+        "actif": bool(d.get("actif", ref["actif"])),
+        "ltv_pct": min(95.0, _pos(d.get("ltv_pct"), ref["ltv_pct"])),
+        "frais_pct": min(10.0, _pos(d.get("frais_pct"), ref["frais_pct"])),
+        "cadence_ans": max(0, int(_pos(d.get("cadence_ans"), ref["cadence_ans"]))),
+        "cash_remis": bool(d.get("cash_remis", ref["cash_remis"])),
+    }
+
+
 def _impots(v: Any) -> Dict[str, float]:
     d = v if isinstance(v, dict) else {}
     return {
@@ -443,14 +453,17 @@ def calcul_impots(benefice: float, regles: Dict[str, float]) -> Dict[str, float]
 #: Taux d'inoccupation SCHL standard quand les Paramètres → Prospection n'en donnent pas.
 TAUX_INOCCUPATION_DEFAUT = 0.03
 
-#: Hypothèses de projection de l'onglet « Performance du fonds » (2026-11-06), toutes visibles et
-#: modifiables dans la page. Croissances = mêmes défauts que le moteur de Prospection (3 % / 3 %).
-#: 0 pour le taux de cap de sortie = celui du rapport de chaque immeuble ; 0 pour le taux de
-#: renouvellement = le taux actuel de chaque prêt est conservé.
+#: Hypothèses de projection de l'onglet « Performance du fonds » (2026-11-06, v3 le 09), toutes visibles
+#: et modifiables dans la page. Croissances = mêmes défauts que le moteur de Prospection (3 % / 3 %).
+#: Plus aucun taux global (Phil : « deux prêts financés le même jour n'auront pas le même taux ») : chaque
+#: prêt garde son taux à l'échéance, les prêts inconnus prennent la moyenne des hypothèques du fonds ;
+#: l'incertitude (± points sur les taux de cap et les taux des prêts renouvelés) donne une fourchette.
+#: Refinancement : à l'échéance du terme / à la stabilisation / à la cadence, nouveau prêt à ltv_pct de la
+#: valeur, frais en %, cash remis aux porteurs de parts (« comme si on l'avait remboursé ») ou gardé.
 PROJECTION_DEFAUT: Dict[str, Any] = {
     "croissance_loyers_pct": 3.0, "croissance_depenses_pct": 3.0, "horizon_annees": 10,
-    "taux_cap_sortie_pct": 0.0, "taux_renouvellement_pct": 0.0,
-    "taux_dette_defaut_pct": 5.0, "amortissement_defaut_ans": 25,
+    "incertitude_points": 0.5,
+    "refinancement": {"actif": True, "ltv_pct": 75.0, "frais_pct": 1.0, "cadence_ans": 5, "cash_remis": True},
     "prix_part_depart": 10.0, "part_nos_holdings_depart_pct": 0.0,
 }
 
@@ -869,13 +882,14 @@ def referentiel(bareme: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             "ils se versent sur le bénéfice après impôts. À valider avec le comptable."
         ),
         "projection_note": (
-            "Document du fonds : le gain d'une année = VAN de fin − VAN de début (p. 14 : loyers en hausse, capital remboursé, "
-            "cash gardé) ; rendement du fonds = gain ÷ VAN de départ ; partage en parts (p. 7-8) : les premiers % aux investisseurs, "
-            "les % suivants à nous, le reste partagé — les investisseurs gardent le même nombre de parts et le prix monte, "
-            "nous recevons de nouvelles parts. Frais de gestion du fonds payés en cash chaque année (p. 20). Détention simple : "
-            "aucun refinancement, un prêt intérêts seulement devient amorti à la fin de son terme ou à la stabilisation. "
-            "Revenus nets = barèmes SCHL indexés : loyers avec la croissance des loyers, taxes, assurances, énergie, conciergerie "
-            "et entretien avec celle des dépenses ; inoccupation, gestion et autres normalisations en % des loyers."
+            "Document du fonds : le gain d'une année = VAN de fin − VAN de début, plus le cash remis aux investisseurs (p. 14 : "
+            "loyers en hausse, capital remboursé, cash) ; rendement du fonds = gain ÷ VAN de départ ; partage en parts (p. 7-8) : "
+            "les premiers % aux investisseurs, les % suivants à nous, le reste partagé — les investisseurs gardent leurs parts et "
+            "le prix monte, nous recevons de nouvelles parts. Frais de gestion du fonds payés en cash (p. 20). Prêts : à l'échéance "
+            "de son terme, chaque prêt garde son propre taux (dernier financement) ; un prêt inconnu ou la suite d'un prêt intérêts "
+            "seulement prend la moyenne des hypothèques du fonds. Refinancement : nouveau prêt à X % de la valeur à l'échéance du "
+            "terme ou à la stabilisation, cash sorti remis aux investisseurs ou gardé. Incertitude : ± points sur les taux de cap "
+            "futurs et les taux des prêts renouvelés → fourchette prudente / favorable. Revenus nets = barèmes SCHL indexés."
         ),
         "valorisation_note": (
             "Document du fonds (p. 11) : VAN = valeur des immeubles + cash − dettes. Stabilisé = valeur du dernier "

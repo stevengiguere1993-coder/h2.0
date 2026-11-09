@@ -124,7 +124,7 @@ type Data = {
   gestion: { taux_pct: number; facturer_sous_traites: boolean; loyers_additionnels_mensuels: number; inclure_projection: boolean };
   location: { frais_logement: number; frais_chambre: number; taux_roulement_pct: number; taux_roulement_chambres_pct: number; nb_relocations_logements: number | null; nb_relocations_chambres: number | null };
   part_des_gains: { rendement_pct: number; seuil_investisseurs_pct: number; tranche_nous_pct: number; part_nous_pct: number };
-  projection: { croissance_loyers_pct: number; croissance_depenses_pct: number; horizon_annees: number; taux_cap_sortie_pct: number; taux_renouvellement_pct: number; taux_dette_defaut_pct: number; amortissement_defaut_ans: number; prix_part_depart: number; part_nos_holdings_depart_pct: number };
+  projection: { croissance_loyers_pct: number; croissance_depenses_pct: number; horizon_annees: number; incertitude_points: number; refinancement: { actif: boolean; ltv_pct: number; frais_pct: number; cadence_ans: number; cash_remis: boolean }; prix_part_depart: number; part_nos_holdings_depart_pct: number };
   depenses: { frais_fixes: FraisFixe[]; charges_sociales_pct: number; salaires: Salaire[]; associes: Associe[]; sous_traitance_gestion_pct: number; agents_location: { par_logement: number; par_chambre: number }; impots: { taux_pct: number; plafond: number; taux_au_dela_pct: number } };
 };
 type SectionRevenu = { key: string; label: string; revenu: number; part_pct: number; [k: string]: unknown };
@@ -1567,17 +1567,22 @@ function HypothesesProjection({ data, modifier, referentiel }: { data: Data; mod
               </div>
             </div>
             <div>
-              <p className={`mb-2 text-[10px] font-semibold uppercase tracking-wider ${FAINT}`}>Valeur des immeubles dans le futur</p>
+              <p className={`mb-2 text-[10px] font-semibold uppercase tracking-wider ${FAINT}`}>Ce qu'on ne peut pas savoir d'avance</p>
+              <p className={`mb-2 text-[11px] leading-snug ${MUTED}`}>Les taux de cap futurs partent du dernier rapport de chaque immeuble ; les prêts renouvelés gardent chacun leur taux (dernier financement) ; un prêt inconnu ou la suite d'un prêt à intérêts seulement prend la moyenne des hypothèques du fonds. L'incertitude donne une fourchette prudente / favorable autour du scénario central.</p>
               <div className="grid gap-3 sm:grid-cols-3">
-                <Champ label="Taux de cap des années futures" hint="La valeur d'une année future = revenus nets de cette année ÷ ce taux. Laisse 0 pour garder le taux de cap du rapport de chaque immeuble. Mets par exemple 5,5 si tu penses que les taux de cap vont monter d'ici là (une valeur plus prudente)."><Num value={p.taux_cap_sortie_pct} step={0.05} onChange={(v) => modifier((d) => { d.projection.taux_cap_sortie_pct = v; })} suffixe="% (0 = rapport)" /></Champ>
+                <Champ label="Incertitude sur les taux" hint="Ajoutée (prudent) ou retirée (favorable) aux taux de cap des années futures et aux taux des prêts renouvelés ou nouveaux. 0 = pas de fourchette."><Num value={p.incertitude_points} step={0.25} onChange={(v) => modifier((d) => { d.projection.incertitude_points = Math.min(10, v); })} suffixe="± points" /></Champ>
               </div>
             </div>
             <div>
-              <p className={`mb-2 text-[10px] font-semibold uppercase tracking-wider ${FAINT}`}>Prêts</p>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <Champ label="Taux à l'échéance du terme" hint="Chaque hypothèque Kratos a un terme (ex. Desjardins 4,28 % jusqu'en mars 2028). À l'échéance, le prêt est renouvelé à ce taux-ci. Laisse 0 pour garder le taux actuel de chaque prêt."><Num value={p.taux_renouvellement_pct} step={0.05} onChange={(v) => modifier((d) => { d.projection.taux_renouvellement_pct = v; })} suffixe="% (0 = inchangé)" /></Champ>
-                <Champ label="Prêt inconnu : taux" hint="Pour une dette dont Kratos n'a pas l'hypothèque (ex. les acquisitions de l'année) et pour la suite d'un prêt à intérêts seulement, il faut un taux pour calculer le paiement. Tu peux aussi le saisir immeuble par immeuble dans sa fiche (onglet Revenus)."><Num value={p.taux_dette_defaut_pct} step={0.05} onChange={(v) => modifier((d) => { d.projection.taux_dette_defaut_pct = v; })} suffixe="%" /></Champ>
-                <Champ label="Prêt inconnu : amortissement" hint="Même chose pour la durée d'amortissement : sans elle, pas de paiement mensuel ni de capital remboursé. Saisissable aussi dans la fiche de l'immeuble."><Num value={p.amortissement_defaut_ans} step={1} onChange={(v) => modifier((d) => { d.projection.amortissement_defaut_ans = Math.max(1, Math.round(v)); })} suffixe="ans" /></Champ>
+              <p className={`mb-2 text-[10px] font-semibold uppercase tracking-wider ${FAINT}`}>Refinancements</p>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <Interrupteur actif={p.refinancement.actif} onChange={(v) => modifier((d) => { d.projection.refinancement.actif = v; })} hex={C.fonds} label={p.refinancement.actif ? "On refinance" : "Détention simple"} hint="Quand un prêt arrive à l'échéance de son terme, qu'un immeuble en rénovation est stabilisé, ou à la cadence ci-contre pour un prêt sans terme connu : nouveau prêt sur la valeur du moment, le reste de la dette ne fait que baisser." />
+                <Champ label="Nouveau prêt, en % de la valeur" hint="Document p. 12 : nouveau prêt au refi sur la valeur stabilisée. 75 % = prêt conventionnel ; plus haut avec la SCHL."><Num value={p.refinancement.ltv_pct} step={1} onChange={(v) => modifier((d) => { d.projection.refinancement.ltv_pct = Math.min(95, v); })} suffixe="%" /></Champ>
+                <Champ label="Frais du refinancement" hint="Évaluation, notaire, frais du prêteur, pénalité : en % du nouveau prêt, retirés du cash sorti."><Num value={p.refinancement.frais_pct} step={0.25} onChange={(v) => modifier((d) => { d.projection.refinancement.frais_pct = Math.min(10, v); })} suffixe="% du prêt" /></Champ>
+                <Champ label="Cadence sans terme connu" hint="Pour un prêt dont on ne connaît pas l'échéance (dette de la fiche) : refinancer tous les N ans. 0 = jamais."><Num value={p.refinancement.cadence_ans} step={1} onChange={(v) => modifier((d) => { d.projection.refinancement.cadence_ans = Math.max(0, Math.round(v)); })} suffixe="ans" /></Champ>
+              </div>
+              <div className="mt-3">
+                <Interrupteur actif={p.refinancement.cash_remis} onChange={(v) => modifier((d) => { d.projection.refinancement.cash_remis = v; })} hex={C.gain} label={p.refinancement.cash_remis ? "Le cash est remis aux investisseurs" : "Le cash reste dans le fonds"} hint="Remis : le cash de l'année et le cash sorti aux refis sont comptés comme rendus aux porteurs de parts (comme si on l'avait remboursé) ; ils comptent dans le rendement et sortent de la VAN. Gardé : il s'accumule dans le fonds sans rendement." />
               </div>
             </div>
             <div>

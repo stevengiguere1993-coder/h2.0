@@ -280,7 +280,8 @@ async def prets_et_achats_kratos(db, kids: List[int], annee_depart: int) -> Tupl
                 fin_terme_annee = 0   # terme déjà échu : renouvellement dès l'an 1
             liste.append({
                 "preteur": h.preteur, "solde": balance_effective(h) * float(part), "taux_pct": float(h.taux_pct or 0.0),
-                "mois_restants": max(int(h.amortissement_mois or 0) - ecoules, 0), "paiement_mensuel": pm * float(part),
+                "mois_restants": max(int(h.amortissement_mois or 0) - ecoules, 0), "amortissement_mois": int(h.amortissement_mois or 0),
+                "paiement_mensuel": pm * float(part), "type_pret": getattr(h, "type_pret", None),
                 "composition": h.composition_interets or "semi", "interet_seulement": io,
                 "conversion_annee": ((fin_terme_annee + 1) if fin_terme_annee is not None else 2) if io else None,
                 "fin_terme_annee": fin_terme_annee,
