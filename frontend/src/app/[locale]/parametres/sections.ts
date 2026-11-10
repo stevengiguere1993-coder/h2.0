@@ -139,6 +139,13 @@ export const SECTIONS: Section[] = [
         minRole: "manager"
       },
       {
+        title: "Période de paie",
+        desc: "Fréquence (hebdomadaire ou aux 2 semaines), jours de début et de fin, coupure et versement ; le rapport de paie les suit.",
+        href: "/parametres/periode-paie",
+        icon: Calendar,
+        minRole: "manager"
+      },
+      {
         // Aussi sous « Entreprises & comptabilité » : les factures et les
         // soumissions sont des documents de Construction, Steven les
         // cherchait ici (2026-11-07).
