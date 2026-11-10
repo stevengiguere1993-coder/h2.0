@@ -547,6 +547,11 @@ def _calculer(d: Dict[str, Any], prets: Dict[int, List[Dict[str, Any]]], bareme:
         prod *= (1.0 + r_ / 100.0)
     prix_h = annees[-1]["prix_part"] if annees else prix_part0
     dist_par_part_total = sum(a["distribution_par_part"] for a in annees)
+    # Rendement annualisé d'une part = TRI des flux d'un investisseur : −prix au départ, cash remis par part chaque
+    # année, prix de la part à l'horizon (le cash remis tôt compte plus qu'une simple somme).
+    flux_part = [-prix_part0] + [a["distribution_par_part"] for a in annees]
+    if annees:
+        flux_part[-1] += prix_h
     sommaire = {
         "van_depart": _r(van0), "van_horizon": _r(annees[-1]["van"] if annees else van0), "capital_entre": _r(cumul["capital_entre"]),
         "gain_total": _r(cumul["gain"]), "plus_value": _r(cumul["plus_value"]), "capital_rembourse": _r(cumul["capital_rembourse"]),
@@ -557,7 +562,8 @@ def _calculer(d: Dict[str, Any], prets: Dict[int, List[Dict[str, Any]]], bareme:
         "tri_pct": _irr(flux) if van0 > 0 else None,
         "rendement_moyen_pct": (_r(100.0 * (prod ** (1.0 / len(rendements)) - 1.0)) if rendements and prod > 0 else None),
         "prix_part_depart": _r(prix_part0), "prix_part_horizon": _r(prix_h), "distributions_par_part": _r(dist_par_part_total),
-        "rendement_part_annualise_pct": (_annualise((prix_h + dist_par_part_total) / prix_part0, horizon) if prix_part0 > 0 and prix_h + dist_par_part_total > 0 else None),
+        "rendement_part_annualise_pct": (_irr(flux_part) if prix_part0 > 0 else None),
+        "valeur_totale_par_part": _r(prix_h + dist_par_part_total),
         "parts_depart": _r(van0 / prix_part0 if prix_part0 > 0 else 0.0), "parts_horizon": _r(parts_total), "parts_nous_horizon": _r(parts_nous),
         "pct_nous_horizon": _r(100.0 * parts_nous / parts_total if parts_total > 0 else 0.0),
         "nb_immeubles": len(fonds_projets), "nb_hors_fonds": len(projets) - len(fonds_projets),
