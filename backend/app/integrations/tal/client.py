@@ -94,6 +94,11 @@ class ConnexionTal:
     def prete_pour_reel(self) -> bool:
         return bool(self.url) and bool(self.cle)
 
+    @property
+    def adresse_sure(self) -> bool:
+        """L'adresse est chiffrée (https) : condition pour y envoyer la clé."""
+        return str(self.url or "").strip().lower().startswith("https://")
+
     def etat(self) -> dict[str, Any]:
         """Pour Paramètres : jamais la clé."""
         mode = (self.mode or MODE_SIMULATION).lower()
@@ -246,7 +251,10 @@ class ClientTal:
     # ── HTTP ─────────────────────────────────────────────────────────
     def _exiger_config(self, etape: str) -> None:
         if not self.cx.prete_pour_reel:
-            raise TalApiError(etape, "URL ou clé API du TAL non configurée (Paramètres → Gestion locative → Bail TAL) : mode réel impossible.")
+            raise TalApiError(etape, "Adresse ou clé de l'API du TAL non configurée (Admin locative → Connexion au TAL) : mode réel impossible.")
+        if not self.cx.adresse_sure:
+            # Aussi pour une adresse posée hors de l'écran (variable d'environnement, ancienne valeur).
+            raise TalApiError(etape, "L'adresse de l'API du TAL doit commencer par https:// : aucun appel n'est fait, la clé ne voyage jamais en clair.")
 
     async def _post(self, etape: str, chemin: str, payload: dict[str, Any]) -> Any:
         url = self.cx.url.rstrip("/") + (chemin if chemin.startswith("/") else "/" + chemin)

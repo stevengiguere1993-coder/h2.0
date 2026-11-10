@@ -253,7 +253,14 @@ async def enregistrer_connexion(
             raise TalBailError(f"Mode inconnu « {mode} » (simulation | reel).", http_status=422)
         row.mode = m
     if api_url is not None:
-        row.api_url = api_url.strip().rstrip("/")[:500] or None
+        adresse = api_url.strip().rstrip("/")[:500]
+        # La clé part dans un en-tête de chaque appel : jamais vers une adresse non chiffrée.
+        if adresse and not adresse.lower().startswith("https://"):
+            raise TalBailError(
+                "L'adresse de l'API doit commencer par https:// : la clé du TAL ne voyage jamais en clair.",
+                http_status=422,
+            )
+        row.api_url = adresse or None
     if entete_cle is not None:
         row.entete_cle = entete_cle.strip()[:64] or None
     if chemin_frw111 is not None:
