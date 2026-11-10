@@ -1228,6 +1228,8 @@ def serialize_imm_immeuble_code(obj: Any, level: str = "summary") -> dict:
         "label": libelle,
         "pole": "immobilier",
         "immeuble_id": _get(obj, "immeuble_id"),
+        # NULL = code de l'immeuble ; sinon code de porte du logement.
+        "logement_id": _get(obj, "logement_id"),
         "libelle": libelle,
         "code": _str(_get(obj, "code")),
         "note": _str(_get(obj, "note")),
