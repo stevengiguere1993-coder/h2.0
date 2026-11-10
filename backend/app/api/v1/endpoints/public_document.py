@@ -137,6 +137,20 @@ async def _cycle_du_doc(db: AsyncSession, doc: ImmDocument):
                 )
             )
         ).scalars().first()
+    if r is None and not doc.bail_id:
+        # Avis d'un bail HORS SYSTÈME (Admin locative, 2026-11-10) : même cycle de
+        # réponse, autre table — mêmes noms de champs (status, avis_envoye_le,
+        # reponse_le, refus_motif).
+        from app.models.admin_locatif import AdmLocAvis
+
+        r = (
+            await db.execute(
+                select(AdmLocAvis).where(
+                    AdmLocAvis.document_id == doc.id,
+                    AdmLocAvis.status != "annule",
+                )
+            )
+        ).scalars().first()
     # Art. 1945 C.c.Q. : un mois sans réponse = réputé accepté. La
     # transition se fait aussi ICI (le locataire peut ouvrir le lien
     # avant que le staff consulte la page Suivis annuels).
@@ -229,7 +243,11 @@ async def _to_public(db: AsyncSession, doc: ImmDocument) -> PublicDocument:
     return PublicDocument(
         titre=doc.titre,
         type=doc.type,
-        locataire_name=locataire.full_name if locataire else None,
+        locataire_name=(
+            locataire.full_name
+            if locataire
+            else getattr(cycle, "locataire_nom", None)
+        ),
         envoye_le=doc.envoye_le,
         signed_at=doc.signed_at,
         signed_by_name=doc.signed_by_name,
@@ -552,7 +570,9 @@ async def _envoyer_copie_signee(db, doc: ImmDocument) -> None:
     ).scalar_one()
     if not d2.pdf_blob:
         raise RuntimeError("PDF signé introuvable.")
-    nom = (locataire.full_name if locataire else "") or "Madame, Monsieur"
+    nom = (
+        locataire.full_name if locataire else (doc.signed_by_name or "")
+    ) or "Madame, Monsieur"
     imm_nom = None
     if doc.immeuble_id:
         im = await db.get(Immeuble, doc.immeuble_id)

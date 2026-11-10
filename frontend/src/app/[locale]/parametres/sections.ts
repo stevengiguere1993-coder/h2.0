@@ -250,6 +250,15 @@ export const SECTIONS: Section[] = [
         minRole: "manager"
       },
       {
+        // Phil 2026-11-10 : « Je comprends pas où mettre la clé API » — le bloc vivait au bas de
+        // la page ci-dessus sans que rien ne l'annonce. Même bloc, lien direct.
+        title: "Bail officiel du TAL — connexion et clé API",
+        desc: "Mode simulation ou réel, adresse de l'API, clé (chiffrée), frais refacturé, schéma du formulaire.",
+        href: "/parametres/locatif#bail-officiel-tal",
+        icon: KeyRound,
+        minRole: "manager"
+      },
+      {
         title: "Contrat de gestion — modèle",
         desc: "Gabarit par défaut de la convention de gestion (tous les immeubles).",
         href: "/parametres/contrat-gestion",
