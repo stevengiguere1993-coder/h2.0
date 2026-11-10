@@ -187,6 +187,8 @@ class ImmeubleCodeRead(ImmeubleCodeBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     immeuble_id: int
+    #: NULL = code de l'immeuble ; sinon code propre à ce logement.
+    logement_id: Optional[int] = None
     position: int = 0
     created_by_email: Optional[str] = None
     created_at: datetime
