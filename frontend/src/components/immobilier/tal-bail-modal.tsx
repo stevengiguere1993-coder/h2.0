@@ -15,6 +15,11 @@
  * 4. « Lancer la signature » → document eSign Kratos avec les signataires
  *    (locataires, cautions, représentant) ; les zones se posent dans
  *    l'éditeur Signature, l'envoi part de là.
+ *
+ * Deux portes (Phil 2026-11-10) : un bail Kratos (`bailId`, depuis
+ * « Locations & nouveaux baux ») ou un bail INDÉPENDANT (`transmissionId`,
+ * page « Bail indépendant ») — sans fiche Kratos : le formulaire enregistré
+ * fait foi, aucun frais au propriétaire, le locateur signe lui-même.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -84,6 +89,14 @@ export type TalTransmission = {
   erreur: string | null;
   genere_le: string | null;
   created_by_email: string | null;
+  created_at?: string | null;
+  tentatives?: number;
+  adresse?: string | null;
+  independant?: boolean;
+  libelle?: string | null;
+  signe_le?: string | null;
+  document_signe_id?: number | null;
+  parties?: { locateurs: string[]; locataires: string[]; cautions: string[]; loyer: string; type_bail: string; date_debut: string; date_fin: string };
   messages: { mnemonique: string | null; texte: string | null }[];
   rapport?: Rapport | null;
   a_verifier?: { chemin: string; note: string }[];
@@ -378,18 +391,23 @@ export function libelleModeTal(mode: string | null | undefined): string {
 export function TalBailModal({
   bailId,
   dossierId,
+  transmissionId,
   titre,
   onClose,
   onDone
 }: {
-  bailId: number;
+  /** Bail Kratos (depuis « Locations & nouveaux baux »). */
+  bailId?: number;
   dossierId?: number | null;
+  /** Bail INDÉPENDANT (page « Bail indépendant ») : la transmission à ouvrir, sans bail Kratos. */
+  transmissionId?: number;
   /** Ex. « Logement 3 · 8900 rue Saint-Hubert ». */
   titre: string;
   onClose: () => void;
   /** Quelque chose a changé (transmission, PDF, signature) → recharger. */
   onDone: () => void;
 }) {
+  const independant = transmissionId != null;
   const [etape, setEtape] = useState<Etape>("chargement");
   const [schema, setSchema] = useState<SchemaInfo | null>(null);
   const [prep, setPrep] = useState<Preparation | null>(null);
@@ -437,7 +455,11 @@ export function TalBailModal({
     try {
       const [rs, rp] = await Promise.all([
         authedFetch(`${BASE}/schema`),
-        authedFetch(`${BASE}/preparer?bail_id=${bailId}`)
+        authedFetch(
+          independant
+            ? `${BASE}/preparer?transmission_id=${transmissionId}`
+            : `${BASE}/preparer?bail_id=${bailId}`
+        )
       ]);
       if (!rs.ok) throw new Error(await lireErreur(rs));
       if (!rp.ok) throw new Error(await lireErreur(rp));
@@ -477,7 +499,7 @@ export function TalBailModal({
       setErr((e as Error).message);
       setEtape("formulaire");
     }
-  }, [bailId, chargerSignature]);
+  }, [bailId, transmissionId, independant, chargerSignature]);
 
   useEffect(() => {
     void charger();
@@ -515,15 +537,20 @@ export function TalBailModal({
     setBusy(true);
     setErr(null);
     try {
-      const r = await authedFetch(`${BASE}/transmissions`, {
-        method: "POST",
-        body: JSON.stringify({
-          bail_id: bailId,
-          dossier_id: dossierId ?? null,
-          form,
-          remplacer
-        })
-      });
+      const r = independant
+        ? await authedFetch(`${BASE}/transmissions/${transmissionId}`, {
+            method: "PATCH",
+            body: JSON.stringify({ form })
+          })
+        : await authedFetch(`${BASE}/transmissions`, {
+            method: "POST",
+            body: JSON.stringify({
+              bail_id: bailId,
+              dossier_id: dossierId ?? null,
+              form,
+              remplacer
+            })
+          });
       if (!r.ok) throw new Error(await lireErreur(r));
       const t = (await r.json()) as TalTransmission;
       setTransmission(t);
@@ -669,7 +696,7 @@ export function TalBailModal({
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brand-800 px-5 py-3">
           <div className="min-w-0">
             <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-accent-500">
-              <FileSignature className="h-4 w-4" /> Nouveau bail officiel (TAL)
+              <FileSignature className="h-4 w-4" /> {independant ? "Bail indépendant (TAL)" : "Nouveau bail officiel (TAL)"}
             </h2>
             <p className="truncate text-xs text-white/55">{titre}</p>
           </div>
@@ -756,8 +783,13 @@ export function TalBailModal({
                 </button>
               </div>
             ) : null}
+            {transmission && (transmission.erreur || transmission.statut === "echec" || transmission.statut === "forme_creee") ? (
+              <div className="mb-3">
+                <JournalTechnique transmissionId={transmission.id} cle={`${transmission.statut}-${transmission.tentatives ?? 0}`} />
+              </div>
+            ) : null}
 
-            <ContexteBandeau contexte={prep.contexte} />
+            <ContexteBandeau contexte={independant ? contexteDuFormulaire(form) : prep.contexte} />
 
             {aVerifier.length ? (
               <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2">
@@ -925,7 +957,7 @@ export function TalBailModal({
         {/* ── 2. Confirmation ── */}
         {etape === "confirmation" && transmission && prep ? (
           <div className="px-5 py-4">
-            <ContexteBandeau contexte={prep.contexte} />
+            <ContexteBandeau contexte={independant ? contexteDuFormulaire(form) : prep.contexte} />
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <ResumeBloc titre="Durée et loyer">
                 <Ligne l="Type" v={String(form.typeBail || "—") === "dureeFixe" ? "Durée fixe" : String(form.typeBail || "—") === "dureeIndeterminee" ? "Durée indéterminée" : "—"} />
@@ -1022,7 +1054,7 @@ export function TalBailModal({
           <div className="px-5 py-4">
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5 text-xs text-emerald-100">
               <ShieldCheck className="h-4 w-4" />
-              <span className="font-semibold">Bail officiel reçu et archivé au dossier</span>
+              <span className="font-semibold">{independant ? "Bail officiel reçu et archivé" : "Bail officiel reçu et archivé au dossier"}</span>
               <span className={`badge ${transmission.mode === "reel" ? "badge-amber" : "badge-neutral"}`}>
                 {libelleModeTal(transmission.mode)}
               </span>
@@ -1048,7 +1080,7 @@ export function TalBailModal({
               <Ligne l="Référence TAL" v={transmission.short_guid || "—"} />
               <Ligne l="Confirmation" v={transmission.no_confirmation || "—"} />
               <Ligne l="Coût TAL" v={transmission.cout != null ? `${transmission.cout.toFixed(2).replace(".", ",")} $` : "—"} />
-              <Ligne l="Frais au propriétaire" v={transmission.frais_montant != null ? `${transmission.frais_montant.toFixed(2).replace(".", ",")} $ (Facturation)` : "aucun"} />
+              <Ligne l="Frais au propriétaire" v={independant ? "aucun (bail indépendant)" : transmission.frais_montant != null ? `${transmission.frais_montant.toFixed(2).replace(".", ",")} $ (Facturation)` : "aucun"} />
             </dl>
             {transmission.messages?.length ? (
               <ul className="mt-2 space-y-0.5 text-[11px] text-white/45">
@@ -1059,6 +1091,7 @@ export function TalBailModal({
                 ))}
               </ul>
             ) : null}
+            <JournalTechnique transmissionId={transmission.id} cle={`${transmission.statut}-${transmission.genere_le ?? ""}`} />
 
             {/* Signature */}
             <div className="mt-4 rounded-xl border border-brand-800 bg-brand-900 p-3.5">
@@ -1070,8 +1103,9 @@ export function TalBailModal({
               ) : (
                 <>
                   <p className="mt-1 text-xs text-white/60">
-                    Le PDF officiel part tel quel en signature électronique : locataire(s), caution(s) et
-                    représentant signent en parallèle. Les zones (signature, initiales, date, cases) se
+                    Le PDF officiel part tel quel en signature électronique :{" "}
+                    {independant ? "locataire(s), caution(s) et locateur(s) signent" : "locataire(s), caution(s) et représentant signent"}{" "}
+                    en parallèle. Les zones (signature, initiales, date, cases) se
                     posent dans l&apos;éditeur Signature, puis l&apos;envoi part de là.
                   </p>
                   <button
@@ -1087,21 +1121,25 @@ export function TalBailModal({
               )}
               {sansCourriel.length ? (
                 <p className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-100">
-                  Sans courriel, donc pas invité(s) : {sansCourriel.join(", ")} — ajoute le courriel sur la
-                  fiche, puis le signataire dans l&apos;éditeur.
+                  Sans courriel, donc pas invité(s) : {sansCourriel.join(", ")} —{" "}
+                  {independant ? "ajoute ce signataire dans l'éditeur Signature." : "ajoute le courriel sur la fiche, puis le signataire dans l'éditeur."}
                 </p>
               ) : null}
             </div>
 
             <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-brand-800 pt-3">
-              <button
-                type="button"
-                onClick={nouvelleVersion}
-                className="text-[11px] text-white/40 hover:text-white/70"
-                title="Repart du formulaire pré-rempli ; un nouveau formulaire sera facturé par le TAL en mode réel."
-              >
-                Générer une nouvelle version{transmission.mode === "reel" ? " (facturée)" : ""}
-              </button>
+              {!independant ? (
+                <button
+                  type="button"
+                  onClick={nouvelleVersion}
+                  className="text-[11px] text-white/40 hover:text-white/70"
+                  title="Repart du formulaire pré-rempli ; un nouveau formulaire sera facturé par le TAL en mode réel."
+                >
+                  Générer une nouvelle version{transmission.mode === "reel" ? " (facturée)" : ""}
+                </button>
+              ) : (
+                <span className="text-[11px] text-white/40">Pour une nouvelle version : « Dupliquer » dans la liste des baux indépendants.</span>
+              )}
               <button type="button" onClick={onClose} className="btn-secondary btn-sm ml-auto">
                 Fermer
               </button>
@@ -1114,6 +1152,82 @@ export function TalBailModal({
 }
 
 // ─── Sous-composants ───────────────────────────────────────────────────
+
+/** Bail indépendant : pas de fiche Kratos — adresse et parties se lisent dans le formulaire. */
+function contexteDuFormulaire(form: Form): Record<string, unknown> {
+  const noms = (k: string) =>
+    ((form[k] as Occurrence[]) || []).map((o) => String(o?.nom || "").trim()).filter(Boolean);
+  const a = (((form.adresseLogement as Occurrence[]) || [])[0] || {}) as Occurrence;
+  const rue = [a.NoCivique, a.Rue].map((x) => String(x || "").trim()).filter(Boolean).join(" ");
+  const adresse = [rue, a.Appartement ? `app. ${String(a.Appartement)}` : "", String(a.Municipalite || "").trim()]
+    .filter(Boolean)
+    .join(", ");
+  return {
+    adresse: adresse || "Adresse du logement à saisir",
+    locataire_nom: noms("locataires").join(", "),
+    garants: String(form.possedeAutresSignataires) === "true" ? noms("autresSignataires") : [],
+    locateur: noms("locateurs").join(", ")
+  };
+}
+
+/** Journal technique des appels au TAL (adresse appelée, réponses brutes sans le PDF ni
+ * la clé, erreurs) : sert à ajuster l'intégration aux vraies réponses du TAL. Chargé à
+ * la demande. */
+function JournalTechnique({ transmissionId, cle }: { transmissionId: number; cle: string }) {
+  const [ouvert, setOuvert] = useState(false);
+  const [journal, setJournal] = useState<unknown>(undefined);
+  const [copie, setCopie] = useState(false);
+  useEffect(() => {
+    if (!ouvert) return;
+    let actif = true;
+    void (async () => {
+      const r = await authedFetch(`${BASE}/transmissions/${transmissionId}`);
+      const j = r.ok ? ((await r.json()) as { journal?: unknown }).journal ?? null : null;
+      if (actif) setJournal(j);
+    })();
+    return () => {
+      actif = false;
+    };
+  }, [ouvert, transmissionId, cle]);
+  const texte = journal ? JSON.stringify(journal, null, 2) : "";
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setOuvert((o) => !o)}
+        className="inline-flex items-center gap-1 text-[11px] text-white/45 hover:underline"
+      >
+        {ouvert ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />} Journal technique des appels au TAL
+      </button>
+      {ouvert ? (
+        journal === undefined ? (
+          <p className="mt-1 text-[11px] text-white/40">Chargement…</p>
+        ) : journal ? (
+          <div className="mt-1 rounded-lg border border-brand-800 bg-brand-950 p-2">
+            <div className="mb-1 flex items-center justify-between gap-2 text-[10px] text-white/40">
+              <span>Adresse appelée, réponses du TAL (sans le PDF ni la clé), erreurs.</span>
+              <button
+                type="button"
+                className="btn-ghost btn-xs"
+                onClick={() => {
+                  void navigator.clipboard.writeText(texte).then(() => {
+                    setCopie(true);
+                    window.setTimeout(() => setCopie(false), 1500);
+                  });
+                }}
+              >
+                {copie ? "Copié" : "Copier"}
+              </button>
+            </div>
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-[10px] leading-snug text-white/70">{texte}</pre>
+          </div>
+        ) : (
+          <p className="mt-1 text-[11px] text-white/40">Aucun appel enregistré pour ce bail.</p>
+        )
+      ) : null}
+    </div>
+  );
+}
 
 function ContexteBandeau({ contexte }: { contexte: Record<string, unknown> }) {
   const c = contexte as {

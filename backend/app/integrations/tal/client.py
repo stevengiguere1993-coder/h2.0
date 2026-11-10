@@ -236,13 +236,17 @@ class ClientTal:
                 r = await client.post(url, json=payload, headers=headers)
         except httpx.HTTPError as exc:
             raise TalApiError(etape, f"TAL injoignable ({type(exc).__name__})") from exc
+        # Jamais la clé : si le TAL la renvoyait dans son message, elle est masquée
+        # avant que le texte ne parte vers l'écran, le journal ou l'audit.
+        texte = r.text or ""
+        if self.cx.cle and len(self.cx.cle) >= 6:
+            texte = texte.replace(self.cx.cle, "***")
         if r.status_code >= 400:
-            # Jamais la clé ; le corps tronqué sert au diagnostic.
-            raise TalApiError(etape, f"HTTP {r.status_code} : {(r.text or '')[:400]}", http_status=r.status_code, corps=(r.text or "")[:2000])
+            raise TalApiError(etape, f"HTTP {r.status_code} : {texte[:400]}", http_status=r.status_code, corps=texte[:2000])
         try:
             return r.json()
         except ValueError as exc:
-            raise TalApiError(etape, "réponse non JSON", http_status=r.status_code, corps=(r.text or "")[:2000]) from exc
+            raise TalApiError(etape, "réponse non JSON", http_status=r.status_code, corps=texte[:2000]) from exc
 
 
 def pdf_simulation(form: dict[str, Any], short_guid: str) -> bytes:
