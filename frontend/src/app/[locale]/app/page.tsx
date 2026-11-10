@@ -297,11 +297,7 @@ export default function AppHome() {
             iconClass="text-emerald-400"
             label="Revenu ce mois"
             value={loading ? "…" : money(kpis?.revenue_this_month || 0)}
-            hint={
-              kpis?.revenue_this_month_mode === "issued"
-                ? "Facturé ce mois (aucune réglée)"
-                : "Factures payées (mois courant)"
-            }
+            hint="Paiements reçus (mois courant)"
           />
           <KpiCard
             href="/app/projets"
