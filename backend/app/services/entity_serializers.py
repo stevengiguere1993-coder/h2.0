@@ -1083,6 +1083,8 @@ def serialize_tal_transmission(obj: Any, level: str = "summary") -> dict:
         "status": statut,
         "mode": _str(_get(obj, "mode")),
         "adresse": _str(_get(obj, "adresse")),
+        "independant": bool(_get(obj, "independant")),
+        "libelle": _str(_get(obj, "libelle")),
         "bail_id": _get(obj, "bail_id"),
         "dossier_id": _get(obj, "dossier_id"),
         "logement_id": _get(obj, "logement_id"),

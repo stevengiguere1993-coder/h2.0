@@ -18,6 +18,9 @@ Préfixe ``/immobilier/tal-bail`` (volet Immobilier, gestionnaires) :
 - POST /transmissions/{id}/relancer→ FRW122 à nouveau avec le même ShortGuid (après échec)
 - POST /transmissions/{id}/annuler
 - GET  /compteur?mois=AAAA-MM
+- POST /independants              → brouillon d'un bail INDÉPENDANT (petit formulaire, ou copie d'un autre)
+- GET  /independants              → baux indépendants (essais, baux pour un tiers hors système)
+- GET  /preparer?transmission_id= → formulaire enregistré d'un bail indépendant (même forme que ?bail_id=)
 
 Règles du contrat (jamais contournées ici) : un appel = un besoin réel de
 signature ; pas de génération d'avance ni en lot ; PDF archivé tel quel ;
@@ -28,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -109,6 +113,39 @@ class FormIn(BaseModel):
 class GenererIn(BaseModel):
     #: L'utilisateur a vu « 2,99 $, besoin réel de signature » et confirme.
     confirme: bool = False
+
+
+class PersonneIn(BaseModel):
+    nom: Optional[str] = Field(default=None, max_length=255)
+    telephone: Optional[str] = Field(default=None, max_length=40)
+    courriel: Optional[str] = Field(default=None, max_length=320)
+    adresse: Optional[str] = Field(default=None, max_length=500)
+
+
+class IndependantIn(BaseModel):
+    """Petit formulaire de « Bail indépendant » : rien n'est obligatoire ici (comme un
+    bail papier) — la validation avant l'envoi dit ce qui manque."""
+
+    libelle: Optional[str] = Field(default=None, max_length=255)
+    #: Dupliquer le formulaire d'un bail indépendant existant (le reste est ignoré).
+    source_id: Optional[int] = None
+    locateur: Optional[PersonneIn] = None
+    locataires: List[PersonneIn] = Field(default_factory=list, max_length=4)
+    cautions: List[PersonneIn] = Field(default_factory=list, max_length=2)
+    adresse: Optional[str] = Field(default=None, max_length=500)
+    appartement: Optional[str] = Field(default=None, max_length=32)
+    ville: Optional[str] = Field(default=None, max_length=128)
+    code_postal: Optional[str] = Field(default=None, max_length=16)
+    nb_pieces: Optional[float] = Field(default=None, ge=0, le=30)
+    au_mois: bool = False
+    date_debut: Optional[date] = None
+    date_fin: Optional[date] = None
+    loyer_mensuel: Optional[float] = Field(default=None, ge=0, le=1_000_000)
+    jour_echeance: int = Field(default=1, ge=1, le=31)
+    chauffage_inclus: bool = False
+    electricite_inclus: bool = False
+    eau_chaude_inclus: bool = False
+    internet_inclus: bool = False
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────
@@ -304,7 +341,20 @@ async def ecrire_parametres(payload: ParametresIn, db: DBSession, user: RequireA
 
 
 @router.get("/preparer", summary="Formulaire pré-rempli pour un bail (rien n'est écrit)")
-async def preparer(db: DBSession, user: RequireManager, bail_id: int = Query(...)) -> Dict[str, Any]:
+async def preparer(
+    db: DBSession, user: RequireManager,
+    bail_id: Optional[int] = Query(default=None), transmission_id: Optional[int] = Query(default=None),
+) -> Dict[str, Any]:
+    if transmission_id is not None:
+        # Bail indépendant : pas de fiche Kratos, le formulaire enregistré fait foi.
+        t = await _transmission_or_404(db, transmission_id)
+        if not t.independant:
+            raise HTTPException(status_code=422, detail="Cette transmission est liée à un bail Kratos : ouvre-la depuis « Locations & nouveaux baux ».")
+        base = await svc.preparation_independante(db, t)
+        cx_ind, _infos_ind = await svc.charger_connexion(db)
+        return {**base, "mode": cx_ind.etat()["mode"], "cout_tal": svc.COUT_TAL, "transmissions": [svc.resume_transmission(t)]}
+    if bail_id is None:
+        raise HTTPException(status_code=422, detail="bail_id ou transmission_id requis.")
     try:
         prep, rapport, ctx, schema, _config = await svc.preparer(db, bail_id, user=user)
     except svc.TalBailError as exc:
@@ -347,9 +397,11 @@ async def creer_transmission(payload: TransmissionCreateIn, db: DBSession, user:
 async def lister_transmissions(
     db: DBSession, user: RequireManager,
     bail_id: Optional[int] = None, dossier_id: Optional[int] = None, statut: Optional[str] = None,
-    immeuble_id: Optional[int] = None, limit: int = Query(default=100, ge=1, le=500),
+    immeuble_id: Optional[int] = None, independant: Optional[bool] = None, limit: int = Query(default=100, ge=1, le=500),
 ) -> Dict[str, Any]:
     q = select(TalTransmission).order_by(TalTransmission.id.desc()).limit(limit)
+    if independant is not None:
+        q = q.where(TalTransmission.independant.is_(bool(independant)))
     if bail_id is not None:
         q = q.where(TalTransmission.bail_id == bail_id)
     if dossier_id is not None:
@@ -477,3 +529,47 @@ async def lire_compteur(db: DBSession, user: RequireManager, mois: Optional[str]
         return await svc.compteur(db, mois)
     except svc.TalBailError as exc:
         raise _erreur(exc) from exc
+
+
+# ─── Bail indépendant (hors système Kratos) ───────────────────────────
+
+
+@router.post("/independants", summary="Créer le brouillon d'un bail indépendant (hors système)", status_code=201)
+async def creer_independant(payload: IndependantIn, db: DBSession, user: RequireManager) -> Dict[str, Any]:
+    """Phil 2026-11-10 : « un genre de petit formulaire puis ça va créer le bail… mon
+    environnement test et… un bail pour un ami, quelqu'un qui n'est pas dans mon
+    système ». Rien n'est envoyé au TAL ici : la suite (vérification, génération,
+    signature) passe par les routes ``/transmissions/{id}``."""
+    source = None
+    if payload.source_id is not None:
+        source = await _transmission_or_404(db, payload.source_id)
+        if not source.independant:
+            raise HTTPException(status_code=422, detail="Seul un bail indépendant se duplique ici.")
+    essentiel = payload.model_dump(exclude={"libelle", "source_id"}, mode="json")
+    try:
+        t, rapport = await svc.creer_independant(db, user=user, essentiel=essentiel, libelle=payload.libelle, source=source)
+    except svc.TalBailError as exc:
+        raise _erreur(exc) from exc
+    await log_action(db, user=user, action="tal_bail.brouillon", entity_type="tal_transmission", entity_id=t.id,
+                     details={"independant": True, "libelle": t.libelle, "source_id": payload.source_id,
+                              "valide": rapport.valide, "erreurs": len(rapport.erreurs)})
+    await db.commit()
+    await db.refresh(t)
+    return svc.resume_transmission(t, avec_form=True)
+
+
+@router.get("/independants", summary="Baux indépendants (essais, baux pour un tiers hors système)")
+async def lister_independants(
+    db: DBSession, user: RequireManager,
+    inclure_annules: bool = False, limit: int = Query(default=200, ge=1, le=500),
+) -> Dict[str, Any]:
+    q = select(TalTransmission).where(TalTransmission.independant.is_(True)).order_by(TalTransmission.id.desc()).limit(limit)
+    if not inclure_annules:
+        q = q.where(TalTransmission.statut != "annulee")
+    rows = (await db.execute(q)).scalars().all()
+    items = []
+    for t in rows:
+        item = svc.resume_transmission(t)
+        item["signature"] = await svc.etat_signature(db, t.esign_document_id)
+        items.append(item)
+    return {"items": items, "total": len(items)}
