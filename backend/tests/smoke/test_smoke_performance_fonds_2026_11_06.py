@@ -178,6 +178,11 @@ def test_projection_avec_refinancements_cash_remis_et_fourchette():
     assert abs(y3["prix_part"] * y3["parts_total"] - y3["van"]) <= 0.005 * y3["parts_total"] + 1
     assert y3["distribution_par_part"] > 0 and s["distributions_total"] == round(sum(a["distributions"] for a in f["annees"]), 2)
     assert s["nb_refinancements"] == 1 and s["cash_remis"] is True and s["distributions_par_part"] > 0
+    # Rendement d'une part = TRI des flux de l'investisseur (prix de départ, cash remis par part, prix à l'horizon).
+    assert s["valeur_totale_par_part"] == round(s["prix_part_horizon"] + s["distributions_par_part"], 2)
+    flux_part = [-10.0] + [a["distribution_par_part"] for a in f["annees"]]
+    flux_part[-1] += s["prix_part_horizon"]
+    assert s["rendement_part_annualise_pct"] == pf._irr(flux_part) and s["rendement_part_annualise_pct"] > 0
     # Fourchette : prudent (cap et taux + 0,5 pt) < central < favorable.
     fo = f["fourchette"]
     assert fo["points"] == 0.5 and fo["prudent"]["van_horizon"] < s["van_horizon"] < fo["favorable"]["van_horizon"]

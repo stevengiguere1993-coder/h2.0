@@ -56,7 +56,7 @@ type SommaireFonds = {
   van_depart: number; van_horizon: number; capital_entre: number; gain_total: number; plus_value: number; capital_rembourse: number; cash_flow_cumule: number;
   frais_fonds_cumules: number; cash_horizon: number; cash_refi_total: number; frais_refi_total: number; nb_refinancements: number; distributions_total: number; cash_remis: boolean;
   part_nous_total: number; part_investisseurs_total: number; tri_pct: number | null; rendement_moyen_pct: number | null;
-  prix_part_depart: number; prix_part_horizon: number; distributions_par_part: number; rendement_part_annualise_pct: number | null; parts_depart: number; parts_horizon: number;
+  prix_part_depart: number; prix_part_horizon: number; distributions_par_part: number; valeur_totale_par_part: number; rendement_part_annualise_pct: number | null; parts_depart: number; parts_horizon: number;
   parts_nous_horizon: number; pct_nous_horizon: number; nb_immeubles: number; nb_hors_fonds: number; nb_acquisitions_an1: number;
 };
 type Borne = { van_horizon: number; tri_pct: number | null; rendement_moyen_pct: number | null; prix_part_horizon: number; rendement_part_annualise_pct: number | null; pct_nous_horizon: number; distributions_total: number; gain_total: number };
@@ -314,7 +314,7 @@ export function PerformanceTab({ scenarioId, version }: { scenarioId: number | n
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <KPI label="VAN du fonds" valeur={`${compact(s.van_depart)} → ${compact(s.van_horizon)}`} sous={fourchetteTxt(fo, "van_horizon", (n) => compact(n ?? 0)) ?? `${s.nb_immeubles} immeuble${s.nb_immeubles > 1 ? "s" : ""} dans le fonds`} hex={C.fonds} icon={Landmark} />
             <KPI label="Rendement du fonds" valeur={pct(s.rendement_moyen_pct)} sous={`moyenne par an · TRI ${pct(s.tri_pct)}${fourchetteTxt(fo, "tri_pct", (n) => pct(n)) ? ` · ${fourchetteTxt(fo, "tri_pct", (n) => pct(n))}` : ""}`} hex={C.gain} icon={TrendingUp} />
-            <KPI label="Prix de la part" valeur={`${money(s.prix_part_depart, 2)} → ${money(s.prix_part_horizon, 2)}`} sous={`${pct(s.rendement_part_annualise_pct)} par an pour un investisseur${remis && s.distributions_par_part ? `, cash remis ${money(s.distributions_par_part, 2)} par part compris` : ""}`} hex={C.projet} icon={PiggyBank} />
+            <KPI label="Pour un investisseur" valeur={`${pct(s.rendement_part_annualise_pct)} par an`} sous={`part ${money(s.prix_part_depart, 2)} → ${money(s.prix_part_horizon, 2)}${remis && s.distributions_par_part ? ` + ${money(s.distributions_par_part, 2)} de cash remis = ${money(s.valeur_totale_par_part, 2)} par part` : ""}${fourchetteTxt(fo, "rendement_part_annualise_pct", (n) => pct(n)) ? ` · ${fourchetteTxt(fo, "rendement_part_annualise_pct", (n) => pct(n))}` : ""}`} hex={C.projet} icon={PiggyBank} />
             <KPI label="Gain total" valeur={money(s.gain_total)} sous={`plus-value ${compact(s.plus_value)} · capital remboursé ${compact(s.capital_rembourse)} · cash ${compact(s.cash_flow_cumule - s.frais_fonds_cumules)}${s.cash_refi_total ? ` · refis ${compact(s.cash_refi_total)}` : ""}`} hex={C.gain} icon={TrendingUp} />
             <KPI label="Nos 3 holdings" valeur={`${pct(s.pct_nous_horizon)} du fonds`} sous={`${money(s.part_nous_total)} en parts de gains à l'horizon${fourchetteTxt(fo, "pct_nous_horizon", (n) => pct(n)) ? ` · ${fourchetteTxt(fo, "pct_nous_horizon", (n) => pct(n))}` : ""}`} hex={C.cash} icon={Wallet} />
             {remis ? (
