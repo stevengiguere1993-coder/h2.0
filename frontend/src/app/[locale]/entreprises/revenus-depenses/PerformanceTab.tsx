@@ -58,8 +58,10 @@ type SommaireFonds = {
   part_nous_total: number; part_investisseurs_total: number; tri_pct: number | null; rendement_moyen_pct: number | null;
   prix_part_depart: number; prix_part_horizon: number; distributions_par_part: number; valeur_totale_par_part: number; rendement_part_annualise_pct: number | null; parts_depart: number; parts_horizon: number;
   parts_nous_horizon: number; pct_nous_horizon: number; nb_immeubles: number; nb_hors_fonds: number; nb_acquisitions_an1: number;
+  valeur_depart: number; dettes_depart: number; dettes_horizon: number; valeur_horizon: number;
 };
 type Borne = { van_horizon: number; tri_pct: number | null; rendement_moyen_pct: number | null; prix_part_horizon: number; rendement_part_annualise_pct: number | null; pct_nous_horizon: number; distributions_total: number; gain_total: number };
+type SansRefi = Borne & { dettes_horizon: number; valeur_horizon: number; cash_horizon: number; nb_refinancements: number };
 type Fourchette = { points: number; prudent: Borne; favorable: Borne } | null;
 type Historique = {
   id: string; nom: string; kratos_immeuble_id: number; prix_achat: number; date_achat: string | null; nb_prets: number; refinance: boolean;
@@ -73,7 +75,7 @@ type Hypotheses = {
 type Performance = {
   annee_depart: number; horizon: number; hypotheses: Hypotheses; regles: { seuil_investisseurs_pct: number; tranche_nous_pct: number; part_nous_pct: number }; aujourd_hui: string;
   reference_prets: { taux_pct: number; amortissement_mois: number; nb_prets: number; source: string };
-  fonds: { annees: AnneeFonds[]; sommaire: SommaireFonds; cash_depart: number; taux_frais_pct: number; fourchette: Fourchette };
+  fonds: { annees: AnneeFonds[]; sommaire: SommaireFonds; cash_depart: number; taux_frais_pct: number; fourchette: Fourchette; sans_refi: SansRefi | null };
   projets: Projet[]; historique: Historique[]; scenario: { id: number; nom: string };
 };
 
@@ -176,32 +178,55 @@ function TableAnnees<T extends { annee: number }>({ annees, lignes, sousTitres }
   );
 }
 
-/** Barres de VAN par année (notre part en superposition) et cash remis aux investisseurs. */
-function GraphiqueVAN({ annees, vanDepart }: { annees: AnneeFonds[]; vanDepart: number }) {
-  const points = [{ annee: annees.length ? annees[0].annee - 1 : 0, van: vanDepart, pct: null as number | null, dist: 0 }, ...annees.map((a) => ({ annee: a.annee, van: a.van, pct: a.pct_nous, dist: a.distributions }))];
-  const max = Math.max(...points.map((p) => p.van + p.dist), 1);
-  const W = 720, H = 190, padL = 8, padB = 28, padT = 22;
+/** Par année : la barre = valeur des immeubles (+ cash) = dettes (bas, gris) + VAN (haut, violet, dont nos parts en vert) ;
+ * le cash remis aux investisseurs dans l'année s'empile au-dessus (ambre). Phil 2026-11-10 : « la valeur totale des
+ * actifs avec les prêts, avec l'équité… pour voir mieux la VAN ». */
+function GraphiqueVAN({ annees, depart }: { annees: AnneeFonds[]; depart: { valeur: number; dettes: number; van: number } }) {
+  const points = [
+    { annee: annees.length ? annees[0].annee - 1 : 0, valeur: depart.valeur, dettes: depart.dettes, van: depart.van, pct: null as number | null, dist: 0 },
+    ...annees.map((a) => ({ annee: a.annee, valeur: a.valeur, dettes: a.dettes, van: a.van, pct: a.pct_nous, dist: a.distributions }))
+  ];
+  const max = Math.max(...points.map((p) => p.dettes + Math.max(p.van, 0) + p.dist), 1);
+  const W = 720, H = 260, padL = 8, padB = 44, padT = 22;
+  const ech = (v: number) => ((H - padB - padT) * Math.max(v, 0)) / max;
   const bw = (W - padL * 2) / points.length;
+  const w = bw * 0.7;
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="h-48 w-full" role="img" aria-label="VAN du fonds par année">
-      {points.map((p, i) => {
-        const h = Math.max(((H - padB - padT) * p.van) / max, 1);
-        const hd = ((H - padB - padT) * p.dist) / max;
-        const x = padL + i * bw + bw * 0.15;
-        const y = H - padB - h;
-        const notre = p.pct != null ? (h * p.pct) / 100 : 0;
-        return (
-          <g key={p.annee}>
-            <rect x={x} y={y} width={bw * 0.7} height={h} rx={4} fill={C.fonds} opacity={i === 0 ? 0.45 : 0.8} />
-            {notre > 0 ? <rect x={x} y={H - padB - notre} width={bw * 0.7} height={notre} rx={3} fill={C.gain} opacity={0.95} /> : null}
-            {hd > 0.5 ? <rect x={x} y={y - hd} width={bw * 0.7} height={hd} rx={3} fill={C.cash} opacity={0.7} /> : null}
-            <text x={x + bw * 0.35} y={y - hd - 6} textAnchor="middle" fontSize={10} fill="currentColor" className="tabular-nums">{compact(p.van)}{p.dist > 0 ? ` +${compact(p.dist)}` : ""}</text>
-            <text x={x + bw * 0.35} y={H - padB + 13} textAnchor="middle" fontSize={10} fill="currentColor" opacity={0.6}>{i === 0 ? "départ" : p.annee}</text>
-            {p.pct != null && p.pct > 0 ? <text x={x + bw * 0.35} y={H - padB + 25} textAnchor="middle" fontSize={9} fill={C.gain}>{pct(p.pct, 1)} à nous</text> : null}
-          </g>
-        );
-      })}
-    </svg>
+    <div>
+      <div className={`mb-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] ${MUTED}`}>
+        <span className="inline-flex items-center gap-1"><i className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: "#64748b", opacity: 0.4 }} /> Dettes</span>
+        <span className="inline-flex items-center gap-1"><i className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: C.fonds }} /> VAN (valeur + cash − dettes)</span>
+        <span className="inline-flex items-center gap-1"><i className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: C.gain }} /> dont nos parts</span>
+        <span className="inline-flex items-center gap-1"><i className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: C.cash }} /> Cash remis dans l&apos;année</span>
+        <span className={FAINT}>Hauteur de la barre = valeur des immeubles (+ cash du fonds)</span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-72 w-full" role="img" aria-label="Valeur des immeubles, dettes et VAN du fonds par année">
+        {points.map((p, i) => {
+          const hD = ech(p.dettes);
+          const hV = ech(p.van);
+          const hR = ech(p.dist);
+          const x = padL + i * bw + bw * 0.15;
+          const yD = H - padB - hD;
+          const yV = yD - hV;
+          const yR = yV - hR;
+          const notre = p.pct != null ? (hV * p.pct) / 100 : 0;
+          return (
+            <g key={p.annee}>
+              <rect x={x} y={yD} width={w} height={Math.max(hD, 1)} rx={3} fill="#64748b" opacity={0.4} />
+              <rect x={x} y={yV} width={w} height={Math.max(hV, 1)} rx={3} fill={C.fonds} opacity={i === 0 ? 0.55 : 0.85} />
+              {notre > 0.5 ? <rect x={x} y={yD - notre} width={w} height={notre} rx={2} fill={C.gain} opacity={0.95} /> : null}
+              {hR > 0.5 ? <rect x={x} y={yR} width={w} height={hR} rx={2} fill={C.cash} opacity={0.8} /> : null}
+              <text x={x + w / 2} y={yR - 6} textAnchor="middle" fontSize={10} fill="currentColor" className="tabular-nums">{compact(p.valeur)}</text>
+              {hV > 14 ? <text x={x + w / 2} y={yV + 11} textAnchor="middle" fontSize={9} fontWeight={700} fill="#fff" className="tabular-nums">{compact(p.van)}</text> : null}
+              {hD > 12 ? <text x={x + w / 2} y={yD + Math.min(hD / 2 + 3, hD - 2)} textAnchor="middle" fontSize={8} fill="currentColor" opacity={0.65} className="tabular-nums">{compact(p.dettes)}</text> : null}
+              <text x={x + w / 2} y={H - padB + 13} textAnchor="middle" fontSize={10} fill="currentColor" opacity={0.7}>{i === 0 ? "départ" : p.annee}</text>
+              {p.pct != null && p.pct > 0 ? <text x={x + w / 2} y={H - padB + 25} textAnchor="middle" fontSize={9} fill={C.gain}>{pct(p.pct, 1)} à nous</text> : null}
+              {p.dist > 0 ? <text x={x + w / 2} y={H - padB + 36} textAnchor="middle" fontSize={9} fill={C.cash}>+{compact(p.dist)} remis</text> : null}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
   );
 }
 
@@ -301,6 +326,7 @@ export function PerformanceTab({ scenarioId, version }: { scenarioId: number | n
   const annees = perf?.fonds.annees || [];
   const h = perf?.hypotheses;
   const fo = perf?.fonds.fourchette ?? null;
+  const sr = perf?.fonds.sans_refi ?? null;
   const remis = !!s?.cash_remis;
   return (
     <div className="space-y-4">
@@ -312,13 +338,13 @@ export function PerformanceTab({ scenarioId, version }: { scenarioId: number | n
             Projection de {perf.annee_depart} à {perf.annee_depart + perf.horizon - 1} ({perf.horizon} ans) · scénario « {perf.scenario.nom} » · loyers +{pct(h.croissance_loyers_pct)} et dépenses +{pct(h.croissance_depenses_pct)} par an · frais du fonds {pct(perf.fonds.taux_frais_pct)} de la VAN · {h.refinancement.actif ? `refinancement à ${pct(h.refinancement.ltv_pct, 0)} de la valeur à l'échéance des termes et à la stabilisation` : "détention simple, sans refinancement"} · {remis ? "cash remis aux investisseurs" : "cash gardé dans le fonds"} · prêts inconnus : {perf.reference_prets.source}.{charge ? " Mise à jour…" : ""}
           </p>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            <KPI label="VAN du fonds" valeur={`${compact(s.van_depart)} → ${compact(s.van_horizon)}`} sous={fourchetteTxt(fo, "van_horizon", (n) => compact(n ?? 0)) ?? `${s.nb_immeubles} immeuble${s.nb_immeubles > 1 ? "s" : ""} dans le fonds`} hex={C.fonds} icon={Landmark} />
-            <KPI label="Rendement du fonds" valeur={pct(s.rendement_moyen_pct)} sous={`moyenne par an · TRI ${pct(s.tri_pct)}${fourchetteTxt(fo, "tri_pct", (n) => pct(n)) ? ` · ${fourchetteTxt(fo, "tri_pct", (n) => pct(n))}` : ""}`} hex={C.gain} icon={TrendingUp} />
+            <KPI label="VAN du fonds" valeur={`${compact(s.van_depart)} → ${compact(s.van_horizon)}`} sous={`${fourchetteTxt(fo, "van_horizon", (n) => compact(n ?? 0)) ?? `${s.nb_immeubles} immeuble${s.nb_immeubles > 1 ? "s" : ""} dans le fonds`}${sr ? ` · sans refi ${compact(sr.van_horizon)} (dettes ${compact(sr.dettes_horizon)} au lieu de ${compact(s.dettes_horizon)})` : ""}`} hex={C.fonds} icon={Landmark} />
+            <KPI label="Rendement du fonds" valeur={pct(s.rendement_moyen_pct)} sous={`moyenne par an · TRI ${pct(s.tri_pct)}${fourchetteTxt(fo, "tri_pct", (n) => pct(n)) ? ` · ${fourchetteTxt(fo, "tri_pct", (n) => pct(n))}` : ""}${sr ? ` · sans refi ${pct(sr.rendement_moyen_pct)} (TRI ${pct(sr.tri_pct)})` : ""}`} hex={C.gain} icon={TrendingUp} />
             <KPI label="Pour un investisseur" valeur={`${pct(s.rendement_part_annualise_pct)} par an`} sous={`part ${money(s.prix_part_depart, 2)} → ${money(s.prix_part_horizon, 2)}${remis && s.distributions_par_part ? ` + ${money(s.distributions_par_part, 2)} de cash remis = ${money(s.valeur_totale_par_part, 2)} par part` : ""}${fourchetteTxt(fo, "rendement_part_annualise_pct", (n) => pct(n)) ? ` · ${fourchetteTxt(fo, "rendement_part_annualise_pct", (n) => pct(n))}` : ""}`} hex={C.projet} icon={PiggyBank} />
             <KPI label="Gain total" valeur={money(s.gain_total)} sous={`plus-value ${compact(s.plus_value)} · capital remboursé ${compact(s.capital_rembourse)} · cash ${compact(s.cash_flow_cumule - s.frais_fonds_cumules)}${s.cash_refi_total ? ` · refis ${compact(s.cash_refi_total)}` : ""}`} hex={C.gain} icon={TrendingUp} />
             <KPI label="Nos 3 holdings" valeur={`${pct(s.pct_nous_horizon)} du fonds`} sous={`${money(s.part_nous_total)} en parts de gains à l'horizon${fourchetteTxt(fo, "pct_nous_horizon", (n) => pct(n)) ? ` · ${fourchetteTxt(fo, "pct_nous_horizon", (n) => pct(n))}` : ""}`} hex={C.cash} icon={Wallet} />
             {remis ? (
-              <KPI label="Remis aux investisseurs" valeur={money(s.distributions_total)} sous={`${s.nb_refinancements} refinancement${s.nb_refinancements > 1 ? "s" : ""} · ${compact(s.cash_refi_total)} sortis des refis · réserve ${money(s.cash_horizon)}`} hex={C.refi} icon={RefreshCw} />
+              <KPI label="Remis aux investisseurs" valeur={money(s.distributions_total)} sous={`${s.nb_refinancements} refinancement${s.nb_refinancements > 1 ? "s" : ""} · ${compact(s.cash_refi_total)} sortis des refis · réserve ${money(s.cash_horizon)}${sr ? ` · sans refi ${compact(sr.distributions_total)}` : ""}`} hex={C.refi} icon={RefreshCw} />
             ) : (
               <KPI label="Cash du fonds" valeur={money(s.cash_horizon)} sous={`cash-flow cumulé ${compact(s.cash_flow_cumule)} − frais ${compact(s.frais_fonds_cumules)}${s.cash_refi_total ? ` + refis ${compact(s.cash_refi_total)}` : ""}`} hex={C.cash} icon={Wallet} />
             )}
@@ -327,7 +353,7 @@ export function PerformanceTab({ scenarioId, version }: { scenarioId: number | n
           <section className={`${CARD} overflow-hidden`} style={{ borderTop: `3px solid ${C.fonds}` }}>
             <Entete hex={C.fonds} icon={Landmark} titre="Le fonds, année par année" note={`Document p. 11 et 14 : VAN = valeur des immeubles + cash − dettes ; le gain de l'année = VAN de fin − VAN de début${remis ? " + cash remis aux investisseurs" : ""}, fait de la plus-value (loyers en hausse), du capital remboursé et du cash. Rendement du fonds = gain ÷ VAN de départ (plus le capital entré dans l'année).`} />
             <div className="space-y-4 p-4">
-              <GraphiqueVAN annees={annees} vanDepart={s.van_depart} />
+              <GraphiqueVAN annees={annees} depart={{ valeur: s.valeur_depart, dettes: s.dettes_depart, van: s.van_depart }} />
               <TableAnnees
                 annees={annees}
                 lignes={[
