@@ -3181,13 +3181,6 @@ async def delete_logement(
                 "d'abord (leur historique de paiements partirait avec)."
             ),
         )
-    # Codes de porte du logement : la colonne ajoutée à chaud n'a pas
-    # forcément sa clé étrangère en cascade — on les retire nous-mêmes.
-    from app.models.immobilier import ImmeubleCode
-
-    await db.execute(
-        delete(ImmeubleCode).where(ImmeubleCode.logement_id == logement_id)
-    )
     await db.delete(obj)
     await db.commit()
 

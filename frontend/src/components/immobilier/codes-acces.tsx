@@ -9,11 +9,6 @@
  * Une liste par immeuble (libellé, code, note), modifiable en place
  * depuis la fiche, visible par quiconque voit l'immeuble. Pensé pour le
  * cellulaire : une ligne = un code, bouton « copier » à côté.
- *
- * Même composant sur la fiche d'un LOGEMENT (Steven 2026-11-10 : « mettre
- * les codes des portes quelque part pour avoir accès au besoin ») :
- * ``logementId`` → codes propres à l'unité, avec en rappel (lecture
- * seule) les codes de son immeuble.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -33,7 +28,6 @@ import { authedFetch } from "@/lib/auth";
 export type ImmeubleCode = {
   id: number;
   immeuble_id: number;
-  logement_id?: number | null;
   libelle: string;
   code: string;
   note?: string | null;
@@ -44,7 +38,7 @@ export type ImmeubleCode = {
 };
 
 /** Libellés proposés au clavier (liste libre : on peut en taper un autre). */
-const LIBELLES_SUGGERES_IMMEUBLE = [
+const LIBELLES_SUGGERES = [
   "Porte d'entrée",
   "Lock box",
   "Garage",
@@ -52,17 +46,6 @@ const LIBELLES_SUGGERES_IMMEUBLE = [
   "Alarme",
   "Boîte aux lettres",
   "Local technique",
-  "Wi-Fi"
-];
-
-const LIBELLES_SUGGERES_LOGEMENT = [
-  "Porte du logement",
-  "Porte d'entrée",
-  "Porte arrière",
-  "Lock box",
-  "Serrure numérique",
-  "Alarme",
-  "Rangement / casier",
   "Wi-Fi"
 ];
 
@@ -88,13 +71,11 @@ async function copier(texte: string): Promise<boolean> {
 function CodeForm({
   initial,
   busy,
-  suggestions,
   onCancel,
   onSubmit
 }: {
   initial: ImmeubleCode | null;
   busy: boolean;
-  suggestions: string[];
   onCancel: () => void;
   onSubmit: (d: Draft) => void;
 }) {
@@ -125,7 +106,7 @@ function CodeForm({
             autoFocus
           />
           <datalist id="codes-acces-libelles">
-            {suggestions.map((l) => (
+            {LIBELLES_SUGGERES.map((l) => (
               <option key={l} value={l} />
             ))}
           </datalist>
@@ -180,20 +161,7 @@ function CodeForm({
   );
 }
 
-export function CodesAccesSection({
-  immeubleId,
-  logementId
-}: {
-  /** Fiche immeuble : ses codes. Fiche logement : rappel en lecture seule. */
-  immeubleId?: number | null;
-  /** Fiche logement : codes propres à l'unité. */
-  logementId?: number;
-}) {
-  const pourLogement = logementId != null;
-  const suggestions = pourLogement
-    ? LIBELLES_SUGGERES_LOGEMENT
-    : LIBELLES_SUGGERES_IMMEUBLE;
-  const [codesImmeuble, setCodesImmeuble] = useState<ImmeubleCode[]>([]);
+export function CodesAccesSection({ immeubleId }: { immeubleId: number }) {
   const [list, setList] = useState<ImmeubleCode[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -201,31 +169,7 @@ export function CodesAccesSection({
   const [busy, setBusy] = useState(false);
   const [copiedId, setCopiedId] = useState<number | null>(null);
 
-  const base = pourLogement
-    ? `/api/v1/immobilier/logements/${logementId}/codes`
-    : `/api/v1/immobilier/immeubles/${immeubleId}/codes`;
-
-  // Rappel des codes de l'immeuble sur la fiche du logement (on entre
-  // souvent par la porte de l'immeuble avant celle de l'unité).
-  useEffect(() => {
-    if (!pourLogement || immeubleId == null) return;
-    let annule = false;
-    void (async () => {
-      try {
-        const r = await authedFetch(
-          `/api/v1/immobilier/immeubles/${immeubleId}/codes`
-        );
-        if (!r.ok) return;
-        const rows = (await r.json()) as ImmeubleCode[];
-        if (!annule) setCodesImmeuble(rows);
-      } catch {
-        /* rappel facultatif */
-      }
-    })();
-    return () => {
-      annule = true;
-    };
-  }, [pourLogement, immeubleId]);
+  const base = `/api/v1/immobilier/immeubles/${immeubleId}/codes`;
 
   const load = useCallback(async () => {
     try {
@@ -319,8 +263,7 @@ export function CodesAccesSection({
     <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-accent-500">
-          <KeyRound className="h-4 w-4" />{" "}
-          {pourLogement ? "Codes de porte" : <>Codes d&apos;accès</>}
+          <KeyRound className="h-4 w-4" /> Codes d&apos;accès
         </h2>
         <span className="text-[11px] text-white/40">
           {list
@@ -341,18 +284,8 @@ export function CodesAccesSection({
         ) : null}
       </div>
       <p className="mb-3 text-[11px] text-white/50">
-        {pourLogement ? (
-          <>
-            Porte du logement, serrure numérique, lock box, alarme… les codes
-            de cette unité, au même endroit pour toute l&apos;équipe.
-          </>
-        ) : (
-          <>
-            Porte d&apos;entrée, lock box, garage, alarme, boîte aux lettres…
-            tout code relié à l&apos;immeuble, au même endroit pour toute
-            l&apos;équipe.
-          </>
-        )}
+        Porte d&apos;entrée, lock box, garage, alarme, boîte aux lettres… tout
+        code relié à l&apos;immeuble, au même endroit pour toute l&apos;équipe.
       </p>
 
       {err ? (
@@ -366,7 +299,6 @@ export function CodesAccesSection({
           <CodeForm
             initial={null}
             busy={busy}
-            suggestions={suggestions}
             onCancel={() => setAdding(false)}
             onSubmit={(d) => void create(d)}
           />
@@ -375,9 +307,7 @@ export function CodesAccesSection({
 
       {list && list.length === 0 && !adding ? (
         <p className="rounded-lg border border-brand-800 bg-brand-950 px-4 py-3 text-sm text-white/60">
-          {pourLogement
-            ? "Aucun code enregistré pour ce logement."
-            : "Aucun code enregistré pour cet immeuble."}
+          Aucun code enregistré pour cet immeuble.
         </p>
       ) : null}
 
@@ -389,7 +319,6 @@ export function CodesAccesSection({
                 <CodeForm
                   initial={c}
                   busy={busy}
-                  suggestions={suggestions}
                   onCancel={() => setEditingId(null)}
                   onSubmit={(d) => void update(c.id, d)}
                 />
@@ -451,51 +380,6 @@ export function CodesAccesSection({
             )
           )}
         </ul>
-      ) : null}
-
-      {pourLogement && codesImmeuble.length > 0 ? (
-        <div className="mt-4">
-          <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/60">
-            Codes de l&apos;immeuble (rappel)
-          </h3>
-          <ul className="divide-y divide-brand-800 rounded-xl border border-brand-800 bg-brand-950">
-            {codesImmeuble.map((c) => (
-              <li
-                key={c.id}
-                className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2"
-              >
-                <span className="min-w-[7rem] text-sm font-semibold text-white">
-                  {c.libelle}
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <code className="rounded-md border border-brand-700 bg-brand-900 px-2 py-0.5 font-mono text-sm font-bold tracking-wider text-white">
-                    {c.code}
-                  </code>
-                  <button
-                    type="button"
-                    onClick={() => void onCopier(c)}
-                    className="btn-ghost btn-xs"
-                    title="Copier le code"
-                  >
-                    {copiedId === c.id ? (
-                      <Check className="h-3.5 w-3.5 text-emerald-300" />
-                    ) : (
-                      <Copy className="h-3.5 w-3.5" />
-                    )}
-                  </button>
-                </span>
-                {c.note ? (
-                  <span className="basis-full text-xs text-white/60 sm:basis-auto sm:flex-1">
-                    {c.note}
-                  </span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-          <p className="mt-1 text-[11px] text-white/50">
-            Ces codes se modifient sur la fiche de l&apos;immeuble.
-          </p>
-        </div>
       ) : null}
     </section>
   );

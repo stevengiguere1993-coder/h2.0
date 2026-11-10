@@ -33,7 +33,6 @@ import {
   DocumentsSection
 } from "@/components/immobilier/tal-avis";
 import { ImmobilierTopbar } from "../../layout";
-import { CodesAccesSection } from "@/components/immobilier/codes-acces";
 import { AssignerBailButton } from "@/components/immobilier/assigner-bail";
 import {
   echeanceLabel,
@@ -1182,14 +1181,6 @@ export default function LogementDetailPage({
                 )}
               </div>
             </section>
-
-            {/* Codes de porte du logement (Steven 2026-11-10 : « mettre
-                les codes des portes quelque part pour avoir accès au
-                besoin ») + rappel des codes de l'immeuble. */}
-            <CodesAccesSection
-              logementId={logementId}
-              immeubleId={lg.immeuble_id}
-            />
 
             {/* (c) Historique des locataires */}
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
