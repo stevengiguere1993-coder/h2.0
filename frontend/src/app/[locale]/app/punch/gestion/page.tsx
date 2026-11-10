@@ -196,37 +196,30 @@ const MONTH_NAMES = [
 type ViewMode = "week" | "month" | "payperiod";
 
 // ---------------------------------------------------------------------------
-// Périodes de paie — réglage de Paramètres → Période de paie (GET
-// /api/v1/punch/payroll/reglages) : une période connue (`ref`, son premier
-// jour) et sa durée (7 ou 14 jours). Toute autre période = ref ± N × durée.
-// Défaut, le temps que le réglage arrive : l'ancien cycle (dimanche 19 avril
-// 2026, 14 jours).
+// Périodes de paie — alignées sur l'ancre côté backend (punch_ops.py).
+// Cycle de 14 jours samedi → vendredi. Ancre : période finissant le
+// vendredi 2026-05-02. Toute autre période = ancre ± N × 14 jours.
 // ---------------------------------------------------------------------------
-type ReglagePaie = { ref: Date; jours: number };
-const REGLAGE_PAIE_DEFAUT: ReglagePaie = { ref: new Date(2026, 3, 19), jours: 14 };
+const PAYROLL_ANCHOR_END = new Date(2026, 4, 2); // 2 mai 2026 (mois 0-based = avril+1=mai)
+const PAYROLL_PERIOD_DAYS = 14;
 
-function payPeriodForDate(
-  d: Date,
-  r: ReglagePaie
-): { start: Date; end: Date } {
+function payPeriodForDate(d: Date): { start: Date; end: Date } {
+  const ms = d.getTime() - PAYROLL_ANCHOR_END.getTime();
   const dayMs = 24 * 60 * 60 * 1000;
-  const jour = new Date(d);
-  jour.setHours(0, 0, 0, 0);
-  // Arrondi : le passage à l'heure d'été / d'hiver décale d'une heure.
-  const deltaDays = Math.round((jour.getTime() - r.ref.getTime()) / dayMs);
-  const cycles = Math.floor(deltaDays / r.jours);
-  const start = new Date(r.ref);
-  start.setDate(start.getDate() + cycles * r.jours);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + r.jours - 1);
+  const deltaDays = Math.round(ms / dayMs);
+  const cycles = Math.round(deltaDays / PAYROLL_PERIOD_DAYS);
+  const end = new Date(PAYROLL_ANCHOR_END);
+  end.setDate(end.getDate() + cycles * PAYROLL_PERIOD_DAYS);
   end.setHours(23, 59, 59, 999);
+  const start = new Date(end);
+  start.setDate(start.getDate() - (PAYROLL_PERIOD_DAYS - 1));
+  start.setHours(0, 0, 0, 0);
   return { start, end };
 }
 
-function shiftPayPeriod(end: Date, deltaCycles: number, jours: number): Date {
+function shiftPayPeriod(end: Date, deltaCycles: number): Date {
   const next = new Date(end);
-  next.setDate(next.getDate() + deltaCycles * jours);
+  next.setDate(next.getDate() + deltaCycles * PAYROLL_PERIOD_DAYS);
   return next;
 }
 
@@ -284,35 +277,9 @@ export default function PunchGestionPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("week");
   const [weekStart, setWeekStart] = useState(() => weekStartOf(new Date()));
   const [monthStart, setMonthStart] = useState(() => monthStartOf(new Date()));
-  const [reglagePaie, setReglagePaie] = useState<ReglagePaie>(REGLAGE_PAIE_DEFAUT);
   const [payPeriodEnd, setPayPeriodEnd] = useState<Date>(
-    () => payPeriodForDate(new Date(), REGLAGE_PAIE_DEFAUT).end
+    () => payPeriodForDate(new Date()).end
   );
-  // Fréquence et jours de la période de paie (Paramètres → Période de paie).
-  useEffect(() => {
-    let annule = false;
-    (async () => {
-      try {
-        const res = await authedFetch("/api/v1/punch/payroll/reglages");
-        if (!res.ok) return;
-        const data = (await res.json()) as {
-          debut_reference: string;
-          jours_periode: number;
-        };
-        const [y, mo, da] = data.debut_reference.split("-").map(Number);
-        if (!y || !mo || !da || !data.jours_periode) return;
-        const r = { ref: new Date(y, mo - 1, da), jours: data.jours_periode };
-        if (annule) return;
-        setReglagePaie(r);
-        setPayPeriodEnd(payPeriodForDate(new Date(), r).end);
-      } catch {
-        /* réglage illisible : l'ancien cycle reste affiché */
-      }
-    })();
-    return () => {
-      annule = true;
-    };
-  }, []);
   // En vue mois : si une journée est cliquée, on filtre la liste sur
   // ce jour seulement. Null = tout le mois affiché.
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
@@ -347,7 +314,7 @@ export default function PunchGestionPage() {
       return { start: monthStart, end: monthEndOf(monthStart) };
     }
     if (viewMode === "payperiod") {
-      const pp = payPeriodForDate(payPeriodEnd, reglagePaie);
+      const pp = payPeriodForDate(payPeriodEnd);
       // end exclusif (jour suivant 00:00) pour le filtre standard
       const exclusiveEnd = new Date(pp.end);
       exclusiveEnd.setHours(0, 0, 0, 0);
@@ -355,7 +322,7 @@ export default function PunchGestionPage() {
       return { start: pp.start, end: exclusiveEnd };
     }
     return { start: weekStart, end: weekEnd };
-  }, [viewMode, weekStart, weekEnd, monthStart, selectedDay, payPeriodEnd, reglagePaie]);
+  }, [viewMode, weekStart, weekEnd, monthStart, selectedDay, payPeriodEnd]);
 
   // Liste des semaines candidates pour le menu déroulant : 26 derniers
   // lundis + 4 lundis à venir (couvre 6 mois passés + 1 mois futur).
@@ -372,13 +339,13 @@ export default function PunchGestionPage() {
 
   // Liste des périodes de paie candidates : 13 passées + 4 à venir.
   const payPeriodOptions = useMemo<Date[]>(() => {
-    const current = payPeriodForDate(new Date(), reglagePaie).end;
+    const current = payPeriodForDate(new Date()).end;
     const out: Date[] = [];
     for (let i = -4; i <= 13; i++) {
-      out.push(shiftPayPeriod(current, -i, reglagePaie.jours));
+      out.push(shiftPayPeriod(current, -i));
     }
     return out;
-  }, [reglagePaie]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -856,7 +823,7 @@ export default function PunchGestionPage() {
                 <button
                   type="button"
                   onClick={() =>
-                    setPayPeriodEnd(shiftPayPeriod(payPeriodEnd, -1, reglagePaie.jours))
+                    setPayPeriodEnd(shiftPayPeriod(payPeriodEnd, -1))
                   }
                   className="btn-ghost btn-xs"
                   aria-label="Période précédente"
@@ -876,7 +843,7 @@ export default function PunchGestionPage() {
                   title="Choisir une période de paie"
                 >
                   {payPeriodOptions.map((end) => {
-                    const pp = payPeriodForDate(end, reglagePaie);
+                    const pp = payPeriodForDate(end);
                     return (
                       <option
                         key={shortISO(pp.end)}
@@ -891,7 +858,7 @@ export default function PunchGestionPage() {
                 <button
                   type="button"
                   onClick={() =>
-                    setPayPeriodEnd(shiftPayPeriod(payPeriodEnd, +1, reglagePaie.jours))
+                    setPayPeriodEnd(shiftPayPeriod(payPeriodEnd, +1))
                   }
                   className="btn-ghost btn-xs"
                   aria-label="Période suivante"
@@ -902,7 +869,7 @@ export default function PunchGestionPage() {
               <button
                 type="button"
                 onClick={() =>
-                  setPayPeriodEnd(payPeriodForDate(new Date(), reglagePaie).end)
+                  setPayPeriodEnd(payPeriodForDate(new Date()).end)
                 }
                 className="btn-secondary text-xs"
               >
@@ -968,7 +935,7 @@ export default function PunchGestionPage() {
                     : "mois"
                   : "semaine"
             }
-            deuxSemaines={viewMode === "payperiod" && reglagePaie.jours > 7}
+            deuxSemaines={viewMode === "payperiod"}
             filtre={filterEmploye}
             onFiltrer={(id) =>
               setFilterEmploye((cur) => (cur === String(id) ? "" : String(id)))

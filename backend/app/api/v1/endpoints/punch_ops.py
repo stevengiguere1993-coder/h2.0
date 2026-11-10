@@ -27,16 +27,8 @@ from app.services.employe_rates import (
     regime_effectif,
     resolve_base_rate,
 )
-from app.services import periode_paie
 from app.services.project_auto_status import bump_to_in_progress_if_needed
-from app.services.punch_diner import (
-    appliquer_diner_auto,
-    aujourd_hui_local,
-    bornes_jour_utc,
-    heures_brutes,
-    heures_nettes,
-    jour_local,
-)
+from app.services.punch_diner import appliquer_diner_auto, heures_brutes, heures_nettes
 from app.services.punch_geo import (
     ajouter_fin,
     candidats_ip,
@@ -913,106 +905,57 @@ def _month_bounds(month: str) -> tuple[date, date]:
 
 
 # ---------------------------------------------------------------------------
-# Période de paie — réglable (``app/services/periode_paie.py``)
+# Bi-weekly payroll period helpers
 # ---------------------------------------------------------------------------
 
-# Ancien cycle codé en dur (aux 2 semaines, dimanche → samedi, période du
-# 19 avril au 2 mai 2026, versée le 7 mai). C'est le réglage par défaut ;
-# la fréquence et les jours se choisissent dans Paramètres → Période de
-# paie (Steven, 2026-11-10).
+# Date d'ancrage : un jeudi/mercredi de paie connu chez Horizon. Toutes
+# les autres périodes se calculent en sautant +/- 14 jours à partir de
+# cette ancre. Pour Horizon Services Immobiliers :
+#   - Versement (PAY_DATE) : 7 mai 2026 (mercredi)
+#   - Coupure (CUTOFF)     : 5 mai 2026 (lundi, J-2)
+#   - Période              : 19 avril → 2 mai (samedi → vendredi)
 PAYROLL_ANCHOR_PAY_DATE = date(2026, 5, 7)
-PAYROLL_ANCHOR_PERIOD_END = date(2026, 5, 2)  # samedi de fin de période
+PAYROLL_ANCHOR_PERIOD_END = date(2026, 5, 2)  # vendredi de fin de période
 PAYROLL_PERIOD_DAYS = 14
 
 
-class PeriodePaieReglages(BaseModel):
-    frequence: str = Field(pattern="^(hebdomadaire|aux_2_semaines)$")
-    #: 0 = lundi … 6 = dimanche.
-    jour_debut: int = Field(ge=0, le=6)
-    #: Premier jour d'une période connue (ramené sur ``jour_debut``) ; il
-    #: choisit quelle semaine ouvre une période aux 2 semaines.
-    debut_reference: Optional[date] = None
-    jours_coupure: int = Field(default=3, ge=0, le=31)
-    jours_versement: int = Field(default=5, ge=0, le=31)
-
-
-class PeriodePaieInfo(BaseModel):
-    debut: date
-    fin: date
-    coupure: date
-    versement: date
-
-
-class PeriodePaieReponse(PeriodePaieReglages):
-    debut_reference: date
-    jours_periode: int
-    jour_fin: int
-    libelle_jours: str
-    frequences: dict[str, str]
-    periode_courante: PeriodePaieInfo
-    periode_suivante: PeriodePaieInfo
-
-
-def _reponse_reglages(r: periode_paie.Reglages) -> PeriodePaieReponse:
-    def info(p: periode_paie.Periode) -> PeriodePaieInfo:
-        return PeriodePaieInfo(
-            debut=p.debut, fin=p.fin, coupure=p.coupure, versement=p.versement
-        )
-
-    courante = periode_paie.periode_contenant(aujourd_hui_local(), r)
-    suivante = periode_paie.periode_contenant(
-        courante.fin + timedelta(days=1), r
+def _bi_weekly_period_for(period_end: date) -> tuple[date, date, date, date]:
+    """Pour une fin de période donnée (ou la plus proche), renvoie
+    (period_start, period_end, cutoff_date, pay_date) en alignant sur
+    l'ancre Horizon (cycle de 14 jours samedi→vendredi)."""
+    delta = (period_end - PAYROLL_ANCHOR_PERIOD_END).days
+    # Aligne sur la grille de 14 jours
+    cycles = round(delta / PAYROLL_PERIOD_DAYS)
+    aligned_end = PAYROLL_ANCHOR_PERIOD_END + timedelta(
+        days=cycles * PAYROLL_PERIOD_DAYS
     )
-    return PeriodePaieReponse(
-        **r.en_dict(),
-        jours_periode=r.jours,
-        jour_fin=r.jour_fin,
-        libelle_jours=r.libelle_jours,
-        frequences=periode_paie.FREQUENCES_LABELS,
-        periode_courante=info(courante),
-        periode_suivante=info(suivante),
+    aligned_start = aligned_end - timedelta(days=PAYROLL_PERIOD_DAYS - 1)
+    cutoff = aligned_end + timedelta(days=3)  # vendredi + 3 = lundi
+    pay = aligned_end + timedelta(days=5)  # vendredi + 5 = mercredi
+    return aligned_start, aligned_end, cutoff, pay
+
+
+def _next_period_end(today: Optional[date] = None) -> date:
+    """Renvoie la fin de la prochaine période de paie à venir (ou en
+    cours si on est entre période_end et pay_date)."""
+    today = today or date.today()
+    delta = (today - PAYROLL_ANCHOR_PERIOD_END).days
+    cycles = delta // PAYROLL_PERIOD_DAYS
+    candidate = PAYROLL_ANCHOR_PERIOD_END + timedelta(
+        days=cycles * PAYROLL_PERIOD_DAYS
     )
-
-
-@router.get(
-    "/payroll/reglages",
-    response_model=PeriodePaieReponse,
-    summary="Période de paie : fréquence, jours, coupure et versement (manager+)",
-)
-async def payroll_reglages(db: DBSession, _: RequireManager) -> PeriodePaieReponse:
-    return _reponse_reglages(await periode_paie.charger_reglages(db))
-
-
-@router.put(
-    "/payroll/reglages",
-    response_model=PeriodePaieReponse,
-    summary="Change la fréquence et les jours de la période de paie (admin+)",
-)
-async def payroll_reglages_modifier(
-    data: PeriodePaieReglages, db: DBSession, admin: RequireAdminRole
-) -> PeriodePaieReponse:
-    """Le rapport de paie, l'export EmployeurD et la vue « Période de
-    paie » des punchs suivent ce réglage. Sans ``debut_reference``, la
-    période en cours commence au dernier ``jour_debut`` (aujourd'hui
-    compris)."""
-    cfg = data.model_dump()
-    if data.debut_reference is None:
-        cfg["debut_reference"] = periode_paie.aligner_sur_jour(
-            aujourd_hui_local(), data.jour_debut
-        )
-    cfg["debut_reference"] = cfg["debut_reference"].isoformat()
-    r = await periode_paie.enregistrer_reglages(
-        db, cfg, user_id=getattr(admin, "id", None)
-    )
-    await db.commit()
-    return _reponse_reglages(r)
+    # Si on a déjà passé la date de versement (period_end + 5j), on
+    # affiche la prochaine période. Sinon on reste sur la courante.
+    if today > candidate + timedelta(days=5):
+        candidate = candidate + timedelta(days=PAYROLL_PERIOD_DAYS)
+    return candidate
 
 
 class BiWeeklyPayrollRow(BaseModel):
     employe_id: int
     employe_name: str
-    hours_week_1: float  # semaine 1 de la période
-    hours_week_2: float  # semaine 2 (toujours 0 en paie hebdomadaire)
+    hours_week_1: float  # samedi → vendredi (semaine 1 de la période)
+    hours_week_2: float  # samedi → vendredi (semaine 2 de la période)
     total_hours: float
     pending_hours: float  # heures non encore approuvées (info utile)
     # Ventilation CCQ / hors décret (retour Phil 2026-09-26) : heures et
@@ -1045,18 +988,12 @@ class BiWeeklyPayrollRow(BaseModel):
 
 
 class BiWeeklyPayrollReport(BaseModel):
-    period_start: date
-    week_1_end: date  # dernier jour de la semaine 1
-    #: Premier jour de la semaine 2 ; None en paie hebdomadaire.
-    week_2_start: Optional[date] = None
-    period_end: date
-    cutoff_date: date  # date limite pour ajustements
-    pay_date: date  # date du versement
-    #: Réglage de la période (Paramètres → Période de paie).
-    frequence: str = "aux_2_semaines"
-    jours_periode: int = 14
-    nb_semaines: int = 2
-    libelle_jours: str = "dimanche → samedi"
+    period_start: date  # samedi
+    week_1_end: date  # vendredi de fin de semaine 1
+    week_2_start: date  # samedi de début de semaine 2
+    period_end: date  # vendredi
+    cutoff_date: date  # date limite pour ajustements (lundi)
+    pay_date: date  # date du versement (mercredi)
     days_until_cutoff: int  # peut être négatif (coupure dépassée)
     days_until_pay: int
     rows: list[BiWeeklyPayrollRow]
@@ -1075,7 +1012,7 @@ class BiWeeklyPayrollReport(BaseModel):
 @router.get(
     "/payroll/bi-weekly",
     response_model=BiWeeklyPayrollReport,
-    summary="Rapport de paie de la période (réglable : hebdo ou aux 2 semaines) (manager+)",
+    summary="Bi-weekly payroll report (manager+)",
 )
 async def payroll_bi_weekly(
     db: DBSession,
@@ -1084,31 +1021,36 @@ async def payroll_bi_weekly(
         default=None,
         pattern=r"^\d{4}-\d{2}-\d{2}$",
         description=(
-            "Un jour de la période voulue (d'habitude sa fin). Si omis, "
-            "période qui vient de finir (jusqu'au versement), sinon en cours."
+            "Fin de période (vendredi). Si omis, période en cours / à venir."
         ),
     ),
 ) -> BiWeeklyPayrollReport:
-    today = aujourd_hui_local()
-    reglages = await periode_paie.charger_reglages(db)
-    periode = periode_paie.periode_a_afficher(today, reglages)
+    today = date.today()
     if period_end:
-        # N'importe quel jour de la période voulue (d'habitude sa fin).
         try:
-            periode = periode_paie.periode_contenant(
-                date.fromisoformat(period_end), reglages
-            )
+            target_end = date.fromisoformat(period_end)
         except ValueError:
-            pass
+            target_end = _next_period_end(today)
+    else:
+        target_end = _next_period_end(today)
 
-    p_start, p_end = periode.debut, periode.fin
-    cutoff, pay = periode.coupure, periode.versement
-    week_1_end = periode.semaines[0][1]
-    week_2_start = periode.semaines[1][0] if len(periode.semaines) > 1 else None
+    p_start, p_end, cutoff, pay = _bi_weekly_period_for(target_end)
+    week_1_end = p_start + timedelta(days=6)  # premier vendredi
+    week_2_start = p_start + timedelta(days=7)  # deuxième samedi
 
-    # Journées de Montréal : un punch du dimanche soir reste au dimanche.
-    start_dt = bornes_jour_utc(p_start)[0]
-    end_dt = bornes_jour_utc(p_end)[1]
+    start_dt = datetime(
+        p_start.year, p_start.month, p_start.day, tzinfo=timezone.utc
+    )
+    week_1_end_dt = datetime(
+        week_1_end.year,
+        week_1_end.month,
+        week_1_end.day,
+        23, 59, 59,
+        tzinfo=timezone.utc,
+    )
+    end_dt = datetime(
+        p_end.year, p_end.month, p_end.day, 23, 59, 59, tzinfo=timezone.utc
+    )
 
     # Une seule query qui ramène tous les punches ; on ventile en
     # mémoire entre semaine 1 et semaine 2 selon la date de début du
@@ -1118,7 +1060,7 @@ async def payroll_bi_weekly(
         .join(Punch, Punch.employe_id == Employe.id)
         .where(
             Punch.started_at >= start_dt,
-            Punch.started_at < end_dt,
+            Punch.started_at <= end_dt,
             Punch.ended_at.is_not(None),
         )
     )
@@ -1136,7 +1078,7 @@ async def payroll_bi_weekly(
             started_at = started_at.replace(tzinfo=timezone.utc)
         h = float(p.hours or 0)
         approved = bool(p.approved)
-        pdate = jour_local(started_at) if started_at is not None else None
+        pdate = started_at.date() if started_at is not None else None
         reg = regime_effectif(periods.get(emp_id, []), pdate, emp, p.regime)
         taux = resolve_base_rate(periods.get(emp_id, []), pdate, emp, reg) or 0.0
         montant = round(h * taux, 2)
@@ -1154,7 +1096,7 @@ async def payroll_bi_weekly(
         # week_1/week_2 (sinon elles disparaîtraient). pending_hours est
         # un total parallèle pour signaler à l'utilisateur ce qui reste
         # à approuver avant la coupure.
-        sem1 = started_at is None or periode.semaine_de(jour_local(started_at)) == 0
+        sem1 = started_at <= week_1_end_dt
         if sem1:
             agg[emp_id].hours_week_1 += h
         else:
@@ -1217,10 +1159,6 @@ async def payroll_bi_weekly(
         period_end=p_end,
         cutoff_date=cutoff,
         pay_date=pay,
-        frequence=reglages.frequence,
-        jours_periode=reglages.jours,
-        nb_semaines=len(periode.semaines),
-        libelle_jours=reglages.libelle_jours,
         days_until_cutoff=(cutoff - today).days,
         days_until_pay=(pay - today).days,
         rows=sorted_rows,

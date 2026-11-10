@@ -395,21 +395,3 @@ détient, la valeur globale et son % personnel ». Cause : participations
    notification `invest_document_depose` aux admins) ; PDF, images,
    Word, Excel, 25 Mo ; `GET /invest/me/documents` = onglet « Mes
    documents ».
-
-## Période de paie réglable (2026-11-10)
-
-Steven : « choisir la fréquence de période de paie et de quel jour à quel
-jour […] selon le système de paie on est du lundi au dimanche […] la paie
-est rendue à la semaine ». Réglage unique `AutomationSetting("periode_paie")`
-(`app/services/periode_paie.py`) : `frequence` (`hebdomadaire` /
-`aux_2_semaines`), `jour_debut` (0 = lundi), `debut_reference` (premier jour
-d'une période connue, ramené sur `jour_debut`), `jours_coupure` /
-`jours_versement` après la fin. Page Paramètres → Période de paie
-(`/parametres/periode-paie`, admin pour changer), routes
-`GET/PUT /api/v1/punch/payroll/reglages`. Le rapport `/punch/payroll/bi-weekly`
-(nom gardé), ses CSV et la vue « Période de paie » des punchs suivent le
-réglage ; en hebdomadaire `week_2_start` est null et les colonnes semaine 2
-du CSV EmployeurD restent à 0. Journées de Montréal (plus de bornes UTC).
-Défaut sans réglage = ancien cycle (dimanche → samedi, 19 avril 2026, 14 j).
-Les feuilles de temps du pôle Entreprises (`timesheets.py`, 14 jours
-alignés sur le lundi 2026-06-01) ne lisent PAS encore ce réglage.

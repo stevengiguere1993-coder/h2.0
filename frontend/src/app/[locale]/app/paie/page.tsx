@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
-import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 
@@ -44,14 +43,8 @@ type Row = {
 type Report = {
   period_start: string;
   week_1_end: string;
-  /** Null en paie hebdomadaire (une seule semaine). */
-  week_2_start: string | null;
+  week_2_start: string;
   period_end: string;
-  /** Réglage de la période (Paramètres → Période de paie). */
-  frequence?: "hebdomadaire" | "aux_2_semaines";
-  jours_periode?: number;
-  nb_semaines?: number;
-  libelle_jours?: string;
   cutoff_date: string;
   pay_date: string;
   days_until_cutoff: number;
@@ -114,21 +107,21 @@ function shiftPeriodEnd(currentEnd: string, days: number): string {
 // Construit une liste de fins de période (ISO YYYY-MM-DD) centrée
 // sur `currentEnd`. 4 périodes futures + 13 passées = 18 entrées,
 // du futur vers le passé, pour le menu déroulant de sélection.
-function buildPeriodOptions(currentEnd: string, jours: number): string[] {
+function buildPeriodOptions(currentEnd: string): string[] {
   const out: string[] = [];
   for (let i = 4; i >= -13; i--) {
-    out.push(shiftPeriodEnd(currentEnd, i * jours));
+    out.push(shiftPeriodEnd(currentEnd, i * 14));
   }
   return out;
 }
 
-function periodLabel(periodEnd: string, jours: number): string {
+function periodLabel(periodEnd: string): string {
   // « Paie 19 avr. → 02 mai » à partir de la fin de période ISO
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(periodEnd);
   if (!m) return periodEnd;
   const end = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
   const start = new Date(end);
-  start.setDate(start.getDate() - (jours - 1));
+  start.setDate(start.getDate() - 13);
   const fmt = (d: Date) =>
     d.toLocaleDateString("fr-CA", { day: "2-digit", month: "short" });
   return `Paie ${fmt(start)} → ${fmt(end)}`;
@@ -216,11 +209,6 @@ export default function PaiePage() {
     })();
   }
 
-  // Période réglable : hebdomadaire ou aux 2 semaines, jours choisis
-  // dans Paramètres → Période de paie (Steven, 2026-11-10).
-  const jours = report?.jours_periode ?? 14;
-  const deuxSemaines = (report?.nb_semaines ?? 2) > 1;
-
   return (
     <>
       <AppTopbar
@@ -236,23 +224,12 @@ export default function PaiePage() {
           <div>
             <h1 className="flex items-center gap-2 text-2xl font-bold text-white">
               <Wallet className="h-6 w-6 text-accent-500" />
-              {report?.frequence === "hebdomadaire"
-                ? "Paie hebdomadaire"
-                : "Paie aux 2 semaines"}
+              Paie bi-hebdomadaire
             </h1>
             <p className="mt-1 text-sm text-white/60">
-              Périodes de {jours} jours
-              {report?.libelle_jours ? ` (${report.libelle_jours})` : ""}.
-              La fréquence, les jours, la coupure et le versement se
-              règlent dans{" "}
-              <Link
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                href={"/parametres/periode-paie" as any}
-                className="text-accent-500 underline-offset-2 hover:underline"
-              >
-                Paramètres → Période de paie
-              </Link>
-              .
+              Périodes de 14 jours (samedi → vendredi). Versement le
+              mercredi suivant. Coupure pour ajustements le lundi
+              avant le versement.
             </p>
           </div>
           {report ? (
@@ -261,7 +238,7 @@ export default function PaiePage() {
                 <button
                   type="button"
                   onClick={() =>
-                    setPeriodEnd(shiftPeriodEnd(report.period_end, -jours))
+                    setPeriodEnd(shiftPeriodEnd(report.period_end, -14))
                   }
                   className="btn-ghost btn-xs"
                   title="Période précédente"
@@ -275,20 +252,20 @@ export default function PaiePage() {
                   className="min-w-[230px] cursor-pointer rounded-md bg-transparent px-2 text-center text-sm font-semibold text-white hover:bg-brand-800 focus:outline-none"
                   title="Choisir une période de paie"
                 >
-                  {buildPeriodOptions(report.period_end, jours).map((opt) => (
+                  {buildPeriodOptions(report.period_end).map((opt) => (
                     <option
                       key={opt}
                       value={opt}
                       className="bg-brand-950 text-white"
                     >
-                      {periodLabel(opt, jours)}
+                      {periodLabel(opt)}
                     </option>
                   ))}
                 </select>
                 <button
                   type="button"
                   onClick={() =>
-                    setPeriodEnd(shiftPeriodEnd(report.period_end, jours))
+                    setPeriodEnd(shiftPeriodEnd(report.period_end, 14))
                   }
                   className="btn-ghost btn-xs"
                   title="Période suivante"
@@ -333,7 +310,7 @@ export default function PaiePage() {
               <KeyDateCard
                 label="Période de paie"
                 primary={`${fmtDateShort(report.period_start)} → ${fmtDateShort(report.period_end)}`}
-                sub={`${jours} jours${report.libelle_jours ? ` · ${report.libelle_jours}` : ""}`}
+                sub="14 jours · samedi → vendredi"
                 tone="accent"
               />
               <KeyDateCard
@@ -399,15 +376,13 @@ export default function PaiePage() {
                         {fmtDateShort(report.week_1_end)}
                       </span>
                     </th>
-                    {deuxSemaines && report.week_2_start ? (
-                      <th className="px-3 py-2 text-right">
-                        Sem. 2
-                        <span className="block text-[10px] font-normal normal-case text-white/40">
-                          {fmtDateShort(report.week_2_start)} →{" "}
-                          {fmtDateShort(report.period_end)}
-                        </span>
-                      </th>
-                    ) : null}
+                    <th className="px-3 py-2 text-right">
+                      Sem. 2
+                      <span className="block text-[10px] font-normal normal-case text-white/40">
+                        {fmtDateShort(report.week_2_start)} →{" "}
+                        {fmtDateShort(report.period_end)}
+                      </span>
+                    </th>
                     <th className="px-3 py-2 text-right">
                       Total
                       <span className="block text-[10px] font-normal normal-case text-white/60">
@@ -433,7 +408,7 @@ export default function PaiePage() {
                   {report.rows.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={deuxSemaines ? 8 : 7}
+                        colSpan={8}
                         className="px-3 py-6 text-center text-xs text-white/50"
                       >
                         Aucune heure punchée pour cette période.
@@ -453,16 +428,14 @@ export default function PaiePage() {
                             brutes={r.hours_brutes_week_1}
                           />
                         </td>
-                        {deuxSemaines ? (
-                          <td className="px-3 py-2 text-right tabular-nums text-white/85">
-                            {r.hours_week_2.toFixed(2)} h
-                            <LigneDiner
-                              heures={r.hours_diner_week_2}
-                              nombre={r.diners_week_2}
-                              brutes={r.hours_brutes_week_2}
-                            />
-                          </td>
-                        ) : null}
+                        <td className="px-3 py-2 text-right tabular-nums text-white/85">
+                          {r.hours_week_2.toFixed(2)} h
+                          <LigneDiner
+                            heures={r.hours_diner_week_2}
+                            nombre={r.diners_week_2}
+                            brutes={r.hours_brutes_week_2}
+                          />
+                        </td>
                         <td className="px-3 py-2 text-right tabular-nums font-semibold text-white">
                           {r.total_hours.toFixed(2)} h
                           {r.hours_diner ? (
@@ -526,24 +499,22 @@ export default function PaiePage() {
                           )}
                         />
                       </td>
-                      {deuxSemaines ? (
-                        <td className="px-3 py-2 text-right tabular-nums text-white/70">
-                          {report.rows
-                            .reduce((s, r) => s + r.hours_week_2, 0)
-                            .toFixed(2)}{" "}
-                          h
-                          <LigneDiner
-                            heures={report.rows.reduce(
-                              (s, r) => s + (r.hours_diner_week_2 ?? 0),
-                              0
-                            )}
-                            nombre={report.rows.reduce(
-                              (s, r) => s + (r.diners_week_2 ?? 0),
-                              0
-                            )}
-                          />
-                        </td>
-                      ) : null}
+                      <td className="px-3 py-2 text-right tabular-nums text-white/70">
+                        {report.rows
+                          .reduce((s, r) => s + r.hours_week_2, 0)
+                          .toFixed(2)}{" "}
+                        h
+                        <LigneDiner
+                          heures={report.rows.reduce(
+                            (s, r) => s + (r.hours_diner_week_2 ?? 0),
+                            0
+                          )}
+                          nombre={report.rows.reduce(
+                            (s, r) => s + (r.diners_week_2 ?? 0),
+                            0
+                          )}
+                        />
+                      </td>
                       <td className="px-3 py-2 text-right tabular-nums font-bold text-white">
                         {report.total_hours.toFixed(2)} h
                         {report.total_hours_diner ? (
@@ -591,9 +562,6 @@ export default function PaiePage() {
                 <span className="font-mono">heures_semaine_2</span> (heures à
                 payer, dîners déjà retirés) — prêt pour EmployeurD ; puis, par
                 semaine, les heures punchées et le dîner retiré.
-                {deuxSemaines
-                  ? null
-                  : " En paie hebdomadaire, les colonnes de la semaine 2 restent à 0 (même format de fichier)."}
               </p>
               <div className="flex flex-wrap gap-2">
                 <button
