@@ -72,6 +72,8 @@ GRATUITS_TOTAL = 10
 #: Type du document archivé (imm_documents). Distinct de « bail » : le
 #: PDF du TAL n'est PAS signé — « bail » reste le bail signé au dossier.
 DOC_TYPE = "bail_tal"
+#: PDF SIGNÉ d'un bail indépendant (aucun bail Kratos à qui le rattacher).
+DOC_TYPE_SIGNE = "bail_tal_signe"
 
 DEFAUTS: dict[str, Any] = {
     #: Frais refacturé au propriétaire par bail GÉNÉRÉ (mode réel) — file
@@ -620,8 +622,13 @@ def construire_formulaire(schema: SchemaTal, ctx: ContexteBail, config: dict[str
         if lp.get("courriel"):
             loc["courrielLocateur"] = str(lp["courriel"]).strip()
             loc["courrielMandant"] = str(lp["courriel"]).strip()
-        a_verifier.append({"chemin": "locateurs[0].adresse", "note": "adresse du locateur du bail parallèle à saisir"})
-        origine["locateurs[0].adresse"] = "inconnu"
+        adr_lp = str(lp.get("adresse") or "").strip()
+        if adr_lp:
+            loc["adresse"] = [decouper_adresse(adr_lp, province=province)]
+            origine["locateurs[0].adresse"] = "donnees"
+        else:
+            a_verifier.append({"chemin": "locateurs[0].adresse", "note": lp.get("note_adresse") or "adresse du locateur du bail parallèle à saisir"})
+            origine["locateurs[0].adresse"] = "inconnu"
         ent = None
     elif ent is not None:
         loc["nom"] = ent.name or ""
@@ -944,9 +951,15 @@ def resume_transmission(t: TalTransmission, *, avec_form: bool = False) -> dict[
         "created_by_email": t.created_by_email,
         "rapport": _charger_json(t.rapport_json, None),
         "a_verifier": _charger_json(t.a_verifier_json, []),
+        "independant": bool(getattr(t, "independant", False)),
+        "libelle": getattr(t, "libelle", None),
     }
+    if out["independant"]:
+        # Pas de fiche Kratos derrière : les noms viennent du formulaire.
+        out["parties"] = parties_du_formulaire(_charger_json(t.payload_json, {}))
     if avec_form:
         out["form"] = _charger_json(t.payload_json, {})
+        out["journal"] = _charger_json(getattr(t, "reponses_json", None), None)
     return out
 
 
@@ -1015,6 +1028,8 @@ async def remplacer_formulaire(db: AsyncSession, t: TalTransmission, form: dict[
     t.payload_json = _json(form)
     t.rapport_json = _json(rapport.as_dict())
     t.schema_version = schema.version
+    if getattr(t, "independant", False):
+        t.adresse = (adresse_depuis_formulaire(form) or t.adresse or "")[:500] or None
     t.updated_at = datetime.now(timezone.utc)
     await db.flush()
     return rapport
@@ -1073,14 +1088,23 @@ async def generer(
     t.tentatives = int(t.tentatives or 0) + 1
     t.erreur = None
     now = datetime.now(timezone.utc)
+    secret = connexion.cle or ""
+    _noter_journal(t, "appel", {
+        "mode": client.mode, "tentative": t.tentatives, "url": connexion.url or None, "entete_cle": connexion.entete_cle,
+        "chemin_frw111": connexion.chemin_frw111, "chemin_frw122": connexion.chemin_frw122,
+    }, secret=secret)
 
     if not t.short_guid:
         try:
             rc = await client.creer_formulaire(form, identifiant_utilisateur=t.identifiant_utilisateur)
         except TalApiError as exc:
+            # La clé ne sort jamais : ni à l'écran, ni au journal, ni dans l'audit.
+            exc.message = _masquer(exc.message, secret)
+            exc.args = (f"{exc.etape} : {exc.message}",)
             t.statut = "echec"
             t.erreur = str(exc)
             t.updated_at = now
+            _noter_journal(t, "frw111_erreur", {"http_status": exc.http_status, "message": exc.message, "corps": _epurer(exc.corps)}, secret=secret)
             await db.commit()
             await log_action(db, user=user, action="tal_bail.echec", entity_type="tal_transmission", entity_id=t.id,
                              details={"etape": exc.etape, "message": exc.message, "http_status": exc.http_status, "mode": t.mode})
@@ -1089,14 +1113,18 @@ async def generer(
         t.short_guid = rc.short_guid
         t.statut = "forme_creee"
         t.updated_at = now
+        _noter_journal(t, "frw111", {"duree_ms": rc.duree_ms, "short_guid": rc.short_guid, "reponse": _epurer(rc.brut)}, secret=secret)
         await db.commit()  # le ShortGuid ne doit jamais se perdre
 
     try:
         rt = await client.declencher_transmission(t.short_guid, identifiant_utilisateur=t.identifiant_utilisateur, form_pour_simulation=form)
     except TalApiError as exc:
+        exc.message = _masquer(exc.message, secret)
+        exc.args = (f"{exc.etape} : {exc.message}",)
         t.statut = "forme_creee"
         t.erreur = str(exc)
         t.updated_at = datetime.now(timezone.utc)
+        _noter_journal(t, "frw122_erreur", {"http_status": exc.http_status, "message": exc.message, "corps": _epurer(exc.corps)}, secret=secret)
         await db.commit()
         await log_action(db, user=user, action="tal_bail.echec", entity_type="tal_transmission", entity_id=t.id,
                          details={"etape": exc.etape, "message": exc.message, "http_status": exc.http_status, "short_guid": t.short_guid, "mode": t.mode})
@@ -1118,6 +1146,7 @@ async def generer(
     t.messages_json = _json(rt.messages)
     t.documents_json = _json(docs_resume)
     t.no_confirmation = rt.no_confirmation
+    _noter_journal(t, "frw122", {"duree_ms": rt.duree_ms, "no_confirmation": rt.no_confirmation, "documents": docs_resume, "reponse": _epurer(rt.brut)}, secret=secret)
     if pdf is None:
         t.statut = "forme_creee"
         t.erreur = "La réponse du TAL ne contient aucun PDF lisible — relance possible avec le même ShortGuid."
@@ -1195,6 +1224,233 @@ async def annuler(db: AsyncSession, t: TalTransmission, *, user) -> TalTransmiss
     return t
 
 
+# ─── Journal des appels (diagnostic) ──────────────────────────────────
+
+
+def _masquer(texte: str, secret: str) -> str:
+    """La clé de l'API n'apparaît jamais dans un texte conservé ou affiché."""
+    if secret and len(secret) >= 6:
+        return (texte or "").replace(secret, "***")
+    return texte or ""
+
+
+def _epurer(obj: Any, *, max_texte: int = 600, _prof: int = 0) -> Any:
+    """Copie d'une réponse du TAL pour le journal : les longues chaînes (le
+    PDF en base64) sont remplacées par leur taille."""
+    if _prof > 6:
+        return "…"
+    if isinstance(obj, dict):
+        return {str(k)[:80]: _epurer(v, max_texte=max_texte, _prof=_prof + 1) for k, v in list(obj.items())[:80]}
+    if isinstance(obj, (list, tuple)):
+        return [_epurer(v, max_texte=max_texte, _prof=_prof + 1) for v in list(obj)[:40]]
+    if isinstance(obj, str):
+        return obj if len(obj) <= max_texte else f"<{len(obj)} caractères>"
+    if isinstance(obj, (int, float, bool)) or obj is None:
+        return obj
+    return str(obj)[:max_texte]
+
+
+def _noter_journal(t: TalTransmission, cle: str, valeur: Any, *, secret: str = "") -> None:
+    """Ajoute une étape au journal technique de la transmission (adresse
+    appelée, réponse brute, erreur) — lisible dans l'écran du bail pour
+    ajuster l'intégration aux vraies réponses du TAL. Jamais la clé."""
+    j = _charger_json(getattr(t, "reponses_json", None), {})
+    if not isinstance(j, dict):
+        j = {}
+    j[cle] = valeur
+    j["maj"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    txt = _masquer(json.dumps(j, ensure_ascii=False, default=str), secret)
+    if len(txt) > 60000:
+        txt = json.dumps({"tronque": True, "maj": j["maj"], cle: "<trop volumineux pour le journal>"}, ensure_ascii=False)
+    t.reponses_json = txt
+
+
+# ─── Bail indépendant (hors système Kratos) ───────────────────────────
+#
+# Phil 2026-11-10 : « une page… bail indépendant… je vais rentrer les
+# informations dans un genre de petit formulaire puis ça va créer le bail.
+# Ça va être mon environnement test et en même temps un environnement pour
+# créer un bail pour un ami… quelqu'un qui n'est pas dans mon système. »
+#
+# Aucune fiche Kratos derrière : pas de bail à activer, pas d'immeuble donc
+# pas de frais refacturé ; le locateur nommé signe lui-même. Le formulaire
+# est construit par LE MÊME mapping que les baux Kratos (une seule logique).
+
+#: Notes « à vérifier » du mapping Kratos, reformulées quand il n'y a pas de fiche.
+_NOTES_INDEPENDANT: dict[str, str] = {
+    "immeuble introuvable": "adresse du logement à saisir",
+    "aucun locataire sur le bail": "nom du locataire à saisir",
+    "adresse actuelle du locataire inconnue (fiche : adresse précédente vide)": "adresse actuelle du locataire à saisir",
+    "aucun garant sur la fiche locataire": "aucune caution",
+    "nombre de pièces absent de la fiche du logement": "nombre de pièces à choisir",
+    "code postal absent de la fiche immeuble": "code postal du logement à saisir",
+    "aucun loyer payé dans les 12 derniers mois (pas de bail précédent connu)": "avis au nouveau locataire : aucun loyer payé dans les 12 derniers mois (à corriger si le logement était loué)",
+}
+
+
+def _texte(v: Any, n: int = 255) -> str:
+    return str(v or "").strip()[:n]
+
+
+def _date_ou_none(v: Any) -> Optional[date]:
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    try:
+        return date.fromisoformat(str(v)[:10]) if v else None
+    except ValueError:
+        return None
+
+
+def _nombre_ou_none(v: Any) -> Optional[float]:
+    try:
+        return float(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def contexte_independant(essentiel: Optional[dict[str, Any]]) -> ContexteBail:
+    """Contexte SANS donnée Kratos : les objets attendus par
+    ``construire_formulaire`` sont fabriqués à partir du petit formulaire de
+    « Bail indépendant ». Le locateur nommé prend la place de l'entreprise
+    propriétaire ; pas de représentant (il signe lui-même)."""
+    from types import SimpleNamespace as NS
+
+    e = essentiel or {}
+    loc = e.get("locateur") if isinstance(e.get("locateur"), dict) else {}
+    personnes = [p for p in (e.get("locataires") or []) if isinstance(p, dict) and _texte(p.get("nom"))]
+    cautions = [p for p in (e.get("cautions") or []) if isinstance(p, dict) and _texte(p.get("nom"))]
+    premier = personnes[0] if personnes else None
+    try:
+        jour = int(e.get("jour_echeance") or 1)
+    except (TypeError, ValueError):
+        jour = 1
+    bail = NS(
+        id=None, status="independant", document_id=None, au_mois=bool(e.get("au_mois")),
+        date_debut=_date_ou_none(e.get("date_debut")), date_fin=_date_ou_none(e.get("date_fin")),
+        loyer_mensuel=_nombre_ou_none(e.get("loyer_mensuel")), jour_echeance=min(max(jour, 1), 31),
+        chauffage_inclus=bool(e.get("chauffage_inclus")), electricite_inclus=bool(e.get("electricite_inclus")),
+        eau_chaude_inclus=bool(e.get("eau_chaude_inclus")), internet_inclus=bool(e.get("internet_inclus")),
+        categorie="standard", parallele_type=None,
+    )
+    logement = NS(id=None, numero=_texte(e.get("appartement"), 32), nb_pieces_decimal=_nombre_ou_none(e.get("nb_pieces")))
+    adresse = _texte(e.get("adresse"), 500)
+    ville = _texte(e.get("ville"), 128)
+    immeuble = None
+    if adresse or ville:
+        immeuble = NS(id=None, name=None, address=adresse, city=ville or None,
+                      postal_code=_texte(e.get("code_postal"), 16) or None, annee_construction=None, gestion_externe=False)
+    locataire = None
+    if premier is not None:
+        locataire = NS(id=None, full_name=_texte(premier.get("nom")), phone=_texte(premier.get("telephone"), 40),
+                       email=_texte(premier.get("courriel"), 320), ancienne_adresse=_texte(premier.get("adresse"), 500) or None)
+    colocs = [NS(full_name=_texte(p.get("nom")), phone=_texte(p.get("telephone"), 40), email=_texte(p.get("courriel"), 320))
+              for p in personnes[1:4]]
+    garants = [NS(full_name=_texte(p.get("nom")), email=_texte(p.get("courriel"), 320)) for p in cautions[:2]]
+    return ContexteBail(
+        bail=bail, logement=logement, immeuble=immeuble, locataire=locataire, colocataires=colocs, garants=garants,
+        locateur_parallele={
+            "nom": _texte(loc.get("nom")), "telephone": _texte(loc.get("telephone"), 40), "courriel": _texte(loc.get("courriel"), 320),
+            "adresse": _texte(loc.get("adresse"), 500), "note_adresse": "adresse du locateur à saisir",
+        },
+    )
+
+
+def adresse_depuis_formulaire(form: Any) -> str:
+    """Adresse lisible du logement telle qu'écrite dans le formulaire."""
+    try:
+        a = (form.get("adresseLogement") or [{}])[0] or {}
+    except (AttributeError, IndexError, TypeError):
+        return ""
+    if not isinstance(a, dict):
+        return ""
+    base = " ".join(p for p in (str(a.get("NoCivique") or "").strip(), str(a.get("Rue") or "").strip()) if p)
+    if str(a.get("Appartement") or "").strip():
+        base += f", app. {str(a.get('Appartement')).strip()}"
+    if str(a.get("Municipalite") or "").strip():
+        base += f", {str(a.get('Municipalite')).strip()}"
+    return base.strip(" ,") or str(a.get("AdresseComplete") or "").strip()
+
+
+def parties_du_formulaire(form: Any) -> dict[str, Any]:
+    """Qui, quoi, combien — lu dans le formulaire (liste des baux indépendants)."""
+    f = form if isinstance(form, dict) else {}
+
+    def noms(k: str) -> list[str]:
+        return [str(o.get("nom") or "").strip() for o in (f.get(k) or []) if isinstance(o, dict) and str(o.get("nom") or "").strip()]
+
+    return {
+        "locateurs": noms("locateurs"), "locataires": noms("locataires"),
+        "cautions": noms("autresSignataires") if str(f.get("possedeAutresSignataires")) == "true" else [],
+        "loyer": str(f.get("coutLoyer") or ""), "type_bail": str(f.get("typeBail") or ""),
+        "date_debut": str(f.get("dateDebutBail") or f.get("dateDebutBailDureeIndeterminee") or ""),
+        "date_fin": str(f.get("dateFinBail") or ""),
+    }
+
+
+async def creer_independant(
+    db: AsyncSession,
+    *,
+    user,
+    essentiel: Optional[dict[str, Any]] = None,
+    libelle: Optional[str] = None,
+    source: Optional[TalTransmission] = None,
+) -> tuple[TalTransmission, Rapport]:
+    """Brouillon d'un bail INDÉPENDANT : le formulaire est construit à partir
+    du petit formulaire (``essentiel``) par le même mapping que les baux
+    Kratos, ou copié d'un bail indépendant existant (``source``). Rien n'est
+    envoyé au TAL."""
+    config = await charger_config()
+    schema = await charger_schema(db)
+    if source is not None:
+        form = _charger_json(source.payload_json, None)
+        if not isinstance(form, dict) or not form:
+            raise TalBailError("Le bail à dupliquer n'a pas de formulaire.", http_status=422)
+        a_verifier = _charger_json(source.a_verifier_json, [])
+        adresse = adresse_depuis_formulaire(form) or (source.adresse or "")
+    else:
+        ctx = contexte_independant(essentiel)
+        prep = construire_formulaire(schema, ctx, config)
+        form = prep.form
+        a_verifier = [{**x, "note": _NOTES_INDEPENDANT.get(x.get("note", ""), x.get("note", ""))} for x in prep.a_verifier]
+        adresse = adresse_logement_texte(ctx)
+    rapport = valider(form, schema, requis=chemins_requis(config))
+    now = datetime.now(timezone.utc)
+    t = TalTransmission(
+        independant=True, created_by_user_id=getattr(user, "id", None), created_by_email=getattr(user, "email", None),
+    )
+    t.created_at = now
+    t.libelle = _texte(libelle) or (getattr(source, "libelle", None) if source is not None else None)
+    t.adresse = (adresse or "")[:500] or None
+    t.statut = "brouillon"
+    t.schema_version = schema.version
+    t.payload_json = _json(form)
+    t.rapport_json = _json(rapport.as_dict())
+    t.a_verifier_json = _json(a_verifier)
+    t.updated_at = now
+    db.add(t)
+    await db.flush()
+    t.identifiant_utilisateur = f"kratos-ind-t{t.id}"
+    return t, rapport
+
+
+async def preparation_independante(db: AsyncSession, t: TalTransmission) -> dict[str, Any]:
+    """Même forme que ``preparer`` (écran du bail), à partir du formulaire
+    enregistré d'un bail indépendant."""
+    schema = await charger_schema(db)
+    config = await charger_config()
+    form = _charger_json(t.payload_json, None)
+    if not isinstance(form, dict) or not form:
+        form = squelette(schema)
+    rapport = valider(form, schema, requis=chemins_requis(config))
+    return {
+        "form": form, "origine": {}, "a_verifier": _charger_json(t.a_verifier_json, []), "rapport": rapport.as_dict(),
+        "contexte": {"independant": True, "adresse": t.adresse, "libelle": getattr(t, "libelle", None), "parties": parties_du_formulaire(form)},
+        "schema_version": schema.version,
+    }
+
+
 # ─── Compteur mensuel ─────────────────────────────────────────────────
 
 
@@ -1267,7 +1523,9 @@ def _prenom_nom(nom_complet: str) -> tuple[str, str]:
     return " ".join(parts[:-1])[:100], parts[-1][:100]
 
 
-def signataires_depuis_formulaire(form: dict[str, Any], *, representant_nom: str = "", representant_courriel: str = "") -> tuple[list[dict[str, Any]], list[str]]:
+def signataires_depuis_formulaire(
+    form: dict[str, Any], *, representant_nom: str = "", representant_courriel: str = "", locateurs_signent: bool = False
+) -> tuple[list[dict[str, Any]], list[str]]:
     """Qui signe le bail : chaque locataire, chaque caution (autres
     signataires) et le représentant du locateur (Horizon) — signature en
     PARALLÈLE (décision Phil 2026-10-15). Retourne aussi les personnes
@@ -1293,6 +1551,19 @@ def signataires_depuis_formulaire(form: dict[str, Any], *, representant_nom: str
         for occ in form.get("autresSignataires") or []:
             if isinstance(occ, dict):
                 ajouter(occ.get("nom", ""), occ.get("courriel", ""), (occ.get("qualite") or "caution").lower() or "caution")
+    if locateurs_signent:
+        # Bail indépendant (Phil 2026-11-10) : le locateur n'est pas un client géré par
+        # Horizon — chaque locateur (ou son représentant nommé au bail) signe lui-même ;
+        # jamais la personne qui prépare le bail dans Kratos.
+        for occ in form.get("locateurs") or []:
+            if not isinstance(occ, dict):
+                continue
+            if str(occ.get("questionRepresentant")) == "true" and str(occ.get("representant") or "").strip():
+                ajouter(occ.get("representant", ""), occ.get("courrielRepresentant", ""), "locateur")
+            else:
+                ajouter(occ.get("nom", ""), occ.get("courrielLocateur") or occ.get("courrielMandant") or "", "locateur",
+                        occ.get("autreNoTelephoneCell") or occ.get("noTelephone") or "")
+        return out, manquants
     loc0 = (form.get("locateurs") or [{}])[0] if isinstance(form.get("locateurs"), list) else {}
     rep_nom = (loc0.get("representant") if isinstance(loc0, dict) else "") or representant_nom
     rep_courriel = (loc0.get("courrielRepresentant") if isinstance(loc0, dict) else "") or representant_courriel
@@ -1325,7 +1596,10 @@ async def lancer_signature(db: AsyncSession, t: TalTransmission, *, user, messag
     form = _charger_json(t.payload_json, {}) or {}
     rep_nom = (getattr(user, "display_name", None) or "").strip()
     rep_courriel = (getattr(user, "email", None) or "").strip()
-    signataires, manquants = signataires_depuis_formulaire(form, representant_nom=rep_nom, representant_courriel=rep_courriel)
+    if getattr(t, "independant", False):
+        signataires, manquants = signataires_depuis_formulaire(form, locateurs_signent=True)
+    else:
+        signataires, manquants = signataires_depuis_formulaire(form, representant_nom=rep_nom, representant_courriel=rep_courriel)
     if not signataires:
         raise TalBailError("Aucun signataire avec courriel : ajoute le courriel du locataire (fiche) ou dans le formulaire.", http_status=422, details={"sans_courriel": manquants})
     try:
@@ -1404,6 +1678,36 @@ async def apres_signature_complete(
     if not octets:
         log.warning("bail TAL #%s : signature complète mais PDF final absent", t.id)
         return None
+    if getattr(t, "independant", False):
+        signers_ind = (
+            await db.execute(
+                select(EsignSigner).where(EsignSigner.document_id == doc.id).order_by(EsignSigner.order_index, EsignSigner.id)
+            )
+        ).scalars().all()
+        noms_ind = ", ".join(f"{s.first_name} {s.last_name}".strip() for s in signers_ind)
+        now_ind = doc.completed_at or datetime.now(timezone.utc)
+        signe = ImmDocument(
+            type=DOC_TYPE_SIGNE,
+            titre=(f"Bail signé — {t.adresse}" if t.adresse else "Bail signé (TAL)")[:255],
+            source="genere", filename=f"bail-signe-{t.id}.pdf",
+            params_json=_json({
+                "transmission_id": t.id, "esign_document_id": doc.id, "short_guid": t.short_guid,
+                "mode": t.mode, "document_tal_id": t.document_id, "independant": True,
+            }),
+            pdf_blob=octets, created_by_email=t.created_by_email,
+            signed_at=now_ind, signed_by_name=(noms_ind[:255] or None),
+        )
+        db.add(signe)
+        await db.flush()
+        t.signe_le = now_ind
+        t.document_signe_id = signe.id
+        t.updated_at = now_ind
+        await log_action(
+            db, user=None, action="tal_bail.bail_signe", entity_type="tal_transmission", entity_id=t.id,
+            details={"independant": True, "esign_document_id": doc.id, "document_signe_id": signe.id, "signataires": noms_ind},
+        )
+        await db.commit()
+        return {"transmission_id": t.id, "bail_id": None, "document_signe_id": signe.id, "independant": True}
     if t.bail_id is None:
         log.warning("bail TAL #%s : signé mais le bail Kratos a disparu (désistement ?)", t.id)
         return None
@@ -1522,4 +1826,6 @@ __all__ = [
     "ContexteBail", "charger_contexte", "construire_formulaire", "appliquer_surcharges", "preparer",
     "resume_transmission", "creer_transmission", "remplacer_formulaire", "valider_transmission",
     "generer", "annuler", "compteur",
+    "DOC_TYPE_SIGNE", "contexte_independant", "creer_independant", "preparation_independante",
+    "parties_du_formulaire", "adresse_depuis_formulaire",
 ]

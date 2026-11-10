@@ -119,6 +119,15 @@ class TalTransmission(Base, TimestampUpdateMixin):
     locataire_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     #: Adresse du logement au moment de la demande (lisible sans jointure).
     adresse: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    #: Bail INDÉPENDANT (Phil 2026-11-10) : saisi dans « Bail indépendant », sans
+    #: bail / locataire / immeuble Kratos — essais et baux pour un tiers hors
+    #: système. Pas de frais refacturé, pas de bail Kratos à activer. Colonnes
+    #: additives → ensure_critical_columns.
+    independant: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false", index=True
+    )
+    #: Nom interne d'un bail indépendant (« Essai 1 », « Bail de Marc »).
+    libelle: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     statut: Mapped[str] = mapped_column(
         String(16), nullable=False, default="brouillon", server_default="brouillon", index=True
@@ -143,6 +152,9 @@ class TalTransmission(Base, TimestampUpdateMixin):
     messages_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     #: Documents reçus (nom, type source, taille) — sans le base64.
     documents_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    #: Journal technique des appels au TAL : adresse appelée, réponses brutes
+    #: (sans le PDF ni la clé), erreurs — pour ajuster l'intégration.
+    reponses_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     #: PDF archivé (imm_documents, type « bail_tal »).
     document_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     #: Document eSign Kratos lancé sur ce PDF (signature interne, PR C).
