@@ -620,6 +620,9 @@ export default function RevenusDepensesPage() {
         const d = (await r.json()) as Detail;
         baseUpdatedAt.current = d.updated_at;
         setRes(d.resultats);
+        // L'onglet Performance relit la projection quand la version du scénario change (Phil 2026-11-10 :
+        // « quand je coche ou décoche les refinancements, la VAN ne change pas » — le détail ne suivait pas).
+        setDetail((p) => (p ? { ...p, updated_at: d.updated_at, resume: d.resume, resultats: d.resultats } : p));
         setScenarios((prev) => prev.map((s) => (s.id === d.id ? { ...s, resume: d.resume, updated_at: d.updated_at } : s)));
         setEtat("ok");
         setErr(null);
