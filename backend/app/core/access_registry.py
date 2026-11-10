@@ -210,9 +210,10 @@ PAGES: list[PageEntry] = [
        "/immobilier/baux"),
     _p("immobilier.locations", "Locations & nouveaux baux", "immobilier",
        "manager", "/immobilier/locations"),
-    # Bail officiel du TAL hors système (essais, bail pour un tiers) — 2026-11-10.
-    _p("immobilier.bail_independant", "Bail indépendant", "immobilier",
-       "manager", "/immobilier/bail-independant"),
+    # Admin locative (Phil 2026-11-10) : baux officiels du TAL hors système, avis de
+    # renouvellement, carnet de contacts, registre des baux générés et coût du TAL.
+    _p("immobilier.admin_locative", "Admin locative", "immobilier",
+       "manager", "/immobilier/admin-locative"),
     _p("immobilier.communications", "Communications", "immobilier",
        "manager", "/immobilier/communications"),
     _p("immobilier.modeles_documents", "Modèles de documents", "immobilier",

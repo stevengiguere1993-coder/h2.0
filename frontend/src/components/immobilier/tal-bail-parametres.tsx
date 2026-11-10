@@ -31,6 +31,8 @@ import {
 import { authedFetch } from "@/lib/auth";
 
 const BASE = "/api/v1/immobilier/tal-bail";
+/** Ancre du bloc : …/parametres/locatif#bail-officiel-tal y conduit directement. */
+export const ANCRE_TAL = "bail-officiel-tal";
 const INPUT =
   "rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white focus:border-accent-500 focus:outline-none disabled:opacity-60";
 
@@ -120,7 +122,16 @@ function fmtDate(iso: string | null): string {
     : d.toLocaleString("fr-CA", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-export function TalBailSection({ canEdit, isAdmin }: { canEdit: boolean; isAdmin: boolean }) {
+export function TalBailSection({
+  canEdit,
+  isAdmin,
+  compact = false
+}: {
+  canEdit: boolean;
+  isAdmin: boolean;
+  /** Sans la marge du haut : le bloc est seul dans son onglet (Admin locative). */
+  compact?: boolean;
+}) {
   const [data, setData] = useState<Parametres | null>(null);
   const [cfg, setCfg] = useState<Config | null>(null);
   const [cx, setCx] = useState<{ mode: string; api_url: string; entete_cle: string; chemin_frw111: string; chemin_frw122: string } | null>(null);
@@ -158,6 +169,17 @@ export function TalBailSection({ canEdit, isAdmin }: { canEdit: boolean; isAdmin
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Lien direct (#bail-officiel-tal) : la page se charge par morceaux, on se replace
+  // sur le bloc quand ses données arrivent, puis une fois le reste de la page posé.
+  const pret = data !== null;
+  useEffect(() => {
+    if (!pret || typeof window === "undefined" || window.location.hash !== `#${ANCRE_TAL}`) return;
+    const aller = () => document.getElementById(ANCRE_TAL)?.scrollIntoView({ block: "start" });
+    aller();
+    const minuterie = window.setTimeout(aller, 800);
+    return () => window.clearTimeout(minuterie);
+  }, [pret]);
 
   async function put(body: Record<string, unknown>, ok: string) {
     setBusy(true);
@@ -249,7 +271,7 @@ export function TalBailSection({ canEdit, isAdmin }: { canEdit: boolean; isAdmin
 
   return (
     <>
-      <h2 className="mt-8 flex items-center gap-2 text-xl font-bold text-white">
+      <h2 id={ANCRE_TAL} className={`${compact ? "" : "mt-8 "}flex scroll-mt-24 items-center gap-2 text-xl font-bold text-white`}>
         <FileSignature className="h-5 w-5 text-accent-500" />
         Bail officiel (TAL)
       </h2>

@@ -61,8 +61,9 @@ const NAV: NavItem[] = [
   { href: "/immobilier/paiements", label: "Paiements", icon: ClipboardList },
   { href: "/immobilier/baux", label: "Baux en vigueur", icon: ClipboardList },
   { href: "/immobilier/locations", label: "Locations & nouveaux baux", icon: KeyRound },
-  // Bail officiel du TAL hors système : essais, bail pour un tiers (Phil 2026-11-10).
-  { href: "/immobilier/bail-independant", label: "Bail indépendant", icon: FileSignature },
+  // Admin locative (Phil 2026-11-10) : baux et avis de renouvellement hors système,
+  // carnet de contacts, registre des baux générés et coût mensuel du TAL.
+  { href: "/immobilier/admin-locative", label: "Admin locative", icon: FileSignature },
   { href: "/immobilier/communications", label: "Communications", icon: Mail },
   { href: "/immobilier/renouvellements", label: "Suivis annuels", icon: ClipboardList },
   { href: "/immobilier/depots", label: "Dépôts de garantie", icon: ShieldCheck },
