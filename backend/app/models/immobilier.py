@@ -298,6 +298,13 @@ class ImmeubleCode(Base, TimestampUpdateMixin):
         ForeignKey("imm_immeubles.id", ondelete="CASCADE"),
         nullable=False, index=True,
     )
+    #: Code propre à UN logement (porte de l'unité, lock box du logement…,
+    #: Steven 2026-11-10 : « mettre les codes des portes quelque part
+    #: dans les logements »). NULL = code de l'immeuble.
+    logement_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("imm_logements.id", ondelete="CASCADE"),
+        nullable=True, index=True,
+    )
     #: « Porte d'entrée », « Lock box », « Garage », « Alarme »…
     libelle: Mapped[str] = mapped_column(String(120), nullable=False)
     code: Mapped[str] = mapped_column(String(255), nullable=False)

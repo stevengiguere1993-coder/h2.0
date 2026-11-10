@@ -1083,6 +1083,34 @@ async def ensure_immobilier_aux_tables() -> None:
                     """
                 )
             )
+        # Codes de porte d'un logement (2026-11-10) : colonne
+        # ``logement_id`` sur imm_immeuble_codes, avec sa clé étrangère en
+        # cascade (schema_check n'ajoute que la colonne nue). Transaction
+        # séparée, idempotente.
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    DO $$
+                    BEGIN
+                      ALTER TABLE imm_immeuble_codes
+                        ADD COLUMN IF NOT EXISTS logement_id INTEGER;
+                      IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'fk_imm_immeuble_codes_logement'
+                      ) THEN
+                        ALTER TABLE imm_immeuble_codes
+                          ADD CONSTRAINT fk_imm_immeuble_codes_logement
+                          FOREIGN KEY (logement_id)
+                          REFERENCES imm_logements(id) ON DELETE CASCADE;
+                      END IF;
+                      CREATE INDEX IF NOT EXISTS
+                        ix_imm_immeuble_codes_logement_id
+                        ON imm_immeuble_codes (logement_id);
+                    END $$;
+                    """
+                )
+            )
     except Exception as exc:  # noqa: BLE001
         log.warning("ensure_immobilier_aux_tables failed: %s", exc)
 

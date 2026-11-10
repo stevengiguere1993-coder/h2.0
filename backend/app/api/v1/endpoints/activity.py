@@ -1653,7 +1653,8 @@ _DETAIL_ENTITIES: dict[str, tuple] = {
         TalTransmission, "immobilier", "tal_transmission",
         "immobilier:tal_dossiers:read",
     ),
-    # Codes d'accès d'un immeuble (porte, lock box, garage…, 2026-10-18).
+    # Codes d'accès d'un immeuble (porte, lock box, garage…, 2026-10-18)
+    # et codes de porte des logements (logement_id renseigné, 2026-11-10).
     "immeuble_code": (
         ImmeubleCode, "immobilier", "imm_immeuble_code",
         "immobilier:immeubles:read",
