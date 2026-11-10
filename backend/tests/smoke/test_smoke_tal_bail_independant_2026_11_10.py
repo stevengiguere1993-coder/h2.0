@@ -366,3 +366,41 @@ def test_formats_reels_des_reponses_du_tal(run, monkeypatch):
     with pytest.raises(tal_client.TalApiError) as ei:
         run(c.creer_formulaire({"coutLoyer": "1"}))
     assert "noPublicForm" in ei.value.message
+
+
+def test_adresse_de_l_api_en_https_seulement(client, auth_headers, run, monkeypatch):
+    """La clé ne voyage jamais en clair : une adresse d'API en http est refusée à
+    l'enregistrement, et le client refuse d'appeler une adresse non chiffrée."""
+    avant = client.get(f"{BASE}/etat", headers=auth_headers).json()["connexion"]["api_url"]
+    r = client.put(f"{BASE}/parametres", headers=auth_headers, json={"api_url": "http://api.tal.exemple.ca/frw"})
+    assert r.status_code == 422 and "https" in r.json()["detail"]
+    assert client.get(f"{BASE}/etat", headers=auth_headers).json()["connexion"]["api_url"] == avant
+    # Une adresse en https passe, une adresse vide aussi (on peut poser la clé avant l'adresse).
+    assert client.put(f"{BASE}/parametres", headers=auth_headers, json={"api_url": "HTTPS://api.tal.exemple.ca/frw/"}).status_code == 200
+    assert client.put(f"{BASE}/parametres", headers=auth_headers, json={"api_url": ""}).status_code == 200
+    assert client.get(f"{BASE}/etat", headers=auth_headers).json()["connexion"]["api_url"] is None
+
+    appels: list = []
+
+    class _Http:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            appels.append(url)
+            raise AssertionError("aucun appel ne doit partir vers une adresse non chiffrée")
+
+    monkeypatch.setattr(tal_client.httpx, "AsyncClient", _Http)
+    c = tal_client.ClientTal(tal_client.ConnexionTal(mode="reel", url="http://tal.exemple.test/api", cle="cle-factice-123456"))
+    for appel in (c.creer_formulaire({"coutLoyer": "1450"}), c.declencher_transmission("Xs0S6bsB8UCSbK1F-HvUOw")):
+        with pytest.raises(tal_client.TalApiError) as exc:
+            run(appel)
+        assert "https" in (str(exc.value) + str(getattr(exc.value, "message", "")))
+    assert appels == []
+
