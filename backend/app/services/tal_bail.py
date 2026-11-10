@@ -69,6 +69,9 @@ CONFIG_KEY = "tal_bail"
 COUT_TAL = 2.99
 #: Formulaires gratuits au total (contrat), puis 2,99 $ chacun.
 GRATUITS_TOTAL = 10
+#: Montant forfaitaire de la licence T-API-2026-013 (avant taxes, palier de 10 à 100
+#: formulaires par an) : facturé à part des redevances par bail, jamais réparti par mois.
+FORFAIT_LICENCE = 300.0
 #: Type du document archivé (imm_documents). Distinct de « bail » : le
 #: PDF du TAL n'est PAS signé — « bail » reste le bail signé au dossier.
 DOC_TYPE = "bail_tal"
@@ -1511,6 +1514,115 @@ async def compteur(db: AsyncSession, mois: Optional[str] = None, *, config: Opti
     }
 
 
+# ─── Registre des baux générés et coût du TAL ─────────────────────────
+
+#: Taxes sur les redevances (contrat : « 2,99 $ plus taxes »).
+TPS_PCT = 5.0
+TVQ_PCT = 9.975
+
+
+def _mois_local(dt: Optional[datetime]) -> Optional[str]:
+    """AAAA-MM à Montréal (un bail généré le 30 à 21 h compte dans le mois du 30)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    try:
+        from zoneinfo import ZoneInfo
+
+        loc = dt.astimezone(ZoneInfo("America/Toronto"))
+    except Exception:  # noqa: BLE001 — pas de base de fuseaux : heure normale de l'Est
+        loc = dt - timedelta(hours=5)
+    return f"{loc.year:04d}-{loc.month:02d}"
+
+
+async def registre(db: AsyncSession, annee: Optional[int] = None) -> dict[str, Any]:
+    """Phil 2026-11-10 : « la liste des baux utilisés, par qui, pour quel immeuble,
+    quand… un résumé par mois de combien ça devrait me coûter au TAL ».
+
+    Tous les baux officiels GÉNÉRÉS (transmis), baux Kratos et baux indépendants.
+    Coût attendu : 2,99 $ + taxes par bail en mode réel, les ``GRATUITS_TOTAL``
+    premiers (dans l'ordre de génération) à 0 $ ; la simulation ne coûte rien."""
+    rows = list((
+        await db.execute(
+            select(TalTransmission).where(TalTransmission.statut == "transmise")
+            .order_by(TalTransmission.genere_le.asc(), TalTransmission.id.asc())
+        )
+    ).scalars().all())
+    reels = [t for t in rows if t.mode == MODE_REEL]
+    rang = {t.id: i for i, t in enumerate(reels, 1)}
+    annee_courante = int((_mois_local(datetime.now(timezone.utc)) or "0000")[:4])
+    annee_ref = int(annee or annee_courante)
+    annees = sorted({annee_courante, annee_ref, *(int(m[:4]) for m in (_mois_local(t.genere_le) for t in rows) if m)}, reverse=True)
+
+    imm_ids = {t.immeuble_id for t in rows if t.immeuble_id}
+    loc_ids = {t.locataire_id for t in rows if t.locataire_id}
+    immeubles: dict[int, str] = {}
+    locataires: dict[int, str] = {}
+    if imm_ids:
+        for im in (await db.execute(select(Immeuble).where(Immeuble.id.in_(imm_ids)))).scalars().all():
+            immeubles[im.id] = im.name
+    if loc_ids:
+        for lo in (await db.execute(select(Locataire).where(Locataire.id.in_(loc_ids)))).scalars().all():
+            locataires[lo.id] = lo.full_name
+
+    def _vide(mois: str) -> dict[str, Any]:
+        return {"mois": mois, "nb_reel": 0, "nb_simulation": 0, "nb_gratuits": 0, "nb_factures": 0,
+                "redevances": 0.0, "frais_refactures": 0.0}
+
+    par_mois: dict[str, dict[str, Any]] = {f"{annee_ref:04d}-{m:02d}": _vide(f"{annee_ref:04d}-{m:02d}") for m in range(1, 13)}
+    items: list[dict[str, Any]] = []
+    for t in rows:
+        mois = _mois_local(t.genere_le)
+        if not mois or not mois.startswith(f"{annee_ref:04d}-"):
+            continue
+        reel = t.mode == MODE_REEL
+        gratuit = bool(reel and rang[t.id] <= GRATUITS_TOTAL)
+        cout = COUT_TAL if (reel and not gratuit) else 0.0
+        parties = parties_du_formulaire(_charger_json(t.payload_json, {}))
+        items.append({
+            "id": t.id, "genere_le": t.genere_le.isoformat() if t.genere_le else None, "mois": mois,
+            "mode": t.mode, "independant": bool(getattr(t, "independant", False)), "libelle": getattr(t, "libelle", None),
+            "adresse": t.adresse, "immeuble_id": t.immeuble_id, "immeuble_nom": immeubles.get(t.immeuble_id) if t.immeuble_id else None,
+            "bail_id": t.bail_id, "locataire_id": t.locataire_id,
+            "locataire_nom": (locataires.get(t.locataire_id) if t.locataire_id else None) or ", ".join(parties["locataires"]) or None,
+            "locateur_nom": ", ".join(parties["locateurs"]) or None,
+            "par": t.created_by_email, "short_guid": t.short_guid,
+            "rang_reel": rang.get(t.id), "gratuit": gratuit, "cout_tal": cout,
+            "frais_montant": float(t.frais_montant) if t.frais_montant is not None else None,
+            "document_id": t.document_id, "esign_document_id": t.esign_document_id,
+            "signe_le": t.signe_le.isoformat() if t.signe_le else None, "document_signe_id": t.document_signe_id,
+        })
+        m = par_mois[mois]
+        if reel:
+            m["nb_reel"] += 1
+            m["nb_gratuits"] += 1 if gratuit else 0
+            m["nb_factures"] += 0 if gratuit else 1
+            m["redevances"] += cout
+            m["frais_refactures"] += float(t.frais_montant or 0)
+        else:
+            m["nb_simulation"] += 1
+    mois_liste = []
+    for cle in sorted(par_mois):
+        m = par_mois[cle]
+        m["redevances"] = round(m["redevances"], 2)
+        m["tps"] = round(m["redevances"] * TPS_PCT / 100.0, 2)
+        m["tvq"] = round(m["redevances"] * TVQ_PCT / 100.0, 2)
+        m["total"] = round(m["redevances"] + m["tps"] + m["tvq"], 2)
+        m["frais_refactures"] = round(m["frais_refactures"], 2)
+        mois_liste.append(m)
+    totaux = {k: round(sum(m[k] for m in mois_liste), 2) for k in
+              ("nb_reel", "nb_simulation", "nb_gratuits", "nb_factures", "redevances", "tps", "tvq", "total", "frais_refactures")}
+    items.sort(key=lambda x: (x["genere_le"] or "", x["id"]), reverse=True)
+    return {
+        "annee": annee_ref, "annees": annees, "mois": mois_liste, "totaux": totaux, "items": items,
+        "cout_unitaire": COUT_TAL, "tps_pct": TPS_PCT, "tvq_pct": TVQ_PCT,
+        "forfait_licence": FORFAIT_LICENCE,
+        "gratuits_total": GRATUITS_TOTAL, "gratuits_utilises": min(len(reels), GRATUITS_TOTAL),
+        "gratuits_restants": max(0, GRATUITS_TOTAL - len(reels)), "total_reel_depuis_le_debut": len(reels),
+    }
+
+
 # ─── Signature interne (eSign Kratos) ─────────────────────────────────
 
 
@@ -1828,4 +1940,5 @@ __all__ = [
     "generer", "annuler", "compteur",
     "DOC_TYPE_SIGNE", "contexte_independant", "creer_independant", "preparation_independante",
     "parties_du_formulaire", "adresse_depuis_formulaire",
+    "registre", "TPS_PCT", "TVQ_PCT", "FORFAIT_LICENCE",
 ]

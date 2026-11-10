@@ -550,6 +550,22 @@ async def creer_independant(payload: IndependantIn, db: DBSession, user: Require
         t, rapport = await svc.creer_independant(db, user=user, essentiel=essentiel, libelle=payload.libelle, source=source)
     except svc.TalBailError as exc:
         raise _erreur(exc) from exc
+    if source is None:
+        # « Une fois une personne créée, je peux venir la sélectionner la fois d'après » :
+        # locateur, locataires et cautions entrent au carnet d'Admin locative. Dans un point
+        # de reprise — le carnet ne fait jamais échouer la création du bail.
+        from app.services import admin_locatif as adm
+
+        personnes: List[Dict[str, Any]] = []
+        if payload.locateur is not None:
+            personnes.append({**payload.locateur.model_dump(), "role": "locateur"})
+        personnes += [{**p.model_dump(), "role": "locataire"} for p in payload.locataires]
+        personnes += [{**p.model_dump(), "role": "caution"} for p in payload.cautions]
+        try:
+            async with db.begin_nested():
+                await adm.memoriser_personnes(db, personnes, user=user)
+        except Exception:  # noqa: BLE001
+            log.exception("Carnet d'Admin locative : mémorisation échouée (bail indépendant %s)", t.id)
     await log_action(db, user=user, action="tal_bail.brouillon", entity_type="tal_transmission", entity_id=t.id,
                      details={"independant": True, "libelle": t.libelle, "source_id": payload.source_id,
                               "valide": rapport.valide, "erreurs": len(rapport.erreurs)})

@@ -67,6 +67,7 @@ from app.api.v1.endpoints import (
     immobilier_exports,
     immobilier_tal_garants,
     immobilier_tal_bail,
+    immobilier_admin_locatif,
     immobilier_codes,
     entreprises_revenus_depenses,
     immobilier_fusion,
@@ -586,6 +587,10 @@ api_router.include_router(
 # Bail de logement OFFICIEL généré par l'API du TAL (2026-10-15).
 api_router.include_router(
     immobilier_tal_bail.router, dependencies=DEP_IMMOBILIER
+)
+# Admin locative : contacts, avis de renouvellement et registre des baux hors système (2026-11-10).
+api_router.include_router(
+    immobilier_admin_locatif.router, dependencies=DEP_IMMOBILIER
 )
 # Codes d'accès d'un immeuble : porte, lock box, garage… (2026-10-18).
 api_router.include_router(immobilier_codes.router, dependencies=DEP_IMMOBILIER)

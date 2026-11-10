@@ -31,6 +31,7 @@ from app.models.tal_bail import (  # noqa: F401
     TalSchema,
     TalTransmission,
 )
+from app.models.admin_locatif import AdmLocAvis, AdmLocContact  # noqa: F401
 from app.models.client import Client
 from app.models.client_document import ClientDocument  # noqa: F401
 from app.models.contact import Contact  # noqa: F401

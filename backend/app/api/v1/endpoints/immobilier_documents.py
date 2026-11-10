@@ -433,8 +433,12 @@ async def _resolve_destinataire(
         bail = await db.get(Bail, d.bail_id)
         if bail:
             locataire = await db.get(Locataire, bail.locataire_id)
-    dest = (email or "").strip() or (
-        (locataire.email or "").strip() if locataire else ""
+    # Dernier repli : l'adresse où le document a déjà été envoyé (avis d'un bail hors
+    # système — Admin locative : il n'y a pas de fiche locataire à qui la demander).
+    dest = (
+        (email or "").strip()
+        or ((locataire.email or "").strip() if locataire else "")
+        or (d.envoye_a or "").strip()
     )
     if not dest:
         raise HTTPException(
@@ -458,12 +462,44 @@ class EnvoyerSignatureResult(BaseModel):
     url: str
 
 
-def _mail_html(titre: str, locataire_name: str, url: str) -> str:
-    first = (locataire_name or "").strip().split(" ")[0] or "Bonjour"
+def _nom_destinataire(d: ImmDocument, locataire: Optional[Locataire]) -> str:
+    """Nom à qui l'on s'adresse : la fiche locataire, sinon le nom gardé avec le
+    document (avis d'un bail hors système — Admin locative)."""
+    if locataire is not None:
+        return locataire.full_name or ""
+    try:
+        return str((json.loads(d.params_json or "{}") or {}).get("locataire_nom") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _de_la_part_de(d: ImmDocument) -> str:
+    """Document d'un bail hors système (Admin locative) : le locateur nommé au document,
+    au nom de qui il part. Vide pour tous les documents des immeubles de Kratos."""
+    try:
+        params = json.loads(d.params_json or "{}") or {}
+    except Exception:  # noqa: BLE001
+        return ""
+    if not isinstance(params, dict) or not params.get("independant"):
+        return ""
+    return str(params.get("locateur_nom") or "").strip()
+
+
+def _mail_html(titre: str, locataire_name: str, url: str, de_la_part_de: str = "") -> str:
+    import html as _html
+
+    first = (locataire_name or "").strip().split(" ")[0]
+    salut = f"Bonjour {first}," if first else "Bonjour,"
+    transmis = (
+        f"Un document vous est transmis de la part de <strong>{_html.escape(de_la_part_de)}</strong> "
+        "pour consultation et signature :"
+        if de_la_part_de
+        else "Un document vous est transmis pour consultation et signature :"
+    )
     return f"""\
 <div style="font-family:Helvetica,Arial,sans-serif;color:#111;line-height:1.5;max-width:640px">
-  <p>Bonjour {first},</p>
-  <p>Un document vous est transmis pour consultation et signature :
+  <p>{salut}</p>
+  <p>{transmis}
      <strong>{titre}</strong>.</p>
   <p style="margin:20px 0 6px 0">
     <a href="{url}" style="display:inline-block;background:#d89b3c;color:#111;
@@ -536,12 +572,13 @@ async def envoyer_signature(
             sujet=f"{d.titre} — Horizon Services Immobiliers",
             corps_html=_mail_html(
                 d.titre,
-                locataire.full_name if locataire else "",
+                _nom_destinataire(d, locataire),
                 url,
+                _de_la_part_de(d),
             ),
             type_envoi="document_signature",
             locataire_id=d.locataire_id,
-            locataire_nom=(locataire.full_name if locataire else None),
+            locataire_nom=(_nom_destinataire(d, locataire) or None),
             bail_id=d.bail_id,
             immeuble_id=d.immeuble_id,
             document_id=d.id,

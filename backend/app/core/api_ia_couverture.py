@@ -91,6 +91,11 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "tal_schemas",
     "tal_connexion",
     "tal_transmissions",
+    #: Admin locative (2026-11-10) : carnet de contacts et avis de renouvellement
+    #: hors système. Lecture IA : kratos_lire sur /immobilier/admin-locative/contacts,
+    #: /avis et /registre. L'envoi d'un avis reste un geste humain.
+    "adm_loc_contacts",
+    "adm_loc_avis",
     "client_documents",
     "clients",
     "contact_hides",
