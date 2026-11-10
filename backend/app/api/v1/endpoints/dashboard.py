@@ -48,7 +48,7 @@ class KpiResponse(BaseModel):
     overdue_total: float
     overdue_count: int
     revenue_this_month: float
-    revenue_this_month_mode: str  # "paid" | "issued"
+    revenue_this_month_mode: str  # toujours "paid" (paiements reçus)
 
     # New KPIs (PlanOps parity)
     prospects_count: int
@@ -82,9 +82,24 @@ def _parse_date(value: Optional[str], default: date) -> date:
         return default
 
 
-def _month_start_utc() -> datetime:
-    now = datetime.now(timezone.utc)
-    return datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+async def paiements_recus_du_mois(db, jour: date) -> float:
+    """Somme des paiements clients (``facture_payments``, TTC) dont la date
+    de paiement tombe dans le mois civil de ``jour`` (jour de Montréal).
+
+    Steven, 2026-11-10 : une facture de 24 365,50 $ réglée par versements
+    en octobre comptait en entier dans le mois où elle passait à « payée »,
+    et ses versements partiels ne comptaient nulle part avant.
+    """
+    debut = date(jour.year, jour.month, 1)
+    suivant = date(jour.year + jour.month // 12, jour.month % 12 + 1, 1)
+    total = (
+        await db.execute(
+            select(func.coalesce(func.sum(Payment.amount), 0)).where(
+                Payment.paid_at >= debut, Payment.paid_at < suivant
+            )
+        )
+    ).scalar_one()
+    return float(total or 0)
 
 
 def _week_start_utc() -> datetime:
@@ -123,7 +138,6 @@ async def get_kpis(
     ).astimezone(timezone.utc)
 
     now = datetime.now(timezone.utc)
-    month_start_dt = _month_start_utc()
     week_start = _week_start_utc()
     seven_days_ago = now - timedelta(days=7)
 
@@ -179,32 +193,11 @@ async def get_kpis(
         await db.execute(overdue_sum_stmt)
     ).one()
 
-    # Revenue this month: paid factures with paid_at >= start of month.
-    # If nothing's been marked paid yet (common in dev/test), fall back
-    # to "issued this month" so the tile isn't stuck at $0.
-    revenue_stmt = select(func.coalesce(func.sum(Facture.total), 0)).where(
-        Facture.status == FactureStatus.PAID.value,
-        Facture.paid_at.is_not(None),
-        Facture.paid_at >= month_start_dt,
-    )
-    revenue = (await db.execute(revenue_stmt)).scalar_one()
+    # Revenu du mois = paiements REÇUS dans le mois (date du paiement),
+    # pas les factures marquées payées : une facture réglée en plusieurs
+    # versements compte chaque versement dans son propre mois.
+    revenue = await paiements_recus_du_mois(db, today)
     revenue_mode = "paid"
-    if float(revenue or 0) == 0:
-        issued_stmt = select(func.coalesce(func.sum(Facture.total), 0)).where(
-            Facture.status.in_(
-                [
-                    FactureStatus.SENT.value,
-                    FactureStatus.PAID.value,
-                    FactureStatus.OVERDUE.value,
-                ]
-            ),
-            Facture.issued_at.is_not(None),
-            Facture.issued_at >= month_start_dt,
-        )
-        issued_sum = (await db.execute(issued_stmt)).scalar_one()
-        if float(issued_sum or 0) > 0:
-            revenue = issued_sum
-            revenue_mode = "issued"
 
     # --- Period-scoped KPIs ---
     prospects_count = (
