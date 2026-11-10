@@ -41,6 +41,7 @@ Règles de projection :
 """
 from __future__ import annotations
 
+import json
 import math
 from datetime import date
 from typing import Any, Callable, Dict, List, Optional
@@ -474,6 +475,8 @@ def _calculer(d: Dict[str, Any], prets: Dict[int, List[Dict[str, Any]]], bareme:
     cash = float(d["fonds"]["cash"] or 0.0)
     van0 = sum(p["depart"]["equite"] for p in fonds_projets if not p["acquise_cette_annee"]) + cash
     valeur_prec = sum(p["depart"]["valeur"] for p in fonds_projets if not p["acquise_cette_annee"])
+    valeur_depart = valeur_prec
+    dettes_depart = sum(p["depart"]["dette"] for p in fonds_projets if not p["acquise_cette_annee"])
     prix_part0 = float(hyp["prix_part_depart"] or 0.0)
     parts_total = (van0 / prix_part0) if prix_part0 > 0 and van0 > 0 else 0.0
     parts_nous = parts_total * float(hyp["part_nos_holdings_depart_pct"] or 0.0) / 100.0
@@ -568,6 +571,8 @@ def _calculer(d: Dict[str, Any], prets: Dict[int, List[Dict[str, Any]]], bareme:
         "pct_nous_horizon": _r(100.0 * parts_nous / parts_total if parts_total > 0 else 0.0),
         "nb_immeubles": len(fonds_projets), "nb_hors_fonds": len(projets) - len(fonds_projets),
         "nb_acquisitions_an1": len([p for p in fonds_projets if p["acquise_cette_annee"]]),
+        "valeur_depart": _r(valeur_depart), "dettes_depart": _r(dettes_depart),
+        "dettes_horizon": _r(annees[-1]["dettes"] if annees else dettes_depart), "valeur_horizon": _r(annees[-1]["valeur"] if annees else valeur_depart),
     }
     return {"projets": projets, "annees": annees, "sommaire": sommaire}
 
@@ -585,6 +590,16 @@ def calculer_performance(data: Dict[str, Any], prets: Optional[Dict[int, List[Di
     reference = conditions_moyennes(prets)
     central = _calculer(d, prets, bareme, reference, 0.0)
     pts = float(hyp.get("incertitude_points") or 0.0)
+    cles_comp = ("van_horizon", "dettes_horizon", "valeur_horizon", "tri_pct", "rendement_moyen_pct", "prix_part_horizon",
+                 "rendement_part_annualise_pct", "pct_nous_horizon", "distributions_total", "cash_horizon", "gain_total", "nb_refinancements")
+    # Phil 2026-11-10 : « quand je coche ou décoche les refinancements, la VAN ne change pas » → le même
+    # scénario SANS refinancement, côte à côte, pour voir ce que les refis changent.
+    sans_refi = None
+    if (hyp.get("refinancement") or {}).get("actif"):
+        d_sans = json.loads(json.dumps(d))
+        d_sans["projection"]["refinancement"]["actif"] = False
+        s_sans = _calculer(d_sans, prets, bareme, reference, 0.0)["sommaire"]
+        sans_refi = {k: s_sans[k] for k in cles_comp}
     fourchette = None
     if pts > 0:
         cles = ("van_horizon", "tri_pct", "rendement_moyen_pct", "prix_part_horizon", "rendement_part_annualise_pct",
@@ -629,7 +644,7 @@ def calculer_performance(data: Dict[str, Any], prets: Optional[Dict[int, List[Di
         "annee_depart": int(d["annee"]), "horizon": int(hyp["horizon_annees"]), "hypotheses": hyp, "regles": d["part_des_gains"],
         "aujourd_hui": auj.isoformat(), "reference_prets": reference,
         "fonds": {"annees": central["annees"], "sommaire": central["sommaire"], "cash_depart": _r(float(d["fonds"]["cash"] or 0.0)),
-                  "taux_frais_pct": float(d["fonds"]["taux_pct"] or 0.0), "fourchette": fourchette},
+                  "taux_frais_pct": float(d["fonds"]["taux_pct"] or 0.0), "fourchette": fourchette, "sans_refi": sans_refi},
         "projets": central["projets"], "historique": historique,
     }
 

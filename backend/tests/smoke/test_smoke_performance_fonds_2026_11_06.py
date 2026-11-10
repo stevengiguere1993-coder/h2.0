@@ -121,7 +121,7 @@ def test_projection_du_fonds_detention_simple():
     d["projection"]["incertitude_points"] = 0
     out = pf.calculer_performance(d)
     assert out["annee_depart"] == 2027 and out["horizon"] == 5 and [a["annee"] for a in out["fonds"]["annees"]] == [2027, 2028, 2029, 2030, 2031]
-    assert out["fonds"]["fourchette"] is None and "hypothèse" in out["reference_prets"]["source"]   # aucun prêt Kratos → repli dit
+    assert out["fonds"]["fourchette"] is None and out["fonds"]["sans_refi"] is None and "hypothèse" in out["reference_prets"]["source"]   # aucun prêt Kratos → repli dit
     stab, reno, hors = out["projets"]
     a1 = stab["annees"][0]
     assert stab["depart"]["equite"] == round(stab["depart"]["valeur"] - 500_000, 2) and a1["revenus_bruts"] == 72_000
@@ -138,6 +138,7 @@ def test_projection_du_fonds_detention_simple():
     s = f["sommaire"]
     assert s["nb_immeubles"] == 2 and s["nb_hors_fonds"] == 1 and s["nb_acquisitions_an1"] == 1 and s["nb_refinancements"] == 0
     assert s["van_depart"] == round(stab["depart"]["equite"] + 50_000, 2) and s["capital_entre"] == 700_000 and s["distributions_total"] == 0
+    assert s["valeur_depart"] == stab["depart"]["valeur"] and s["dettes_depart"] == 500_000 and s["dettes_horizon"] == f["annees"][-1]["dettes"]
     y1 = f["annees"][0]
     assert y1["capital_entre"] == 700_000 and y1["van_debut"] == s["van_depart"] and y1["distributions"] == 0
     assert abs(y1["van"] - (y1["valeur"] + y1["cash"] - y1["dettes"])) < 0.02
@@ -183,6 +184,10 @@ def test_projection_avec_refinancements_cash_remis_et_fourchette():
     flux_part = [-10.0] + [a["distribution_par_part"] for a in f["annees"]]
     flux_part[-1] += s["prix_part_horizon"]
     assert s["rendement_part_annualise_pct"] == pf._irr(flux_part) and s["rendement_part_annualise_pct"] > 0
+    # Comparaison sans refinancement : moins de dette à l'horizon, VAN plus haute, rien de sorti aux refis.
+    sr = f["sans_refi"]
+    assert sr["nb_refinancements"] == 0 and sr["dettes_horizon"] < s["dettes_horizon"] and sr["van_horizon"] > s["van_horizon"]
+    assert sr["distributions_total"] < s["distributions_total"]
     # Fourchette : prudent (cap et taux + 0,5 pt) < central < favorable.
     fo = f["fourchette"]
     assert fo["points"] == 0.5 and fo["prudent"]["van_horizon"] < s["van_horizon"] < fo["favorable"]["van_horizon"]
