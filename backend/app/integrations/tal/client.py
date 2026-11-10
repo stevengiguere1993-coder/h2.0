@@ -10,8 +10,20 @@ transmission personnalisée ») :
    FACTURABLE (2,99 $) ; réponse : ``documents[]`` (nom, flux base64,
    type source ex. genererPdf) + ``messages[]`` (mnémonique, texte).
 
-URL de base, chemins, nom de l'en-tête de la clé et format exact ne sont
-PAS encore connus (ils arrivent avec la clé) : tout vient d'une
+Formats RÉELS des réponses (exemples fournis par le TAL avec la clé,
+2026-11-10) :
+- FRW111 → ``{"noPublicSession": "…", "noPublicForm": "…",
+  "noTransactionChiffre": null}`` : le numéro public du formulaire (le
+  « ShortGuid » de la fiche) est ``noPublicForm`` ;
+- FRW122 → ``{"documents": [{"nom": "Bail de logement.pdf", "fichier":
+  "<base64>", "_type": "genererPDF"}], "messages": [{"mnemonique":
+  "TypeFormulaire", "message": "53000BAIL"}]}`` — aucun numéro de
+  confirmation dans la réponse.
+Le corps du FRW111 est EXACTEMENT l'objet de pré-remplissage de la fiche
+(``{"form": {...}}``), rien d'autre.
+
+URL de base, chemins et nom de l'en-tête de la clé ne sont
+PAS encore confirmés (ils arrivent avec la clé) : tout vient d'une
 ``ConnexionTal`` résolue par le service (table ``tal_connexion`` →
 variables d'environnement ``TAL_*`` en repli) et s'ajuste sans toucher
 au reste.
@@ -119,6 +131,8 @@ class ReponseCreation:
     short_guid: str
     brut: Any = None
     duree_ms: int = 0
+    #: ``noPublicSession`` du FRW111 (gardé au journal ; pas utilisé par le FRW122 documenté).
+    no_public_session: Optional[str] = None
 
 
 @dataclass
@@ -169,14 +183,20 @@ class ClientTal:
         if self.simulation:
             return ReponseCreation(short_guid="SIM-" + secrets.token_urlsafe(8), brut={"simulation": True}, duree_ms=1)
         self._exiger_config("FRW111")
-        payload: dict[str, Any] = {"typeFormulaire": TYPE_FORMULAIRE, "form": form}
-        if identifiant_utilisateur:
-            payload["identifiantUtilisateur"] = identifiant_utilisateur
+        # Corps = l'objet de pré-remplissage de la fiche du TAL, tel quel : {"form": {...}}.
+        # Le type de formulaire et l'identifiant de suivi n'en font pas partie (le suivi
+        # n'est documenté que pour le FRW122) ; si le TAL attend le type dans l'adresse,
+        # il se met dans « Chemin FRW111 » (Paramètres).
+        payload: dict[str, Any] = {"form": form}
         corps = await self._post("FRW111", self.cx.chemin_frw111, payload)
-        short_guid = _extraire(corps, "shortGuid", "noPublicFormulaire", "NoPublicFormulaire", "numeroPublic", "id")
+        short_guid = _extraire(corps, "noPublicForm", "noPublicFormulaire", "shortGuid", "numeroPublic", "id")
         if not short_guid:
-            raise TalApiError("FRW111", "réponse sans ShortGuid", corps=corps)
-        return ReponseCreation(short_guid=str(short_guid), brut=corps, duree_ms=int((time.monotonic() - t0) * 1000))
+            raise TalApiError("FRW111", "réponse sans numéro public de formulaire (noPublicForm)", corps=corps)
+        session = _extraire(corps, "noPublicSession")
+        return ReponseCreation(
+            short_guid=str(short_guid), brut=corps, duree_ms=int((time.monotonic() - t0) * 1000),
+            no_public_session=(str(session) if session else None),
+        )
 
     # ── FRW122 ──────────────────────────────────────────────────────
     async def declencher_transmission(
@@ -205,7 +225,7 @@ class ClientTal:
             b64 = _extraire(d, "fluxFichier", "flux", "contenu", "fichier", "base64", "contenuBase64", "data")
             if not b64:
                 continue
-            type_source = _extraire(d, "typeSource", "type", "source")
+            type_source = _extraire(d, "_type", "typeSource", "type", "source")
             documents.append(DocumentTal(
                 nom=str(_extraire(d, "nom", "nomFichier", "name") or "document.pdf"),
                 contenu_base64=str(b64),

@@ -302,3 +302,67 @@ def test_la_cle_ne_sort_jamais(client, auth_headers, run, monkeypatch):
             return len((await s.execute(select(FraisManuelGestion))).scalars().all())
 
     assert run(_frais()) == IDS["nb_frais"]
+
+
+def test_formats_reels_des_reponses_du_tal(run, monkeypatch):
+    """Exemples fournis par le TAL avec la clé (2026-11-10) : le numéro public du
+    formulaire s'appelle ``noPublicForm`` ; le document porte ``fichier`` (base64) et
+    ``_type`` ; pas de numéro de confirmation. Le corps du FRW111 est exactement
+    l'objet de pré-remplissage ``{"form": {...}}``."""
+    import base64
+
+    pdf = b"%PDF-1.5 bail officiel de test"
+    reponses = {
+        "FRW111": {"noPublicSession": "07rUQYLu10OFHFglEOghJg", "noPublicForm": "Xs0S6bsB8UCSbK1F-HvUOw", "noTransactionChiffre": None},
+        "FRW122": {
+            "documents": [{"nom": "Bail de logement.pdf", "fichier": base64.b64encode(pdf).decode("ascii"), "_type": "genererPDF"}],
+            "messages": [{"mnemonique": "TypeFormulaire", "message": "53000BAIL"}],
+        },
+    }
+    appels: list = []
+
+    class _Rep:
+        status_code = 200
+        text = ""
+
+        def __init__(self, corps):
+            self._corps = corps
+
+        def json(self):
+            return self._corps
+
+    class _Http:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            appels.append((url, json))
+            return _Rep(reponses["FRW111" if "FRW111" in url else "FRW122"])
+
+    monkeypatch.setattr(tal_client.httpx, "AsyncClient", _Http)
+    c = tal_client.ClientTal(tal_client.ConnexionTal(mode="reel", url="https://tal.exemple.test/api", cle="cle-factice-123456"))
+
+    async def _go():
+        rc = await c.creer_formulaire({"coutLoyer": "1450"}, identifiant_utilisateur="kratos-ind-t7")
+        rt = await c.declencher_transmission(rc.short_guid, identifiant_utilisateur="kratos-ind-t7")
+        return rc, rt
+
+    rc, rt = run(_go())
+    assert rc.short_guid == "Xs0S6bsB8UCSbK1F-HvUOw" and rc.no_public_session == "07rUQYLu10OFHFglEOghJg"
+    assert appels[0][1] == {"form": {"coutLoyer": "1450"}}                       # rien d'autre que le pré-remplissage
+    assert appels[1][1] == {"NoPublicFormulaire": "Xs0S6bsB8UCSbK1F-HvUOw", "IdTransmissionPerso": "envoi-partenaire", "IdentifiantUtilisateur": "kratos-ind-t7"}
+    d = rt.documents[0]
+    assert d.nom == "Bail de logement.pdf" and d.type_source == "genererPDF" and d.octets() == pdf
+    assert rt.messages == [{"mnemonique": "TypeFormulaire", "texte": "53000BAIL"}] and rt.no_confirmation is None
+
+    # Une réponse sans numéro public est une erreur claire, jamais un faux succès.
+    reponses["FRW111"] = {"noPublicSession": "x"}
+    with pytest.raises(tal_client.TalApiError) as ei:
+        run(c.creer_formulaire({"coutLoyer": "1"}))
+    assert "noPublicForm" in ei.value.message
