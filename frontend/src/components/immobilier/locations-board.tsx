@@ -14,7 +14,6 @@
  * bientôt notre système interne) fait passer la carte à « Reloué ».
  */
 
-import { fichierEnMemoire } from "@/lib/fichier-mobile";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Check,
@@ -2235,15 +2234,7 @@ function ImportBailSigneModal({
             <input
               type="file"
               accept="application/pdf"
-              onChange={(e) => {
-                const f = e.target.files?.[0] ?? null;
-                setFile(null);
-                if (!f) return;
-                // Copie en mémoire dès le choix (Android, Kyle 2026-11-11).
-                fichierEnMemoire(f)
-                  .then(setFile)
-                  .catch((x) => setErr((x as Error).message));
-              }}
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               className="mt-0.5 block w-full text-xs text-white/70 file:mr-2 file:rounded-md file:border-0 file:bg-brand-800 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-white"
             />
           </label>

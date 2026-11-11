@@ -341,21 +341,7 @@ export async function authedFetch(
   try {
     res = await doFetch();
   } catch (err) {
-    if (!retryable) {
-      // Erreur RÉSEAU sur une écriture : le navigateur ne dit que
-      // « Failed to fetch » / « Load failed » (Kyle 2026-11-11, bail
-      // signé depuis un téléphone). On dit quoi faire, en français.
-      if (err instanceof TypeError) {
-        const envoi =
-          typeof FormData !== "undefined" && init.body instanceof FormData;
-        throw new Error(
-          envoi
-            ? "Envoi du fichier interrompu (connexion perdue ou fichier devenu illisible sur le téléphone). Vérifie le réseau et choisis le fichier de nouveau."
-            : "Connexion au serveur perdue pendant l'enregistrement. Vérifie le réseau puis réessaie (recharge la page pour voir si c'est passé)."
-        );
-      }
-      throw err;
-    }
+    if (!retryable) throw err;
     await new Promise((r) => setTimeout(r, 1500));
     res = await doFetch();
   }

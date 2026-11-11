@@ -29,7 +29,6 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
-import { fichiersEnMemoire } from "@/lib/fichier-mobile";
 import { authedFetch } from "@/lib/auth";
 import { PdfApercuModal } from "@/components/pdf-apercu-modal";
 import { BoutonExportZip } from "@/components/immobilier/bouton-export";
@@ -161,25 +160,9 @@ export function ImportDocButton({
     }
   }
 
-  const [lecture, setLecture] = useState(false);
-  const [erreurLecture, setErreurLecture] = useState<string | null>(null);
-
-  async function choisir(list: FileList | null) {
-    const choisis = list ? Array.from(list) : [];
-    if (choisis.length === 0) return;
-    // Copie en mémoire TOUT DE SUITE (Android : « Failed to fetch » quand
-    // le fichier est lu plus tard, Kyle 2026-11-11) — voir fichier-mobile.
-    setErreurLecture(null);
-    setLecture(true);
-    let files: File[];
-    try {
-      files = await fichiersEnMemoire(choisis);
-    } catch (e) {
-      setErreurLecture((e as Error).message);
-      return;
-    } finally {
-      setLecture(false);
-    }
+  function choisir(list: FileList | null) {
+    const files = list ? Array.from(list) : [];
+    if (files.length === 0) return;
     // Dans les sections Documents on ne présume pas « bail » : c'est
     // une pièce au dossier, le gestionnaire choisit le type.
     const entrees = versFichiersAImporter(files).map((f) => ({
@@ -213,7 +196,7 @@ export function ImportDocButton({
     setPanneau(true);
   }
 
-  const occupe = Boolean(busy) || enCours || lecture;
+  const occupe = Boolean(busy) || enCours;
   return (
     <>
       <input
@@ -223,12 +206,8 @@ export function ImportDocButton({
         accept="application/pdf,image/jpeg,image/png"
         className="hidden"
         onChange={(e) => {
-          // On ne vide le champ qu'APRÈS la copie en mémoire : sur
-          // Android, le vider peut rendre le fichier illisible.
-          const input = e.target;
-          void choisir(input.files).finally(() => {
-            input.value = "";
-          });
+          choisir(e.target.files);
+          e.target.value = "";
         }}
       />
       <button
@@ -250,9 +229,6 @@ export function ImportDocButton({
           </span>
         ) : null}
       </button>
-      {erreurLecture ? (
-        <span className="text-[11px] text-rose-300">{erreurLecture}</span>
-      ) : null}
       {panneau ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
