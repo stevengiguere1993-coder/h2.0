@@ -94,6 +94,8 @@ export type TalTransmission = {
   adresse?: string | null;
   independant?: boolean;
   libelle?: string | null;
+  /** Langue du bail produit par le TAL : « fr » (défaut) ou « en ». */
+  langue?: string;
   signe_le?: string | null;
   document_signe_id?: number | null;
   parties?: { locateurs: string[]; locataires: string[]; cautions: string[]; loyer: string; type_bail: string; date_debut: string; date_fin: string };
@@ -421,6 +423,13 @@ export function TalBailModal({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [confirme, setConfirme] = useState(false);
+  // Langue du bail officiel (Accept-Language du TAL) : français par défaut.
+  const [langue, setLangue] = useState<"fr" | "en">("fr");
+  // Un bail rouvert (relance après une panne) garde la langue déjà demandée.
+  const langueEnregistree = transmission?.langue;
+  useEffect(() => {
+    if (langueEnregistree === "en" || langueEnregistree === "fr") setLangue(langueEnregistree);
+  }, [langueEnregistree]);
   const [remplacer, setRemplacer] = useState(false);
   const [ouverts, setOuverts] = useState<Record<string, boolean>>({
     parties: true,
@@ -578,7 +587,7 @@ export function TalBailModal({
     try {
       const r = await authedFetch(
         `${BASE}/transmissions/${transmission.id}/${relance ? "relancer" : "generer"}`,
-        { method: "POST", body: JSON.stringify({ confirme: true }) }
+        { method: "POST", body: JSON.stringify({ confirme: true, langue }) }
       );
       if (!r.ok) {
         const msg = await lireErreur(r);
@@ -1014,7 +1023,20 @@ export function TalBailModal({
               </p>
             ) : null}
 
-            <label className="mt-4 flex items-start gap-2 rounded-lg border border-brand-800 bg-brand-900/60 px-3 py-2.5 text-xs text-white/80">
+            <label className="mt-4 flex flex-wrap items-center gap-2 text-xs text-white/70">
+              Langue du bail
+              <select
+                value={langue}
+                onChange={(e) => setLangue(e.target.value === "en" ? "en" : "fr")}
+                className="rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
+              >
+                <option value="fr">Français</option>
+                <option value="en">Anglais</option>
+              </select>
+              <span className="text-white/45">Le TAL produit le formulaire officiel dans cette langue. Ce que tu as saisi reste tel quel.</span>
+            </label>
+
+            <label className="mt-3 flex items-start gap-2 rounded-lg border border-brand-800 bg-brand-900/60 px-3 py-2.5 text-xs text-white/80">
               <input
                 type="checkbox"
                 checked={confirme}

@@ -128,6 +128,9 @@ class TalTransmission(Base, TimestampUpdateMixin):
     )
     #: Nom interne d'un bail indépendant (« Essai 1 », « Bail de Marc »).
     libelle: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    #: Langue du bail produit par le TAL : « fr » (défaut, colonne vide) ou « en ».
+    #: Part dans l'en-tête Accept-Language du FRW122. Colonne additive → ensure_critical_columns.
+    langue: Mapped[Optional[str]] = mapped_column(String(2), nullable=True)
 
     statut: Mapped[str] = mapped_column(
         String(16), nullable=False, default="brouillon", server_default="brouillon", index=True

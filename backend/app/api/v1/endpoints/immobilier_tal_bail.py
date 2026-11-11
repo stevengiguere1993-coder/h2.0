@@ -113,6 +113,8 @@ class FormIn(BaseModel):
 class GenererIn(BaseModel):
     #: L'utilisateur a vu « 2,99 $, besoin réel de signature » et confirme.
     confirme: bool = False
+    #: Langue du bail produit : « fr » (défaut) ou « en ». Absent = ne change rien.
+    langue: Optional[str] = Field(default=None, pattern=r"^(fr|en)$")
 
 
 class PersonneIn(BaseModel):
@@ -444,7 +446,9 @@ async def valider_transmission(transmission_id: int, db: DBSession, user: Requir
     return rapport.as_dict()
 
 
-async def _generer(transmission_id: int, db, user, *, confirme: bool, relance: bool) -> Dict[str, Any]:
+async def _generer(
+    transmission_id: int, db, user, *, confirme: bool, relance: bool, langue: Optional[str] = None
+) -> Dict[str, Any]:
     if not confirme:
         raise HTTPException(
             status_code=422,
@@ -460,6 +464,8 @@ async def _generer(transmission_id: int, db, user, *, confirme: bool, relance: b
         raise HTTPException(status_code=404, detail="Transmission introuvable.")
     if relance and not t.short_guid and t.statut != "echec":
         raise HTTPException(status_code=409, detail="Rien à relancer : cette transmission n'a pas encore été envoyée.")
+    if langue and t.statut != "transmise":
+        t.langue = langue          # langue du PDF demandé au TAL (français par défaut)
     try:
         t = await svc.generer(db, t, user=user)
     except svc.TalBailError as exc:
@@ -472,12 +478,12 @@ async def _generer(transmission_id: int, db, user, *, confirme: bool, relance: b
 
 @router.post("/transmissions/{transmission_id}/generer", summary="Générer le bail officiel (FRW111 + FRW122)")
 async def generer_transmission(transmission_id: int, payload: GenererIn, db: DBSession, user: RequireManager) -> Dict[str, Any]:
-    return await _generer(transmission_id, db, user, confirme=payload.confirme, relance=False)
+    return await _generer(transmission_id, db, user, confirme=payload.confirme, relance=False, langue=payload.langue)
 
 
 @router.post("/transmissions/{transmission_id}/relancer", summary="Relancer FRW122 avec le même ShortGuid")
 async def relancer_transmission(transmission_id: int, payload: GenererIn, db: DBSession, user: RequireManager) -> Dict[str, Any]:
-    return await _generer(transmission_id, db, user, confirme=payload.confirme, relance=True)
+    return await _generer(transmission_id, db, user, confirme=payload.confirme, relance=True, langue=payload.langue)
 
 
 @router.post("/transmissions/{transmission_id}/annuler", summary="Annuler un brouillon / un échec")
