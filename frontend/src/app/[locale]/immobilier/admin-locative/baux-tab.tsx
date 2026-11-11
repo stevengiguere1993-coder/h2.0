@@ -58,6 +58,11 @@ type Essentiel = {
   internet_inclus: boolean;
   /** Type de chauffage du logement : aucun défaut, il se choisit à chaque bail. */
   chauffage_type: string;
+  /** Avis au nouveau locataire (section G du bail) : aucun défaut non plus. */
+  avis_situation: string;
+  avis_montant: string;
+  avis_frequence: string;
+  avis_date_dernier_paiement: string;
 };
 
 const PERSONNE_VIDE: Personne = { nom: "", telephone: "", courriel: "", adresse: "" };
@@ -80,7 +85,11 @@ const ESSENTIEL_VIDE: Essentiel = {
   electricite_inclus: false,
   eau_chaude_inclus: false,
   internet_inclus: false,
-  chauffage_type: ""
+  chauffage_type: "",
+  avis_situation: "",
+  avis_montant: "",
+  avis_frequence: "mois",
+  avis_date_dernier_paiement: ""
 };
 // Clés du formulaire du TAL pour le type de chauffage.
 const CHAUFFAGES: [string, string][] = [
@@ -443,7 +452,11 @@ function NouveauBail({
           electricite_inclus: e.electricite_inclus,
           eau_chaude_inclus: e.eau_chaude_inclus,
           internet_inclus: e.internet_inclus,
-          chauffage_type: e.chauffage_type || null
+          chauffage_type: e.chauffage_type || null,
+          avis_situation: e.avis_situation || null,
+          avis_montant: e.avis_situation ? nombre(e.avis_montant) : null,
+          avis_frequence: e.avis_situation ? e.avis_frequence : null,
+          avis_date_dernier_paiement: e.avis_situation === "aucunLoyer" ? e.avis_date_dernier_paiement || null : null
         })
       });
       if (!r.ok) throw new Error(await lireErreur(r));
@@ -647,6 +660,57 @@ function NouveauBail({
                 </label>
               ))}
             </div>
+          </Bloc>
+
+          <Bloc
+            titre="Avis au nouveau locataire (section G)"
+            note="Avis obligatoire : le locateur dit au nouveau locataire le loyer le plus bas payé pour ce logement dans les 12 derniers mois."
+          >
+            <div className="grid gap-2 sm:grid-cols-4">
+              <Champ label="Situation" className="sm:col-span-4" requis={R("situationApplicableAvisNouveauLocataire")}>
+                <select className="input" value={e.avis_situation} onChange={(ev) => poser("avis_situation", ev.target.value)}>
+                  <option value="">À choisir</option>
+                  <option value="loyer">Un loyer a été payé dans les 12 derniers mois</option>
+                  <option value="aucunLoyer">Aucun loyer n&apos;a été payé dans les 12 derniers mois</option>
+                  <option value="residencePriveeAines">Le logement était dans une résidence privée pour aînés</option>
+                </select>
+              </Champ>
+              {e.avis_situation ? (
+                <>
+                  <Champ
+                    label={
+                      e.avis_situation === "loyer"
+                        ? "Loyer le plus bas payé ($)"
+                        : e.avis_situation === "aucunLoyer"
+                          ? "Dernier loyer payé ($)"
+                          : "Loyer du bail précédent ($)"
+                    }
+                    requis={e.avis_situation !== "aucunLoyer"}
+                  >
+                    <input className="input" inputMode="decimal" value={e.avis_montant} onChange={(ev) => poser("avis_montant", ev.target.value)} />
+                  </Champ>
+                  <Champ label="Fréquence">
+                    <select className="input" value={e.avis_frequence} onChange={(ev) => poser("avis_frequence", ev.target.value)}>
+                      <option value="mois">Par mois</option>
+                      <option value="semaine">Par semaine</option>
+                    </select>
+                  </Champ>
+                  {e.avis_situation === "aucunLoyer" ? (
+                    <Champ label="Dernier loyer payé le" className="sm:col-span-2">
+                      <input
+                        className="input"
+                        type="date"
+                        value={e.avis_date_dernier_paiement}
+                        onChange={(ev) => poser("avis_date_dernier_paiement", ev.target.value)}
+                      />
+                    </Champ>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+            {e.avis_situation === "aucunLoyer" ? (
+              <p className="mt-2 text-[11px] text-white/45">Laisse le dernier loyer vide seulement si le logement n&apos;a jamais été loué.</p>
+            ) : null}
           </Bloc>
 
           {err ? <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{err}</p> : null}

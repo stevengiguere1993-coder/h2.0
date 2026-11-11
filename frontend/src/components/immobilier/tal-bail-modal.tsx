@@ -96,6 +96,10 @@ export type TalTransmission = {
   libelle?: string | null;
   /** Langue du bail produit par le TAL : « fr » (défaut) ou « en ». */
   langue?: string;
+  /** Bail réel compté parmi les essais gratuits (rang_reel sur gratuits_total). */
+  gratuit?: boolean;
+  rang_reel?: number | null;
+  gratuits_total?: number;
   signe_le?: string | null;
   document_signe_id?: number | null;
   parties?: { locateurs: string[]; locataires: string[]; cautions: string[]; loyer: string; type_bail: string; date_debut: string; date_fin: string };
@@ -116,7 +120,19 @@ type Preparation = {
   transmissions: TalTransmission[];
   /** Chemins des champs exigés avant l'envoi (Paramètres) : marqués d'une étoile rouge. */
   requis?: string[];
+  /** Règles d'affichage : les champs qui ne s'appliquent pas aux réponses sont masqués (et vidés par le serveur). */
+  regles?: Regle[];
 };
+type Condition = {
+  champ?: string;
+  vaut?: string[];
+  pas?: string[];
+  contient?: string;
+  rempli?: boolean;
+  groupe?: string;
+  nommes_min?: number;
+};
+type Regle = { cible: string; groupe?: string; si: Condition[] };
 export type SignatureEtat = {
   esign_document_id: number;
   statut: string;
@@ -142,7 +158,7 @@ type Etape = "chargement" | "formulaire" | "confirmation" | "resultat";
 
 // ─── Sections du formulaire (clés racine ; le reste tombe dans « Autres ») ──
 
-const SECTIONS: { id: string; titre: string; cles: string[] }[] = [
+const SECTIONS: { id: string; titre: string; cles: string[]; note?: string }[] = [
   {
     id: "parties",
     titre: "A · Locateur et locataires",
@@ -261,6 +277,9 @@ const SECTIONS: { id: string; titre: string; cles: string[] }[] = [
   {
     id: "avis",
     titre: "G · Avis au nouveau locataire (loyer précédent)",
+    note:
+      "Avis obligatoire (art. 1896 du Code civil) : le locateur dit au nouveau locataire le loyer le plus bas payé pour ce logement dans les 12 derniers mois. " +
+      "À remplir à chaque bail : choisis la situation, puis indique le montant.",
     cles: [
       "situationApplicableAvisNouveauLocataire",
       "montantLoyerPlusBasPaye12Mois",
@@ -353,6 +372,57 @@ function fmtDateTime(iso: string | null | undefined): string {
   });
 }
 
+// ─── Règles d'affichage (mêmes règles que le serveur, qui vide ces champs avant l'envoi) ───
+
+function texteDe(v: unknown): string {
+  if (typeof v === "boolean") return v ? "true" : "false";
+  return v == null ? "" : String(v);
+}
+
+function estSansReponse(v: unknown): boolean {
+  return v == null || v === "" || v === false || (Array.isArray(v) && v.length === 0);
+}
+
+function conditionTient(c: Condition, form: Form, occ?: Occurrence): boolean {
+  if (c.groupe && c.nommes_min != null) {
+    const occs = form[c.groupe];
+    const nommes = Array.isArray(occs)
+      ? occs.filter((o) => o && typeof o === "object" && String((o as Occurrence).nom ?? "").trim()).length
+      : 0;
+    return nommes >= c.nommes_min;
+  }
+  const v = (occ ?? form)[c.champ || ""];
+  if (c.vaut) return c.vaut.includes(texteDe(v));
+  if (c.pas) return !c.pas.includes(texteDe(v));
+  if (c.contient != null) return Array.isArray(v) && v.map(String).includes(c.contient);
+  if (c.rempli) return !estSansReponse(v);
+  return true;
+}
+
+function sApplique(r: Regle, form: Form, occ?: Occurrence): boolean {
+  return r.si.every((c) => conditionTient(c, form, occ));
+}
+
+/** Déclarations d'un signataire (« locataire2… ») : montrées seulement si cette personne est au bail. */
+function declarationVisible(k: string, form: Form): boolean {
+  const m = /^(locataire|autreSignataire|locateur)(\d)(.*)$/.exec(k);
+  if (!m) return true;
+  const groupe = m[1] === "locataire" ? "locataires" : m[1] === "locateur" ? "locateurs" : "autresSignataires";
+  if (m[1] === "autreSignataire" && texteDe(form.possedeAutresSignataires) !== "true") return false;
+  const occs = form[groupe];
+  const occ = Array.isArray(occs) ? (occs[Number(m[2]) - 1] as Occurrence | undefined) : undefined;
+  if (!occ || !String(occ.nom ?? "").trim()) return false;
+  if (/nomConjoint$|confirmationAvisResidenceFamiliale$/.test(m[3])) {
+    return texteDe(form[`${m[1]}${m[2]}logementResidenceFamiliale`]) === "true";
+  }
+  if (/AccepteRemiseChequePostdates$/.test(m[3])) return ["cheque", "chequePostDate"].includes(texteDe(form.modePaiement));
+  return true;
+}
+
+// Le formulaire du TAL n'a pas de case « débit préautorisé » : ce choix écrit « Autre » + la précision.
+const CLE_DPA = "__dpa";
+const LIBELLE_DPA = "Débit préautorisé (DPA)";
+
 function racineDe(chemin: string): string {
   return chemin.split(/[[.]/)[0];
 }
@@ -434,13 +504,14 @@ export function TalBailModal({
   }, [langueEnregistree]);
   const [remplacer, setRemplacer] = useState(false);
   const [ouverts, setOuverts] = useState<Record<string, boolean>>({
-    parties: true,
-    logement: true,
-    duree: true,
-    loyer: true,
+    // Tout replié au départ (Phil 2026-11-11) : on déplie ce qu'on veut revoir.
+    parties: false,
+    logement: false,
+    duree: false,
+    loyer: false,
     services: false,
     fixation: false,
-    avis: true,
+    avis: false,
     autres: false,
     annexe6: false,
     signatures: false
@@ -655,7 +726,9 @@ export function TalBailModal({
         (k) => !couvertes.has(k) && !estAnnexe6(k) && !estSignature(k)
       ),
       annexe6: toutes.filter(estAnnexe6),
-      signatures: toutes.filter(estSignature)
+      // Déclarations de chaque signataire ; les blocs « signature… » et le mot de passe du
+      // formulaire ne se remplissent pas à la main : ils ne sont pas montrés.
+      declarations: toutes.filter((k) => /^(locataire|autreSignataire|locateur)\d/.test(k))
     };
   }, [schema]);
 
@@ -668,6 +741,8 @@ export function TalBailModal({
   // Champs exigés avant l'envoi (réglage « Champs exigés ») : une étoile rouge à côté du libellé.
   const requisListe = prep?.requis;
   const requis = useMemo(() => new Set(requisListe || []), [requisListe]);
+  const reglesListe = prep?.regles;
+  const regles = useMemo(() => reglesListe || [], [reglesListe]);
   const racinesAVerifier = useMemo(
     () => new Set(aVerifier.map((x) => racineDe(x.chemin))),
     [aVerifier]
@@ -868,6 +943,7 @@ export function TalBailModal({
                     s.cles.reduce((n, k) => n + (erreursParRacine.get(k)?.length || 0), 0)
                   }
                 >
+                  {s.note ? <p className="mb-2 text-[11px] text-white/55">{s.note}</p> : null}
                   <ChampsListe
                     cles={s.cles.filter((k) => k in schema.gabarit)}
                     form={form}
@@ -876,6 +952,7 @@ export function TalBailModal({
                     origine={prep.origine}
                     aVerifier={racinesAVerifier}
                     requis={requis}
+                    regles={regles}
                     erreurs={erreursParRacine}
                     poserRacine={poserRacine}
                     poserOccurrence={poserOccurrence}
@@ -900,6 +977,7 @@ export function TalBailModal({
                     origine={prep.origine}
                     aVerifier={racinesAVerifier}
                     requis={requis}
+                    regles={regles}
                     erreurs={erreursParRacine}
                     poserRacine={poserRacine}
                     poserOccurrence={poserOccurrence}
@@ -923,6 +1001,7 @@ export function TalBailModal({
                   origine={prep.origine}
                   aVerifier={racinesAVerifier}
                   requis={requis}
+                  regles={regles}
                   erreurs={erreursParRacine}
                   poserRacine={poserRacine}
                   poserOccurrence={poserOccurrence}
@@ -932,19 +1011,25 @@ export function TalBailModal({
               </Section>
               <Section
                 id="signatures"
-                titre="Engagements et blocs de signature (laissés vides — recueillis à la signature eSign)"
+                titre="Déclarations de chaque signataire (à cocher à la signature)"
                 ouvert={!!ouverts.signatures}
                 onToggle={() => setOuverts((o) => ({ ...o, signatures: !o.signatures }))}
-                nbAlertes={racines.signatures.filter((k) => racinesAVerifier.has(k)).length}
+                nbAlertes={racines.declarations.filter((k) => racinesAVerifier.has(k)).length}
               >
+                <p className="mb-2 text-[11px] text-white/55">
+                  Ce sont les déclarations que chaque personne fait en signant le bail : avertisseurs de fumée, règlement de
+                  l&apos;immeuble, avis au nouveau locataire, résidence familiale. Laisse-les décochées : chacun les coche et les
+                  paraphe à la signature. Coche une case ici seulement si la personne te l&apos;a déjà confirmé.
+                </p>
                 <ChampsListe
-                  cles={racines.signatures}
+                  cles={racines.declarations}
                   form={form}
                   schema={schema}
                   champIndex={champIndex}
                   origine={prep.origine}
                   aVerifier={racinesAVerifier}
                   requis={requis}
+                  regles={regles}
                   erreurs={erreursParRacine}
                   poserRacine={poserRacine}
                   poserOccurrence={poserOccurrence}
@@ -1117,7 +1202,16 @@ export function TalBailModal({
             <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-white/60 sm:grid-cols-4">
               <Ligne l="Référence TAL" v={transmission.short_guid || "—"} />
               <Ligne l="Confirmation" v={transmission.no_confirmation || "—"} />
-              <Ligne l="Coût TAL" v={transmission.cout != null ? `${transmission.cout.toFixed(2).replace(".", ",")} $` : "—"} />
+              <Ligne
+                l="Coût TAL"
+                v={
+                  transmission.gratuit
+                    ? `Gratuit (essai ${transmission.rang_reel ?? ""} sur ${transmission.gratuits_total ?? ""})`
+                    : transmission.cout != null
+                      ? `${transmission.cout.toFixed(2).replace(".", ",")} $`
+                      : "—"
+                }
+              />
               <Ligne l="Frais au propriétaire" v={independant ? "aucun (bail indépendant)" : transmission.frais_montant != null ? `${transmission.frais_montant.toFixed(2).replace(".", ",")} $ (Facturation)` : "aucun"} />
             </dl>
             {transmission.messages?.length ? (
@@ -1414,6 +1508,8 @@ type ListeProps = {
   aVerifier: Set<string>;
   /** Chemins exigés avant l'envoi (« coutLoyer », « locataires[0].nom »…). */
   requis: Set<string>;
+  /** Règles d'affichage : un champ sans objet pour ces réponses n'est pas montré. */
+  regles: Regle[];
   erreurs: Map<string, string[]>;
   poserRacine: (k: string, v: unknown) => void;
   poserOccurrence: (k: string, i: number, occ: Occurrence) => void;
@@ -1422,9 +1518,11 @@ type ListeProps = {
 };
 
 function ChampsListe(p: ListeProps) {
+  const masques = new Set(p.regles.filter((r) => !r.groupe && !sApplique(r, p.form)).map((r) => r.cible));
+  const cles = p.cles.filter((k) => !masques.has(k) && declarationVisible(k, p.form));
   return (
     <div className="grid gap-2 sm:grid-cols-2">
-      {p.cles.map((k) => {
+      {cles.map((k) => {
         const gab = p.schema.gabarit[k];
         if (estGroupe(gab)) {
           return (
@@ -1435,14 +1533,25 @@ function ChampsListe(p: ListeProps) {
         }
         const champ = p.champIndex.get(`|${k}`);
         const large = champ?.type === "textarea" || (champ?.type === "checkbox" && !!champ.valeurs_possibles);
+        const estModePaiement = k === "modePaiement";
+        const dpaChoisi = estModePaiement && p.form.modePaiement === "autre" && p.form.precisionAutresModePaiement === LIBELLE_DPA;
         return (
           <div key={k} id={`tal-f-${k}`} className={large ? "sm:col-span-2" : ""}>
             <ChampInput
               nom={k}
               champ={champ}
-              valeur={p.form[k]}
+              valeur={dpaChoisi ? CLE_DPA : p.form[k]}
               gabarit={gab}
-              onChange={(v) => p.poserRacine(k, v)}
+              optionsEnPlus={estModePaiement ? [{ cle: CLE_DPA, fr: LIBELLE_DPA }] : undefined}
+              onChange={(v) => {
+                if (estModePaiement && v === CLE_DPA) {
+                  p.poserRacine("modePaiement", "autre");
+                  p.poserRacine("precisionAutresModePaiement", LIBELLE_DPA);
+                  return;
+                }
+                if (dpaChoisi) p.poserRacine("precisionAutresModePaiement", "");
+                p.poserRacine(k, v);
+              }}
               origine={p.origine[k]}
               aVerifier={p.aVerifier.has(k)}
               requis={p.requis.has(k)}
@@ -1518,7 +1627,9 @@ function GroupeEditeur({ k, ...p }: ListeProps & { k: string }) {
               </div>
             ) : null}
             <div className="grid gap-2 sm:grid-cols-2">
-              {sousCles.map((s) => {
+              {sousCles
+                .filter((s) => !p.regles.some((r) => r.groupe === k && r.cible === s && !sApplique(r, p.form, occ)))
+                .map((s) => {
                 const sgab = gab[0][s];
                 if (estGroupe(sgab)) {
                   const sousOcc = ((occ[s] as Occurrence[]) || [squeletteVide(sgab[0]) as Occurrence])[0] || {};
@@ -1601,6 +1712,7 @@ function ChampInput({
   origine,
   aVerifier,
   requis = false,
+  optionsEnPlus,
   erreurs
 }: {
   nom: string;
@@ -1612,6 +1724,8 @@ function ChampInput({
   aVerifier: boolean;
   /** Champ exigé avant l'envoi : étoile rouge à côté du libellé. */
   requis?: boolean;
+  /** Choix ajoutés à une liste du TAL (ex. débit préautorisé), placés avant « Autre ». */
+  optionsEnPlus?: { cle: string; fr: string }[];
   erreurs?: string[];
 }) {
   const label = champ?.label_fr || humaniser(nom);
@@ -1723,11 +1837,27 @@ function ChampInput({
           className={`${INPUT_CLS} mt-0.5 block w-full ${bordure}`}
         >
           <option value="">—</option>
-          {vp.map((o) => (
+          {vp
+            .filter((o) => !(optionsEnPlus?.length && o.cle === "autre"))
+            .map((o) => (
+              <option key={o.cle} value={o.cle}>
+                {o.fr || o.cle}
+              </option>
+            ))}
+          {(optionsEnPlus || []).map((o) => (
             <option key={o.cle} value={o.cle}>
-              {o.fr || o.cle}
+              {o.fr}
             </option>
           ))}
+          {optionsEnPlus?.length
+            ? vp
+                .filter((o) => o.cle === "autre")
+                .map((o) => (
+                  <option key={o.cle} value={o.cle}>
+                    {o.fr || o.cle}
+                  </option>
+                ))
+            : null}
         </select>
         {erreurs?.length ? <p className="mt-1 font-normal text-rose-200">{erreurs[0]}</p> : null}
       </label>

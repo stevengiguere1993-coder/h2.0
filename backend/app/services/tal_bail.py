@@ -48,6 +48,7 @@ from app.integrations.tal.client import (
     connexion_depuis_env,
     valeur_officielle,
 )
+from app.integrations.tal.regles import REGLES, s_applique, vider_inapplicables
 from app.integrations.tal.schema import SchemaTal, charger_schema, squelette
 from app.integrations.tal.validateur import Rapport, nombre_canonique, valider
 from app.models.entreprise import Entreprise
@@ -104,15 +105,17 @@ DEFAUTS: dict[str, Any] = {
     #: Champs que Kratos exige remplis avant tout appel (chemins).
     "requis": (
         "locateurs[0].nom,locataires[0].nom,adresseLogement[0].Rue,"
-        "adresseLogement[0].Municipalite,coutLoyer,typeBail,typeChauffageLogement"
+        "adresseLogement[0].Municipalite,coutLoyer,typeBail,typeChauffageLogement,"
+        "situationApplicableAvisNouveauLocataire"
     ),
 }
-#: Liste « requis » d'avant le 2026-11-11 (sans le type de chauffage). Si c'est encore
-#: elle qui est enregistrée, la liste par défaut du jour s'applique.
+#: Anciennes listes « requis » par défaut. Si c'est encore l'une d'elles qui est
+#: enregistrée (jamais retouchée à la main), la liste par défaut du jour s'applique.
 _REQUIS_AVANT_CHAUFFAGE = (
     "locateurs[0].nom,locataires[0].nom,adresseLogement[0].Rue,"
     "adresseLogement[0].Municipalite,coutLoyer,typeBail"
 )
+_ANCIENS_REQUIS = (_REQUIS_AVANT_CHAUFFAGE, _REQUIS_AVANT_CHAUFFAGE + ",typeChauffageLogement")
 #: Mode de paiement « débit préautorisé » (réglage Kratos, pas une clé du TAL).
 MODE_PAIEMENT_DPA = "dpa"
 LIBELLE_DPA = "Débit préautorisé (DPA)"
@@ -162,7 +165,7 @@ def fusionner_config(cfg: Optional[dict[str, Any]]) -> dict[str, Any]:
         out["tarif_recharge"] = max(0.0, round(float(out["tarif_recharge"]), 2))
     except (TypeError, ValueError):
         out["tarif_recharge"] = DEFAUTS["tarif_recharge"]
-    if "".join(str(out.get("requis") or "").split()) == _REQUIS_AVANT_CHAUFFAGE:
+    if "".join(str(out.get("requis") or "").split()) in _ANCIENS_REQUIS:
         out["requis"] = DEFAUTS["requis"]
     out["frais_auto"] = bool(out.get("frais_auto", True))
     out["logement_sans_fumee"] = bool(out.get("logement_sans_fumee", True))
@@ -930,7 +933,34 @@ def construire_formulaire(schema: SchemaTal, ctx: ContexteBail, config: dict[str
         poser("confirmationTransmissionAvisNouveauLocataire", True)
         poser("locateur1confirmationLocateurAvisNouveauLocataire", True)
     else:
-        defaut("situationApplicableAvisNouveauLocataire", "aucunLoyer", "aucun loyer payé dans les 12 derniers mois (pas de bail précédent connu)")
+        # Pas de bail précédent connu de Kratos : AUCUN défaut. L'avis au nouveau locataire
+        # (art. 1896 C.c.Q.) affirme un fait ; la situation se choisit (petit formulaire d'un
+        # bail indépendant, ou section G de l'écran) et le bail ne part pas sans elle.
+        avis = getattr(bail, "avis_nouveau_locataire", None) or {}
+        champ_g = schema.champ("situationApplicableAvisNouveauLocataire")
+        situations = champ_g.cles_valeurs if champ_g is not None else []
+        situation = str(avis.get("situation") or "").strip()
+        if situation and (not situations or situation in situations):
+            poser("situationApplicableAvisNouveauLocataire", situation)
+            frequence = str(avis.get("frequence") or "mois")
+            montant = _montant(avis.get("montant"))
+            if situation == "loyer":
+                poser("montantLoyerPlusBasPaye12Mois", montant)
+                poser("frequenceLoyerPlusBasPaye12Mois", frequence)
+            elif situation == "aucunLoyer":
+                poser("dateDernierPaiementLoyer", _iso(avis.get("date_dernier_paiement")))
+                poser("montantDernierLoyerPaye", montant)
+                if montant:
+                    poser("frequenceDernierLoyer", frequence)
+            else:
+                poser("montantLoyerBailPrecedent", montant)
+                if montant:
+                    poser("frequenceLoyerBailPrecedent", frequence)
+            poser("confirmationTransmissionAvisNouveauLocataire", True)
+            poser("locateur1confirmationLocateurAvisNouveauLocataire", True)
+        else:
+            poser("situationApplicableAvisNouveauLocataire", "", kind="inconnu",
+                  note="avis au nouveau locataire (section G) : situation à choisir — obligatoire")
 
     # ── Engagements du locateur (cases) ───────────────────────────
     poser("engagementAvertisseursFumeeLocateur", True)
@@ -943,7 +973,9 @@ def construire_formulaire(schema: SchemaTal, ctx: ContexteBail, config: dict[str
         if k.startswith("signature") and isinstance(form.get(k), list):
             origine[k] = "signature"
     inconnu("locataire1logementResidenceFamiliale", "résidence familiale (conjoint) : question au locataire")
-    inconnu("motPasseWF", "mot de passe WF : rôle à confirmer avec le TAL")
+    vider_inapplicables(form, schema.gabarit)
+    sans_objet = {r["cible"] for r in REGLES if not r.get("groupe") and not s_applique(r, form)}
+    a_verifier = [x for x in a_verifier if re.split(r"[\[.]", str(x.get("chemin") or ""))[0] not in sans_objet]
     return Prepare(form=form, origine=origine, a_verifier=a_verifier)
 
 
@@ -992,6 +1024,7 @@ async def preparer(
         appliquer_surcharges(prep.form, surcharges)
         for k in surcharges:
             prep.origine[str(k)] = "utilisateur"
+        vider_inapplicables(prep.form, schema.gabarit)
     rapport = valider(prep.form, schema, requis=chemins_requis(config))
     if ctx.bail.document_id is not None:
         rapport.avertissements.append("Ce bail a déjà un document au dossier (bail signé ?) — un nouveau formulaire coûte 2,99 $.")
@@ -1077,6 +1110,7 @@ async def creer_transmission(
     ouvert plutôt que d'en empiler."""
     prep, rapport, ctx, schema, config = await preparer(db, bail_id, user=user, surcharges=surcharges)
     if form is not None:
+        vider_inapplicables(form, schema.gabarit)
         prep.form = form
         rapport = valider(form, schema, requis=chemins_requis(config))
     existantes = (
@@ -1122,6 +1156,9 @@ async def remplacer_formulaire(db: AsyncSession, t: TalTransmission, form: dict[
         raise TransmissionFermee("Le formulaire ne se modifie plus une fois créé au TAL (ShortGuid attribué) ou transmis — crée une nouvelle transmission.")
     schema = await charger_schema(db)
     config = await charger_config()
+    # Un champ que les réponses rendent sans objet ne reste pas rempli « au cas où » :
+    # le TAL l'imprimerait.
+    vider_inapplicables(form, schema.gabarit)
     rapport = valider(form, schema, requis=chemins_requis(config))
     t.payload_json = _json(form)
     t.rapport_json = _json(rapport.as_dict())
@@ -1181,7 +1218,8 @@ async def generer(
         raise FormulaireInvalide("Le formulaire ne passe pas la validation locale — rien n'a été envoyé au TAL.", details=rapport.as_dict())
     # Montants au format de l'exemple du TAL (point décimal, deux décimales) : ce qui
     # est gardé est exactement ce qui est envoyé.
-    if normaliser_montants(form, schema):
+    sans_objet = vider_inapplicables(form, schema.gabarit)
+    if normaliser_montants(form, schema) or sans_objet:
         t.payload_json = _json(form)
     if connexion is None:
         connexion, _infos = await charger_connexion(db)
@@ -1284,7 +1322,9 @@ async def generer(
     t.genere_le = datetime.now(timezone.utc)
     t.updated_at = t.genere_le
     t.erreur = None
-    t.cout = 0.0 if client.simulation else COUT_TAL
+    # Les GRATUITS_TOTAL premiers baux réels sont des essais gratuits.
+    rang = len(await rangs_reels(db)) + 1
+    t.cout = 0.0 if (client.simulation or rang <= GRATUITS_TOTAL) else COUT_TAL
 
     # Frais refacturé au propriétaire (mode réel seulement).
     t.frais_manuel_id = None
@@ -1438,6 +1478,11 @@ def contexte_independant(essentiel: Optional[dict[str, Any]]) -> ContexteBail:
         chauffage_inclus=bool(e.get("chauffage_inclus")), electricite_inclus=bool(e.get("electricite_inclus")),
         eau_chaude_inclus=bool(e.get("eau_chaude_inclus")), internet_inclus=bool(e.get("internet_inclus")),
         chauffage_type=_texte(e.get("chauffage_type"), 40) or None,
+        # Avis au nouveau locataire (section G), choisi dans le petit formulaire.
+        avis_nouveau_locataire={
+            "situation": _texte(e.get("avis_situation"), 40), "montant": _nombre_ou_none(e.get("avis_montant")),
+            "frequence": _texte(e.get("avis_frequence"), 16), "date_dernier_paiement": _date_ou_none(e.get("avis_date_dernier_paiement")),
+        },
         categorie="standard", parallele_type=None,
     )
     logement = NS(id=None, numero=_texte(e.get("appartement"), 32), nb_pieces_decimal=_nombre_ou_none(e.get("nb_pieces")))
@@ -1521,6 +1566,7 @@ async def creer_independant(
         form = prep.form
         a_verifier = [{**x, "note": _NOTES_INDEPENDANT.get(x.get("note", ""), x.get("note", ""))} for x in prep.a_verifier]
         adresse = adresse_logement_texte(ctx)
+    vider_inapplicables(form, schema.gabarit)
     rapport = valider(form, schema, requis=chemins_requis(config))
     now = datetime.now(timezone.utc)
     t = TalTransmission(
@@ -1555,6 +1601,7 @@ async def preparation_independante(db: AsyncSession, t: TalTransmission) -> dict
         "contexte": {"independant": True, "adresse": t.adresse, "libelle": getattr(t, "libelle", None), "parties": parties_du_formulaire(form)},
         "schema_version": schema.version,
         "requis": chemins_requis(config),      # champs exigés avant l'envoi : marqués d'une étoile à l'écran
+        "regles": REGLES,                      # champs qui ne s'appliquent pas : masqués à l'écran
     }
 
 
@@ -1577,6 +1624,31 @@ def _bornes_mois(mois: Optional[str]) -> tuple[datetime, datetime, str]:
     return debut, fin, f"{y:04d}-{mo:02d}"
 
 
+async def rangs_reels(db: AsyncSession) -> dict[int, int]:
+    """Rang de chaque bail officiel généré en mode réel, dans l'ordre de génération
+    (1 = le premier). Les GRATUITS_TOTAL premiers sont des essais gratuits."""
+    ids = (
+        await db.execute(
+            select(TalTransmission.id)
+            .where(TalTransmission.statut == "transmise", TalTransmission.mode == MODE_REEL)
+            .order_by(TalTransmission.genere_le.asc(), TalTransmission.id.asc())
+        )
+    ).scalars().all()
+    return {tid: i for i, tid in enumerate(ids, 1)}
+
+
+async def resume_avec_cout(db: AsyncSession, t: TalTransmission, *, avec_form: bool = False) -> dict[str, Any]:
+    """Résumé d'une transmission avec son coût réel : un essai gratuit est dit gratuit."""
+    out = resume_transmission(t, avec_form=avec_form)
+    if t.statut == "transmise" and t.mode == MODE_REEL:
+        rang = (await rangs_reels(db)).get(t.id)
+        out["rang_reel"] = rang
+        out["gratuit"] = bool(rang and rang <= GRATUITS_TOTAL)
+        out["gratuits_total"] = GRATUITS_TOTAL
+        out["cout"] = 0.0 if out["gratuit"] else COUT_TAL
+    return out
+
+
 async def compteur(db: AsyncSession, mois: Optional[str] = None, *, config: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     debut, fin, libelle = _bornes_mois(mois)
     cfg = config or await charger_config()
@@ -1591,6 +1663,7 @@ async def compteur(db: AsyncSession, mois: Optional[str] = None, *, config: Opti
     ).scalars().all()
     reel = [t for t in rows if t.mode == MODE_REEL]
     simul = [t for t in rows if t.mode != MODE_REEL]
+    rangs = await rangs_reels(db)
     total_reel = (
         await db.execute(
             select(func.count(TalTransmission.id)).where(
@@ -1608,7 +1681,8 @@ async def compteur(db: AsyncSession, mois: Optional[str] = None, *, config: Opti
         "nb_transmises": len(rows),
         "nb_reel": len(reel),
         "nb_simulation": len(simul),
-        "cout_tal_estime": round(sum(float(t.cout or 0) for t in reel), 2),
+        # Même règle que le registre : seuls les baux au-delà des essais gratuits coûtent.
+        "cout_tal_estime": round(sum(COUT_TAL for t in reel if rangs.get(t.id, 0) > GRATUITS_TOTAL), 2),
         "cout_unitaire": COUT_TAL,
         "frais_refactures": round(sum(float(t.frais_montant or 0) for t in reel), 2),
         "tarif_recharge": cfg.get("tarif_recharge"),
@@ -2044,5 +2118,6 @@ __all__ = [
     "generer", "annuler", "compteur",
     "DOC_TYPE_SIGNE", "contexte_independant", "creer_independant", "preparation_independante",
     "parties_du_formulaire", "adresse_depuis_formulaire",
-    "registre", "TPS_PCT", "TVQ_PCT", "FORFAIT_LICENCE", "normaliser_montants",
+    "registre", "TPS_PCT", "TVQ_PCT", "FORFAIT_LICENCE", "normaliser_montants", "REGLES",
+    "rangs_reels", "resume_avec_cout",
 ]
