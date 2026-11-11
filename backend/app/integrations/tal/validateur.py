@@ -264,7 +264,10 @@ def valider(form: dict[str, Any], schema: SchemaTal, *, requis: Optional[list[st
     for chemin in requis or []:
         v = _lire_chemin(form, chemin)
         if _vide(v):
-            r.erreurs.append(f"{chemin} : champ requis par Kratos (Paramètres) et vide.")
+            # Le nom du champ tel qu'on le lit au formulaire, pour le retrouver à l'écran.
+            champ = schema.champ(chemin) if re.fullmatch(r"[A-Za-z0-9_]+", chemin) else None
+            libelle = f" — « {champ.label_fr} »" if champ is not None and champ.label_fr else ""
+            r.erreurs.append(f"{chemin} : champ requis par Kratos (Paramètres) et vide{libelle}.")
     return r
 
 

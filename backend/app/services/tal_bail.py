@@ -88,8 +88,12 @@ DEFAUTS: dict[str, Any] = {
     "frais_auto": True,
     "libelle_frais": "Bail officiel TAL — {adresse} ({locataire})",
     #: Défauts du formulaire quand Kratos n'a pas la donnée.
+    #: Clé du formulaire du TAL (virementBancaire, cheque…) ou « dpa » : le débit
+    #: préautorisé n'a pas de case au formulaire, il s'écrit « Autre » + précision.
     "mode_paiement_defaut": "virementBancaire",
-    "chauffage_defaut": "electricite",
+    #: AUCUN chauffage par défaut (Phil 2026-11-11) : le type se choisit à chaque
+    #: bail. Une valeur ici (electricite | gaz | mazout) redevient un défaut.
+    "chauffage_defaut": "",
     "logement_sans_fumee": True,
     "animaux_defaut": False,
     "province_defaut": "Québec",
@@ -100,9 +104,18 @@ DEFAUTS: dict[str, Any] = {
     #: Champs que Kratos exige remplis avant tout appel (chemins).
     "requis": (
         "locateurs[0].nom,locataires[0].nom,adresseLogement[0].Rue,"
-        "adresseLogement[0].Municipalite,coutLoyer,typeBail"
+        "adresseLogement[0].Municipalite,coutLoyer,typeBail,typeChauffageLogement"
     ),
 }
+#: Liste « requis » d'avant le 2026-11-11 (sans le type de chauffage). Si c'est encore
+#: elle qui est enregistrée, la liste par défaut du jour s'applique.
+_REQUIS_AVANT_CHAUFFAGE = (
+    "locateurs[0].nom,locataires[0].nom,adresseLogement[0].Rue,"
+    "adresseLogement[0].Municipalite,coutLoyer,typeBail"
+)
+#: Mode de paiement « débit préautorisé » (réglage Kratos, pas une clé du TAL).
+MODE_PAIEMENT_DPA = "dpa"
+LIBELLE_DPA = "Débit préautorisé (DPA)"
 
 _NB_PIECES: dict[float, str] = {
     1.0: "un", 1.5: "un-demi", 2.0: "deux", 2.5: "deux-demi", 3.0: "trois",
@@ -149,6 +162,8 @@ def fusionner_config(cfg: Optional[dict[str, Any]]) -> dict[str, Any]:
         out["tarif_recharge"] = max(0.0, round(float(out["tarif_recharge"]), 2))
     except (TypeError, ValueError):
         out["tarif_recharge"] = DEFAUTS["tarif_recharge"]
+    if "".join(str(out.get("requis") or "").split()) == _REQUIS_AVANT_CHAUFFAGE:
+        out["requis"] = DEFAUTS["requis"]
     out["frais_auto"] = bool(out.get("frais_auto", True))
     out["logement_sans_fumee"] = bool(out.get("logement_sans_fumee", True))
     out["animaux_defaut"] = bool(out.get("animaux_defaut", False))
@@ -821,15 +836,31 @@ def construire_formulaire(schema: SchemaTal, ctx: ContexteBail, config: dict[str
     else:
         poser("termesPaiement", "autre")
         poser("precisionAutresTermes", f"Le {jour} de chaque mois")
-    defaut("modePaiement", cfg.get("mode_paiement_defaut") or "virementBancaire", "mode de paiement par défaut (Paramètres)")
+    mode_paiement = str(cfg.get("mode_paiement_defaut") or "virementBancaire")
+    if mode_paiement == MODE_PAIEMENT_DPA:
+        # Pas de case « débit préautorisé » au formulaire du TAL : « Autre » + précision.
+        defaut("modePaiement", "autre", "mode de paiement par défaut (Paramètres) : débit préautorisé")
+        defaut("precisionAutresModePaiement", LIBELLE_DPA, "précision du mode de paiement par défaut (Paramètres)")
+    else:
+        defaut("modePaiement", mode_paiement, "mode de paiement par défaut (Paramètres)")
     origine["locataireAccepteRemiseChequePostdates"] = "signature"
     inconnu("lieuPaiement", "lieu de paiement (ou mode électronique) à préciser")
 
     # ── F. Services et conditions ────────────────────────────────
     poser("possedeRemiseReglementImmeuble", "", kind="inconnu", note="règlement de l'immeuble remis ? (oui/non + date)")
     defaut("possederServiceConciergerie", "false")
-    chauffage = cfg.get("chauffage_defaut") or "electricite"
-    defaut("typeChauffageLogement", [chauffage], "type de chauffage par défaut (Paramètres)")
+    # Type de chauffage : celui choisi pour CE bail ; sinon le défaut des Paramètres s'il y
+    # en a un ; sinon rien — il se choisit à chaque bail (champ exigé avant l'envoi).
+    champ_chauffage = schema.champ("typeChauffageLogement")
+    types_chauffage = champ_chauffage.cles_valeurs if champ_chauffage is not None else []
+    chauffage_choisi = str(getattr(bail, "chauffage_type", None) or "").strip()
+    chauffage_defaut = str(cfg.get("chauffage_defaut") or "").strip()
+    if chauffage_choisi and (not types_chauffage or chauffage_choisi in types_chauffage):
+        poser("typeChauffageLogement", [chauffage_choisi])
+    elif chauffage_defaut:
+        defaut("typeChauffageLogement", [chauffage_defaut], "type de chauffage par défaut (Paramètres)")
+    else:
+        poser("typeChauffageLogement", [], kind="inconnu", note="type de chauffage : à choisir (électricité, gaz ou mazout)")
     poser("responsabiliteChauffage", "locateur" if bail.chauffage_inclus else "locataire")
     resp = _occurrence(schema, "responsabiliteServicesTaxesCoutsConsommation")
     resp.update({
@@ -1406,6 +1437,7 @@ def contexte_independant(essentiel: Optional[dict[str, Any]]) -> ContexteBail:
         loyer_mensuel=_nombre_ou_none(e.get("loyer_mensuel")), jour_echeance=min(max(jour, 1), 31),
         chauffage_inclus=bool(e.get("chauffage_inclus")), electricite_inclus=bool(e.get("electricite_inclus")),
         eau_chaude_inclus=bool(e.get("eau_chaude_inclus")), internet_inclus=bool(e.get("internet_inclus")),
+        chauffage_type=_texte(e.get("chauffage_type"), 40) or None,
         categorie="standard", parallele_type=None,
     )
     logement = NS(id=None, numero=_texte(e.get("appartement"), 32), nb_pieces_decimal=_nombre_ou_none(e.get("nb_pieces")))
@@ -1522,6 +1554,7 @@ async def preparation_independante(db: AsyncSession, t: TalTransmission) -> dict
         "form": form, "origine": {}, "a_verifier": _charger_json(t.a_verifier_json, []), "rapport": rapport.as_dict(),
         "contexte": {"independant": True, "adresse": t.adresse, "libelle": getattr(t, "libelle", None), "parties": parties_du_formulaire(form)},
         "schema_version": schema.version,
+        "requis": chemins_requis(config),      # champs exigés avant l'envoi : marqués d'une étoile à l'écran
     }
 
 
