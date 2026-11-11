@@ -150,6 +150,12 @@ class IndependantIn(BaseModel):
     electricite_inclus: bool = False
     eau_chaude_inclus: bool = False
     internet_inclus: bool = False
+    #: Avis au nouveau locataire (section G) : loyer | aucunLoyer | residencePriveeAines.
+    avis_situation: Optional[str] = Field(default=None, max_length=40)
+    #: Loyer le plus bas des 12 derniers mois, ou dernier loyer payé, selon la situation.
+    avis_montant: Optional[float] = Field(default=None, ge=0, le=1_000_000)
+    avis_frequence: Optional[str] = Field(default=None, pattern=r"^(mois|semaine)$")
+    avis_date_dernier_paiement: Optional[date] = None
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────
@@ -373,6 +379,7 @@ async def preparer(
         "contexte": ctx.resume(),
         "schema_version": schema.version,
         "requis": svc.chemins_requis(_config),   # champs exigés avant l'envoi : marqués d'une étoile à l'écran
+        "regles": svc.REGLES,                    # champs qui ne s'appliquent pas : masqués à l'écran
         "mode": cx.etat()["mode"],
         "cout_tal": svc.COUT_TAL,
         "transmissions": [svc.resume_transmission(t) for t in existantes],
@@ -424,7 +431,7 @@ async def lister_transmissions(
 @router.get("/transmissions/{transmission_id}", summary="Détail d'une transmission (avec le formulaire)")
 async def lire_transmission(transmission_id: int, db: DBSession, user: RequireManager) -> Dict[str, Any]:
     t = await _transmission_or_404(db, transmission_id)
-    return svc.resume_transmission(t, avec_form=True)
+    return await svc.resume_avec_cout(db, t, avec_form=True)
 
 
 @router.patch("/transmissions/{transmission_id}", summary="Remplacer le formulaire d'un brouillon")
@@ -476,7 +483,7 @@ async def _generer(
     except TalApiError as exc:
         raise _erreur_tal(exc) from exc
     await db.refresh(t)
-    return svc.resume_transmission(t)
+    return await svc.resume_avec_cout(db, t)
 
 
 @router.post("/transmissions/{transmission_id}/generer", summary="Générer le bail officiel (FRW111 + FRW122)")

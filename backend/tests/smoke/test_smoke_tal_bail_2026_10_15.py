@@ -53,8 +53,13 @@ from app.services import tal_bail as svc
 from tests.smoke.conftest import TestSessionLocal
 
 BASE = "/api/v1/immobilier/tal-bail"
-#: Le type de chauffage n'a pas de défaut : la personne le choisit à chaque bail.
-CHAUFFAGE_CHOISI = {"typeChauffageLogement": ["electricite"]}
+#: Ni le type de chauffage ni l'avis au nouveau locataire (section G) n'ont de défaut : la
+#: personne les choisit à chaque bail.
+CHAUFFAGE_CHOISI = {"typeChauffageLogement": ["electricite"], "situationApplicableAvisNouveauLocataire": "aucunLoyer"}
+AVIS_REQUIS = (
+    "situationApplicableAvisNouveauLocataire : champ requis par Kratos (Paramètres) et vide — "
+    "« Choisir la situation qui s'applique »."
+)
 CHAUFFAGE_REQUIS = (
     "typeChauffageLogement : champ requis par Kratos (Paramètres) et vide — "
     "« Quel est le type de chauffage utilisé dans le logement? »."
@@ -214,7 +219,9 @@ def test_preparer_remplit_depuis_kratos(client, auth_headers, tal_seed):
     loc = f["locateurs"][0]
     assert loc["nom"] == "Horizon Immo Smoke INC"
     assert loc["noTelephone"] == "514-555-0101"
-    assert loc["courrielLocateur"] == "info@horizon-smoke.ca"
+    # Locateur représenté : le formulaire du TAL demande le courriel du représentant et celui du
+    # locateur (« mandant ») ; son courriel simple, sans objet ici, reste vide.
+    assert loc["courrielMandant"] == "info@horizon-smoke.ca" and loc["courrielLocateur"] == ""
     assert loc["questionRepresentant"] == "true" and loc["representant"]
     assert loc["adresse"][0]["Municipalite"] == "Saint-Rémi" and loc["adresse"][0]["CodePostal"] == "J0L 2L0"
     # Locataire + caution.
@@ -247,8 +254,10 @@ def test_preparer_remplit_depuis_kratos(client, auth_headers, tal_seed):
     assert f["situationApplicableRestrictionsFixationLoyer"] == "aucun"   # immeuble de 1960
     # Section G depuis le bail précédent (1 000 $, dernier paiement 2026-06-02).
     assert f["situationApplicableAvisNouveauLocataire"] == "loyer"
-    assert f["montantLoyerBailPrecedent"] == "1000.00" and f["montantDernierLoyerPaye"] == "1000.00"
-    assert f["montantLoyerPlusBasPaye12Mois"] == "1000.00" and f["dateDernierPaiementLoyer"] == "2026-06-02"
+    # Situation (1) : seul le loyer le plus bas des 12 derniers mois est demande ; les champs des
+    # situations (2) et (3) restent vides, sinon le TAL les imprimerait aussi.
+    assert f["montantLoyerPlusBasPaye12Mois"] == "1000.00" and f["frequenceLoyerPlusBasPaye12Mois"] == "mois"
+    assert f["montantLoyerBailPrecedent"] == "" and f["montantDernierLoyerPaye"] == ""
     assert f["confirmationTransmissionAvisNouveauLocataire"] is True
     # Engagements : locateur coché, locataire laissé pour la signature ; blocs vides.
     assert f["engagementAvertisseursFumeeLocateur"] is True
@@ -259,14 +268,19 @@ def test_preparer_remplit_depuis_kratos(client, auth_headers, tal_seed):
     assert body["origine"]["coutLoyer"] == "donnees" and body["origine"]["modePaiement"] == "defaut"
     assert body["origine"]["locataire1engagementAvertisseursFumeeLocataire"] == "signature"
     chemins = {x["chemin"] for x in body["a_verifier"]}
-    assert {"modePaiement", "motPasseWF", "responsabiliteServicesTaxesCoutsConsommation[0]"} <= chemins
+    assert {"modePaiement", "responsabiliteServicesTaxesCoutsConsommation[0]"} <= chemins
+    # Le mot de passe du formulaire reste vide : le premier bail reel (2026-11-11) est passe sans lui.
+    assert "motPasseWF" not in chemins and f["motPasseWF"] == ""
     # Aucun chauffage par défaut (Phil 2026-11-11) : le type se choisit à chaque bail. Tant qu'il
     # ne l'est pas, le formulaire ne part pas — et c'est la SEULE chose qui manque ici.
     assert f["typeChauffageLogement"] == [] and "typeChauffageLogement" in chemins
     assert body["rapport"]["valide"] is False and body["rapport"]["erreurs"] == [CHAUFFAGE_REQUIS], body["rapport"]
     # La liste des champs exigés accompagne le formulaire (étoiles rouges à l'écran).
     assert body["requis"] == ["locateurs[0].nom", "locataires[0].nom", "adresseLogement[0].Rue", "adresseLogement[0].Municipalite",
-                              "coutLoyer", "typeBail", "typeChauffageLogement"]
+                              "coutLoyer", "typeBail", "typeChauffageLogement", "situationApplicableAvisNouveauLocataire"]
+    # Règles d'affichage envoyées à l'écran : un champ sans objet est masqué, et vidé avant l'envoi.
+    assert {"cible": "dateDebutBailDureeIndeterminee", "si": [{"champ": "typeBail", "vaut": ["dureeIndeterminee"]}]} in body["regles"]
+    assert f["dateDebutBailDureeIndeterminee"] == "" and f["dateDernierPaiementLoyer"] == "" and f["montantLoyerBailPrecedent"] == ""
     assert body["contexte"]["locateur"] == "Horizon Immo Smoke INC" and body["contexte"]["garants"] == ["Bob Caution"]
     assert body["mode"] == "simulation" and body["cout_tal"] == 2.99 and body["transmissions"] == []
 
@@ -278,9 +292,11 @@ def test_preparer_bail_au_15_et_chauffage_inclus(client, auth_headers, tal_seed)
     assert f["termesPaiement"] == "autre" and f["precisionAutresTermes"] == "Le 15 de chaque mois"
     assert f["responsabiliteChauffage"] == "locateur"
     assert f["nbPieces"] == "quatre-demi" and f["nbSemainesMoisAnnees"] == "1 an"
-    assert f["situationApplicableAvisNouveauLocataire"] == "aucunLoyer"   # jamais loué
+    # Pas de bail précédent connu : AUCUN défaut pour l'avis au nouveau locataire (section G).
+    assert f["situationApplicableAvisNouveauLocataire"] == ""
     assert f["possedeAutresSignataires"] == "false"
-    assert r.json()["rapport"]["erreurs"] == [CHAUFFAGE_REQUIS]      # tout y est, sauf le type de chauffage à choisir
+    # Tout y est, sauf les deux choix qui se font à chaque bail.
+    assert r.json()["rapport"]["erreurs"] == [CHAUFFAGE_REQUIS, AVIS_REQUIS]
     assert client.get(f"{BASE}/preparer", headers=auth_headers, params={"bail_id": 999_999}).status_code == 404
 
 
@@ -539,7 +555,9 @@ def test_echec_frw122_garde_le_shortguid_et_relance_sans_second_frw111(client, a
     g = r.json()
     assert g["statut"] == "transmise" and g["short_guid"] == "TAL-ABC123" and g["no_confirmation"] == "CONF-2026-0001"
     assert faux.creer_calls == 1 and faux.declencher_calls == 2       # JAMAIS un second FRW111
-    assert g["cout"] == 2.99 and g["frais_montant"] == 8.99 and g["frais_manuel_id"]
+    # Premier bail réel : un essai gratuit (rang 1 sur 10) ; le frais au propriétaire reste dû.
+    assert g["cout"] == 0.0 and g["gratuit"] is True and g["rang_reel"] == 1 and g["gratuits_total"] == 10
+    assert g["frais_montant"] == 8.99 and g["frais_manuel_id"]
     assert g["erreur"] is None and g["tentatives"] == 2
     assert [d["nom"] for d in g["documents"]] == ["recu.xml", "53000BAIL.pdf"]
 
@@ -557,7 +575,7 @@ def test_echec_frw122_garde_le_shortguid_et_relance_sans_second_frw111(client, a
     assert v["fm_libelle"].startswith("Bail officiel TAL") and "Carl Reel" in v["fm_libelle"]
 
     c = client.get(f"{BASE}/compteur", headers=auth_headers).json()
-    assert c["nb_reel"] == 1 and c["cout_tal_estime"] == 2.99 and c["frais_refactures"] == 8.99
+    assert c["nb_reel"] == 1 and c["cout_tal_estime"] == 0 and c["frais_refactures"] == 8.99
     assert c["gratuits_restants"] == 9 and c["total_reel_depuis_le_debut"] == 1
 
 

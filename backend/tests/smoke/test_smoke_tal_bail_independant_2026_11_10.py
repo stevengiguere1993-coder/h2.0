@@ -44,6 +44,8 @@ ESSENTIEL = {
     "nb_pieces": 4.5, "date_debut": "2027-07-01", "date_fin": "2028-06-30", "loyer_mensuel": 1450,
     "jour_echeance": 1, "electricite_inclus": False, "chauffage_inclus": False, "internet_inclus": True,
     "chauffage_type": "gaz",          # choisi à chaque bail : aucun défaut
+    # Avis au nouveau locataire (section G) : choisi à chaque bail, aucun défaut.
+    "avis_situation": "loyer", "avis_montant": 1400, "avis_frequence": "mois",
 }
 
 
@@ -527,6 +529,7 @@ def test_langue_du_bail_choisie_a_la_generation(client, auth_headers, run, monke
         "locataires": [{"nom": "John Smith", "courriel": "john@exemple.ca"}],
         "adresse": "4521 rue Saint-Denis", "appartement": "9", "ville": "Montréal", "code_postal": "H2J 2L4", "nb_pieces": 3.5,
         "date_debut": "2027-07-01", "date_fin": "2028-06-30", "loyer_mensuel": 1200, "chauffage_type": "electricite",
+        "avis_situation": "aucunLoyer",
     })
     assert r.status_code == 201, r.text
     tid = r.json()["id"]
@@ -593,14 +596,15 @@ def test_chauffage_a_choisir_et_debit_preautorise(client, auth_headers):
     le virement restant le défaut. La liste des champs exigés suit le formulaire (étoiles à l'écran)."""
     cfg = client.get(f"{BASE}/etat", headers=auth_headers).json()
     assert cfg["defauts"]["chauffage_defaut"] == "" and cfg["defauts"]["mode_paiement_defaut"] == "virementBancaire"
-    assert cfg["defauts"]["requis"].endswith(",typeBail,typeChauffageLogement")
+    assert cfg["defauts"]["requis"].endswith(",typeBail,typeChauffageLogement,situationApplicableAvisNouveauLocataire")
     # Une ancienne liste « requis » restée enregistrée (sans le chauffage) suit la liste du jour.
     ancienne = "locateurs[0].nom,locataires[0].nom,adresseLogement[0].Rue,adresseLogement[0].Municipalite,coutLoyer,typeBail"
     assert svc.fusionner_config({"requis": ancienne})["requis"] == svc.DEFAUTS["requis"]
+    assert svc.fusionner_config({"requis": ancienne + ",typeChauffageLogement"})["requis"] == svc.DEFAUTS["requis"]
     assert svc.fusionner_config({"requis": "coutLoyer"})["requis"] == "coutLoyer"            # un vrai réglage est respecté
 
     base = {"locateur": {"nom": "Marc Tremblay"}, "locataires": [{"nom": "Julie Roy"}], "adresse": "12 rue des Lilas", "ville": "Laval",
-            "date_debut": "2027-07-01", "date_fin": "2028-06-30", "loyer_mensuel": 1300}
+            "date_debut": "2027-07-01", "date_fin": "2028-06-30", "loyer_mensuel": 1300, "avis_situation": "aucunLoyer"}
     try:
         # 1. Sans type de chauffage : le brouillon se crée, mais le bail ne partirait pas.
         r = client.post(f"{BASE}/independants", headers=auth_headers, json=base)
@@ -632,4 +636,79 @@ def test_chauffage_a_choisir_et_debit_preautorise(client, auth_headers):
         # Retour aux réglages de départ : virement par défaut, aucun chauffage par défaut.
         r = client.put(f"{BASE}/parametres", headers=auth_headers, json={"mode_paiement_defaut": "virementBancaire", "chauffage_defaut": ""})
         assert r.status_code == 200 and r.json()["config"]["chauffage_defaut"] == "" and r.json()["config"]["mode_paiement_defaut"] == "virementBancaire"
+
+
+def test_champs_sans_objet_masques_et_vides(client, auth_headers):
+    """1er bail réel (2026-11-11) : la date de début « durée indéterminée », remplie par erreur, s'est imprimée
+    sur un bail à durée fixe — le TAL imprime tout ce qu'il reçoit. Une seule liste de règles : l'écran
+    masque les champs sans objet, Kratos les vide avant d'enregistrer et d'envoyer."""
+    from app.integrations.tal.regles import REGLES, vider_inapplicables
+    from app.integrations.tal.schema import charger_schema_asset, squelette
+
+    schema = charger_schema_asset()
+    racine = set(schema.gabarit)
+    # Chaque règle vise un champ qui existe, avec des conditions sur des champs qui existent.
+    for regle in REGLES:
+        if regle.get("groupe"):
+            modele = schema.gabarit[regle["groupe"]][0]
+            assert regle["cible"] in modele, regle
+            assert all(c["champ"] in modele for c in regle["si"] if "champ" in c), regle
+        else:
+            assert regle["cible"] in racine, regle
+            assert all((c.get("champ") or c.get("groupe")) in racine for c in regle["si"]), regle
+
+    form = squelette(schema)
+    form.update({
+        "typeBail": "dureeFixe", "dateDebutBail": "2026-12-01", "dateFinBail": "2027-06-30", "dateDebutBailDureeIndeterminee": "2026-12-01",
+        "dependancesIncluses": ["StationnementInterieur"], "meublesInclusLoyer": "false", "listeMeublesInclusLoyer": ["lits"], "nbLits": "2",
+        "modePaiement": "virementBancaire", "precisionAutresModePaiement": "Débit préautorisé (DPA)",
+        "situationApplicableAvisNouveauLocataire": "loyer", "montantLoyerPlusBasPaye12Mois": "1400.00", "montantDernierLoyerPaye": "1400.00",
+    })
+    form["stationnementExterieur"] = [{"nbPlaces": "2", "emplacements": "A1"}]
+    form["stationnementInterieur"] = [{"nbPlaces": "1", "emplacements": "16"}]
+    form["locateurs"][0].update({"nom": "Marc", "questionRepresentant": "false", "courrielLocateur": "marc@exemple.ca",
+                                 "courrielMandant": "marc@exemple.ca", "representant": "Quelqu'un"})
+    form["locataires"][0].update({"nom": "Julie", "questionRepresentant": "true", "representant": "Me Roy",
+                                  "courrielRepresentant": "roy@exemple.ca", "courrielLocataire": "julie@exemple.ca"})
+    vides = vider_inapplicables(form, schema.gabarit)
+    assert form["dateDebutBailDureeIndeterminee"] == "" and form["dateDebutBail"] == "2026-12-01" and form["dateFinBail"] == "2027-06-30"
+    assert form["stationnementExterieur"] == [{"nbPlaces": "", "emplacements": ""}] and form["stationnementInterieur"][0]["emplacements"] == "16"
+    assert form["listeMeublesInclusLoyer"] == [] and form["nbLits"] == ""                    # en cascade
+    assert form["precisionAutresModePaiement"] == "" and form["montantDernierLoyerPaye"] == "" and form["montantLoyerPlusBasPaye12Mois"] == "1400.00"
+    loc, lt = form["locateurs"][0], form["locataires"][0]
+    # Non représenté : son seul courriel. Représenté : le représentant et les deux courriels qui vont avec.
+    assert loc["courrielLocateur"] == "marc@exemple.ca" and loc["courrielMandant"] == "" and loc["representant"] == ""
+    assert lt["courrielLocataire"] == "" and lt["courrielRepresentant"] == "roy@exemple.ca" and lt["representant"] == "Me Roy"
+    assert {"dateDebutBailDureeIndeterminee", "stationnementExterieur", "nbLits", "locateurs[0].courrielMandant",
+            "locataires[0].courrielLocataire"} <= set(vides)
+    assert vider_inapplicables(form, schema.gabarit) == []                                    # rien de plus au 2e passage
+    form.update({"typeBail": "dureeIndeterminee", "dateDebutBailDureeIndeterminee": "2026-12-01"})
+    vider_inapplicables(form, schema.gabarit)
+    assert form["dateDebutBail"] == "" and form["dateFinBail"] == "" and form["dateDebutBailDureeIndeterminee"] == "2026-12-01"
+
+    # Par l'écran : le formulaire enregistré est nettoyé, et la préparation porte les règles et la liste des champs exigés.
+    cree = client.post(f"{BASE}/independants", headers=auth_headers, json={**ESSENTIEL, "libelle": "Sans objet"}).json()
+    f = cree["form"]
+    assert f["locateurs"][0]["courrielLocateur"] == "marc@exemple.test" and f["locateurs"][0]["courrielMandant"] == ""
+    assert f["situationApplicableAvisNouveauLocataire"] == "loyer" and f["montantLoyerPlusBasPaye12Mois"] == "1400.00"
+    assert f["confirmationTransmissionAvisNouveauLocataire"] is True and cree["rapport"]["valide"] is True
+    f["dateDebutBailDureeIndeterminee"] = "2027-07-01"
+    f["dependancesIncluses"] = []
+    f["stationnementExterieur"] = [{"nbPlaces": "3", "emplacements": "B2"}]
+    r = client.patch(f"{BASE}/transmissions/{cree['id']}", headers=auth_headers, json={"form": f})
+    assert r.status_code == 200 and r.json()["rapport"]["valide"] is True, r.text
+    f2 = r.json()["form"]
+    assert f2["dateDebutBailDureeIndeterminee"] == "" and f2["stationnementExterieur"] == [{"nbPlaces": "", "emplacements": ""}]
+    prep = client.get(f"{BASE}/preparer", headers=auth_headers, params={"transmission_id": cree["id"]}).json()
+    assert prep["regles"] == REGLES and "situationApplicableAvisNouveauLocataire" in prep["requis"]
+    # Section G : la situation (1) ne vaut rien sans le montant ; sans situation du tout, le bail ne part pas.
+    f2["montantLoyerPlusBasPaye12Mois"] = ""
+    r = client.patch(f"{BASE}/transmissions/{cree['id']}", headers=auth_headers, json={"form": f2})
+    assert any(e.startswith("Section G : indique le loyer le plus bas") for e in r.json()["rapport"]["erreurs"])
+    f2["situationApplicableAvisNouveauLocataire"] = ""
+    r = client.patch(f"{BASE}/transmissions/{cree['id']}", headers=auth_headers, json={"form": f2})
+    erreurs = r.json()["rapport"]["erreurs"]
+    assert any(e.startswith("situationApplicableAvisNouveauLocataire : champ requis par Kratos") for e in erreurs)
+    assert client.post(f"{BASE}/transmissions/{cree['id']}/generer", headers=auth_headers, json={"confirme": True}).status_code == 422
+    assert client.post(f"{BASE}/transmissions/{cree['id']}/annuler", headers=auth_headers).status_code == 200
 

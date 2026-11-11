@@ -261,6 +261,14 @@ def valider(form: dict[str, Any], schema: SchemaTal, *, requis: Optional[list[st
         r.avertissements.append("Bail à durée indéterminée sans date de début.")
     if form.get("bailIncluServices") in ("true", True) and _vide(form.get("coutServices")):
         r.avertissements.append("Le loyer inclut des services mais coutServices est vide.")
+    # Section G — avis au nouveau locataire (art. 1896 C.c.Q.) : l'avis doit dire le montant.
+    situation_g = form.get("situationApplicableAvisNouveauLocataire")
+    if situation_g == "loyer" and (_vide(form.get("montantLoyerPlusBasPaye12Mois")) or _vide(form.get("frequenceLoyerPlusBasPaye12Mois"))):
+        r.erreurs.append("Section G : indique le loyer le plus bas payé au cours des 12 derniers mois et sa fréquence.")
+    if situation_g == "residencePriveeAines" and (_vide(form.get("montantLoyerBailPrecedent")) or _vide(form.get("frequenceLoyerBailPrecedent"))):
+        r.erreurs.append("Section G : indique le loyer exigé en vertu du bail précédent et sa fréquence.")
+    if situation_g == "aucunLoyer" and (_vide(form.get("dateDernierPaiementLoyer")) or _vide(form.get("montantDernierLoyerPaye"))):
+        r.avertissements.append("Section G : le dernier loyer payé (date et montant) n'est pas indiqué — à laisser vide seulement si le logement n'a jamais été loué.")
     for chemin in requis or []:
         v = _lire_chemin(form, chemin)
         if _vide(v):
