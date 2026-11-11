@@ -52,7 +52,8 @@ export async function lireErreur(r: Response): Promise<string> {
 }
 
 export function nombre(v: string): number | null {
-  const n = Number(String(v).replace(",", ".").replace(/\s/g, ""));
+  // « 1 250,75 $ » se lit 1250.75 : espaces et signe de dollar retirés, virgule lue comme un point.
+  const n = Number(String(v).replace(/[\s$]/g, "").replace(",", "."));
   return v.trim() !== "" && Number.isFinite(n) ? n : null;
 }
 

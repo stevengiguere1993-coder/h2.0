@@ -550,3 +550,38 @@ def test_langue_du_bail_choisie_a_la_generation(client, auth_headers, run, monke
 
         run(_ranger())
 
+
+def test_jamais_de_virgule_decimale_au_tal():
+    """Avis du TAL (11 nov. 2026) : la virgule décimale n'est pas interprétée, il faut un point.
+    Kratos accepte ce qu'on écrit naturellement et n'envoie que des points ; une saisie ambiguë
+    est refusée avant tout envoi."""
+    from app.integrations.tal.schema import charger_schema_asset
+    from app.integrations.tal.validateur import nombre_canonique, valider
+
+    schema = charger_schema_asset()
+    cas = {
+        "1450": "1450.00", "1450,5": "1450.50", "1450.50": "1450.50", "125,50": "125.50",
+        "1 250,75": "1250.75", "1 250.75 $": "1250.75", "1250,75 $": "1250.75", "$1,250.75": "1250.75",
+        "1\u202f250,75": "1250.75", "1\u00a0250": "1250.00", "12 345 678,9": "12345678.90", "1.250,75": "1250.75",
+    }
+    for saisie, attendu in cas.items():
+        form = {"coutLoyer": saisie}
+        assert not valider(dict(form), schema, requis=[]).as_dict()["erreurs"], saisie
+        assert svc.normaliser_montants(form, schema) == (0 if saisie == attendu else 1) and form["coutLoyer"] == attendu, saisie
+        assert "," not in form["coutLoyer"]
+    # Ambigu ou pas un nombre : refusé à la validation, donc jamais envoyé, et laissé tel quel.
+    for saisie in ("1,250", "1.250", "1,25,0", "12,3456.7", "mille", "1250 dollars", "--5", "$"):
+        form = {"coutLoyer": saisie}
+        erreurs = valider(dict(form), schema, requis=[]).as_dict()["erreurs"]
+        assert any(e.startswith("coutLoyer : nombre attendu") for e in erreurs), saisie
+        assert svc.normaliser_montants(form, schema) == 0 and form["coutLoyer"] == saisie
+        assert nombre_canonique(saisie) is None
+    assert "sans ambiguïté" in valider({"coutLoyer": "1,250"}, schema, requis=[]).as_dict()["erreurs"][0]
+    # Compteurs et heures (type « number ») : forme gardée, mais jamais de virgule.
+    form = {"nbTables": "2", "soinsInfirmiers": [{"heuresPrepose": "1,5", "coutPrepose": "20,5"}], "stationnementExterieur": [{"nbPlaces": " 3 "}]}
+    assert svc.normaliser_montants(form, schema) == 3
+    assert form == {"nbTables": "2", "soinsInfirmiers": [{"heuresPrepose": "1.5", "coutPrepose": "20.50"}], "stationnementExterieur": [{"nbPlaces": "3"}]}
+    # Valeurs déjà numériques (construites par Kratos) : toujours un point.
+    assert nombre_canonique(1450) == "1450" and nombre_canonique(1450.5) == "1450.5" and nombre_canonique(True) is None and nombre_canonique("") is None
+    assert svc._montant(1250.75) == "1250.75" and svc._montant("1250.5") == "1250.50"
+

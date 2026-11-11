@@ -49,7 +49,7 @@ from app.integrations.tal.client import (
     valeur_officielle,
 )
 from app.integrations.tal.schema import SchemaTal, charger_schema, squelette
-from app.integrations.tal.validateur import Rapport, valider
+from app.integrations.tal.validateur import Rapport, nombre_canonique, valider
 from app.models.entreprise import Entreprise
 from app.models.immobilier import (
     Bail,
@@ -405,37 +405,38 @@ def _montant(v: Any) -> str:
     return f"{f:.2f}"
 
 
-_MONTANT_RE = re.compile(r"^-?\d+(?:[.,]\d+)?$")
-
-
 def _au_format_montant(v: Any) -> Any:
-    if isinstance(v, bool) or v is None:
-        return v
-    if isinstance(v, (int, float)):
-        return f"{float(v):.2f}"
-    if isinstance(v, str) and _MONTANT_RE.match(v.strip()):
-        return f"{float(v.strip().replace(',', '.')):.2f}"
-    return v
+    """« 1 250,75 $ » → « 1250.75 » ; ce qui n'est pas un nombre reste tel quel."""
+    canon = nombre_canonique(v)
+    return f"{float(canon):.2f}" if canon is not None else v
+
+
+def _au_format_compteur(v: Any) -> Any:
+    """Compteur ou nombre d'heures : « 1,5 » → « 1.5 », « 3 » reste « 3 »."""
+    canon = nombre_canonique(v)
+    return canon if canon is not None and isinstance(v, str) else v
 
 
 def normaliser_montants(form: dict[str, Any], schema: SchemaTal) -> int:
     """Met chaque champ de type « nombre » (les montants) au format de l'exemple du
     TAL : point décimal et deux décimales (« 1450.00 », imprimé « 1450,00 » sur le
-    bail) ; une virgule saisie devient un point. Les compteurs (type « number ») et
-    tout ce qui n'est pas un nombre restent tels quels. Modifie le formulaire sur
-    place ; retourne le nombre de valeurs changées."""
+    bail). Le TAL n'interprète pas la virgule décimale (avis du 11 nov. 2026) : une
+    virgule saisie devient un point, les espaces et le signe de dollar sont retirés
+    (« 1 250,75 $ » → « 1250.75 »). Les compteurs (type « number ») gardent leur forme
+    mais jamais de virgule (« 1,5 » heure → « 1.5 »). Ce qui n'est pas un nombre reste
+    tel quel. Modifie le formulaire sur place ; retourne le nombre de valeurs changées."""
     changes = 0
 
-    def poser(occurrence: Any, nom: str) -> None:
+    def poser(occurrence: Any, nom: str, montant: bool) -> None:
         nonlocal changes
         if isinstance(occurrence, dict) and nom in occurrence:
-            neuf = _au_format_montant(occurrence[nom])
+            neuf = _au_format_montant(occurrence[nom]) if montant else _au_format_compteur(occurrence[nom])
             if neuf != occurrence[nom]:
                 occurrence[nom] = neuf
                 changes += 1
 
     for champ in schema.champs:
-        if champ.type != "nombre":
+        if champ.type not in ("nombre", "number"):
             continue
         niveaux = [g for g in (champ.groupe or "").split(".") if g]
         cibles: list[Any] = [form]
@@ -447,7 +448,7 @@ def normaliser_montants(form: dict[str, Any], schema: SchemaTal) -> int:
                     suivantes.extend(v)
             cibles = suivantes
         for c in cibles:
-            poser(c, champ.nom)
+            poser(c, champ.nom, champ.type == "nombre")
     return changes
 
 
