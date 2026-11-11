@@ -165,6 +165,7 @@ async def ensure_critical_columns() -> None:
         ("tal_transmissions", "independant", "BOOLEAN NOT NULL DEFAULT FALSE"),
         ("tal_transmissions", "libelle", "VARCHAR(255)"),
         ("tal_transmissions", "reponses_json", "TEXT"),
+        ("tal_transmissions", "langue", "VARCHAR(2)"),
         # Baux PARALLÈLES (Financement, 2026-10-16) : catégorie + locateur du
         # bail parallèle. DEFAULT backfille les baux existants en « standard ».
         ("imm_baux", "categorie", "VARCHAR(16) NOT NULL DEFAULT 'standard'"),

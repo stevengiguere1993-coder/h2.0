@@ -126,7 +126,8 @@ def test_outils_de_mapping():
     assert svc._telephone("(514) 555-0101") == "514-555-0101"
     assert svc._telephone("1 514 555 0101") == "514-555-0101"
     assert svc._telephone("055-685-6750") == ""
-    assert svc._montant(1150) == "1150" and svc._montant(1150.5) == "1150.50"
+    # Montants au format de l'exemple du TAL : toujours deux décimales.
+    assert svc._montant(1150) == "1150.00" and svc._montant(1150.5) == "1150.50" and svc._montant("") == ""
 
 
 # ─── Données de test ────────────────────────────────────────────────────
@@ -227,7 +228,7 @@ def test_preparer_remplit_depuis_kratos(client, auth_headers, tal_seed):
     # Durée, loyer, échéance.
     assert f["typeBail"] == "dureeFixe" and f["dateDebutBail"] == "2026-11-01" and f["dateFinBail"] == "2027-06-30"
     assert f["nbSemainesMoisAnnees"] == "8 mois"
-    assert f["coutLoyer"] == "1150" and f["coutTotalLoyer"] == "1150" and f["frequenceCoutLoyer"] == "mois"
+    assert f["coutLoyer"] == "1150.00" and f["coutTotalLoyer"] == "1150.00" and f["frequenceCoutLoyer"] == "mois"
     assert f["termesPaiement"] == "permierJourMois" and f["premierTermePaiement"] == "2026-11-01"
     assert f["modePaiement"] == "virementBancaire"
     # Responsabilités depuis les inclusions du bail.
@@ -240,8 +241,8 @@ def test_preparer_remplit_depuis_kratos(client, auth_headers, tal_seed):
     assert f["situationApplicableRestrictionsFixationLoyer"] == "aucun"   # immeuble de 1960
     # Section G depuis le bail précédent (1 000 $, dernier paiement 2026-06-02).
     assert f["situationApplicableAvisNouveauLocataire"] == "loyer"
-    assert f["montantLoyerBailPrecedent"] == "1000" and f["montantDernierLoyerPaye"] == "1000"
-    assert f["montantLoyerPlusBasPaye12Mois"] == "1000" and f["dateDernierPaiementLoyer"] == "2026-06-02"
+    assert f["montantLoyerBailPrecedent"] == "1000.00" and f["montantDernierLoyerPaye"] == "1000.00"
+    assert f["montantLoyerPlusBasPaye12Mois"] == "1000.00" and f["dateDernierPaiementLoyer"] == "2026-06-02"
     assert f["confirmationTransmissionAvisNouveauLocataire"] is True
     # Engagements : locateur coché, locataire laissé pour la signature ; blocs vides.
     assert f["engagementAvertisseursFumeeLocateur"] is True
@@ -360,7 +361,7 @@ def test_flux_simulation_complet(client, auth_headers, tal_seed, run):
     assert r.json()["total"] == 1
     assert client.get(f"{BASE}/transmissions", headers=auth_headers, params={"statut": "nimporte"}).status_code == 422
     det = client.get(f"{BASE}/transmissions/{t['id']}", headers=auth_headers).json()
-    assert det["form"]["coutLoyer"] == "1150" and det["statut"] == "transmise"
+    assert det["form"]["coutLoyer"] == "1150.00" and det["statut"] == "transmise" and det["langue"] == "fr"
 
     c = client.get(f"{BASE}/compteur", headers=auth_headers).json()
     assert c["nb_simulation"] >= 1 and c["nb_reel"] == 0 and c["gratuits_restants"] == 10 and c["cout_tal_estime"] == 0
@@ -478,13 +479,13 @@ class _FauxClient:
         self.declencher_calls = 0
         self.identifiants: list = []
 
-    async def creer_formulaire(self, form, *, identifiant_utilisateur=None):
+    async def creer_formulaire(self, form, *, langue=None, identifiant_utilisateur=None):
         self.creer_calls += 1
         self.identifiants.append(identifiant_utilisateur)
         assert form["locataires"][0]["nom"] == "Carl Reel"
         return tal_client.ReponseCreation(short_guid="TAL-ABC123", brut={"shortGuid": "TAL-ABC123"})
 
-    async def declencher_transmission(self, short_guid, *, identifiant_utilisateur=None, form_pour_simulation=None):
+    async def declencher_transmission(self, short_guid, *, langue=None, identifiant_utilisateur=None, form_pour_simulation=None):
         self.declencher_calls += 1
         assert short_guid == "TAL-ABC123"
         if self.declencher_calls == 1:
@@ -552,7 +553,7 @@ def test_echec_frw111_sans_shortguid(client, auth_headers, tal_seed, run, monkey
         simulation = False
         mode = tal_client.MODE_REEL
 
-        async def creer_formulaire(self, form, *, identifiant_utilisateur=None):
+        async def creer_formulaire(self, form, *, langue=None, identifiant_utilisateur=None):
             raise tal_client.TalApiError("FRW111", "HTTP 401 : clé refusée", http_status=401)
 
     monkeypatch.setattr(svc, "_fabrique_client", lambda cx: _Casse())

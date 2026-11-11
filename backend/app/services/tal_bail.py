@@ -40,10 +40,13 @@ from app.integrations.tal.client import (
     MODE_REEL,
     MODE_SIMULATION,
     MODES,
+    VALEURS_OFFICIELLES,
     ClientTal,
     ConnexionTal,
     TalApiError,
+    code_langue,
     connexion_depuis_env,
+    valeur_officielle,
 )
 from app.integrations.tal.schema import SchemaTal, charger_schema, squelette
 from app.integrations.tal.validateur import Rapport, valider
@@ -201,14 +204,12 @@ async def charger_connexion(db: Optional[AsyncSession]) -> tuple[ConnexionTal, d
         return cx, infos
     if row.mode in MODES:
         cx.mode = row.mode
-    if row.api_url:
-        cx.url = row.api_url.strip().rstrip("/")
-    if row.entete_cle:
-        cx.entete_cle = row.entete_cle.strip()
-    if row.chemin_frw111:
-        cx.chemin_frw111 = row.chemin_frw111.strip()
-    if row.chemin_frw122:
-        cx.chemin_frw122 = row.chemin_frw122.strip()
+    # Une valeur vide, ou une ancienne hypothèse de Kratos restée enregistrée (X-Api-Key,
+    # /FRW111/…), laisse la place à la valeur de la documentation du TAL.
+    cx.url = valeur_officielle("api_url", row.api_url or cx.url)
+    cx.entete_cle = valeur_officielle("entete_cle", row.entete_cle or cx.entete_cle)
+    cx.chemin_frw111 = valeur_officielle("chemin_frw111", row.chemin_frw111 or cx.chemin_frw111)
+    cx.chemin_frw122 = valeur_officielle("chemin_frw122", row.chemin_frw122 or cx.chemin_frw122)
     chiffree = row.cle_chiffree
     if chiffree:
         infos["cle_posee_le"] = row.cle_posee_le
@@ -224,6 +225,13 @@ async def charger_connexion(db: Optional[AsyncSession]) -> tuple[ConnexionTal, d
             if not cx.cle:
                 cx.cle = ""
     return cx, infos
+
+
+def _a_enregistrer(champ: str, valeur: str) -> Optional[str]:
+    """Un réglage identique à la documentation du TAL (ou une ancienne hypothèse) ne
+    s'enregistre pas : la ligne reste vide et suit la valeur officielle."""
+    effectif = valeur_officielle(champ, valeur)
+    return None if effectif == VALEURS_OFFICIELLES[champ] else effectif
 
 
 async def enregistrer_connexion(
@@ -260,13 +268,13 @@ async def enregistrer_connexion(
                 "L'adresse de l'API doit commencer par https:// : la clé du TAL ne voyage jamais en clair.",
                 http_status=422,
             )
-        row.api_url = adresse or None
+        row.api_url = _a_enregistrer("api_url", adresse)
     if entete_cle is not None:
-        row.entete_cle = entete_cle.strip()[:64] or None
+        row.entete_cle = _a_enregistrer("entete_cle", entete_cle.strip()[:64])
     if chemin_frw111 is not None:
-        row.chemin_frw111 = chemin_frw111.strip()[:255] or None
+        row.chemin_frw111 = _a_enregistrer("chemin_frw111", chemin_frw111.strip()[:255])
     if chemin_frw122 is not None:
-        row.chemin_frw122 = chemin_frw122.strip()[:255] or None
+        row.chemin_frw122 = _a_enregistrer("chemin_frw122", chemin_frw122.strip()[:255])
     if effacer_cle:
         row.cle_chiffree = None
         row.cle_posee_le = None
@@ -393,7 +401,54 @@ def _montant(v: Any) -> str:
         f = float(v)
     except (TypeError, ValueError):
         return str(v)
-    return f"{f:.0f}" if abs(f - round(f)) < 0.005 else f"{f:.2f}"
+    # Format de l'exemple du TAL (« 780.00 », imprimé « 780,00 » sur le bail).
+    return f"{f:.2f}"
+
+
+_MONTANT_RE = re.compile(r"^-?\d+(?:[.,]\d+)?$")
+
+
+def _au_format_montant(v: Any) -> Any:
+    if isinstance(v, bool) or v is None:
+        return v
+    if isinstance(v, (int, float)):
+        return f"{float(v):.2f}"
+    if isinstance(v, str) and _MONTANT_RE.match(v.strip()):
+        return f"{float(v.strip().replace(',', '.')):.2f}"
+    return v
+
+
+def normaliser_montants(form: dict[str, Any], schema: SchemaTal) -> int:
+    """Met chaque champ de type « nombre » (les montants) au format de l'exemple du
+    TAL : point décimal et deux décimales (« 1450.00 », imprimé « 1450,00 » sur le
+    bail) ; une virgule saisie devient un point. Les compteurs (type « number ») et
+    tout ce qui n'est pas un nombre restent tels quels. Modifie le formulaire sur
+    place ; retourne le nombre de valeurs changées."""
+    changes = 0
+
+    def poser(occurrence: Any, nom: str) -> None:
+        nonlocal changes
+        if isinstance(occurrence, dict) and nom in occurrence:
+            neuf = _au_format_montant(occurrence[nom])
+            if neuf != occurrence[nom]:
+                occurrence[nom] = neuf
+                changes += 1
+
+    for champ in schema.champs:
+        if champ.type != "nombre":
+            continue
+        niveaux = [g for g in (champ.groupe or "").split(".") if g]
+        cibles: list[Any] = [form]
+        for g in niveaux:
+            suivantes: list[Any] = []
+            for c in cibles:
+                v = c.get(g) if isinstance(c, dict) else None
+                if isinstance(v, list):
+                    suivantes.extend(v)
+            cibles = suivantes
+        for c in cibles:
+            poser(c, champ.nom)
+    return changes
 
 
 def _iso(d: Any) -> str:
@@ -940,6 +995,7 @@ def resume_transmission(t: TalTransmission, *, avec_form: bool = False) -> dict[
         "adresse": t.adresse,
         "statut": t.statut,
         "mode": t.mode,
+        "langue": code_langue(getattr(t, "langue", None)),
         "schema_version": t.schema_version,
         "identifiant_utilisateur": t.identifiant_utilisateur,
         "short_guid": t.short_guid,
@@ -1091,22 +1147,27 @@ async def generer(
     if not rapport.valide:
         await db.flush()
         raise FormulaireInvalide("Le formulaire ne passe pas la validation locale — rien n'a été envoyé au TAL.", details=rapport.as_dict())
+    # Montants au format de l'exemple du TAL (point décimal, deux décimales) : ce qui
+    # est gardé est exactement ce qui est envoyé.
+    if normaliser_montants(form, schema):
+        t.payload_json = _json(form)
     if connexion is None:
         connexion, _infos = await charger_connexion(db)
     client = client or _fabrique_client(connexion)
+    langue = code_langue(getattr(t, "langue", None))
     t.mode = client.mode
     t.tentatives = int(t.tentatives or 0) + 1
     t.erreur = None
     now = datetime.now(timezone.utc)
     secret = connexion.cle or ""
     _noter_journal(t, "appel", {
-        "mode": client.mode, "tentative": t.tentatives, "url": connexion.url or None, "entete_cle": connexion.entete_cle,
+        "mode": client.mode, "tentative": t.tentatives, "langue": langue, "url": connexion.url or None, "entete_cle": connexion.entete_cle,
         "chemin_frw111": connexion.chemin_frw111, "chemin_frw122": connexion.chemin_frw122,
     }, secret=secret)
 
     if not t.short_guid:
         try:
-            rc = await client.creer_formulaire(form, identifiant_utilisateur=t.identifiant_utilisateur)
+            rc = await client.creer_formulaire(form, langue=langue, identifiant_utilisateur=t.identifiant_utilisateur)
         except TalApiError as exc:
             # La clé ne sort jamais : ni à l'écran, ni au journal, ni dans l'audit.
             exc.message = _masquer(exc.message, secret)
@@ -1127,7 +1188,9 @@ async def generer(
         await db.commit()  # le ShortGuid ne doit jamais se perdre
 
     try:
-        rt = await client.declencher_transmission(t.short_guid, identifiant_utilisateur=t.identifiant_utilisateur, form_pour_simulation=form)
+        rt = await client.declencher_transmission(
+            t.short_guid, langue=langue, identifiant_utilisateur=t.identifiant_utilisateur, form_pour_simulation=form
+        )
     except TalApiError as exc:
         exc.message = _masquer(exc.message, secret)
         exc.args = (f"{exc.etape} : {exc.message}",)
@@ -1947,5 +2010,5 @@ __all__ = [
     "generer", "annuler", "compteur",
     "DOC_TYPE_SIGNE", "contexte_independant", "creer_independant", "preparation_independante",
     "parties_du_formulaire", "adresse_depuis_formulaire",
-    "registre", "TPS_PCT", "TVQ_PCT", "FORFAIT_LICENCE",
+    "registre", "TPS_PCT", "TVQ_PCT", "FORFAIT_LICENCE", "normaliser_montants",
 ]
