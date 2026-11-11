@@ -43,6 +43,7 @@ ESSENTIEL = {
     "adresse": "4521 rue Saint-Denis", "appartement": "3", "ville": "Montréal", "code_postal": "H2J 2L4",
     "nb_pieces": 4.5, "date_debut": "2027-07-01", "date_fin": "2028-06-30", "loyer_mensuel": 1450,
     "jour_echeance": 1, "electricite_inclus": False, "chauffage_inclus": False, "internet_inclus": True,
+    "chauffage_type": "gaz",          # choisi à chaque bail : aucun défaut
 }
 
 
@@ -525,7 +526,7 @@ def test_langue_du_bail_choisie_a_la_generation(client, auth_headers, run, monke
         "libelle": "Bail en anglais", "locateur": {"nom": "Marc Tremblay", "courriel": "marc@exemple.ca"},
         "locataires": [{"nom": "John Smith", "courriel": "john@exemple.ca"}],
         "adresse": "4521 rue Saint-Denis", "appartement": "9", "ville": "Montréal", "code_postal": "H2J 2L4", "nb_pieces": 3.5,
-        "date_debut": "2027-07-01", "date_fin": "2028-06-30", "loyer_mensuel": 1200,
+        "date_debut": "2027-07-01", "date_fin": "2028-06-30", "loyer_mensuel": 1200, "chauffage_type": "electricite",
     })
     assert r.status_code == 201, r.text
     tid = r.json()["id"]
@@ -549,4 +550,86 @@ def test_langue_du_bail_choisie_a_la_generation(client, auth_headers, run, monke
                     await s.commit()
 
         run(_ranger())
+
+
+def test_jamais_de_virgule_decimale_au_tal():
+    """Avis du TAL (11 nov. 2026) : la virgule décimale n'est pas interprétée, il faut un point.
+    Kratos accepte ce qu'on écrit naturellement et n'envoie que des points ; une saisie ambiguë
+    est refusée avant tout envoi."""
+    from app.integrations.tal.schema import charger_schema_asset
+    from app.integrations.tal.validateur import nombre_canonique, valider
+
+    schema = charger_schema_asset()
+    cas = {
+        "1450": "1450.00", "1450,5": "1450.50", "1450.50": "1450.50", "125,50": "125.50",
+        "1 250,75": "1250.75", "1 250.75 $": "1250.75", "1250,75 $": "1250.75", "$1,250.75": "1250.75",
+        "1\u202f250,75": "1250.75", "1\u00a0250": "1250.00", "12 345 678,9": "12345678.90", "1.250,75": "1250.75",
+    }
+    for saisie, attendu in cas.items():
+        form = {"coutLoyer": saisie}
+        assert not valider(dict(form), schema, requis=[]).as_dict()["erreurs"], saisie
+        assert svc.normaliser_montants(form, schema) == (0 if saisie == attendu else 1) and form["coutLoyer"] == attendu, saisie
+        assert "," not in form["coutLoyer"]
+    # Ambigu ou pas un nombre : refusé à la validation, donc jamais envoyé, et laissé tel quel.
+    for saisie in ("1,250", "1.250", "1,25,0", "12,3456.7", "mille", "1250 dollars", "--5", "$"):
+        form = {"coutLoyer": saisie}
+        erreurs = valider(dict(form), schema, requis=[]).as_dict()["erreurs"]
+        assert any(e.startswith("coutLoyer : nombre attendu") for e in erreurs), saisie
+        assert svc.normaliser_montants(form, schema) == 0 and form["coutLoyer"] == saisie
+        assert nombre_canonique(saisie) is None
+    assert "sans ambiguïté" in valider({"coutLoyer": "1,250"}, schema, requis=[]).as_dict()["erreurs"][0]
+    # Compteurs et heures (type « number ») : forme gardée, mais jamais de virgule.
+    form = {"nbTables": "2", "soinsInfirmiers": [{"heuresPrepose": "1,5", "coutPrepose": "20,5"}], "stationnementExterieur": [{"nbPlaces": " 3 "}]}
+    assert svc.normaliser_montants(form, schema) == 3
+    assert form == {"nbTables": "2", "soinsInfirmiers": [{"heuresPrepose": "1.5", "coutPrepose": "20.50"}], "stationnementExterieur": [{"nbPlaces": "3"}]}
+    # Valeurs déjà numériques (construites par Kratos) : toujours un point.
+    assert nombre_canonique(1450) == "1450" and nombre_canonique(1450.5) == "1450.5" and nombre_canonique(True) is None and nombre_canonique("") is None
+    assert svc._montant(1250.75) == "1250.75" and svc._montant("1250.5") == "1250.50"
+
+
+def test_chauffage_a_choisir_et_debit_preautorise(client, auth_headers):
+    """Retours de Phil (2026-11-11) : aucun chauffage par défaut — le type se choisit à chaque bail et le
+    bail ne se génère pas sans lui ; le mode de paiement par défaut peut être le débit préautorisé (DPA),
+    le virement restant le défaut. La liste des champs exigés suit le formulaire (étoiles à l'écran)."""
+    cfg = client.get(f"{BASE}/etat", headers=auth_headers).json()
+    assert cfg["defauts"]["chauffage_defaut"] == "" and cfg["defauts"]["mode_paiement_defaut"] == "virementBancaire"
+    assert cfg["defauts"]["requis"].endswith(",typeBail,typeChauffageLogement")
+    # Une ancienne liste « requis » restée enregistrée (sans le chauffage) suit la liste du jour.
+    ancienne = "locateurs[0].nom,locataires[0].nom,adresseLogement[0].Rue,adresseLogement[0].Municipalite,coutLoyer,typeBail"
+    assert svc.fusionner_config({"requis": ancienne})["requis"] == svc.DEFAUTS["requis"]
+    assert svc.fusionner_config({"requis": "coutLoyer"})["requis"] == "coutLoyer"            # un vrai réglage est respecté
+
+    base = {"locateur": {"nom": "Marc Tremblay"}, "locataires": [{"nom": "Julie Roy"}], "adresse": "12 rue des Lilas", "ville": "Laval",
+            "date_debut": "2027-07-01", "date_fin": "2028-06-30", "loyer_mensuel": 1300}
+    try:
+        # 1. Sans type de chauffage : le brouillon se crée, mais le bail ne partirait pas.
+        r = client.post(f"{BASE}/independants", headers=auth_headers, json=base)
+        assert r.status_code == 201, r.text
+        sans = r.json()
+        assert sans["form"]["typeChauffageLogement"] == [] and sans["form"]["modePaiement"] == "virementBancaire"
+        assert any(e.startswith("typeChauffageLogement : champ requis par Kratos") and "type de chauffage" in e for e in sans["rapport"]["erreurs"])
+        assert client.post(f"{BASE}/transmissions/{sans['id']}/generer", headers=auth_headers, json={"confirme": True}).status_code == 422
+        prep = client.get(f"{BASE}/preparer", headers=auth_headers, params={"transmission_id": sans["id"]}).json()
+        assert "typeChauffageLogement" in prep["requis"] and "coutLoyer" in prep["requis"] and "locataires[0].nom" in prep["requis"]
+        # 2. Type choisi dans le petit formulaire : posé tel quel ; une valeur inconnue du TAL est ignorée.
+        avec = client.post(f"{BASE}/independants", headers=auth_headers, json={**base, "chauffage_type": "mazout"}).json()
+        assert avec["form"]["typeChauffageLogement"] == ["mazout"] and avec["rapport"]["valide"] is True
+        bois = client.post(f"{BASE}/independants", headers=auth_headers, json={**base, "chauffage_type": "bois"}).json()
+        assert bois["form"]["typeChauffageLogement"] == []
+        # 3. Réglages : débit préautorisé par défaut + un chauffage par défaut si on en veut un.
+        r = client.put(f"{BASE}/parametres", headers=auth_headers, json={"mode_paiement_defaut": "dpa", "chauffage_defaut": "gaz"})
+        assert r.status_code == 200 and r.json()["config"]["mode_paiement_defaut"] == "dpa" and r.json()["config"]["chauffage_defaut"] == "gaz"
+        dpa = client.post(f"{BASE}/independants", headers=auth_headers, json=base).json()
+        f = dpa["form"]
+        # Pas de case « débit préautorisé » au formulaire du TAL : « Autre » + précision.
+        assert f["modePaiement"] == "autre" and f["precisionAutresModePaiement"] == "Débit préautorisé (DPA)"
+        assert f["typeChauffageLogement"] == ["gaz"] and dpa["rapport"]["valide"] is True
+        chemins = {x["chemin"] for x in dpa["a_verifier"]}
+        assert {"modePaiement", "precisionAutresModePaiement", "typeChauffageLogement"} <= chemins
+        for tid in (sans["id"], avec["id"], bois["id"], dpa["id"]):
+            assert client.post(f"{BASE}/transmissions/{tid}/annuler", headers=auth_headers).status_code == 200
+    finally:
+        # Retour aux réglages de départ : virement par défaut, aucun chauffage par défaut.
+        r = client.put(f"{BASE}/parametres", headers=auth_headers, json={"mode_paiement_defaut": "virementBancaire", "chauffage_defaut": ""})
+        assert r.status_code == 200 and r.json()["config"]["chauffage_defaut"] == "" and r.json()["config"]["mode_paiement_defaut"] == "virementBancaire"
 

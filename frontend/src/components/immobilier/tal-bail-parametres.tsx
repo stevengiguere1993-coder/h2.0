@@ -106,12 +106,16 @@ type Diff = {
 
 const MODES_PAIEMENT = [
   ["virementBancaire", "Virement bancaire"],
+  // Pas de case au formulaire du TAL : inscrit sous « Autre » avec la précision.
+  ["dpa", "Débit préautorisé (DPA)"],
   ["cheque", "Chèque"],
   ["chequePostDate", "Chèques postdatés"],
   ["argentComptant", "Argent comptant"],
   ["autre", "Autre"]
 ];
 const CHAUFFAGES = [
+  // Aucun défaut (Phil 2026-11-11) : le type de chauffage se choisit à chaque bail.
+  ["", "Aucun : à choisir à chaque bail"],
   ["electricite", "Électricité"],
   ["gaz", "Gaz"],
   ["mazout", "Mazout"]
@@ -139,6 +143,8 @@ export function TalBailSection({
   const [cfg, setCfg] = useState<Config | null>(null);
   const [cx, setCx] = useState<{ mode: string; api_url: string; entete_cle: string; chemin_frw111: string; chemin_frw122: string } | null>(null);
   const [apiKey, setApiKey] = useState("");
+  // Frais par bail : le texte tel qu'on le tape (« 8,99 », « 8.99 »), lu en nombre à l'enregistrement.
+  const [tarifTexte, setTarifTexte] = useState("");
   const [versions, setVersions] = useState<Version[]>([]);
   const [diff, setDiff] = useState<Diff | null>(null);
   const [busy, setBusy] = useState(false);
@@ -156,6 +162,7 @@ export function TalBailSection({
       const d = (await r.json()) as Parametres;
       setData(d);
       setCfg(d.config);
+      setTarifTexte(String(d.config.tarif_recharge).replace(".", ","));
       setCx({
         mode: d.connexion.mode,
         api_url: d.connexion.api_url || "",
@@ -458,12 +465,20 @@ export function TalBailSection({
                   <label className="block text-xs font-medium uppercase tracking-wide text-white/50">Frais par bail au propriétaire ($)</label>
                   <input
                     inputMode="decimal"
-                    value={String(cfg.tarif_recharge)}
+                    value={tarifTexte}
                     disabled={!canEdit}
-                    onChange={(e) => setCfg({ ...cfg, tarif_recharge: Number(e.target.value.replace(",", ".")) || 0 })}
+                    onChange={(e) => {
+                      // Chiffres, UNE virgule ou UN point : la saisie reste telle quelle pendant qu'on tape.
+                      const texte = e.target.value.replace(/[^0-9.,]/g, "").replace(/([.,])(.*)[.,]/, "$1$2");
+                      setTarifTexte(texte);
+                      const n = Number(texte.replace(",", "."));
+                      setCfg({ ...cfg, tarif_recharge: Number.isFinite(n) ? n : 0 });
+                    }}
                     className={`${INPUT} mt-1 w-full`}
                   />
-                  <p className="mt-1 text-[11px] text-white/40">Défaut {data.defauts.tarif_recharge} $ · ajouté à la file Facturation à chaque bail généré en mode réel.</p>
+                  <p className="mt-1 text-[11px] text-white/40">
+                    Défaut {String(data.defauts.tarif_recharge).replace(".", ",")} $ · ajouté à la file Facturation à chaque bail généré en mode réel.
+                  </p>
                 </div>
                 <label className="flex items-start gap-2 pt-6 text-sm text-white/80">
                   <input type="checkbox" checked={cfg.frais_auto} disabled={!canEdit} onChange={(e) => setCfg({ ...cfg, frais_auto: e.target.checked })} className="mt-1" />
@@ -483,6 +498,12 @@ export function TalBailSection({
                       <option key={v} value={v}>{l}</option>
                     ))}
                   </select>
+                  {cfg.mode_paiement_defaut === "dpa" ? (
+                    <p className="mt-1 text-[11px] text-white/40">
+                      Le formulaire du TAL n&apos;a pas de case pour le DPA : il est inscrit sous « Autre », avec la précision « Débit
+                      préautorisé (DPA) ».
+                    </p>
+                  ) : null}
                 </div>
                 <div>
                   <label className="block text-xs font-medium uppercase tracking-wide text-white/50">Chauffage par défaut</label>
@@ -491,6 +512,9 @@ export function TalBailSection({
                       <option key={v} value={v}>{l}</option>
                     ))}
                   </select>
+                  {!cfg.chauffage_defaut ? (
+                    <p className="mt-1 text-[11px] text-white/40">Un bail ne se génère pas tant que le type de chauffage n&apos;est pas choisi.</p>
+                  ) : null}
                 </div>
               </div>
               <div className="flex flex-wrap gap-4 text-sm text-white/80">
@@ -549,18 +573,20 @@ export function TalBailSection({
 
           {/* ── Schéma ── */}
           <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-white/50">Schéma du formulaire (fourni par le TAL)</h3>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-white/50">Champs du formulaire officiel (fichier du TAL)</h3>
             <p className="mt-2 text-sm text-white/80">
               Actif : <b>{data.schema.version}</b>{" "}
               <span className="text-white/45">· {data.schema.nb_champs} champs · {data.schema.source}</span>
             </p>
             <p className="mt-1 text-[11px] text-white/40">
-              Quand le TAL publie une nouvelle version (15 jours pour s&apos;adapter) : téléverse le JSON,
-              lis le diff, active. Le fichier embarqué reste disponible (version 0).
+              C&apos;est la liste des champs du formulaire officiel, telle que le TAL l&apos;a définie. Kratos a déjà la version en
+              vigueur : tu n&apos;as rien à faire ici. Si le TAL modifie son formulaire, il t&apos;envoie un nouveau fichier JSON et le
+              contrat donne 15 jours pour suivre : téléverse-le ici, regarde ce qui change, puis active-le. La version fournie
+              avec Kratos reste toujours disponible.
             </p>
             {isAdmin ? (
               <label className="btn-outline-accent btn-sm mt-3 inline-flex cursor-pointer">
-                <Upload className="h-3.5 w-3.5" /> Téléverser un schéma JSON
+                <Upload className="h-3.5 w-3.5" /> Téléverser un nouveau fichier du TAL
                 <input
                   type="file"
                   accept="application/json,.json"

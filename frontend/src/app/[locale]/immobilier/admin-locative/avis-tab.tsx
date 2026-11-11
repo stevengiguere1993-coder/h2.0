@@ -26,7 +26,9 @@ import {
   Champ,
   ChoisirContact,
   type Contact,
+  Etoile,
   Fenetre,
+  NoteCarnetVide,
   argent,
   dateFr,
   dateInstantFr,
@@ -574,7 +576,8 @@ function AvisForm({
       pied={
         <>
           <p className="text-[11px] text-white/45">
-            L&apos;avis portera la date du jour de son envoi. Rien ne part à cette étape : on enregistre le brouillon.
+            <Etoile /> Obligatoire pour envoyer l&apos;avis. Il portera la date du jour de son envoi. Rien ne part à cette étape : on
+            enregistre le brouillon.
           </p>
           <button type="button" onClick={onClose} className="btn-secondary btn-sm ml-auto" disabled={busy}>
             Fermer
@@ -588,6 +591,7 @@ function AvisForm({
         </>
       }
     >
+      <NoteCarnetVide contacts={contacts} />
       <Champ label="Nom de cet avis (pour toi, n'apparaît pas sur l'avis)">
         <input className="input" value={f.libelle} onChange={(ev) => poser("libelle", ev.target.value)} placeholder="Ex. Renouvellement de Marc 2027" maxLength={255} />
       </Champ>
@@ -608,7 +612,7 @@ function AvisForm({
           }
         />
         <div className="grid gap-2 sm:grid-cols-3">
-          <Champ label="Nom">
+          <Champ label="Nom" requis>
             <input className="input" value={f.locateur_nom} onChange={(ev) => poser("locateur_nom", ev.target.value)} />
           </Champ>
           <Champ label="Téléphone">
@@ -631,10 +635,10 @@ function AvisForm({
           onChoisir={(c) => setF((x) => ({ ...x, locataire_nom: c.nom, locataire_courriel: c.courriel || "" }))}
         />
         <div className="grid gap-2 sm:grid-cols-2">
-          <Champ label="Nom">
+          <Champ label="Nom" requis>
             <input className="input" value={f.locataire_nom} onChange={(ev) => poser("locataire_nom", ev.target.value)} />
           </Champ>
-          <Champ label="Courriel (l'avis y sera envoyé)">
+          <Champ label="Courriel (l'avis y sera envoyé)" requis>
             <input className="input" type="email" value={f.locataire_courriel} onChange={(ev) => poser("locataire_courriel", ev.target.value)} />
           </Champ>
         </div>
@@ -642,7 +646,7 @@ function AvisForm({
 
       <Bloc titre="Logement loué">
         <div className="grid gap-2 sm:grid-cols-4">
-          <Champ label="Numéro et rue" className="sm:col-span-2">
+          <Champ label="Numéro et rue" className="sm:col-span-2" requis>
             <input className="input" value={f.logement_adresse} onChange={(ev) => poser("logement_adresse", ev.target.value)} placeholder="4521 rue Saint-Denis" />
           </Champ>
           <Champ label="Appartement">
@@ -679,15 +683,15 @@ function AvisForm({
             </select>
           </Champ>
           {f.modif_mode === "nouveau_loyer" ? (
-            <Champ label="Nouveau loyer mensuel ($)">
+            <Champ label="Nouveau loyer mensuel ($)" requis>
               <input className="input" inputMode="decimal" value={f.nouveau_loyer} onChange={(ev) => poser("nouveau_loyer", ev.target.value)} placeholder="1495" />
             </Champ>
           ) : f.modif_mode === "hausse_montant" ? (
-            <Champ label="Montant de la hausse ($ par mois)">
+            <Champ label="Montant de la hausse ($ par mois)" requis>
               <input className="input" inputMode="decimal" value={f.hausse_montant} onChange={(ev) => poser("hausse_montant", ev.target.value)} placeholder="45" />
             </Champ>
           ) : f.modif_mode === "hausse_pct" ? (
-            <Champ label="Pourcentage de la hausse (%)">
+            <Champ label="Pourcentage de la hausse (%)" requis>
               <input className="input" inputMode="decimal" value={f.hausse_pct} onChange={(ev) => poser("hausse_pct", ev.target.value)} placeholder="3" />
             </Champ>
           ) : (

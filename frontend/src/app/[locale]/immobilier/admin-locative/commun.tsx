@@ -52,7 +52,8 @@ export async function lireErreur(r: Response): Promise<string> {
 }
 
 export function nombre(v: string): number | null {
-  const n = Number(String(v).replace(",", ".").replace(/\s/g, ""));
+  // « 1 250,75 $ » se lit 1250.75 : espaces et signe de dollar retirés, virgule lue comme un point.
+  const n = Number(String(v).replace(/[\s$]/g, "").replace(",", "."));
   return v.trim() !== "" && Number.isFinite(n) ? n : null;
 }
 
@@ -98,10 +99,44 @@ export function nomDepuisCourriel(courriel: string | null | undefined): string {
 
 // ─── Mise en forme partagée ────────────────────────────────────────────
 
-export function Champ({ label, children, className = "" }: { label: string; children: React.ReactNode; className?: string }) {
+/** Petite étoile rouge d'un champ obligatoire. */
+export function Etoile() {
+  return (
+    <span className="ml-0.5 font-bold text-rose-400" title="Obligatoire">
+      *
+    </span>
+  );
+}
+
+/** Tant que le carnet est vide, le sélecteur de contacts n'a rien à proposer : on le dit. */
+export function NoteCarnetVide({ contacts }: { contacts: Contact[] }) {
+  if (contacts.some((c) => c.actif)) return null;
+  return (
+    <p className="rounded-lg border border-brand-800 bg-brand-900/60 px-3 py-2 text-[11px] text-white/55">
+      Le carnet de contacts est encore vide. Les personnes que tu inscris ici y entrent toutes seules : la prochaine fois, une
+      liste « Choisir dans le carnet » apparaîtra au-dessus de chaque nom.
+    </p>
+  );
+}
+
+export function Champ({
+  label,
+  children,
+  className = "",
+  requis = false
+}: {
+  label: string;
+  children: React.ReactNode;
+  className?: string;
+  /** Champ obligatoire : une petite étoile rouge suit le libellé. */
+  requis?: boolean;
+}) {
   return (
     <label className={`flex flex-col gap-1 text-xs text-white/60 ${className}`}>
-      <span>{label}</span>
+      <span>
+        {label}
+        {requis ? <Etoile /> : null}
+      </span>
       {children}
     </label>
   );

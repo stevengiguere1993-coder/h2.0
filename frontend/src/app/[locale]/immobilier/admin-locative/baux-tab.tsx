@@ -25,13 +25,15 @@ import {
   type TalTransmission
 } from "@/components/immobilier/tal-bail-modal";
 import { authedFetch } from "@/lib/auth";
-import { BASE_TAL as BASE, Bloc, Champ, ChoisirContact, type Contact, argent, dateFr, lireErreur, nombre } from "./commun";
+import { BASE_TAL as BASE, Bloc, Champ, ChoisirContact, type Contact, Etoile, NoteCarnetVide, argent, dateFr, lireErreur, nombre } from "./commun";
 
 type Etat = {
   connexion: { mode: string; pret_pour_reel: boolean; cle_configuree: boolean; url_configuree: boolean };
   compteur: { gratuits_restants: number; total_reel_depuis_le_debut: number };
   cout_tal: number;
   gratuits_total: number;
+  /** Réglages du bail officiel ; « requis » = chemins des champs exigés avant l'envoi. */
+  config?: { requis?: string };
 };
 type Item = TalTransmission & { signature: SignatureEtat | null };
 type Personne = { nom: string; telephone: string; courriel: string; adresse: string };
@@ -54,6 +56,8 @@ type Essentiel = {
   electricite_inclus: boolean;
   eau_chaude_inclus: boolean;
   internet_inclus: boolean;
+  /** Type de chauffage du logement : aucun défaut, il se choisit à chaque bail. */
+  chauffage_type: string;
 };
 
 const PERSONNE_VIDE: Personne = { nom: "", telephone: "", courriel: "", adresse: "" };
@@ -75,8 +79,15 @@ const ESSENTIEL_VIDE: Essentiel = {
   chauffage_inclus: false,
   electricite_inclus: false,
   eau_chaude_inclus: false,
-  internet_inclus: false
+  internet_inclus: false,
+  chauffage_type: ""
 };
+// Clés du formulaire du TAL pour le type de chauffage.
+const CHAUFFAGES: [string, string][] = [
+  ["electricite", "Électricité"],
+  ["gaz", "Gaz"],
+  ["mazout", "Mazout"]
+];
 const PIECES = ["1", "1.5", "2", "2.5", "3", "3.5", "4", "4.5", "5", "5.5", "6", "6.5", "7", "7.5"];
 
 function personneDe(c: Contact): Personne {
@@ -188,6 +199,7 @@ export function BauxTab({
       {nouveau ? (
         <NouveauBail
           contacts={contacts}
+          requis={(etat?.config?.requis || "").split(",").map((x) => x.trim()).filter(Boolean)}
           onClose={() => setNouveau(false)}
           onCree={(t) => {
             setNouveau(false);
@@ -376,7 +388,19 @@ export function BauxTab({
 
 // ─── Petit formulaire ──────────────────────────────────────────────────
 
-function NouveauBail({ contacts, onClose, onCree }: { contacts: Contact[]; onClose: () => void; onCree: (t: TalTransmission) => void }) {
+function NouveauBail({
+  contacts,
+  requis,
+  onClose,
+  onCree
+}: {
+  contacts: Contact[];
+  /** Chemins des champs exigés avant l'envoi (Paramètres) : étoile rouge sur le champ correspondant. */
+  requis: string[];
+  onClose: () => void;
+  onCree: (t: TalTransmission) => void;
+}) {
+  const R = (...chemins: string[]) => chemins.some((c) => requis.includes(c));
   const [e, setE] = useState<Essentiel>(ESSENTIEL_VIDE);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -418,7 +442,8 @@ function NouveauBail({ contacts, onClose, onCree }: { contacts: Contact[]; onClo
           chauffage_inclus: e.chauffage_inclus,
           electricite_inclus: e.electricite_inclus,
           eau_chaude_inclus: e.eau_chaude_inclus,
-          internet_inclus: e.internet_inclus
+          internet_inclus: e.internet_inclus,
+          chauffage_type: e.chauffage_type || null
         })
       });
       if (!r.ok) throw new Error(await lireErreur(r));
@@ -448,6 +473,7 @@ function NouveauBail({ contacts, onClose, onCree }: { contacts: Contact[]; onClo
         </div>
 
         <div className="space-y-3 px-5 py-4">
+          <NoteCarnetVide contacts={contacts} />
           <Champ label="Nom de ce bail (pour toi, n'apparaît pas au bail)">
             <input className="input" value={e.libelle} onChange={(ev) => poser("libelle", ev.target.value)} placeholder="Ex. Essai 1, Bail de Marc" maxLength={255} />
           </Champ>
@@ -460,13 +486,13 @@ function NouveauBail({ contacts, onClose, onCree }: { contacts: Contact[]; onClo
               onChoisir={(c) => setE((x) => ({ ...x, locateur: personneDe(c) }))}
             />
             <div className="grid gap-2 sm:grid-cols-3">
-              <Champ label="Nom">
+              <Champ label="Nom" requis={R("locateurs[0].nom")}>
                 <input className="input" value={e.locateur.nom} onChange={(ev) => poserLocateur("nom", ev.target.value)} />
               </Champ>
-              <Champ label="Téléphone">
+              <Champ label="Téléphone" requis={R("locateurs[0].noTelephone")}>
                 <input className="input" value={e.locateur.telephone} onChange={(ev) => poserLocateur("telephone", ev.target.value)} placeholder="514-555-0100" />
               </Champ>
-              <Champ label="Courriel (pour la signature)">
+              <Champ label="Courriel (pour la signature)" requis={R("locateurs[0].courrielLocateur")}>
                 <input className="input" type="email" value={e.locateur.courriel} onChange={(ev) => poserLocateur("courriel", ev.target.value)} />
               </Champ>
               <Champ label="Adresse du locateur" className="sm:col-span-3">
@@ -485,13 +511,13 @@ function NouveauBail({ contacts, onClose, onCree }: { contacts: Contact[]; onClo
                     className="sm:col-span-4 sm:max-w-sm"
                     onChoisir={(c) => setE((x) => ({ ...x, locataires: x.locataires.map((q, j) => (j === i ? personneDe(c) : q)) }))}
                   />
-                  <Champ label={i === 0 ? "Nom" : `Nom (locataire ${i + 1})`}>
+                  <Champ label={i === 0 ? "Nom" : `Nom (locataire ${i + 1})`} requis={R(`locataires[${i}].nom`)}>
                     <input className="input" value={p.nom} onChange={(ev) => poserListe("locataires", i, "nom", ev.target.value)} />
                   </Champ>
                   <Champ label="Téléphone">
                     <input className="input" value={p.telephone} onChange={(ev) => poserListe("locataires", i, "telephone", ev.target.value)} />
                   </Champ>
-                  <Champ label="Courriel">
+                  <Champ label="Courriel" requis={R(`locataires[${i}].courrielLocataire`)}>
                     <input className="input" type="email" value={p.courriel} onChange={(ev) => poserListe("locataires", i, "courriel", ev.target.value)} />
                   </Champ>
                   {e.locataires.length > 1 ? (
@@ -544,13 +570,13 @@ function NouveauBail({ contacts, onClose, onCree }: { contacts: Contact[]; onClo
 
           <Bloc titre="Logement loué">
             <div className="grid gap-2 sm:grid-cols-4">
-              <Champ label="Numéro et rue" className="sm:col-span-2">
+              <Champ label="Numéro et rue" className="sm:col-span-2" requis={R("adresseLogement[0].Rue", "adresseLogement[0].NoCivique")}>
                 <input className="input" value={e.adresse} onChange={(ev) => poser("adresse", ev.target.value)} placeholder="4521 rue Saint-Denis" />
               </Champ>
-              <Champ label="Appartement">
+              <Champ label="Appartement" requis={R("adresseLogement[0].Appartement")}>
                 <input className="input" value={e.appartement} onChange={(ev) => poser("appartement", ev.target.value)} />
               </Champ>
-              <Champ label="Nombre de pièces">
+              <Champ label="Nombre de pièces" requis={R("nbPieces")}>
                 <select className="input" value={e.nb_pieces} onChange={(ev) => poser("nb_pieces", ev.target.value)}>
                   <option value="">—</option>
                   {PIECES.map((p) => (
@@ -560,10 +586,10 @@ function NouveauBail({ contacts, onClose, onCree }: { contacts: Contact[]; onClo
                   ))}
                 </select>
               </Champ>
-              <Champ label="Ville" className="sm:col-span-2">
+              <Champ label="Ville" className="sm:col-span-2" requis={R("adresseLogement[0].Municipalite")}>
                 <input className="input" value={e.ville} onChange={(ev) => poser("ville", ev.target.value)} />
               </Champ>
-              <Champ label="Code postal">
+              <Champ label="Code postal" requis={R("adresseLogement[0].CodePostal")}>
                 <input className="input" value={e.code_postal} onChange={(ev) => poser("code_postal", ev.target.value)} placeholder="H2J 2L4" />
               </Champ>
             </div>
@@ -571,28 +597,38 @@ function NouveauBail({ contacts, onClose, onCree }: { contacts: Contact[]; onClo
 
           <Bloc titre="Durée et loyer">
             <div className="grid gap-2 sm:grid-cols-4">
-              <Champ label="Type de bail">
+              <Champ label="Type de bail" requis={R("typeBail")}>
                 <select className="input" value={e.au_mois ? "indetermine" : "fixe"} onChange={(ev) => poser("au_mois", ev.target.value === "indetermine")}>
                   <option value="fixe">Durée fixe</option>
                   <option value="indetermine">Durée indéterminée</option>
                 </select>
               </Champ>
-              <Champ label="Début">
+              <Champ label="Début" requis={R("dateDebutBail", "dateDebutBailDureeIndeterminee")}>
                 <input className="input" type="date" value={e.date_debut} onChange={(ev) => poser("date_debut", ev.target.value)} />
               </Champ>
               {!e.au_mois ? (
-                <Champ label="Fin">
+                <Champ label="Fin" requis={R("dateFinBail")}>
                   <input className="input" type="date" value={e.date_fin} onChange={(ev) => poser("date_fin", ev.target.value)} />
                 </Champ>
               ) : (
                 <span />
               )}
               <span />
-              <Champ label="Loyer par mois ($)">
+              <Champ label="Loyer par mois ($)" requis={R("coutLoyer")}>
                 <input className="input" inputMode="decimal" value={e.loyer_mensuel} onChange={(ev) => poser("loyer_mensuel", ev.target.value)} placeholder="1450" />
               </Champ>
               <Champ label="Payable le (jour du mois)">
                 <input className="input" inputMode="numeric" value={e.jour_echeance} onChange={(ev) => poser("jour_echeance", ev.target.value)} />
+              </Champ>
+              <Champ label="Type de chauffage" className="sm:col-span-2" requis={R("typeChauffageLogement")}>
+                <select className="input" value={e.chauffage_type} onChange={(ev) => poser("chauffage_type", ev.target.value)}>
+                  <option value="">À choisir</option>
+                  {CHAUFFAGES.map(([v, l]) => (
+                    <option key={v} value={v}>
+                      {l}
+                    </option>
+                  ))}
+                </select>
               </Champ>
             </div>
             <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-white/70">
@@ -618,7 +654,8 @@ function NouveauBail({ contacts, onClose, onCree }: { contacts: Contact[]; onClo
 
         <div className="flex flex-wrap items-center gap-2 border-t border-brand-800 px-5 py-3">
           <p className="text-[11px] text-white/45">
-            Rien n&apos;est envoyé au TAL à cette étape : on crée seulement le brouillon. Les personnes nommées entrent au carnet.
+            <Etoile /> Obligatoire pour générer le bail. Rien n&apos;est envoyé au TAL à cette étape : on crée seulement le brouillon, et
+            ce qui manque se complète à l&apos;étape suivante. Les personnes nommées entrent au carnet.
           </p>
           <button type="button" onClick={onClose} className="btn-secondary btn-sm ml-auto" disabled={busy}>
             Fermer
