@@ -25,7 +25,7 @@ import {
   type TalTransmission
 } from "@/components/immobilier/tal-bail-modal";
 import { authedFetch } from "@/lib/auth";
-import { BASE_TAL as BASE, Bloc, Champ, ChoisirContact, type Contact, dateFr, lireErreur, nombre } from "./commun";
+import { BASE_TAL as BASE, Bloc, Champ, ChoisirContact, type Contact, argent, dateFr, lireErreur, nombre } from "./commun";
 
 type Etat = {
   connexion: { mode: string; pret_pour_reel: boolean; cle_configuree: boolean; url_configuree: boolean };
@@ -302,7 +302,7 @@ export function BauxTab({
                         {t.libelle && t.adresse ? `${t.adresse} · ` : ""}
                         {p?.locateurs.length ? p.locateurs.join(", ") : "locateur à saisir"} →{" "}
                         {p?.locataires.length ? p.locataires.join(", ") : "locataire à saisir"}
-                        {p?.loyer ? ` · ${p.loyer} $` : ""}
+                        {p?.loyer ? ` · ${nombre(p.loyer) !== null ? argent(nombre(p.loyer)) : `${p.loyer} $`}` : ""}
                         {p?.date_debut ? ` · dès le ${dateFr(p.date_debut)}` : ""}
                       </p>
                       {t.erreur && t.statut !== "transmise" ? (

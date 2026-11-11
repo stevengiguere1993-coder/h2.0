@@ -63,6 +63,9 @@ type Connexion = {
   source_cle: string | null;
   coffre_disponible: boolean;
   cle_dechiffrable: boolean;
+  /** Adresse, en-tête et chemins sont ceux de la documentation officielle du TAL. */
+  valeurs_officielles?: boolean;
+  officiel?: { api_url: string; entete_cle: string; chemin_frw111: string; chemin_frw122: string };
 };
 type Parametres = {
   config: Config;
@@ -323,10 +326,26 @@ export function TalBailSection({
               ) : null}
               {c.mode === "reel" && !c.pret_pour_reel ? (
                 <span className="flex items-center gap-1 text-amber-200">
-                  <AlertTriangle className="h-3.5 w-3.5" /> URL ou clé manquante : aucun appel ne partira.
+                  <AlertTriangle className="h-3.5 w-3.5" /> Clé manquante : aucun appel ne partira.
                 </span>
               ) : null}
             </div>
+            {c.officiel ? (
+              c.valeurs_officielles ? (
+                <p className="mt-2 text-[11px] text-emerald-300">
+                  Adresse, en-tête et chemins : valeurs de la documentation officielle du TAL. Rien à saisir, sauf la clé.
+                </p>
+              ) : (
+                <p className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-amber-200">
+                  Ces réglages diffèrent de la documentation officielle du TAL.
+                  {peutEditerCle ? (
+                    <button type="button" className="btn-secondary btn-xs" onClick={() => c.officiel && setCx({ ...cx, ...c.officiel })}>
+                      Remettre les valeurs officielles
+                    </button>
+                  ) : null}
+                </p>
+              )
+            ) : null}
             {!c.coffre_disponible ? (
               <p className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-100">
                 Aucune clé de chiffrement sur le serveur (SUBSCRIPTION_ENCRYPTION_KEY ou
@@ -362,7 +381,7 @@ export function TalBailSection({
                   value={cx.api_url}
                   disabled={!peutEditerCle}
                   onChange={(e) => setCx({ ...cx, api_url: e.target.value })}
-                  placeholder="https://… (fournie avec la clé)"
+                  placeholder={c.officiel?.api_url || "https://…"}
                   className={`${INPUT} mt-1 w-full`}
                 />
               </div>

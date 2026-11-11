@@ -143,12 +143,20 @@ export default function AdminLocativePage() {
           {onglet === "connexion" ? (
             <div>
               <div className="max-w-3xl rounded-xl border border-brand-800 bg-brand-900 p-4 text-sm text-white/70">
-                <p className="font-semibold text-white">Où mettre la clé de l&apos;API du TAL</p>
+                <p className="font-semibold text-white">Connexion à l&apos;API du TAL</p>
                 <ol className="mt-2 list-decimal space-y-1 pl-5">
-                  <li>Dans le cadre « Connexion à l&apos;API du TAL » ci-dessous, inscris l&apos;adresse de l&apos;API fournie par le TAL.</li>
-                  <li>Colle la clé dans le champ « Clé API ». Elle est chiffrée sur le serveur et ne s&apos;affiche plus jamais.</li>
-                  <li>Clique « Enregistrer la connexion ». Le mode reste à Simulation tant que tu ne le changes pas.</li>
-                  <li>Passe au mode Réel quand tu veux générer un vrai bail : chaque bail généré compte alors au TAL.</li>
+                  <li>
+                    Colle la clé dans le champ « Clé API », puis clique « Enregistrer la connexion ». Elle est chiffrée sur le
+                    serveur et ne s&apos;affiche plus jamais.
+                  </li>
+                  <li>
+                    L&apos;adresse de l&apos;API, le nom de l&apos;en-tête et les deux chemins viennent de la documentation officielle du
+                    TAL. Ils sont déjà réglés : n&apos;y touche pas.
+                  </li>
+                  <li>
+                    Tant que le mode est à Simulation, aucun appel ne part au TAL. Passe au mode Réel quand tu veux générer un
+                    vrai bail : chaque bail généré compte alors au TAL.
+                  </li>
                 </ol>
                 <p className="mt-2 text-xs text-white/55">
                   Seul un administrateur peut changer la connexion et la clé. Le même bloc se trouve dans Paramètres, section

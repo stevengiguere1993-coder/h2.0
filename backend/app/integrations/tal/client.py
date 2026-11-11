@@ -1,49 +1,48 @@
-"""Client de l'API FRW du TAL — deux appels (fiche « Déclencher une
-transmission personnalisée ») :
+"""Client de l'API FRW du TAL — deux appels, selon la documentation officielle
+« APIdocPartenaires » (TAL, 3 nov. 2026) :
 
-1. FRW111 CreerFormulaireIndividu : clé partenaire + ``{"form": {...}}``
-   → numéro public de formulaire (ShortGuid). Gratuit tant que la
-   transmission n'est pas déclenchée (à confirmer avec le TAL).
-2. FRW122 DeclencherTransmissionPersonnalisee : NoPublicFormulaire =
-   ShortGuid, IdTransmissionPerso = « envoi-partenaire », Identifiant
-   Utilisateur (optionnel, notre suivi) → le formulaire devient
-   FACTURABLE (2,99 $) ; réponse : ``documents[]`` (nom, flux base64,
-   type source ex. genererPdf) + ``messages[]`` (mnémonique, texte).
+1. FRW111 — ``POST {base}/api/v1/SIS/CreerFormulaireIndividu/{typeFormulaire}``
+   (typeFormulaire = ``53000BAIL``). Corps : ``{"form": {...}}``, l'objet de
+   pré-remplissage, rien d'autre. Réponse : ``{"noPublicSession": "…",
+   "noPublicForm": "…", "noTransactionChiffre": null}`` — le numéro public du
+   formulaire (le « ShortGuid ») est ``noPublicForm``. Non facturable.
+2. FRW122 — ``POST {base}/api/v1/SIS/DeclencherTransmissionPersonnalisee/
+   {noPublicFormulaire}/{idTransmissionPerso}`` (idTransmissionPerso =
+   « transmission-personnalisee »), SANS corps. Le formulaire devient FACTURABLE
+   (2,99 $). Réponse : ``{"documents": [{"nom": "Bail de logement.pdf",
+   "fichier": "<base64>", "_type": "genererPDF"}], "messages":
+   [{"mnemonique": "TypeFormulaire", "message": "53000BAIL"}]}`` — aucun
+   numéro de confirmation.
 
-Formats RÉELS des réponses (exemples fournis par le TAL avec la clé,
-2026-11-10) :
-- FRW111 → ``{"noPublicSession": "…", "noPublicForm": "…",
-  "noTransactionChiffre": null}`` : le numéro public du formulaire (le
-  « ShortGuid » de la fiche) est ``noPublicForm`` ;
-- FRW122 → ``{"documents": [{"nom": "Bail de logement.pdf", "fichier":
-  "<base64>", "_type": "genererPDF"}], "messages": [{"mnemonique":
-  "TypeFormulaire", "message": "53000BAIL"}]}`` — aucun numéro de
-  confirmation dans la réponse.
-Le corps du FRW111 est EXACTEMENT l'objet de pré-remplissage de la fiche
-(``{"form": {...}}``), rien d'autre.
+En-têtes des deux appels : ``X-ClePartenaire`` (la clé de partenaire externe),
+``Accept-Language`` (``fr-CA`` ou ``en-CA`` ; au FRW122 c'est la LANGUE DU BAIL
+produit) et ``accept: application/json``. Base : ``https://formulaires.mtess.
+gouv.qc.ca``. Erreurs 400 / 401 / 403 : ``{type, title, status, detail, instance}``.
 
-URL de base, chemins et nom de l'en-tête de la clé ne sont
-PAS encore confirmés (ils arrivent avec la clé) : tout vient d'une
-``ConnexionTal`` résolue par le service (table ``tal_connexion`` →
-variables d'environnement ``TAL_*`` en repli) et s'ajuste sans toucher
-au reste.
+Ces valeurs sont les DÉFAUTS de Kratos : il n'y a rien à saisir, sauf la clé.
+Elles restent modifiables (Admin locative → Connexion au TAL, ou variables
+``TAL_*``) si le TAL les change un jour. Les valeurs d'avant la documentation —
+des hypothèses de Kratos (``X-Api-Key``, ``/FRW111/…``, ``/FRW122/…``, corps JSON
+au FRW122, « envoi-partenaire ») — sont remplacées d'office, même enregistrées.
 
-Mode ``simulation`` (défaut tant qu'il n'y a pas de clé) : aucun appel
-réseau ; ShortGuid « SIM-… », PDF local clairement marqué « SIMULATION —
-CE N'EST PAS UN BAIL OFFICIEL », message mnémonique SIMULATION. Le mode
-réel refuse de partir sans URL ni clé. La clé n'apparaît jamais dans les
-journaux ni dans les erreurs.
+Mode ``simulation`` (défaut) : aucun appel réseau ; ShortGuid « SIM-… », PDF local
+clairement marqué « SIMULATION — CE N'EST PAS UN BAIL OFFICIEL », message
+mnémonique SIMULATION. Le mode réel refuse de partir sans clé, et vers une
+adresse qui n'est pas en https. La clé n'apparaît jamais dans les journaux ni
+dans les erreurs.
 """
 
 from __future__ import annotations
 
 import base64
 import io
+import json
 import logging
 import secrets
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -51,15 +50,96 @@ from app.core.config import settings
 
 log = logging.getLogger(__name__)
 
-ID_TRANSMISSION_PERSO = "envoi-partenaire"
+#: Adresse de base de l'API (documentation du TAL) — la plateforme de formulaires du gouvernement.
+URL_DEFAUT = "https://formulaires.mtess.gouv.qc.ca"
+#: Valeur imposée du paramètre idTransmissionPerso (documentation du TAL).
+ID_TRANSMISSION_PERSO = "transmission-personnalisee"
 MODE_SIMULATION = "simulation"
 MODE_REEL = "reel"
 MODES = (MODE_SIMULATION, MODE_REEL)
 TYPE_FORMULAIRE = "53000BAIL"
-ENTETE_CLE_DEFAUT = "X-Api-Key"
-CHEMIN_FRW111_DEFAUT = "/FRW111/CreerFormulaireIndividu"
-CHEMIN_FRW122_DEFAUT = "/FRW122/DeclencherTransmissionPersonnalisee"
+ENTETE_CLE_DEFAUT = "X-ClePartenaire"
+CHEMIN_FRW111_DEFAUT = "/api/v1/SIS/CreerFormulaireIndividu/{typeFormulaire}"
+CHEMIN_FRW122_DEFAUT = "/api/v1/SIS/DeclencherTransmissionPersonnalisee/{noPublicFormulaire}/{idTransmissionPerso}"
+#: Langue du bail produit : en-tête Accept-Language (fr-CA par défaut).
+LANGUES: dict[str, str] = {"fr": "fr-CA", "en": "en-CA"}
+LANGUE_DEFAUT = "fr"
+VALEURS_OFFICIELLES: dict[str, str] = {
+    "api_url": URL_DEFAUT,
+    "entete_cle": ENTETE_CLE_DEFAUT,
+    "chemin_frw111": CHEMIN_FRW111_DEFAUT,
+    "chemin_frw122": CHEMIN_FRW122_DEFAUT,
+}
+#: Hypothèses de Kratos d'avant la documentation : jamais valides pour cette API.
+ANCIENNES_VALEURS: dict[str, tuple[str, ...]] = {
+    "entete_cle": ("x-api-key",),
+    "chemin_frw111": ("/frw111/creerformulaireindividu",),
+    "chemin_frw122": ("/frw122/declenchertransmissionpersonnalisee",),
+}
 _TIMEOUT = httpx.Timeout(60.0, connect=15.0)
+
+
+def valeur_officielle(champ: str, valeur: Optional[str]) -> str:
+    """La valeur à utiliser pour un réglage de connexion : celle fournie, sauf si elle
+    est vide ou si c'est une ancienne hypothèse de Kratos — alors la valeur de la
+    documentation du TAL."""
+    v = (valeur or "").strip()
+    if champ == "api_url":
+        v = v.rstrip("/")
+    if not v or v.lower() in ANCIENNES_VALEURS.get(champ, ()):
+        return VALEURS_OFFICIELLES[champ]
+    return v
+
+
+def code_langue(langue: Optional[str]) -> str:
+    """« fr » ou « en » (défaut : fr)."""
+    l = (langue or LANGUE_DEFAUT).strip().lower()[:2]
+    return l if l in LANGUES else LANGUE_DEFAUT
+
+
+def _chemin(gabarit: str, **params: str) -> str:
+    """Chemin d'un service : remplit ``{typeFormulaire}``, ``{noPublicFormulaire}`` et
+    ``{idTransmissionPerso}`` (encodés). Un chemin saisi sans ces repères reçoit les
+    valeurs à la suite, dans l'ordre de la documentation."""
+    chemin = gabarit.strip()
+    if not chemin.startswith("/"):
+        chemin = "/" + chemin
+    reste: list[str] = []
+    for nom, valeur in params.items():
+        repere = "{" + nom + "}"
+        v = quote(str(valeur), safe="")
+        if repere in chemin:
+            chemin = chemin.replace(repere, v)
+        else:
+            reste.append(v)
+    if reste:
+        chemin = chemin.rstrip("/") + "/" + "/".join(reste)
+    return chemin
+
+
+def _message_erreur(statut: int, texte: str) -> str:
+    """Message lisible d'une erreur du TAL : le titre et le détail du format
+    ``{type, title, status, detail, instance}`` quand c'est lui, sinon le texte reçu."""
+    detail = ""
+    try:
+        d = json.loads(texte) if texte else None
+    except ValueError:
+        d = None
+    if isinstance(d, dict):
+        morceaux = [str(d[k]) for k in ("title", "detail") if d.get(k)]
+        erreurs = d.get("errors")
+        if isinstance(erreurs, dict):
+            for k, v in list(erreurs.items())[:8]:
+                morceaux.append(f"{k} : {', '.join(map(str, v)) if isinstance(v, list) else v}")
+        detail = " · ".join(morceaux)
+    aide = {
+        401: "clé refusée par le TAL (vérifie la clé dans Admin locative → Connexion au TAL)",
+        403: "accès refusé par le TAL pour cette clé",
+        404: "adresse introuvable (vérifie l'adresse de l'API et les chemins)",
+    }.get(statut)
+    base = f"HTTP {statut}" + (f" — {aide}" if aide else "")
+    suite = (detail or texte or "").strip()[:400]
+    return f"{base} : {suite}" if suite else base
 
 
 class TalApiError(Exception):
@@ -80,7 +160,7 @@ class ConnexionTal:
     le temps de l'appel)."""
 
     mode: str = MODE_SIMULATION
-    url: str = ""
+    url: str = URL_DEFAUT
     cle: str = ""
     entete_cle: str = ENTETE_CLE_DEFAUT
     chemin_frw111: str = CHEMIN_FRW111_DEFAUT
@@ -99,10 +179,20 @@ class ConnexionTal:
         """L'adresse est chiffrée (https) : condition pour y envoyer la clé."""
         return str(self.url or "").strip().lower().startswith("https://")
 
+    @property
+    def officielle(self) -> bool:
+        """Adresse, en-tête et chemins sont ceux de la documentation du TAL."""
+        return (
+            (self.url or "").rstrip("/") == URL_DEFAUT and self.entete_cle == ENTETE_CLE_DEFAUT
+            and self.chemin_frw111 == CHEMIN_FRW111_DEFAUT and self.chemin_frw122 == CHEMIN_FRW122_DEFAUT
+        )
+
     def etat(self) -> dict[str, Any]:
         """Pour Paramètres : jamais la clé."""
         mode = (self.mode or MODE_SIMULATION).lower()
         return {
+            "valeurs_officielles": self.officielle,
+            "officiel": dict(VALEURS_OFFICIELLES),
             "mode": mode,
             "url_configuree": bool(self.url),
             "api_url": self.url or None,
@@ -119,11 +209,11 @@ def connexion_depuis_env() -> ConnexionTal:
     ``TAL_API_KEY``, ``TAL_API_ENTETE_CLE``, ``TAL_API_CHEMIN_FRW111/122``."""
     return ConnexionTal(
         mode=((getattr(settings, "tal_mode", None) or MODE_SIMULATION).strip().lower()),
-        url=(getattr(settings, "tal_api_url", None) or "").strip().rstrip("/"),
+        url=valeur_officielle("api_url", getattr(settings, "tal_api_url", None)),
         cle=(getattr(settings, "tal_api_key", None) or "").strip(),
-        entete_cle=(getattr(settings, "tal_api_entete_cle", None) or ENTETE_CLE_DEFAUT).strip(),
-        chemin_frw111=(getattr(settings, "tal_api_chemin_frw111", None) or CHEMIN_FRW111_DEFAUT).strip(),
-        chemin_frw122=(getattr(settings, "tal_api_chemin_frw122", None) or CHEMIN_FRW122_DEFAUT).strip(),
+        entete_cle=valeur_officielle("entete_cle", getattr(settings, "tal_api_entete_cle", None)),
+        chemin_frw111=valeur_officielle("chemin_frw111", getattr(settings, "tal_api_chemin_frw111", None)),
+        chemin_frw122=valeur_officielle("chemin_frw122", getattr(settings, "tal_api_chemin_frw122", None)),
     )
 
 
@@ -183,17 +273,19 @@ class ClientTal:
         return MODE_SIMULATION if self.simulation else MODE_REEL
 
     # ── FRW111 ──────────────────────────────────────────────────────
-    async def creer_formulaire(self, form: dict[str, Any], *, identifiant_utilisateur: Optional[str] = None) -> ReponseCreation:
+    async def creer_formulaire(
+        self, form: dict[str, Any], *, langue: Optional[str] = None, identifiant_utilisateur: Optional[str] = None
+    ) -> ReponseCreation:
         t0 = time.monotonic()
         if self.simulation:
             return ReponseCreation(short_guid="SIM-" + secrets.token_urlsafe(8), brut={"simulation": True}, duree_ms=1)
         self._exiger_config("FRW111")
-        # Corps = l'objet de pré-remplissage de la fiche du TAL, tel quel : {"form": {...}}.
-        # Le type de formulaire et l'identifiant de suivi n'en font pas partie (le suivi
-        # n'est documenté que pour le FRW122) ; si le TAL attend le type dans l'adresse,
-        # il se met dans « Chemin FRW111 » (Paramètres).
+        # Corps = l'objet de pré-remplissage, tel quel : {"form": {...}}. Le type de
+        # formulaire est dans l'adresse ; aucun identifiant de suivi n'est documenté
+        # (``identifiant_utilisateur`` reste dans Kratos, il n'est pas envoyé).
         payload: dict[str, Any] = {"form": form}
-        corps = await self._post("FRW111", self.cx.chemin_frw111, payload)
+        chemin = _chemin(self.cx.chemin_frw111, typeFormulaire=TYPE_FORMULAIRE)
+        corps = await self._post("FRW111", chemin, payload, langue=langue)
         short_guid = _extraire(corps, "noPublicForm", "noPublicFormulaire", "shortGuid", "numeroPublic", "id")
         if not short_guid:
             raise TalApiError("FRW111", "réponse sans numéro public de formulaire (noPublicForm)", corps=corps)
@@ -205,7 +297,8 @@ class ClientTal:
 
     # ── FRW122 ──────────────────────────────────────────────────────
     async def declencher_transmission(
-        self, short_guid: str, *, identifiant_utilisateur: Optional[str] = None, form_pour_simulation: Optional[dict[str, Any]] = None
+        self, short_guid: str, *, langue: Optional[str] = None, identifiant_utilisateur: Optional[str] = None,
+        form_pour_simulation: Optional[dict[str, Any]] = None,
     ) -> ReponseTransmission:
         t0 = time.monotonic()
         if self.simulation:
@@ -218,10 +311,10 @@ class ClientTal:
                 duree_ms=int((time.monotonic() - t0) * 1000),
             )
         self._exiger_config("FRW122")
-        payload: dict[str, Any] = {"NoPublicFormulaire": short_guid, "IdTransmissionPerso": ID_TRANSMISSION_PERSO}
-        if identifiant_utilisateur:
-            payload["IdentifiantUtilisateur"] = identifiant_utilisateur
-        corps = await self._post("FRW122", self.cx.chemin_frw122, payload)
+        # Tout est dans l'adresse ; l'appel n'a pas de corps. La langue demandée ici est
+        # celle du bail produit.
+        chemin = _chemin(self.cx.chemin_frw122, noPublicFormulaire=short_guid, idTransmissionPerso=ID_TRANSMISSION_PERSO)
+        corps = await self._post("FRW122", chemin, None, langue=langue)
         docs_brut = _extraire(corps, "documents") or []
         documents: list[DocumentTal] = []
         for d in docs_brut if isinstance(docs_brut, list) else []:
@@ -251,17 +344,20 @@ class ClientTal:
     # ── HTTP ─────────────────────────────────────────────────────────
     def _exiger_config(self, etape: str) -> None:
         if not self.cx.prete_pour_reel:
-            raise TalApiError(etape, "Adresse ou clé de l'API du TAL non configurée (Admin locative → Connexion au TAL) : mode réel impossible.")
+            raise TalApiError(etape, "Clé de l'API du TAL non enregistrée (Admin locative → Connexion au TAL) : mode réel impossible.")
         if not self.cx.adresse_sure:
             # Aussi pour une adresse posée hors de l'écran (variable d'environnement, ancienne valeur).
             raise TalApiError(etape, "L'adresse de l'API du TAL doit commencer par https:// : aucun appel n'est fait, la clé ne voyage jamais en clair.")
 
-    async def _post(self, etape: str, chemin: str, payload: dict[str, Any]) -> Any:
+    async def _post(self, etape: str, chemin: str, payload: Optional[dict[str, Any]], *, langue: Optional[str] = None) -> Any:
         url = self.cx.url.rstrip("/") + (chemin if chemin.startswith("/") else "/" + chemin)
-        headers = {self.cx.entete_cle: self.cx.cle, "Accept": "application/json", "Content-Type": "application/json"}
+        headers = {self.cx.entete_cle: self.cx.cle, "Accept": "application/json", "Accept-Language": LANGUES[code_langue(langue)]}
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-                r = await client.post(url, json=payload, headers=headers)
+                if payload is None:
+                    r = await client.post(url, headers=headers, content=b"")
+                else:
+                    r = await client.post(url, json=payload, headers={**headers, "Content-Type": "application/json"})
         except httpx.HTTPError as exc:
             raise TalApiError(etape, f"TAL injoignable ({type(exc).__name__})") from exc
         # Jamais la clé : si le TAL la renvoyait dans son message, elle est masquée
@@ -270,7 +366,7 @@ class ClientTal:
         if self.cx.cle and len(self.cx.cle) >= 6:
             texte = texte.replace(self.cx.cle, "***")
         if r.status_code >= 400:
-            raise TalApiError(etape, f"HTTP {r.status_code} : {texte[:400]}", http_status=r.status_code, corps=texte[:2000])
+            raise TalApiError(etape, _message_erreur(r.status_code, texte), http_status=r.status_code, corps=texte[:2000])
         try:
             return r.json()
         except ValueError as exc:
