@@ -11,6 +11,7 @@
  * les autres).
  */
 
+import { fichiersEnMemoire } from "@/lib/fichier-mobile";
 import { useRef, useState, type DragEvent } from "react";
 import { FileText, Loader2, Plus, Upload, X } from "lucide-react";
 
@@ -193,16 +194,30 @@ export function DocumentsAImporterZone({
   const [survol, setSurvol] = useState(false);
   const enCours = Boolean(progression && progression.fait < progression.total);
 
-  function ajouter(list: FileList | File[] | null | undefined) {
+  const [erreurLecture, setErreurLecture] = useState<string | null>(null);
+
+  async function ajouter(list: FileList | File[] | null | undefined) {
     if (!list || disabled) return;
-    const nouveaux = versFichiersAImporter(Array.from(list), fichiers);
+    const choisis = Array.from(list);
+    if (choisis.length === 0) return;
+    // Copie en mémoire dès le choix : sur Android, un fichier lu plus
+    // tard échoue en « Failed to fetch » (Kyle 2026-11-11).
+    setErreurLecture(null);
+    let copies: File[];
+    try {
+      copies = await fichiersEnMemoire(choisis);
+    } catch (e) {
+      setErreurLecture((e as Error).message);
+      return;
+    }
+    const nouveaux = versFichiersAImporter(copies, fichiers);
     if (nouveaux.length > 0) onChange([...fichiers, ...nouveaux]);
   }
 
   function onDrop(e: DragEvent<HTMLDivElement>) {
     e.preventDefault();
     setSurvol(false);
-    ajouter(e.dataTransfer?.files);
+    void ajouter(e.dataTransfer?.files);
   }
 
   return (
@@ -226,8 +241,10 @@ export function DocumentsAImporterZone({
         className="hidden"
         disabled={disabled}
         onChange={(e) => {
-          ajouter(e.target.files);
-          e.target.value = "";
+          const input = e.target;
+          void ajouter(input.files).finally(() => {
+            input.value = "";
+          });
         }}
       />
       <div
@@ -265,6 +282,9 @@ export function DocumentsAImporterZone({
           PDF, JPG ou PNG · 20 Mo max par fichier · plusieurs à la fois
         </span>
       </div>
+      {erreurLecture ? (
+        <p className="mt-1 text-[11px] text-rose-300">{erreurLecture}</p>
+      ) : null}
       {fichiers.length > 0 ? (
         <div className="mt-2">
           <FichiersAImporterListe

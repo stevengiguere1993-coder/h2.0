@@ -15,6 +15,7 @@
  * locataire / logement / immeuble) — règle « sections miroir ».
  */
 
+import { fichierEnMemoire } from "@/lib/fichier-mobile";
 import { useEffect, useState } from "react";
 import { ArrowRightLeft, Check, FileSignature, Loader2, X } from "lucide-react";
 
@@ -379,7 +380,15 @@ function TransfertUniteModal({
                   <input
                     type="file"
                     accept="application/pdf"
-                    onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] ?? null;
+                      setFile(null);
+                      if (!f) return;
+                      // Copie en mémoire dès le choix (Android, Kyle 2026-11-11).
+                      fichierEnMemoire(f)
+                        .then(setFile)
+                        .catch((x) => setErr((x as Error).message));
+                    }}
                     className="mt-0.5 block w-full text-xs text-white/70 file:mr-2 file:rounded-md file:border-0 file:bg-brand-800 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-white"
                   />
                 </label>
