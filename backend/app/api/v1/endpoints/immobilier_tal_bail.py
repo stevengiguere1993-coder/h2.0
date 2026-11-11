@@ -145,6 +145,8 @@ class IndependantIn(BaseModel):
     loyer_mensuel: Optional[float] = Field(default=None, ge=0, le=1_000_000)
     jour_echeance: int = Field(default=1, ge=1, le=31)
     chauffage_inclus: bool = False
+    #: Type de chauffage du logement (clé du formulaire du TAL : electricite | gaz | mazout).
+    chauffage_type: Optional[str] = Field(default=None, max_length=40)
     electricite_inclus: bool = False
     eau_chaude_inclus: bool = False
     internet_inclus: bool = False
@@ -370,6 +372,7 @@ async def preparer(
         "rapport": rapport.as_dict(),
         "contexte": ctx.resume(),
         "schema_version": schema.version,
+        "requis": svc.chemins_requis(_config),   # champs exigés avant l'envoi : marqués d'une étoile à l'écran
         "mode": cx.etat()["mode"],
         "cout_tal": svc.COUT_TAL,
         "transmissions": [svc.resume_transmission(t) for t in existantes],

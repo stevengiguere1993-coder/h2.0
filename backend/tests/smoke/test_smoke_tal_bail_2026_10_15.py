@@ -53,6 +53,12 @@ from app.services import tal_bail as svc
 from tests.smoke.conftest import TestSessionLocal
 
 BASE = "/api/v1/immobilier/tal-bail"
+#: Le type de chauffage n'a pas de défaut : la personne le choisit à chaque bail.
+CHAUFFAGE_CHOISI = {"typeChauffageLogement": ["electricite"]}
+CHAUFFAGE_REQUIS = (
+    "typeChauffageLogement : champ requis par Kratos (Paramètres) et vide — "
+    "« Quel est le type de chauffage utilisé dans le logement? »."
+)
 IDS: dict = {}
 
 
@@ -254,7 +260,13 @@ def test_preparer_remplit_depuis_kratos(client, auth_headers, tal_seed):
     assert body["origine"]["locataire1engagementAvertisseursFumeeLocataire"] == "signature"
     chemins = {x["chemin"] for x in body["a_verifier"]}
     assert {"modePaiement", "motPasseWF", "responsabiliteServicesTaxesCoutsConsommation[0]"} <= chemins
-    assert body["rapport"]["valide"] is True, body["rapport"]
+    # Aucun chauffage par défaut (Phil 2026-11-11) : le type se choisit à chaque bail. Tant qu'il
+    # ne l'est pas, le formulaire ne part pas — et c'est la SEULE chose qui manque ici.
+    assert f["typeChauffageLogement"] == [] and "typeChauffageLogement" in chemins
+    assert body["rapport"]["valide"] is False and body["rapport"]["erreurs"] == [CHAUFFAGE_REQUIS], body["rapport"]
+    # La liste des champs exigés accompagne le formulaire (étoiles rouges à l'écran).
+    assert body["requis"] == ["locateurs[0].nom", "locataires[0].nom", "adresseLogement[0].Rue", "adresseLogement[0].Municipalite",
+                              "coutLoyer", "typeBail", "typeChauffageLogement"]
     assert body["contexte"]["locateur"] == "Horizon Immo Smoke INC" and body["contexte"]["garants"] == ["Bob Caution"]
     assert body["mode"] == "simulation" and body["cout_tal"] == 2.99 and body["transmissions"] == []
 
@@ -268,7 +280,7 @@ def test_preparer_bail_au_15_et_chauffage_inclus(client, auth_headers, tal_seed)
     assert f["nbPieces"] == "quatre-demi" and f["nbSemainesMoisAnnees"] == "1 an"
     assert f["situationApplicableAvisNouveauLocataire"] == "aucunLoyer"   # jamais loué
     assert f["possedeAutresSignataires"] == "false"
-    assert r.json()["rapport"]["valide"] is True
+    assert r.json()["rapport"]["erreurs"] == [CHAUFFAGE_REQUIS]      # tout y est, sauf le type de chauffage à choisir
     assert client.get(f"{BASE}/preparer", headers=auth_headers, params={"bail_id": 999_999}).status_code == 404
 
 
@@ -278,7 +290,8 @@ def test_preparer_bail_au_15_et_chauffage_inclus(client, auth_headers, tal_seed)
 def test_flux_simulation_complet(client, auth_headers, tal_seed, run):
     r = client.post(f"{BASE}/transmissions", headers=auth_headers, json={
         "bail_id": tal_seed["bail_id"], "dossier_id": tal_seed["dossier_id"],
-        "surcharges": {"lieuPaiement": "Virement Interac", "dependancesIncluses": ["RemiseOuEspaceRangement"]},
+        "surcharges": {"lieuPaiement": "Virement Interac", "dependancesIncluses": ["RemiseOuEspaceRangement"],
+                       "typeChauffageLogement": ["electricite"]},
     })
     assert r.status_code == 201, r.text
     t = r.json()
@@ -505,7 +518,7 @@ class _FauxClient:
 def test_echec_frw122_garde_le_shortguid_et_relance_sans_second_frw111(client, auth_headers, tal_seed, run, monkeypatch):
     faux = _FauxClient()
     monkeypatch.setattr(svc, "_fabrique_client", lambda cx: faux)
-    r = client.post(f"{BASE}/transmissions", headers=auth_headers, json={"bail_id": tal_seed["bail2_id"]})
+    r = client.post(f"{BASE}/transmissions", headers=auth_headers, json={"bail_id": tal_seed["bail2_id"], "surcharges": CHAUFFAGE_CHOISI})
     assert r.status_code == 201, r.text
     tid = r.json()["id"]
     # Rien à relancer avant le premier envoi.
@@ -571,7 +584,7 @@ def test_echec_frw111_sans_shortguid(client, auth_headers, tal_seed, run, monkey
             return b.id
 
     bail_id = run(_bail())
-    tid = client.post(f"{BASE}/transmissions", headers=auth_headers, json={"bail_id": bail_id}).json()["id"]
+    tid = client.post(f"{BASE}/transmissions", headers=auth_headers, json={"bail_id": bail_id, "surcharges": CHAUFFAGE_CHOISI}).json()["id"]
     r = client.post(f"{BASE}/transmissions/{tid}/generer", headers=auth_headers, json={"confirme": True})
     assert r.status_code == 502 and r.json()["detail"]["etape"] == "FRW111"
     det = client.get(f"{BASE}/transmissions/{tid}", headers=auth_headers).json()

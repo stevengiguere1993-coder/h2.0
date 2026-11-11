@@ -28,7 +28,53 @@ from .schema import (
 _EMAIL_RE = re.compile(r"^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$")
 _CODE_POSTAL_RE = re.compile(r"^[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z] ?\d[ABCEGHJ-NPRSTV-Z]\d$", re.IGNORECASE)
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_NOMBRE_RE = re.compile(r"^-?\d+(?:[.,]\d+)?$")
+_ESPACES_RE = re.compile(r"[\s\u00a0\u2009\u202f]+")
+
+
+def nombre_canonique(valeur: Any) -> Optional[str]:
+    """Forme canonique d'un nombre saisi : des chiffres et, s'il y a des cents, UN POINT
+    (« 1250.75 »). Le TAL n'interprète pas la virgule décimale (avis du 11 nov. 2026) :
+    Kratos n'en envoie jamais.
+
+    Accepte ce qu'une personne écrit naturellement — espaces de milliers, signe de dollar,
+    virgule ou point pour les cents : « 1 250,75 $ », « 1250.75 », « 1,250.75 ». Retourne
+    None quand ce n'est pas un nombre, ou quand la saisie est ambiguë (« 1,250 » ou
+    « 1.250 » : mille deux cent cinquante, ou un et quart ?) — on ne devine pas un montant."""
+    if valeur is None or isinstance(valeur, bool):
+        return None
+    if isinstance(valeur, int):
+        return str(valeur)
+    if isinstance(valeur, float):
+        if valeur != valeur or valeur in (float("inf"), float("-inf")):
+            return None
+        return repr(round(valeur, 6))
+    if not isinstance(valeur, str):
+        return None
+    v = _ESPACES_RE.sub("", valeur).replace("$", "")
+    signe = ""
+    if v[:1] in ("-", "+"):
+        signe, v = ("-" if v[0] == "-" else ""), v[1:]
+    if not v:
+        return None
+    if v.isdigit():
+        return signe + v
+    if "," in v and "." in v:
+        # Les deux signes : le dernier sépare les cents, l'autre groupe les milliers.
+        pos = max(v.rfind(","), v.rfind("."))
+        milliers = "," if v[pos] == "." else "."
+        groupes, cents = v[:pos].split(milliers), v[pos + 1:]
+        valide = (
+            cents.isdigit() and all(g.isdigit() for g in groupes)
+            and 1 <= len(groupes[0]) <= 3 and all(len(g) == 3 for g in groupes[1:])
+        )
+        return f"{signe}{''.join(groupes)}.{cents}" if valide else None
+    sep = "," if "," in v else "."
+    if v.count(sep) != 1:
+        return None
+    entier, cents = v.split(sep)
+    if not (entier.isdigit() and cents.isdigit()) or len(cents) == 3:
+        return None
+    return f"{signe}{entier}.{cents}"
 _TEXTE_MAX = 2000
 
 
@@ -102,8 +148,12 @@ def _valider_scalaire(champ: ChampTal, valeur: Any, chemin: str, r: Rapport) -> 
             r.erreurs.append(f"{chemin} : date invalide « {valeur} ».")
         return
     if t in TYPES_NOMBRE:
-        if isinstance(valeur, bool) or not (isinstance(valeur, (int, float)) or (isinstance(valeur, str) and _NOMBRE_RE.match(valeur.strip()))):
-            r.erreurs.append(f"{chemin} : nombre attendu, reçu {valeur!r}.")
+        if nombre_canonique(valeur) is None:
+            ambigu = isinstance(valeur, str) and re.search(r"\d[.,]\d{3}\s*\$?\s*$", valeur) is not None
+            r.erreurs.append(
+                f"{chemin} : nombre attendu, reçu {valeur!r}."
+                + (" Écris-le sans ambiguïté, par exemple 1250 ou 1250.75." if ambigu else "")
+            )
         return
     if t == "email":
         if not isinstance(valeur, str) or not _EMAIL_RE.match(valeur.strip()):
@@ -214,7 +264,10 @@ def valider(form: dict[str, Any], schema: SchemaTal, *, requis: Optional[list[st
     for chemin in requis or []:
         v = _lire_chemin(form, chemin)
         if _vide(v):
-            r.erreurs.append(f"{chemin} : champ requis par Kratos (Paramètres) et vide.")
+            # Le nom du champ tel qu'on le lit au formulaire, pour le retrouver à l'écran.
+            champ = schema.champ(chemin) if re.fullmatch(r"[A-Za-z0-9_]+", chemin) else None
+            libelle = f" — « {champ.label_fr} »" if champ is not None and champ.label_fr else ""
+            r.erreurs.append(f"{chemin} : champ requis par Kratos (Paramètres) et vide{libelle}.")
     return r
 
 

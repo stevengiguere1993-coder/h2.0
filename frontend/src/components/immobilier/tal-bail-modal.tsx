@@ -114,6 +114,8 @@ type Preparation = {
   mode: string;
   cout_tal: number;
   transmissions: TalTransmission[];
+  /** Chemins des champs exigés avant l'envoi (Paramètres) : marqués d'une étoile rouge. */
+  requis?: string[];
 };
 export type SignatureEtat = {
   esign_document_id: number;
@@ -663,6 +665,9 @@ export function TalBailModal({
       : prep?.a_verifier || [];
     return src;
   }, [prep, transmission]);
+  // Champs exigés avant l'envoi (réglage « Champs exigés ») : une étoile rouge à côté du libellé.
+  const requisListe = prep?.requis;
+  const requis = useMemo(() => new Set(requisListe || []), [requisListe]);
   const racinesAVerifier = useMemo(
     () => new Set(aVerifier.map((x) => racineDe(x.chemin))),
     [aVerifier]
@@ -843,6 +848,13 @@ export function TalBailModal({
               </div>
             ) : null}
 
+            {requis.size ? (
+              <p className="mt-3 text-[11px] text-white/55">
+                <span className="font-bold text-rose-400">*</span> Obligatoire pour générer le bail. La liste se règle dans Admin
+                locative, onglet « Connexion au TAL ».
+              </p>
+            ) : null}
+
             <div className="mt-3 space-y-2">
               {SECTIONS.map((s) => (
                 <Section
@@ -863,6 +875,7 @@ export function TalBailModal({
                     champIndex={champIndex}
                     origine={prep.origine}
                     aVerifier={racinesAVerifier}
+                    requis={requis}
                     erreurs={erreursParRacine}
                     poserRacine={poserRacine}
                     poserOccurrence={poserOccurrence}
@@ -886,6 +899,7 @@ export function TalBailModal({
                     champIndex={champIndex}
                     origine={prep.origine}
                     aVerifier={racinesAVerifier}
+                    requis={requis}
                     erreurs={erreursParRacine}
                     poserRacine={poserRacine}
                     poserOccurrence={poserOccurrence}
@@ -908,6 +922,7 @@ export function TalBailModal({
                   champIndex={champIndex}
                   origine={prep.origine}
                   aVerifier={racinesAVerifier}
+                  requis={requis}
                   erreurs={erreursParRacine}
                   poserRacine={poserRacine}
                   poserOccurrence={poserOccurrence}
@@ -929,6 +944,7 @@ export function TalBailModal({
                   champIndex={champIndex}
                   origine={prep.origine}
                   aVerifier={racinesAVerifier}
+                  requis={requis}
                   erreurs={erreursParRacine}
                   poserRacine={poserRacine}
                   poserOccurrence={poserOccurrence}
@@ -1396,6 +1412,8 @@ type ListeProps = {
   champIndex: Map<string, Champ>;
   origine: Record<string, string>;
   aVerifier: Set<string>;
+  /** Chemins exigés avant l'envoi (« coutLoyer », « locataires[0].nom »…). */
+  requis: Set<string>;
   erreurs: Map<string, string[]>;
   poserRacine: (k: string, v: unknown) => void;
   poserOccurrence: (k: string, i: number, occ: Occurrence) => void;
@@ -1427,6 +1445,7 @@ function ChampsListe(p: ListeProps) {
               onChange={(v) => p.poserRacine(k, v)}
               origine={p.origine[k]}
               aVerifier={p.aVerifier.has(k)}
+              requis={p.requis.has(k)}
               erreurs={p.erreurs.get(k)}
             />
           </div>
@@ -1523,6 +1542,7 @@ function GroupeEditeur({ k, ...p }: ListeProps & { k: string }) {
                             }
                             origine={p.origine[`${k}[${i}].${s}`]}
                             aVerifier={false}
+                            requis={p.requis.has(`${k}[${i}].${s}[0].${ss}`)}
                           />
                         ))}
                       </div>
@@ -1539,6 +1559,7 @@ function GroupeEditeur({ k, ...p }: ListeProps & { k: string }) {
                     onChange={(v) => p.poserOccurrence(k, i, { ...occ, [s]: v })}
                     origine={p.origine[`${k}[${i}].${s}`]}
                     aVerifier={false}
+                    requis={p.requis.has(`${k}[${i}].${s}`)}
                   />
                 );
               })}
@@ -1579,6 +1600,7 @@ function ChampInput({
   onChange,
   origine,
   aVerifier,
+  requis = false,
   erreurs
 }: {
   nom: string;
@@ -1588,9 +1610,16 @@ function ChampInput({
   onChange: (v: unknown) => void;
   origine?: string;
   aVerifier: boolean;
+  /** Champ exigé avant l'envoi : étoile rouge à côté du libellé. */
+  requis?: boolean;
   erreurs?: string[];
 }) {
   const label = champ?.label_fr || humaniser(nom);
+  const etoile = requis ? (
+    <span className="ml-0.5 font-bold text-rose-400" title="Obligatoire pour générer le bail">
+      *
+    </span>
+  ) : null;
   const vp = champ?.valeurs_possibles || null;
   const booleen = champ?.est_booleen || typeof gabarit === "boolean";
   const bordure = erreurs?.length
@@ -1610,7 +1639,10 @@ function ChampInput({
           checked={valeur === true}
           onChange={(e) => onChange(e.target.checked)}
         />
-        <span className="min-w-0 flex-1">{label}</span>
+        <span className="min-w-0 flex-1">
+          {label}
+          {etoile}
+        </span>
         <OrigineTag origine={origine} />
       </label>
     );
@@ -1623,6 +1655,7 @@ function ChampInput({
       <div className={`rounded-md border ${bordure} px-2 py-1.5`} title={titreAide}>
         <p className="text-[11px] font-semibold text-white/60">
           {label}
+          {etoile}
           <OrigineTag origine={origine} />
         </p>
         <div className="mt-1 inline-flex overflow-hidden rounded-md border border-brand-800 text-[11px]">
@@ -1654,6 +1687,7 @@ function ChampInput({
       <div className={`rounded-md border ${bordure} px-2 py-1.5`} title={titreAide}>
         <p className="text-[11px] font-semibold text-white/60">
           {label}
+          {etoile}
           <OrigineTag origine={origine} />
         </p>
         <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
@@ -1681,6 +1715,7 @@ function ChampInput({
     return (
       <label className="block text-[11px] font-semibold text-white/60" title={titreAide}>
         {label}
+        {etoile}
         <OrigineTag origine={origine} />
         <select
           value={String(valeur ?? "")}
@@ -1711,6 +1746,7 @@ function ChampInput({
     return (
       <label className="block text-[11px] font-semibold text-white/60" title={titreAide}>
         {label}
+        {etoile}
         <OrigineTag origine={origine} />
         <textarea
           rows={2}
@@ -1727,6 +1763,7 @@ function ChampInput({
   return (
     <label className="block text-[11px] font-semibold text-white/60" title={titreAide}>
       {label}
+      {etoile}
       <OrigineTag origine={origine} />
       <input
         type={htmlType}
