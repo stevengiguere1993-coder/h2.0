@@ -483,7 +483,9 @@ async def list_documents(
     entreprise_id: Optional[int] = None,
     q: Optional[str] = None,
 ) -> List[DocumentListItem]:
-    stmt = select(EsignDocument)
+    # Les documents créés par un autre module (bail officiel du TAL, piloté
+    # depuis Gestion immobilière) ne sont pas des documents de cette section.
+    stmt = select(EsignDocument).where(EsignDocument.origine.is_(None))
     if group == "en_cours":
         stmt = stmt.where(
             EsignDocument.status.in_(
@@ -1148,6 +1150,11 @@ async def cancel_document(
     doc.status = EsignDocumentStatus.ANNULE.value
     await db.flush()
     await _add_event(db, doc, "annule", detail=f"par {user.email}")
+    # ``updated_at`` (onupdate côté serveur) est expiré après le flush :
+    # relecture explicite, sinon chargement paresseux hors greenlet — sans
+    # elle, l'annulation plantait (erreur 500) et ne s'enregistrait jamais
+    # (trouvé le 2026-11-11 en branchant la signature des baux).
+    await db.refresh(doc)
     return await _doc_to_detail(db, doc)
 
 

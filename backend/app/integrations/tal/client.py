@@ -374,47 +374,78 @@ class ClientTal:
 
 
 def pdf_simulation(form: dict[str, Any], short_guid: str) -> bytes:
-    """PDF local, une page, marqué partout « SIMULATION » : pour tester le
-    parcours complet (archivage, signature, frais) sans appel ni frais."""
-    from reportlab.lib.pagesizes import LETTER
+    """PDF local marqué partout « SIMULATION », au gabarit du bail officiel : quatre pages
+    612 × 1008, lignes de signature et cases d'initiales aux mêmes endroits que sur le
+    formulaire du TAL. Le parcours complet se teste sans appel ni frais, signature en
+    ligne comprise (les zones se posent comme sur un vrai bail)."""
     from reportlab.pdfgen import canvas
 
+    from app.integrations.tal.gabarit_signature import GABARIT, HAUTEUR, LARGEUR, PAGES_FORMULAIRE
+
+    titres = {
+        "fumee": "Avertisseurs de fumée", "cheques": "Chèques postdatés", "reglement": "Règlement de l'immeuble",
+        "copropriete": "Copropriété divise", "avis": "G · Avis au nouveau locataire", "signatures": "H · Signatures des parties",
+        "solidaire": "Engagement solidaire", "autre": "Autres signataires", "famille": "I · Avis de résidence familiale",
+    }
     buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=LETTER)
-    w, h = LETTER
-    c.setFont("Helvetica-Bold", 20)
-    c.drawCentredString(w / 2, h - 72, "SIMULATION — CE N'EST PAS UN BAIL OFFICIEL")
-    c.setFont("Helvetica", 10)
-    c.drawCentredString(w / 2, h - 92, "Aucun appel au Tribunal administratif du logement n'a été fait. Document non valide, non facturé.")
-    y = h - 130
-    c.drawString(72, y, f"Référence de simulation : {short_guid}")
-    y -= 18
-    adresse = ""
-    try:
-        a = (form.get("adresseLogement") or [{}])[0]
-        adresse = a.get("AdresseComplete") or f"{a.get('NoCivique', '')} {a.get('Rue', '')} app. {a.get('Appartement', '')}, {a.get('Municipalite', '')}"
-    except Exception:  # noqa: BLE001
-        pass
-    lignes = [
-        f"Logement : {adresse}",
-        f"Locateur : {((form.get('locateurs') or [{}])[0] or {}).get('nom', '')}",
-        f"Locataire(s) : {', '.join(str((l or {}).get('nom', '')) for l in (form.get('locataires') or []))}",
-        f"Type de bail : {form.get('typeBail', '')}  du {form.get('dateDebutBail', '')} au {form.get('dateFinBail', '')}",
-        f"Loyer : {form.get('coutLoyer', '')} $ / {form.get('frequenceCoutLoyer', '')}",
-        f"Nombre de pièces : {form.get('nbPieces', '')}",
-    ]
-    for l in lignes:
-        c.drawString(72, y, l[:110])
-        y -= 16
-    c.setFont("Helvetica-Oblique", 9)
-    c.drawString(72, 60, "Ce PDF est produit par Kratos en mode simulation. Le vrai bail viendra du TAL, verrouillé et numéroté.")
-    for yy in range(80, int(h) - 150, 120):
-        c.saveState()
-        c.setFont("Helvetica-Bold", 40)
-        c.setFillGray(0.85)
-        c.drawCentredString(w / 2, yy, "SIMULATION")
-        c.restoreState()
-    c.showPage()
+    c = canvas.Canvas(buf, pagesize=(LARGEUR, HAUTEUR))
+    w, h = LARGEUR, HAUTEUR
+    for page in range(1, PAGES_FORMULAIRE + 1):
+        for yy in range(140, int(h) - 150, 150):
+            c.saveState()
+            c.setFont("Helvetica-Bold", 40)
+            c.setFillGray(0.88)
+            c.drawCentredString(w / 2, yy, "SIMULATION")
+            c.restoreState()
+        c.setFont("Helvetica-Bold", 15 if page == 1 else 10)
+        c.drawCentredString(w / 2, h - 60, "SIMULATION — CE N'EST PAS UN BAIL OFFICIEL")
+        c.setFont("Helvetica", 9)
+        c.drawCentredString(w / 2, h - 76, "Aucun appel au Tribunal administratif du logement n'a été fait. Document non valide, non facturé.")
+        if page == 1:
+            y = h - 112
+            c.setFont("Helvetica", 10)
+            c.drawString(72, y, f"Référence de simulation : {short_guid}")
+            y -= 18
+            adresse = ""
+            try:
+                a = (form.get("adresseLogement") or [{}])[0]
+                adresse = a.get("AdresseComplete") or f"{a.get('NoCivique', '')} {a.get('Rue', '')} app. {a.get('Appartement', '')}, {a.get('Municipalite', '')}"
+            except Exception:  # noqa: BLE001
+                pass
+            lignes = [
+                f"Logement : {adresse}",
+                f"Locateur : {((form.get('locateurs') or [{}])[0] or {}).get('nom', '')}",
+                f"Locataire(s) : {', '.join(str((l or {}).get('nom', '')) for l in (form.get('locataires') or []))}",
+                f"Type de bail : {form.get('typeBail', '')}  du {form.get('dateDebutBail', '')} au {form.get('dateFinBail', '')}",
+                f"Loyer : {form.get('coutLoyer', '')} $ / {form.get('frequenceCoutLoyer', '')}",
+                f"Nombre de pièces : {form.get('nbPieces', '')}",
+            ]
+            for l in lignes:
+                c.drawString(72, y, l[:110])
+                y -= 16
+            c.setFont("Helvetica-Oblique", 9)
+            c.drawString(72, y - 6, "Ce PDF est produit par Kratos en mode simulation. Le vrai bail viendra du TAL, verrouillé et numéroté.")
+        # Lignes et libellés du gabarit officiel : mêmes positions que sur le formulaire du TAL.
+        vus: set[str] = set()
+        for zone in GABARIT:
+            if zone.page != page:
+                continue
+            ligne = h - zone.ligne_y
+            c.setStrokeGray(0.25)
+            c.setLineWidth(0.5)
+            c.line(zone.x - 2, ligne, zone.x + zone.w + 2, ligne)
+            c.setFillGray(0.15)
+            c.setFont("Helvetica", 6)
+            c.drawString(zone.x - 2, ligne - 8, zone.libelle)
+            if zone.cle in titres and zone.cle not in vus:
+                vus.add(zone.cle)
+                c.setFont("Helvetica-Bold", 7)
+                if zone.x >= 150:
+                    c.drawString(36, ligne + 2, titres[zone.cle])
+                else:
+                    c.drawString(36, h - zone.y + 4, titres[zone.cle])
+        c.setFillGray(0)
+        c.showPage()
     c.save()
     return buf.getvalue()
 

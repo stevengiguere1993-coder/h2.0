@@ -1420,20 +1420,16 @@ function BailTalBloc({
                 : d.esign_statut === "envoye"
                   ? `En signature · ${d.nb_signes ?? 0}/${d.nb_signataires ?? 0}`
                   : d.esign_statut === "brouillon"
-                    ? "Signature à envoyer (zones à poser)"
+                    ? "Signature à envoyer"
                     : `Signature ${d.esign_statut}`}
             </span>
             {d.esign_envoye_le ? (
               <span className="text-sky-200/70">envoyée le {fmtDateTime(d.esign_envoye_le)}</span>
             ) : null}
-            {d.esign_document_id ? (
-              <Link
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                href={`/entreprises/signature/${d.esign_document_id}` as any}
-                className="ml-auto underline-offset-2 hover:underline"
-              >
-                Ouvrir dans Signature →
-              </Link>
+            {d.esign_statut !== "complete" ? (
+              <button type="button" onClick={onNouveauBail} className="ml-auto underline-offset-2 hover:underline">
+                {d.esign_statut === "envoye" ? "Suivre la signature" : "Envoyer pour signature"}
+              </button>
             ) : null}
           </div>
           {d.signataires?.length ? (
