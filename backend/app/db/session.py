@@ -166,6 +166,8 @@ async def ensure_critical_columns() -> None:
         ("tal_transmissions", "libelle", "VARCHAR(255)"),
         ("tal_transmissions", "reponses_json", "TEXT"),
         ("tal_transmissions", "langue", "VARCHAR(2)"),
+        # Signature du bail pilotée depuis Gestion immobilière (2026-11-11) : origine du document.
+        ("esign_documents", "origine", "VARCHAR(32)"),
         # Baux PARALLÈLES (Financement, 2026-10-16) : catégorie + locateur du
         # bail parallèle. DEFAULT backfille les baux existants en « standard ».
         ("imm_baux", "categorie", "VARCHAR(16) NOT NULL DEFAULT 'standard'"),
@@ -1685,6 +1687,7 @@ async def ensure_esign_tables() -> None:
                     "INTEGER NOT NULL DEFAULT 0",
                 ),
                 ("esign_signers", "last_reminder_at", "TIMESTAMPTZ"),
+                ("esign_documents", "origine", "VARCHAR(32)"),
             ):
                 await conn.execute(
                     text(
@@ -1694,6 +1697,21 @@ async def ensure_esign_tables() -> None:
                 )
     except Exception as exc:  # noqa: BLE001
         log.warning("ensure_esign_tables failed: %s", exc)
+    # Documents de signature déjà créés pour un bail officiel du TAL : marqués,
+    # pour sortir de la section Signature (idempotent). Transaction à part :
+    # un échec ici ne doit jamais défaire les colonnes créées au-dessus.
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE esign_documents SET origine = 'bail_tal' "
+                    "WHERE origine IS NULL AND id IN ("
+                    "SELECT esign_document_id FROM tal_transmissions "
+                    "WHERE esign_document_id IS NOT NULL)"
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_esign_tables : marquage des baux non fait : %s", exc)
 
 
 async def ensure_invest_portal_tables() -> None:

@@ -81,6 +81,9 @@ FORFAIT_LICENCE = 300.0
 DOC_TYPE = "bail_tal"
 #: PDF SIGNÉ d'un bail indépendant (aucun bail Kratos à qui le rattacher).
 DOC_TYPE_SIGNE = "bail_tal_signe"
+#: Marqueur des documents de signature créés pour un bail : ils se pilotent depuis Gestion
+#: immobilière et n'apparaissent pas dans la section Signature de Gestion d'entreprise.
+ORIGINE_ESIGN = "bail_tal"
 
 DEFAUTS: dict[str, Any] = {
     #: Frais refacturé au propriétaire par bail GÉNÉRÉ (mode réel) — file
@@ -1813,60 +1816,116 @@ def _prenom_nom(nom_complet: str) -> tuple[str, str]:
     return " ".join(parts[:-1])[:100], parts[-1][:100]
 
 
+def personnes_a_signer(
+    form: dict[str, Any], *, independant: bool, representant_nom: str = "", representant_courriel: str = ""
+) -> list[dict[str, Any]]:
+    """Qui doit signer le bail, dans l'ordre du formulaire — avec ou sans courriel.
+
+    Chaque personne porte sa partie (locateur | locataire | autre) et son RANG dans
+    cette partie : c'est ce rang qui décide de sa ligne de signature sur le PDF
+    officiel. Une personne représentée (« représenté par ») cède sa place à son
+    représentant. Bail géré par Horizon : le représentant du locateur signe pour le
+    propriétaire. Bail indépendant (Phil 2026-11-10) : chaque locateur nommé signe
+    lui-même, jamais la personne qui prépare le bail dans Kratos."""
+    out: list[dict[str, Any]] = []
+
+    def ajouter(partie: str, rang: int, role: str, nom: Any, courriel: Any, telephone: Any = "", pour: Any = "") -> None:
+        nom = str(nom or "").strip()
+        if not nom:
+            return
+        out.append({
+            "cle": f"{partie}:{rang}", "partie": partie, "rang": rang, "role": role, "nom": nom,
+            "courriel": str(courriel or "").strip(), "telephone": str(telephone or "").strip() or None,
+            "pour": str(pour or "").strip() or None,
+        })
+
+    def lui_ou_son_representant(occ: dict[str, Any], cle_courriel: str) -> tuple[Any, Any, Any, Any]:
+        if str(occ.get("questionRepresentant")) == "true" and str(occ.get("representant") or "").strip():
+            return occ.get("representant"), occ.get("courrielRepresentant") or "", "", occ.get("nom") or ""
+        telephone = occ.get("autreNoTelephoneCell") or occ.get("noTelephone") or ""
+        return occ.get("nom"), occ.get(cle_courriel) or occ.get("courrielMandant") or "", telephone, ""
+
+    def nommes(groupe: str) -> list[dict[str, Any]]:
+        return [o for o in (form.get(groupe) or []) if isinstance(o, dict) and str(o.get("nom") or "").strip()]
+
+    if independant:
+        for rang, occ in enumerate(nommes("locateurs"), 1):
+            ajouter("locateur", rang, "locateur", *lui_ou_son_representant(occ, "courrielLocateur"))
+    else:
+        locateurs = form.get("locateurs") if isinstance(form.get("locateurs"), list) else []
+        loc0 = locateurs[0] if locateurs and isinstance(locateurs[0], dict) else {}
+        ajouter("locateur", 1, "locateur", loc0.get("representant") or representant_nom,
+                loc0.get("courrielRepresentant") or representant_courriel, "", loc0.get("nom") or "")
+    for rang, occ in enumerate(nommes("locataires"), 1):
+        ajouter("locataire", rang, "locataire", *lui_ou_son_representant(occ, "courrielLocataire"))
+    if str(form.get("possedeAutresSignataires")) == "true":
+        for rang, occ in enumerate(nommes("autresSignataires"), 1):
+            ajouter("autre", rang, str(occ.get("qualite") or "").strip().lower() or "caution", occ.get("nom"), occ.get("courriel") or "")
+    return out
+
+
 def signataires_depuis_formulaire(
     form: dict[str, Any], *, representant_nom: str = "", representant_courriel: str = "", locateurs_signent: bool = False
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Qui signe le bail : chaque locataire, chaque caution (autres
-    signataires) et le représentant du locateur (Horizon) — signature en
-    PARALLÈLE (décision Phil 2026-10-15). Retourne aussi les personnes
-    sans courriel (impossibles à inviter)."""
+    """Les personnes de ``personnes_a_signer`` qui ont un courriel (invitables), puis
+    celles qui n'en ont pas. Signature en PARALLÈLE (décision Phil 2026-10-15)."""
+    personnes = personnes_a_signer(
+        form, independant=locateurs_signent, representant_nom=representant_nom, representant_courriel=representant_courriel
+    )
+    ordre = {"locataire": 0, "autre": 1, "locateur": 2}
     out: list[dict[str, Any]] = []
     manquants: list[str] = []
-
-    def ajouter(nom: str, courriel: str, role: str, telephone: str = "") -> None:
-        nom = (nom or "").strip()
-        courriel = (courriel or "").strip()
-        if not nom:
-            return
-        if not courriel:
-            manquants.append(f"{nom} ({role})")
-            return
-        prenom, famille = _prenom_nom(nom)
-        out.append({"prenom": prenom, "nom": famille, "nom_complet": nom, "courriel": courriel, "telephone": (telephone or "").strip() or None, "role": role})
-
-    for occ in form.get("locataires") or []:
-        if isinstance(occ, dict):
-            ajouter(occ.get("nom", ""), occ.get("courrielLocataire", ""), "locataire", occ.get("autreNoTelephoneCell") or occ.get("noTelephone") or "")
-    if str(form.get("possedeAutresSignataires")) == "true":
-        for occ in form.get("autresSignataires") or []:
-            if isinstance(occ, dict):
-                ajouter(occ.get("nom", ""), occ.get("courriel", ""), (occ.get("qualite") or "caution").lower() or "caution")
-    if locateurs_signent:
-        # Bail indépendant (Phil 2026-11-10) : le locateur n'est pas un client géré par
-        # Horizon — chaque locateur (ou son représentant nommé au bail) signe lui-même ;
-        # jamais la personne qui prépare le bail dans Kratos.
-        for occ in form.get("locateurs") or []:
-            if not isinstance(occ, dict):
-                continue
-            if str(occ.get("questionRepresentant")) == "true" and str(occ.get("representant") or "").strip():
-                ajouter(occ.get("representant", ""), occ.get("courrielRepresentant", ""), "locateur")
-            else:
-                ajouter(occ.get("nom", ""), occ.get("courrielLocateur") or occ.get("courrielMandant") or "", "locateur",
-                        occ.get("autreNoTelephoneCell") or occ.get("noTelephone") or "")
-        return out, manquants
-    loc0 = (form.get("locateurs") or [{}])[0] if isinstance(form.get("locateurs"), list) else {}
-    rep_nom = (loc0.get("representant") if isinstance(loc0, dict) else "") or representant_nom
-    rep_courriel = (loc0.get("courrielRepresentant") if isinstance(loc0, dict) else "") or representant_courriel
-    if rep_nom:
-        ajouter(rep_nom, rep_courriel, "locateur")
+    for pers in sorted(personnes, key=lambda x: (ordre.get(x["partie"], 9), x["rang"])):
+        if not pers["courriel"]:
+            manquants.append(f"{pers['nom']} ({pers['role']})")
+            continue
+        prenom, famille = _prenom_nom(pers["nom"])
+        out.append({
+            "prenom": prenom, "nom": famille, "nom_complet": pers["nom"], "courriel": pers["courriel"],
+            "telephone": pers["telephone"], "role": pers["role"], "partie": pers["partie"], "rang": pers["rang"],
+        })
     return out, manquants
 
 
+def reference_signataire(role: str, rang: int) -> str:
+    """``contact_ref`` d'un signataire de bail : « tal:<rôle>:<rang> » (le rang = sa ligne sur le PDF)."""
+    return f"tal:{(role or 'signataire')[:40]}:{int(rang)}"[:64]
+
+
+def lire_reference_signataire(ref: Optional[str]) -> tuple[Optional[str], Optional[str], Optional[int]]:
+    """(rôle affiché, partie, rang) depuis ``contact_ref`` — accepte l'ancien format « tal:<rôle> »."""
+    morceaux = (ref or "").split(":")
+    if len(morceaux) < 2 or morceaux[0] != "tal" or not morceaux[1]:
+        return None, None, None
+    role = morceaux[1]
+    partie = role if role in ("locateur", "locataire") else "autre"
+    rang = int(morceaux[2]) if len(morceaux) > 2 and morceaux[2].isdigit() else None
+    return role, partie, rang
+
+
+async def entreprise_proprietaire(db: AsyncSession, t: TalTransmission) -> Optional[int]:
+    """Compagnie propriétaire de l'immeuble du bail (aucune pour un bail indépendant)."""
+    if not t.immeuble_id:
+        return None
+    entreprise_id = (
+        await db.execute(
+            select(ImmeubleOwnership.entreprise_id)
+            .where(ImmeubleOwnership.immeuble_id == t.immeuble_id)
+            .order_by(ImmeubleOwnership.ownership_pct.desc()).limit(1)
+        )
+    ).scalar_one_or_none()
+    if entreprise_id is None:
+        im = await db.get(Immeuble, t.immeuble_id)
+        entreprise_id = getattr(im, "owner_entreprise_id", None) if im is not None else None
+    return entreprise_id
+
+
 async def lancer_signature(db: AsyncSession, t: TalTransmission, *, user, message: Optional[str] = None) -> tuple[Any, bool, list[str]]:
-    """Crée le document eSign (brouillon) sur le PDF officiel du TAL avec
-    les signataires pré-remplis ; les zones se posent dans l'éditeur eSign
-    puis l'envoi part de là. Idempotent : un document déjà créé est
-    renvoyé tel quel. Retourne (document, créé ?, personnes sans courriel)."""
+    """Voie historique (API) : crée le document de signature en BROUILLON, sans
+    zones. L'écran de Gestion immobilière passe par ``tal_bail_signature.envoyer``,
+    qui pose les zones du gabarit officiel et envoie en un geste. Idempotent : un
+    document déjà créé est renvoyé tel quel. Retourne (document, créé ?, personnes
+    sans courriel)."""
     import asyncio
     import hashlib
 
@@ -1896,25 +1955,14 @@ async def lancer_signature(db: AsyncSession, t: TalTransmission, *, user, messag
         pages = await asyncio.to_thread(pdf_page_count, pdf)
     except Exception:  # noqa: BLE001
         pages = 1
-    entreprise_id: Optional[int] = None
-    if t.immeuble_id:
-        entreprise_id = (
-            await db.execute(
-                select(ImmeubleOwnership.entreprise_id)
-                .where(ImmeubleOwnership.immeuble_id == t.immeuble_id)
-                .order_by(ImmeubleOwnership.ownership_pct.desc()).limit(1)
-            )
-        ).scalar_one_or_none()
-        if entreprise_id is None:
-            im = await db.get(Immeuble, t.immeuble_id)
-            entreprise_id = getattr(im, "owner_entreprise_id", None) if im is not None else None
+    entreprise_id = await entreprise_proprietaire(db, t)
     titre = (f"Bail de logement — {t.adresse}" if t.adresse else "Bail de logement (TAL)")[:255]
     doc = EsignDocument(
         entreprise_id=entreprise_id, created_by_user_id=getattr(user, "id", None), title=titre,
         message=(message or "Voici votre bail de logement (formulaire officiel du Tribunal administratif du logement) à signer électroniquement.")[:2000],
         status=EsignDocumentStatus.BROUILLON.value, use_signing_order=False,
         filename=f"bail-tal-{t.id}.pdf", content_type="application/pdf", pdf_blob=pdf, page_count=max(1, int(pages or 1)),
-        sha256=hashlib.sha256(pdf).hexdigest(),
+        sha256=hashlib.sha256(pdf).hexdigest(), origine=ORIGINE_ESIGN,
     )
     db.add(doc)
     await db.flush()
@@ -1922,7 +1970,7 @@ async def lancer_signature(db: AsyncSession, t: TalTransmission, *, user, messag
         db.add(EsignSigner(
             document_id=doc.id, order_index=i, first_name=s["prenom"] or s["nom_complet"][:100], last_name=s["nom"],
             email=s["courriel"][:320], phone=(s["telephone"] or None), require_sms_auth=False,
-            contact_ref=(f"tal:{s['role']}")[:64],
+            contact_ref=reference_signataire(s["role"], s["rang"]),
         ))
     db.add(EsignEvent(document_id=doc.id, type="cree", detail=(f"Bail officiel TAL (transmission #{t.id}) — par {rep_courriel}")[:500]))
     t.esign_document_id = doc.id
@@ -2064,18 +2112,29 @@ async def etat_signature(db: AsyncSession, esign_document_id: Optional[int]) -> 
     def _iso_dt(v: Any) -> Optional[str]:
         return v.isoformat() if isinstance(v, datetime) else None
 
-    rows = [{
-        "id": s.id, "nom": f"{s.first_name} {s.last_name}".strip(), "email": s.email,
-        "role": (s.contact_ref or "").replace("tal:", "") or None,
-        "envoye_le": _iso_dt(s.sent_at), "ouvert_le": _iso_dt(s.last_opened_at or s.opened_at),
-        "signe_le": _iso_dt(s.signed_at), "refuse_le": _iso_dt(s.declined_at),
-    } for s in signers]
+    en_cours = doc.status == "envoye"
+    rows = []
+    for s in signers:
+        role, partie, rang = lire_reference_signataire(s.contact_ref)
+        attendu = en_cours and s.signed_at is None and s.declined_at is None
+        rows.append({
+            "id": s.id, "nom": f"{s.first_name} {s.last_name}".strip(), "email": s.email,
+            "role": role, "partie": partie, "rang": rang,
+            "envoye_le": _iso_dt(s.sent_at), "ouvert_le": _iso_dt(s.last_opened_at or s.opened_at),
+            "signe_le": _iso_dt(s.signed_at), "refuse_le": _iso_dt(s.declined_at),
+            "motif_refus": (s.decline_reason or None) if s.declined_at else None,
+            # Tant que la personne n'a ni signé ni refusé : renvoi de l'invitation, correction du courriel.
+            "peut_renvoyer": attendu, "peut_modifier": attendu,
+        })
     return {
         "esign_document_id": doc.id, "statut": doc.status, "titre": doc.title,
         "envoye_le": _iso_dt(doc.sent_at), "complete_le": _iso_dt(doc.completed_at), "expire_le": _iso_dt(doc.expires_at),
         "nb_signataires": len(rows), "nb_signes": sum(1 for r in rows if r["signe_le"]),
         "nb_refus": sum(1 for r in rows if r["refuse_le"]),
-        "signataires": rows, "url": f"/entreprises/signature/{doc.id}",
+        "signataires": rows,
+        # Tout se pilote depuis Gestion immobilière (Phil 2026-11-11) : aucun lien vers la section Signature.
+        "peut_annuler": en_cours,
+        "peut_envoyer": doc.status in ("brouillon", "annule", "refuse", "expire"),
     }
 
 
@@ -2107,6 +2166,7 @@ async def etat_bail_tal(db: AsyncSession, bail_id: Optional[int]) -> Optional[di
 
 __all__ = [
     "signataires_depuis_formulaire", "lancer_signature", "etat_signature", "etat_bail_tal",
+    "personnes_a_signer", "reference_signataire", "lire_reference_signataire", "entreprise_proprietaire", "ORIGINE_ESIGN",
     "apres_signature_complete",
     "CONFIG_KEY", "COUT_TAL", "DOC_TYPE", "DEFAUTS", "GRATUITS_TOTAL",
     "TalBailError", "FormulaireInvalide", "TransmissionFermee",
