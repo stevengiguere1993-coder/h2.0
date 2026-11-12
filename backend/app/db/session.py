@@ -490,6 +490,7 @@ async def ensure_critical_columns() -> None:
         ("optimisation_projets", "qbo_hypotheque_account_id", "VARCHAR(64)"),
         ("optimisation_projets", "qbo_hypotheque_account_name", "VARCHAR(255)"),
         ("optimisation_projets", "avances_accounts_json", "TEXT"),
+        ("optimisation_projets", "cashflow_exclus_json", "TEXT"),
         # Renouvellement v3 : réponse du locataire + application au bail.
         ("imm_bail_renouvellements", "reponse_le", "DATE"),
         ("imm_bail_renouvellements", "refus_motif", "TEXT"),

@@ -80,6 +80,15 @@ class OptimisationProjet(Base, TimestampUpdateMixin):
     avances_accounts_json: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True
     )
+    #: Catégories (ids de comptes QuickBooks) RETIRÉES de l'encadré
+    #: Cashflow — liste JSON d'ids. NULL = tout le résultat, comme avant.
+    #: Une liste d'EXCLUSIONS, pas d'inclusions : une nouvelle catégorie
+    #: créée dans QuickBooks entre d'office au cashflow (rien ne disparaît
+    #: en silence du budget de détention). Phil 2026-11-12. Colonne
+    #: additive → ensure_critical_columns.
+    cashflow_exclus_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
 
     #: Point de départ du calcul de rentabilité de la compagnie
     #: (revenus − dépenses lus de QuickBooks). Vide = depuis la

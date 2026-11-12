@@ -30,12 +30,17 @@ _ACCOUNT_TYPES = (
 
 #: Entrées d'argent qui FINANCENT une enveloppe (prêt, marge, apport,
 #: subvention…) — on front la dépense, on se fait rembourser ensuite.
+#: Actif à court terme (Phil 2026-11-12 : « c'est une retenue de la
+#: banque ») : la mise de fonds que le prêteur garde et libère au fil des
+#: déboursés. Lié à une enveloppe, son SOLDE est de l'argent encore
+#: retenu → il se SOUSTRAIT du financé (voir l'endpoint qbo-depenses).
 _ACCOUNT_TYPES_FINANCEMENT = (
     "Income",
     "Other Income",
     "Long Term Liability",
     "Other Current Liability",
     "Equity",
+    "Other Current Asset",
 )
 
 #: Comptes bancaires (solde courant affiché sur le budget).
@@ -541,11 +546,25 @@ def _assembler_cashflow(
     comptes: Optional[List[Dict[str, Any]]] = None,
     hypotheque: Optional[List[float]] = None,
     bornes: Optional[List[tuple]] = None,
+    exclus: Optional[set] = None,
 ) -> Dict[str, Any]:
     """Combine les colonnes mensuelles du P&L en lignes de cashflow :
     ``titres`` = libellés de colonnes SANS la première (une par mois,
-    la dernière étant « Total »)."""
+    la dernière étant « Total »).
+
+    ``exclus`` : ids des catégories (comptes) que Phil a retirées du
+    cashflow (2026-11-12 : « je devrais pouvoir choisir les catégories
+    qui s'y retrouvent ») — leurs montants sortent des revenus, des
+    dépenses, de l'écart et du détail ; elles reviennent dans
+    ``exclues`` avec leur total, pour que l'écran dise ce qui est écarté."""
     n = len(titres)
+    exclus = {str(x) for x in (exclus or ()) if x}
+    ecartes = [
+        c for c in comptes or [] if str(c.get("compte_id") or "") in exclus
+    ]
+    comptes = [
+        c for c in comptes or [] if str(c.get("compte_id") or "") not in exclus
+    ]
 
     def _serie(*cles: str) -> List[float]:
         out = [0.0] * n
@@ -558,6 +577,20 @@ def _assembler_cashflow(
     revenus = _serie("Income", "OtherIncome")
     depenses = _serie("Expenses", "COGS", "OtherExpenses")
     net = groupes.get("NetIncome")
+    if net is not None:
+        net = [float(v) for v in net]
+    # Catégories écartées : retirées des totaux de section (et du net).
+    for c in ecartes:
+        for i in range(min(n, len(c["vals"]))):
+            v = float(c["vals"][i])
+            if c["type"] == "revenu":
+                revenus[i] -= v
+                if net is not None and i < len(net):
+                    net[i] -= v
+            else:
+                depenses[i] -= v
+                if net is not None and i < len(net):
+                    net[i] += v
     hyp = [0.0] * n
     for i in range(min(n, len(hypotheque or []))):
         hyp[i] = float((hypotheque or [])[i])
@@ -610,7 +643,18 @@ def _assembler_cashflow(
         "ecart": round(ecarts[-1], 2) if n else 0.0,
         "details": _details(n - 1) if n else [],
     }
-    return {"mois": mois, "total": total}
+    exclues = [
+        {
+            "nom": c["nom"],
+            "compte_id": c.get("compte_id"),
+            "type": c["type"],
+            "montant": round(float(c["vals"][n - 1]), 2)
+            if n and len(c["vals"]) >= n
+            else 0.0,
+        }
+        for c in ecartes
+    ]
+    return {"mois": mois, "total": total, "exclues": exclues}
 
 
 def _colonne_total(titre: str, borne: tuple, autres: List[tuple]) -> bool:
@@ -628,9 +672,11 @@ async def cashflow_mensuel(
     date_debut: Optional[str],
     date_fin: Optional[str],
     hypotheque_account_id: Optional[str] = None,
+    exclus: Optional[set] = None,
 ) -> Dict[str, Any]:
     """Cashflow d'opération PAR MOIS (revenus, dépenses, écart) lu du
     rapport ProfitAndLoss ventilé mensuellement + total de période.
+    ``exclus`` : catégories retirées du cashflow par l'utilisateur.
     Lecture seule."""
     from app.integrations.quickbooks import get_qbo
 
@@ -706,7 +752,7 @@ async def cashflow_mensuel(
         except Exception as exc:  # noqa: BLE001 — cashflow sans hyp
             log.info("hypothèque cashflow (%s): %s", scope, exc)
             hyp = None
-    return _assembler_cashflow(titres, groupes, comptes, hyp, bornes)
+    return _assembler_cashflow(titres, groupes, comptes, hyp, bornes, exclus)
 
 
 async def rentabilite(
@@ -816,6 +862,15 @@ def _signe(classification: str, sens: str) -> float:
     return 1.0 if (sens == "Credit") == credit_positif else -1.0
 
 
+def _signe_financement(sens: str) -> float:
+    """Volet FINANCEMENT : chaque compte lié se lit en ENTRÉE d'argent,
+    quel que soit son type. Un crédit = + (prêt tiré, apport, retenue
+    LIBÉRÉE par la banque) ; un débit = − (remboursement, argent MIS en
+    retenue chez le prêteur). Pour un actif à court terme, la somme
+    retombe sur −solde : ce que la banque retient encore."""
+    return 1.0 if sens == "Credit" else -1.0
+
+
 def _lignes_document(type_key: str, txn: Dict[str, Any]):
     """(compte, sens Debit/Credit, montant brut, description, tiers) de
     chaque ligne d'un document QuickBooks, selon son type."""
@@ -855,6 +910,8 @@ async def transactions_depenses(
     account_ids: set[str],
     date_debut: Optional[str],
     date_fin: str,
+    *,
+    financement: bool = False,
 ) -> List[Dict[str, Any]]:
     """Transactions (Bills + Purchases + écritures de journal) touchant
     les comptes donnés, avec leurs pièces jointes QuickBooks.
@@ -876,6 +933,11 @@ async def transactions_depenses(
     (``_signe``) : + = dépensé sur un compte de dépense/actif, + = encaissé
     sur un compte de passif/équité/revenu (enveloppes de FINANCEMENT :
     dépôts, virements, écritures ; un remboursement sort en −).
+
+    ``financement=True`` (détail du « Financé ») : tout compte se lit en
+    entrée d'argent (``_signe_financement``) — c'est ce qui rend juste un
+    ACTIF à court terme lié au financement (retenue de la banque : mise
+    en retenue = −, libération = +).
     """
     from app.integrations.quickbooks import get_qbo
 
@@ -926,7 +988,12 @@ async def transactions_depenses(
                     if not _compte_retenu(acc, txn_date):
                         continue
                     try:
-                        montant = _signe(classif.get(acc, ""), sens) * float(brut)
+                        signe = (
+                            _signe_financement(sens)
+                            if financement
+                            else _signe(classif.get(acc, ""), sens)
+                        )
+                        montant = signe * float(brut)
                     except (TypeError, ValueError):
                         continue
                     impute += montant
