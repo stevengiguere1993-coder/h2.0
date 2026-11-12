@@ -322,15 +322,11 @@ async def get_kpis(
     )
     time_to_sale = (await db.execute(tts_stmt)).scalar_one()
 
-    # Chantiers actifs : projets de construction « en cours » seulement.
-    # Les bons de travail partagent la table `projects` (kind="bon_travail")
-    # et restent souvent « en cours » : ils gonflaient la tuile (38 au lieu
-    # de 7, 2026-11-11).
+    # Active projects (in_progress)
     active_projects = (
         await db.execute(
             select(func.count(Project.id)).where(
-                Project.status == ProjectStatus.IN_PROGRESS.value,
-                Project.kind != "bon_travail",
+                Project.status == ProjectStatus.IN_PROGRESS.value
             )
         )
     ).scalar_one()
