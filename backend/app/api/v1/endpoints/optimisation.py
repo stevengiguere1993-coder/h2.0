@@ -119,6 +119,8 @@ class ProjetRead(BaseModel):
     qbo_hypotheque_account_id: Optional[str] = None
     qbo_hypotheque_account_name: Optional[str] = None
     avances_accounts_json: Optional[str] = None
+    #: Catégories retirées du cashflow (liste JSON d'ids de comptes).
+    cashflow_exclus_json: Optional[str] = None
     objectif_revenus_mensuels: Optional[float]
     objectif_depenses_mensuelles: Optional[float]
     objectif_revenus_annuels: Optional[float] = None
@@ -163,6 +165,9 @@ class ProjetUpdate(BaseModel):
     )
     qbo_hypotheque_account_name: Optional[str] = Field(
         default=None, max_length=255
+    )
+    cashflow_exclus_json: Optional[str] = Field(
+        default=None, max_length=20_000
     )
     avances_accounts_json: Optional[str] = Field(
         default=None, max_length=20_000
@@ -830,6 +835,10 @@ async def qbo_transactions_ligne(
             comptes,
             p.date_debut.isoformat() if p.date_debut else None,
             date.today().isoformat(),
+            # Financement : chaque compte se lit en entrée d'argent — une
+            # retenue de la banque (actif) sort en − quand l'argent y est
+            # mis, en + quand la banque le libère.
+            **({"financement": True} if volet == "financement" else {}),
         )
     except Exception as exc:  # noqa: BLE001 — message propre à l'UI
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
@@ -924,8 +933,12 @@ async def qbo_transactions_compte(
 
 class QboDepensesOut(BaseModel):
     par_ligne: Dict[int, float] = Field(default_factory=dict)
-    #: Financement encaissé par enveloppe (comptes d'entrée d'argent).
+    #: Financement encaissé par enveloppe (comptes d'entrée d'argent),
+    #: NET de ce que la banque retient encore (actifs à court terme liés).
     financement_par_ligne: Dict[int, float] = Field(default_factory=dict)
+    #: Argent encore RETENU par la banque par enveloppe (solde des actifs
+    #: à court terme liés au financement) — déjà soustrait du financé.
+    retenu_par_ligne: Dict[int, float] = Field(default_factory=dict)
     #: Solde courant du compte bancaire du projet (None si non choisi).
     solde_bancaire: Optional[float] = None
     #: Cashflow d'opération PAR MOIS depuis l'ouverture du projet :
@@ -979,14 +992,45 @@ async def qbo_depenses(
         log.info("qbo-depenses projet #%s: %s", projet_id, exc)
         return QboDepensesOut(erreur=str(exc))
 
-    def _somme(raw: Optional[str]) -> float:
+    def _comptes(raw: Optional[str]) -> List[str]:
         try:
-            comptes = json.loads(raw or "[]")
+            return [
+                str(c.get("id"))
+                for c in json.loads(raw or "[]")
+                if c.get("id") is not None
+            ]
         except Exception:  # noqa: BLE001
-            return 0.0
-        return sum(
-            float(totaux.get(str(c.get("id")), 0.0)) for c in comptes
-        )
+            return []
+
+    def _somme(raw: Optional[str]) -> float:
+        return sum(float(totaux.get(i, 0.0)) for i in _comptes(raw))
+
+    # Plan comptable des comptes SUIVIS : leur nom COMPLET (« Frais de
+    # détention:Frais bancaire » — l'écran titre les enveloppes avec la
+    # catégorie entière, Phil 2026-09-24) et leur classification (un ACTIF
+    # lié au financement = retenue de la banque). Jamais bloquant.
+    ids_suivis: set = set()
+    for ligne in lignes:
+        ids_suivis.update(_comptes(ligne.qbo_accounts_json))
+        ids_suivis.update(_comptes(ligne.qbo_financement_accounts_json))
+    plan: Dict[str, Dict[str, str]] = {}
+    if ids_suivis:
+        try:
+            plan = {
+                c["id"]: c
+                for c in await lister_comptes_depense(p.qbo_scope, "tous")
+                if c["id"] in ids_suivis
+            }
+        except Exception as exc:  # noqa: BLE001 — jamais bloquant
+            log.info("plan comptable projet #%s: %s", projet_id, exc)
+
+    # Catégories que l'utilisateur a retirées du cashflow.
+    try:
+        cashflow_exclus = {
+            str(x) for x in json.loads(p.cashflow_exclus_json or "[]") if x
+        }
+    except Exception:  # noqa: BLE001
+        cashflow_exclus = set()
 
     # Cashflow d'opération mois par mois depuis l'OUVERTURE du projet
     # (date_debut). Le déficit du total nourrit la Détention ci-dessous.
@@ -1019,12 +1063,14 @@ async def qbo_depenses(
                 (p.date_debut or date(2000, 1, 1)).isoformat(),
                 date.today().isoformat(),
                 hypotheque_account_id=p.qbo_hypotheque_account_id,
+                **({"exclus": cashflow_exclus} if cashflow_exclus else {}),
             )
         except Exception as exc:  # noqa: BLE001 — jamais bloquant
             log.info("cashflow projet #%s: %s", projet_id, exc)
 
     par_ligne: Dict[int, float] = {}
     financement: Dict[int, float] = {}
+    retenus: Dict[int, float] = {}
     for ligne in lignes:
         if ligne.mode == "deficit_operation":
             # Budget de détention : dépensé = l'écart TOTAL du cashflow,
@@ -1036,9 +1082,21 @@ async def qbo_depenses(
             par_ligne[ligne.id] = round(_somme(ligne.qbo_accounts_json), 2)
         # Les entrées d'argent sortent tantôt en crédit (négatif) tantôt
         # en positif selon le type de compte → on garde la magnitude.
-        financement[ligne.id] = round(
-            abs(_somme(ligne.qbo_financement_accounts_json)), 2
-        )
+        # Un ACTIF à court terme lié ici est une retenue de la banque
+        # (Phil 2026-11-12) : son solde est de l'argent PAS ENCORE entre
+        # nos mains → il se soustrait. Ex. Frais de développement : prêt
+        # tiré 60 000 − mise de fonds encore retenue 15 000 = 45 000.
+        encaisse = 0.0
+        retenu = 0.0
+        for compte_id in _comptes(ligne.qbo_financement_accounts_json):
+            valeur = float(totaux.get(compte_id, 0.0))
+            if (plan.get(compte_id) or {}).get("classification") == "Asset":
+                retenu += valeur
+            else:
+                encaisse += valeur
+        financement[ligne.id] = round(abs(encaisse) - retenu, 2)
+        if abs(retenu) >= 0.005:
+            retenus[ligne.id] = round(retenu, 2)
 
     solde = None
     if p.qbo_bank_account_id:
@@ -1047,35 +1105,14 @@ async def qbo_depenses(
         except Exception as exc:  # noqa: BLE001 — jamais bloquant
             log.info("solde bancaire projet #%s: %s", projet_id, exc)
 
-    # Noms COMPLETS des comptes suivis (« Frais de détention:Frais
-    # bancaire ») : l'écran s'en sert pour titrer les enveloppes avec la
-    # catégorie entière (Phil 2026-09-24 : « pour l'instant je vois juste
-    # Frais bancaire »). Jamais bloquant.
-    noms: Dict[str, str] = {}
-    ids_suivis: set = set()
-    for ligne in lignes:
-        for raw in (ligne.qbo_accounts_json, ligne.qbo_financement_accounts_json):
-            try:
-                ids_suivis.update(
-                    str(c.get("id"))
-                    for c in json.loads(raw or "[]")
-                    if c.get("id") is not None
-                )
-            except Exception:  # noqa: BLE001
-                continue
-    if ids_suivis:
-        try:
-            noms = {
-                c["id"]: c["fully_qualified_name"]
-                for c in await lister_comptes_depense(p.qbo_scope, "tous")
-                if c["id"] in ids_suivis
-            }
-        except Exception as exc:  # noqa: BLE001 — jamais bloquant
-            log.info("noms des comptes projet #%s: %s", projet_id, exc)
+    noms: Dict[str, str] = {
+        i: c["fully_qualified_name"] for i, c in plan.items()
+    }
 
     return QboDepensesOut(
         par_ligne=par_ligne,
         financement_par_ligne=financement,
+        retenu_par_ligne=retenus,
         solde_bancaire=solde,
         cashflow=cashflow,
         hypotheque_configuree=bool(p.qbo_hypotheque_account_id),
