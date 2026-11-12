@@ -21,6 +21,9 @@ Préfixe ``/immobilier/tal-bail`` (volet Immobilier, gestionnaires) :
 - POST /independants              → brouillon d'un bail INDÉPENDANT (petit formulaire, ou copie d'un autre)
 - GET  /independants              → baux indépendants (essais, baux pour un tiers hors système)
 - GET  /preparer?transmission_id= → formulaire enregistré d'un bail indépendant (même forme que ?bail_id=)
+- GET  /transmissions/{id}/signature/personnes → qui signe, envoi possible ou non, suivi (tout l'écran de signature)
+- POST /transmissions/{id}/signature/envoyer   → zones du gabarit officiel posées + invitations parties, en un geste
+- POST /transmissions/{id}/signature/signataires/{sid}/renvoyer · PATCH …/signataires/{sid} (courriel) · POST …/signature/annuler
 
 Règles du contrat (jamais contournées ici) : un appel = un besoin réel de
 signature ; pas de génération d'avance ni en lot ; PDF archivé tel quel ;
@@ -50,6 +53,7 @@ from app.integrations.tal.schema import (
 )
 from app.models.tal_bail import TRANSMISSION_STATUTS, TalSchema, TalTransmission
 from app.services import tal_bail as svc
+from app.services import tal_bail_signature as sig
 from app.services.audit import log_action
 from app.services.automation_state import get_automation_config, set_automation_config
 
@@ -525,6 +529,72 @@ async def lancer_signature(transmission_id: int, payload: Optional[SignatureIn],
     await db.commit()
     etat = await svc.etat_signature(db, doc.id)
     return {"esign_document_id": doc.id, "cree": cree, "url": f"/entreprises/signature/{doc.id}", "sans_courriel": manquants, "signature": etat}
+
+
+class EnvoiSignatureIn(BaseModel):
+    #: Courriel par personne (clé « partie:rang », ex. « locataire:2 ») tel que vu à l'écran :
+    #: remplace celui du formulaire ; vide = cette personne n'est pas invitée.
+    courriels: Optional[Dict[str, Optional[str]]] = None
+    message: Optional[str] = Field(default=None, max_length=2000)
+
+
+class CourrielSignataireIn(BaseModel):
+    courriel: str = Field(..., min_length=3, max_length=320)
+
+
+@router.get("/transmissions/{transmission_id}/signature/personnes", summary="Signature du bail : qui signe, envoi possible, suivi")
+async def signature_personnes(transmission_id: int, db: DBSession, user: RequireManager) -> Dict[str, Any]:
+    t = await _transmission_or_404(db, transmission_id)
+    return await sig.etat_envoi(db, t, user=user)
+
+
+@router.post("/transmissions/{transmission_id}/signature/envoyer", summary="Envoyer le bail pour signature (zones posées automatiquement)")
+async def signature_envoyer(transmission_id: int, payload: Optional[EnvoiSignatureIn], db: DBSession, user: RequireManager) -> Dict[str, Any]:
+    """Phil 2026-11-11 : un clic — les zones de signature, d'initiales et de date se posent
+    aux endroits prévus par le formulaire officiel et les invitations partent. Aucun
+    détour par la section Signature de Gestion d'entreprise."""
+    try:
+        return await sig.envoyer(
+            db, transmission_id, user=user,
+            courriels=(payload.courriels if payload else None), message=(payload.message if payload else None),
+        )
+    except svc.TalBailError as exc:
+        raise _erreur(exc) from exc
+
+
+@router.post("/transmissions/{transmission_id}/signature/signataires/{signataire_id}/renvoyer", summary="Renvoyer l'invitation à une personne")
+async def signature_renvoyer(transmission_id: int, signataire_id: int, db: DBSession, user: RequireManager) -> Dict[str, Any]:
+    t = await _transmission_or_404(db, transmission_id)
+    try:
+        out = await sig.renvoyer(db, t, signataire_id, user=user)
+    except svc.TalBailError as exc:
+        raise _erreur(exc) from exc
+    await db.commit()
+    return out
+
+
+@router.patch("/transmissions/{transmission_id}/signature/signataires/{signataire_id}", summary="Corriger le courriel d'une personne qui n'a pas signé")
+async def signature_changer_courriel(
+    transmission_id: int, signataire_id: int, payload: CourrielSignataireIn, db: DBSession, user: RequireManager
+) -> Dict[str, Any]:
+    t = await _transmission_or_404(db, transmission_id)
+    try:
+        out = await sig.changer_courriel(db, t, signataire_id, payload.courriel, user=user)
+    except svc.TalBailError as exc:
+        raise _erreur(exc) from exc
+    await db.commit()
+    return out
+
+
+@router.post("/transmissions/{transmission_id}/signature/annuler", summary="Annuler l'envoi en signature (les liens cessent de fonctionner)")
+async def signature_annuler(transmission_id: int, db: DBSession, user: RequireManager) -> Dict[str, Any]:
+    t = await _transmission_or_404(db, transmission_id)
+    try:
+        out = await sig.annuler(db, t, user=user)
+    except svc.TalBailError as exc:
+        raise _erreur(exc) from exc
+    await db.commit()
+    return out
 
 
 @router.get("/transmissions/{transmission_id}/signature", summary="Suivi de la signature (qui, quand)")

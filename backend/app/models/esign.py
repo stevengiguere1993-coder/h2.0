@@ -144,6 +144,13 @@ class EsignDocument(Base, TimestampUpdateMixin):
         Integer, nullable=True
     )
 
+    # Module qui a créé le document, quand ce n'est pas la section Signature :
+    # « bail_tal » = bail officiel du TAL, piloté depuis Gestion immobilière
+    # (Phil 2026-11-11). Ces documents n'apparaissent pas dans la section
+    # Signature de Gestion d'entreprise. NULL = document de la section
+    # Signature. Colonne additive → ensure_critical_columns.
+    origine: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+
 
 class EsignSigner(Base, TimestampUpdateMixin):
     """Signataire d'un document — banque de contacts ou création libre."""

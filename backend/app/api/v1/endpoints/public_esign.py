@@ -728,6 +728,17 @@ async def verify_sms_code(
 # --------------------------- Signature / refus ---------------------------
 
 
+async def _page_de_suivi(db: AsyncSession, doc_id: int) -> str:
+    """Où le gestionnaire suit ce document : la section Signature, sauf pour
+    un bail officiel du TAL, suivi dans Gestion immobilière."""
+    try:
+        from app.services.tal_bail_signature import lien_de_suivi
+
+        return (await lien_de_suivi(db, doc_id)) or "/entreprises/signature"
+    except Exception:  # noqa: BLE001
+        return "/entreprises/signature"
+
+
 async def _signer_fields(
     db: AsyncSession, doc_id: int, signer_id: int
 ) -> list[EsignField]:
@@ -902,7 +913,7 @@ async def sign_esign(
                 f"Signé par {signer.first_name} {signer.last_name}."
                 + (" Document complété ✔" if all_signed else "")
             ),
-            href="/entreprises/signature",
+            href=await _page_de_suivi(db, doc.id),
         )
         await db.commit()
     except Exception:  # noqa: BLE001
@@ -1085,7 +1096,7 @@ async def decline_esign(
                 + (f" Raison : {signer.decline_reason}"
                    if signer.decline_reason else "")
             ),
-            href="/entreprises/signature",
+            href=await _page_de_suivi(db, doc.id),
         )
         await db.commit()
     except Exception:  # noqa: BLE001

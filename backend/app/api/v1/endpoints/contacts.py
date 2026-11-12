@@ -291,11 +291,19 @@ async def list_all_contacts(
     # toute personne saisie un jour dans un document fait partie de la
     # banque sans ressaisie (Phil 2026-10-07) — le plus récent par
     # courriel, sauf si la personne est déjà là par une autre source.
-    from app.models.esign import EsignSigner
+    from app.models.esign import EsignDocument, EsignSigner
 
     vus_sig: set[str] = set()
+    # Seulement les documents de la section Signature : les signataires d'un
+    # bail officiel du TAL (Gestion immobilière) ne sont pas des contacts
+    # d'affaires.
     rows_s = (
-        await db.execute(select(EsignSigner).order_by(EsignSigner.id.desc()))
+        await db.execute(
+            select(EsignSigner)
+            .join(EsignDocument, EsignDocument.id == EsignSigner.document_id)
+            .where(EsignDocument.origine.is_(None))
+            .order_by(EsignSigner.id.desc())
+        )
     ).scalars().all()
     for sg in rows_s:
         em = (sg.email or "").strip().lower()

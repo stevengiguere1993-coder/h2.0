@@ -12,9 +12,10 @@
  *    (2,99 $ par formulaire en mode réel ; besoin réel de signature).
  * 3. Génération (FRW111 + FRW122) → PDF officiel archivé au dossier,
  *    jamais modifié.
- * 4. « Lancer la signature » → document eSign Kratos avec les signataires
- *    (locataires, cautions, représentant) ; les zones se posent dans
- *    l'éditeur Signature, l'envoi part de là.
+ * 4. « Envoyer pour signature » (Phil 2026-11-11) : un clic, tout dans
+ *    Gestion immobilière — les zones se posent aux endroits prévus par le
+ *    formulaire officiel, les invitations partent, le suivi se fait ici
+ *    (voir tal-bail-signature.tsx).
  *
  * Deux portes (Phil 2026-11-10) : un bail Kratos (`bailId`, depuis
  * « Locations & nouveaux baux ») ou un bail INDÉPENDANT (`transmissionId`,
@@ -28,7 +29,6 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  ExternalLink,
   FileSignature,
   FileText,
   Loader2,
@@ -39,8 +39,11 @@ import {
   X
 } from "lucide-react";
 
-import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+
+import { TalBailSignature } from "./tal-bail-signature";
+
+export type { SignatureEtat } from "./tal-bail-signature";
 
 const BASE = "/api/v1/immobilier/tal-bail";
 const INPUT_CLS =
@@ -133,27 +136,6 @@ type Condition = {
   nommes_min?: number;
 };
 type Regle = { cible: string; groupe?: string; si: Condition[] };
-export type SignatureEtat = {
-  esign_document_id: number;
-  statut: string;
-  envoye_le: string | null;
-  complete_le: string | null;
-  nb_signataires: number;
-  nb_signes: number;
-  nb_refus: number;
-  url: string;
-  signataires: {
-    id: number;
-    nom: string;
-    email: string | null;
-    role: string | null;
-    envoye_le: string | null;
-    ouvert_le: string | null;
-    signe_le: string | null;
-    refuse_le: string | null;
-  }[];
-};
-
 type Etape = "chargement" | "formulaire" | "confirmation" | "resultat";
 
 // ─── Sections du formulaire (clés racine ; le reste tombe dans « Autres ») ──
@@ -489,8 +471,6 @@ export function TalBailModal({
   const [transmission, setTransmission] = useState<TalTransmission | null>(
     null
   );
-  const [signature, setSignature] = useState<SignatureEtat | null>(null);
-  const [sansCourriel, setSansCourriel] = useState<string[]>([]);
   const [rapport, setRapport] = useState<Rapport | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -526,12 +506,6 @@ export function TalBailModal({
     return m;
   }, [schema]);
 
-  const chargerSignature = useCallback(async (tid: number) => {
-    const r = await authedFetch(`${BASE}/transmissions/${tid}/signature`);
-    if (r.ok) setSignature((await r.json()) as SignatureEtat);
-    else setSignature(null);
-  }, []);
-
   const charger = useCallback(async () => {
     setErr(null);
     try {
@@ -552,7 +526,6 @@ export function TalBailModal({
       const transmise = p.transmissions.find((t) => t.statut === "transmise");
       if (transmise) {
         setTransmission(transmise);
-        await chargerSignature(transmise.id);
         setEtape("resultat");
         return;
       }
@@ -581,7 +554,7 @@ export function TalBailModal({
       setErr((e as Error).message);
       setEtape("formulaire");
     }
-  }, [bailId, transmissionId, independant, chargerSignature]);
+  }, [bailId, transmissionId, independant]);
 
   useEffect(() => {
     void charger();
@@ -671,34 +644,7 @@ export function TalBailModal({
       }
       const t = (await r.json()) as TalTransmission;
       setTransmission(t);
-      setSignature(null);
       setEtape("resultat");
-      onDone();
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function lancerSignature() {
-    if (!transmission) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      const r = await authedFetch(
-        `${BASE}/transmissions/${transmission.id}/signature`,
-        { method: "POST", body: JSON.stringify({}) }
-      );
-      if (!r.ok) throw new Error(await lireErreur(r));
-      const b = (await r.json()) as {
-        esign_document_id: number;
-        sans_courriel: string[];
-        signature: SignatureEtat;
-      };
-      setSignature(b.signature);
-      setSansCourriel(b.sans_courriel || []);
-      setTransmission({ ...transmission, esign_document_id: b.esign_document_id });
       onDone();
     } catch (e) {
       setErr((e as Error).message);
@@ -713,7 +659,6 @@ export function TalBailModal({
     setForm(prep.form);
     setRapport(prep.rapport);
     setTransmission(null);
-    setSignature(null);
     setEtape("formulaire");
   }
 
@@ -1225,39 +1170,8 @@ export function TalBailModal({
             ) : null}
             <JournalTechnique transmissionId={transmission.id} cle={`${transmission.statut}-${transmission.genere_le ?? ""}`} />
 
-            {/* Signature */}
-            <div className="mt-4 rounded-xl border border-brand-800 bg-brand-900 p-3.5">
-              <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-accent-500">
-                <FileSignature className="h-3.5 w-3.5" /> Signature (outil Kratos)
-              </h4>
-              {signature ? (
-                <SignatureSuivi sig={signature} />
-              ) : (
-                <>
-                  <p className="mt-1 text-xs text-white/60">
-                    Le PDF officiel part tel quel en signature électronique :{" "}
-                    {independant ? "locataire(s), caution(s) et locateur(s) signent" : "locataire(s), caution(s) et représentant signent"}{" "}
-                    en parallèle. Les zones (signature, initiales, date, cases) se
-                    posent dans l&apos;éditeur Signature, puis l&apos;envoi part de là.
-                  </p>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void lancerSignature()}
-                    className="btn-accent btn-sm mt-2 disabled:opacity-60"
-                  >
-                    {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSignature className="h-4 w-4" />}
-                    Lancer la signature
-                  </button>
-                </>
-              )}
-              {sansCourriel.length ? (
-                <p className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-100">
-                  Sans courriel, donc pas invité(s) : {sansCourriel.join(", ")} —{" "}
-                  {independant ? "ajoute ce signataire dans l'éditeur Signature." : "ajoute le courriel sur la fiche, puis le signataire dans l'éditeur."}
-                </p>
-              ) : null}
-            </div>
+            {/* Signature : envoi en un clic et suivi, sans quitter Gestion immobilière */}
+            <TalBailSignature key={`${transmission.id}-${transmission.genere_le ?? ""}`} transmissionId={transmission.id} onChange={onDone} />
 
             <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-brand-800 pt-3">
               {!independant ? (
@@ -1401,66 +1315,6 @@ function Ligne({ l, v }: { l: string; v: string }) {
         {v}
       </dd>
     </>
-  );
-}
-
-export function SignatureSuivi({ sig }: { sig: SignatureEtat }) {
-  const badge =
-    sig.statut === "complete"
-      ? "badge-emerald"
-      : sig.statut === "envoye"
-        ? "badge-violet"
-        : sig.statut === "refuse" || sig.statut === "expire" || sig.statut === "annule"
-          ? "badge-rose"
-          : "badge-neutral";
-  const label: Record<string, string> = {
-    brouillon: "Zones à poser, puis envoyer",
-    envoye: "Envoyé — en attente",
-    complete: "Signé par tous",
-    refuse: "Refusé",
-    annule: "Annulé",
-    expire: "Expiré"
-  };
-  return (
-    <div className="mt-2 text-xs">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className={`badge ${badge}`}>{label[sig.statut] || sig.statut}</span>
-        <span className="text-white/50">
-          {sig.nb_signes}/{sig.nb_signataires} signé(s)
-          {sig.envoye_le ? ` · envoyé le ${fmtDateTime(sig.envoye_le)}` : ""}
-          {sig.complete_le ? ` · complété le ${fmtDateTime(sig.complete_le)}` : ""}
-        </span>
-        <Link
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={sig.url as any}
-          className="btn-outline-accent btn-xs ml-auto"
-        >
-          <ExternalLink className="h-3 w-3" /> Ouvrir dans Signature
-        </Link>
-      </div>
-      <ul className="mt-2 divide-y divide-brand-800 rounded-md border border-brand-800">
-        {sig.signataires.map((s) => (
-          <li key={s.id} className="flex flex-wrap items-center gap-2 px-2 py-1.5">
-            <span className="font-medium text-white/85">{s.nom}</span>
-            {s.role ? <span className="badge badge-neutral">{s.role}</span> : null}
-            <span className="text-white/40">{s.email}</span>
-            <span className="ml-auto text-[11px] text-white/55">
-              {s.signe_le ? (
-                <span className="text-emerald-300">✓ signé le {fmtDateTime(s.signe_le)}</span>
-              ) : s.refuse_le ? (
-                <span className="text-rose-300">refusé le {fmtDateTime(s.refuse_le)}</span>
-              ) : s.ouvert_le ? (
-                <>ouvert le {fmtDateTime(s.ouvert_le)}</>
-              ) : s.envoye_le ? (
-                <>envoyé le {fmtDateTime(s.envoye_le)}</>
-              ) : (
-                <>pas encore envoyé</>
-              )}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 }
 
