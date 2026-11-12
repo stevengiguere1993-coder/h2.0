@@ -100,6 +100,8 @@ type Projet = {
   qbo_hypotheque_account_id: string | null;
   qbo_hypotheque_account_name: string | null;
   avances_accounts_json: string | null;
+  /** Catégories retirées du cashflow : liste JSON d'ids de comptes QuickBooks. */
+  cashflow_exclus_json?: string | null;
   objectif_revenus_mensuels: number | null;
   objectif_depenses_mensuelles: number | null;
   objectif_revenus_annuels: number | null;
@@ -122,6 +124,8 @@ type QboCompte = {
   name: string;
   fully_qualified_name: string;
   account_type: string;
+  /** Asset | Liability | Equity | Revenue | Expense. */
+  classification?: string;
 };
 type ObjectifLibre = {
   label: string;
@@ -167,6 +171,8 @@ type Cashflow = {
   };
   //: Explication quand il n'y a rien à montrer (ex. ouverture future).
   note?: string | null;
+  //: Catégories retirées du cashflow, avec leur total sur la période.
+  exclues?: CashflowDetail[];
 };
 type AvanceMois = { mois: string; variation: number; solde: number };
 type AvanceCompte = {
@@ -323,6 +329,8 @@ export default function ProjetsOptimisationPage() {
 
   const [qboDep, setQboDep] = useState<Record<number, number>>({});
   const [qboFin, setQboFin] = useState<Record<number, number>>({});
+  //: Argent encore retenu par la banque, par enveloppe (déjà soustrait du financé).
+  const [qboRetenu, setQboRetenu] = useState<Record<number, number>>({});
   const [qboSolde, setQboSolde] = useState<number | null>(null);
   const [qboCashflow, setQboCashflow] = useState<Cashflow | null>(null);
   const [qboHypCfg, setQboHypCfg] = useState(false);
@@ -367,6 +375,7 @@ export default function ProjetsOptimisationPage() {
       const d = (await r.json()) as {
         par_ligne: Record<number, number>;
         financement_par_ligne: Record<number, number>;
+        retenu_par_ligne?: Record<number, number>;
         solde_bancaire: number | null;
         cashflow: Cashflow | null;
         hypotheque_configuree?: boolean;
@@ -375,6 +384,7 @@ export default function ProjetsOptimisationPage() {
       };
       setQboDep(d.par_ligne || {});
       setQboFin(d.financement_par_ligne || {});
+      setQboRetenu(d.retenu_par_ligne || {});
       setQboSolde(d.solde_bancaire ?? null);
       setQboCashflow(d.cashflow ?? null);
       setQboHypCfg(!!d.hypotheque_configuree);
@@ -403,6 +413,7 @@ export default function ProjetsOptimisationPage() {
     if (selId) {
       setQboDep({});
       setQboFin({});
+      setQboRetenu({});
       setQboSolde(null);
       setQboCashflow(null);
       setQboHypCfg(false);
@@ -629,6 +640,7 @@ export default function ProjetsOptimisationPage() {
                       projet={detail}
                       qboDep={qboDep}
                       qboFin={qboFin}
+                      qboRetenu={qboRetenu}
                       qboNoms={qboNoms}
                       qboSolde={qboSolde}
                       qboErr={qboErr}
@@ -645,6 +657,8 @@ export default function ProjetsOptimisationPage() {
                       cashflow={qboCashflow}
                       hypCfg={qboHypCfg}
                       loading={qboLoading}
+                      onPatchProjet={patchProjet}
+                      onChanged={() => void loadQbo(detail.id)}
                     />
                   </div>
                   <ObjectifsSection projet={detail} onPatch={patchProjet} />
@@ -1000,6 +1014,7 @@ function BudgetSection({
   projet,
   qboDep,
   qboFin,
+  qboRetenu,
   qboNoms,
   qboSolde,
   qboErr,
@@ -1011,6 +1026,7 @@ function BudgetSection({
   projet: Projet;
   qboDep: Record<number, number>;
   qboFin: Record<number, number>;
+  qboRetenu: Record<number, number>;
   qboNoms: Record<string, string>;
   qboSolde: number | null;
   qboErr: string | null;
@@ -1243,7 +1259,7 @@ function BudgetSection({
                 </th>
                 <th
                   className={`${GRP_FIN} pb-2 pr-2`}
-                  title="Financement encaissé (lu de QuickBooks) — comptes liés dans les réglages ⚙"
+                  title="Financement encaissé (lu de QuickBooks), moins ce que la banque retient encore — comptes liés dans les réglages ⚙"
                 >
                   Financé
                 </th>
@@ -1260,6 +1276,7 @@ function BudgetSection({
               {projet.budget_lignes.map((l, idx) => {
                 const dep = qboDep[l.id] ?? null;
                 const fin = qboFin[l.id] ?? 0;
+                const retenu = qboRetenu[l.id] ?? 0;
                 const budget = Number(l.budget_montant) || 0;
                 const comptant = Number(l.comptant_disponible) || 0;
                 const ecart = dep === null ? null : budget - dep;
@@ -1407,6 +1424,14 @@ function BudgetSection({
                             style={{ color: "var(--qg-text-muted)" }}
                           >
                             {nbFin} compte{nbFin > 1 ? "s" : ""}
+                          </span>
+                        ) : null}
+                        {retenu > 0.005 ? (
+                          <span
+                            className="text-[10px] text-amber-300"
+                            title="Solde de la retenue liée à cette enveloppe : argent que la banque garde encore. Il est déjà soustrait du financé, donc de l'argent disponible."
+                          >
+                            {fmtMoney(retenu)} retenus par la banque
                           </span>
                         ) : null}
                       </span>
@@ -1913,6 +1938,14 @@ function FinancementModal({
           pour cette enveloppe (prêt, marge de crédit, apport, subvention…).
           On avance les fonds, le remboursement arrive progressivement.
         </p>
+        <p
+          className="mt-1 text-[11px]"
+          style={{ color: "var(--qg-text-muted)" }}
+        >
+          Retenue de la banque : coche aussi son compte d&apos;actif à court
+          terme (Other Current Asset). Ce que la banque retient encore est
+          soustrait du financé, et revient à mesure qu&apos;elle le libère.
+        </p>
         {err ? (
           <p className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
             {err}
@@ -2251,7 +2284,8 @@ function BudgetSettingsModal({
                   style={{ color: "var(--qg-text-muted)" }}
                 >
                   Comptes QuickBooks d&apos;entrée d&apos;argent (prêt,
-                  marge, apport…) qui financent chaque enveloppe.
+                  marge, apport…) qui financent chaque enveloppe, et
+                  retenues de la banque (actifs à court terme).
                 </p>
                 <ul className="mt-1 space-y-0.5">
                   {projet.budget_lignes.map((l) => {
@@ -2599,13 +2633,21 @@ function CashflowSection({
   projet,
   cashflow,
   hypCfg,
-  loading
+  loading,
+  onPatchProjet,
+  onChanged
 }: {
   projet: Projet;
   cashflow: Cashflow | null;
   hypCfg: boolean;
   loading: boolean;
+  onPatchProjet: (p: Record<string, unknown>) => Promise<void>;
+  /** Les catégories ont changé : relire QuickBooks. */
+  onChanged: () => void;
 }) {
+  //: Choix des catégories du cashflow (Phil 2026-11-12).
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
+  const exclues = cashflow?.exclues || [];
   //: Mois dépliés (détail par compte). "total" = la ligne Total.
   const [ouverts, setOuverts] = useState<Set<string>>(new Set());
   //: Compte de dépense dont on regarde les TRANSACTIONS d'un mois
@@ -2761,23 +2803,57 @@ function CashflowSection({
             {projet.date_debut ? ` (${projet.date_debut})` : ""}
           </span>
         </h3>
-        {annees.length > 1 ? (
-          <select
-            className="input"
-            style={{ width: "auto" }}
-            value={annee}
-            onChange={(e) => setAnnee(e.target.value)}
-            title="Filtrer le cashflow par année"
-          >
-            <option value="">Toutes les années</option>
-            {annees.map((a) => (
-              <option key={a} value={a}>
-                {a}
-              </option>
-            ))}
-          </select>
-        ) : null}
+        <div className="flex items-center gap-2">
+          {annees.length > 1 ? (
+            <select
+              className="input"
+              style={{ width: "auto" }}
+              value={annee}
+              onChange={(e) => setAnnee(e.target.value)}
+              title="Filtrer le cashflow par année"
+            >
+              <option value="">Toutes les années</option>
+              {annees.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          {projet.qbo_scope ? (
+            <button
+              type="button"
+              onClick={() => setCategoriesOpen(true)}
+              className="btn-ghost btn-sm inline-flex items-center gap-1"
+              title="Choisir les catégories QuickBooks qui entrent dans le cashflow"
+            >
+              <Settings2 className="h-4 w-4" />
+              Catégories
+            </button>
+          ) : null}
+        </div>
       </div>
+      {exclues.length > 0 ? (
+        <p className="mt-2 text-[11px] text-amber-300">
+          {exclues.length} catégorie{exclues.length > 1 ? "s" : ""} retirée
+          {exclues.length > 1 ? "s" : ""} du cashflow :{" "}
+          {exclues
+            .map((e) => `${e.nom} (${fmtMoney(Math.abs(e.montant))})`)
+            .join(", ")}
+          .
+        </p>
+      ) : null}
+      {categoriesOpen ? (
+        <CashflowCategoriesModal
+          projet={projet}
+          onPatch={onPatchProjet}
+          onClose={() => setCategoriesOpen(false)}
+          onSaved={() => {
+            setCategoriesOpen(false);
+            onChanged();
+          }}
+        />
+      ) : null}
 
       {loading && !cashflow ? (
         <div className="flex items-center justify-center py-8">
@@ -2966,6 +3042,230 @@ function CashflowSection({
         </div>
       )}
     </section>
+  );
+}
+
+// ─── Catégories du cashflow (Phil 2026-11-12) ──────────────────
+
+/** Ids des catégories retirées du cashflow, lus du projet. */
+function parseExclus(json: string | null | undefined): string[] {
+  try {
+    const v = JSON.parse(json || "[]") as unknown;
+    return Array.isArray(v) ? v.map((x) => String(x)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function CashflowCategoriesModal({
+  projet,
+  onPatch,
+  onClose,
+  onSaved
+}: {
+  projet: Projet;
+  onPatch: (p: Record<string, unknown>) => Promise<void>;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [comptes, setComptes] = useState<QboCompte[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [filter, setFilter] = useState("");
+  //: Catégories RETIRÉES (tout le reste entre au cashflow, y compris une
+  //: catégorie créée plus tard dans QuickBooks).
+  const [exclus, setExclus] = useState<Set<string>>(
+    () => new Set(parseExclus(projet.cashflow_exclus_json))
+  );
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/optimisation/qbo-comptes?scope=${encodeURIComponent(
+            projet.qbo_scope || `inc:${projet.entreprise_id}`
+          )}&kind=tous`
+        );
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const d = (await r.json()) as {
+          comptes: QboCompte[];
+          erreur: string | null;
+        };
+        if (d.erreur) setErr(d.erreur);
+        // Le cashflow se lit dans l'état des résultats : revenus et dépenses.
+        setComptes(
+          (d.comptes || []).filter(
+            (c) =>
+              c.classification === "Revenue" || c.classification === "Expense"
+          )
+        );
+      } catch (e) {
+        setErr(`Plan comptable illisible : ${(e as Error).message}`);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [projet.qbo_scope, projet.entreprise_id]);
+
+  async function save() {
+    setSaving(true);
+    try {
+      // On ne garde que les ids qui existent encore dans le plan comptable.
+      const connus = new Set(comptes.map((c) => c.id));
+      const liste = Array.from(exclus).filter(
+        (id) => connus.size === 0 || connus.has(id)
+      );
+      await onPatch({ cashflow_exclus_json: JSON.stringify(liste) });
+      onSaved();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const visibles = comptes.filter((c) =>
+    c.fully_qualified_name.toLowerCase().includes(filter.toLowerCase())
+  );
+  const groupes: { titre: string; lignes: QboCompte[] }[] = [
+    {
+      titre: "Revenus",
+      lignes: visibles.filter((c) => c.classification === "Revenue")
+    },
+    {
+      titre: "Dépenses",
+      lignes: visibles.filter((c) => c.classification === "Expense")
+    }
+  ];
+  const nbInclus = comptes.filter((c) => !exclus.has(c.id)).length;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-2xl border p-4"
+        style={{
+          borderColor: "var(--qg-border)",
+          backgroundColor: "var(--qg-card-bg)"
+        }}
+      >
+        <h3
+          className="text-sm font-semibold"
+          style={{ color: "var(--qg-text)" }}
+        >
+          Catégories du cashflow
+        </h3>
+        <p
+          className="mt-1 text-[11px]"
+          style={{ color: "var(--qg-text-muted)" }}
+        >
+          Décoche une catégorie pour la retirer du cashflow : elle sort des
+          revenus ou des dépenses, de l&apos;écart et du budget de détention.
+          Une nouvelle catégorie créée dans QuickBooks entre d&apos;office.
+        </p>
+        {err ? (
+          <p className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+            {err}
+          </p>
+        ) : null}
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
+          </div>
+        ) : comptes.length > 0 ? (
+          <>
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                className="input"
+                placeholder="Filtrer…"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+              />
+              <button
+                type="button"
+                className="btn-ghost btn-sm flex-shrink-0"
+                onClick={() => setExclus(new Set())}
+                title="Remettre toutes les catégories dans le cashflow"
+              >
+                Tout cocher
+              </button>
+            </div>
+            <div className="mt-2 min-h-0 flex-1 overflow-y-auto pr-1">
+              {groupes.map((g) =>
+                g.lignes.length > 0 ? (
+                  <div key={g.titre} className="mb-2">
+                    <p
+                      className="px-1.5 text-[10px] font-semibold uppercase tracking-wider"
+                      style={{ color: "var(--qg-text-muted)" }}
+                    >
+                      {g.titre}
+                    </p>
+                    <div className="space-y-0.5">
+                      {g.lignes.map((c) => (
+                        <label
+                          key={c.id}
+                          className="flex cursor-pointer items-start gap-2 rounded-md px-1.5 py-1 text-[12px] hover:bg-accent-500/10"
+                          style={{ color: "var(--qg-text)" }}
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-0.5"
+                            checked={!exclus.has(c.id)}
+                            onChange={(e) =>
+                              setExclus((prev) => {
+                                const next = new Set(prev);
+                                if (e.target.checked) next.delete(c.id);
+                                else next.add(c.id);
+                                return next;
+                              })
+                            }
+                          />
+                          <span>
+                            {c.fully_qualified_name}
+                            <span
+                              className="ml-1 text-[10px]"
+                              style={{ color: "var(--qg-text-muted)" }}
+                            >
+                              ({c.account_type})
+                            </span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ) : null
+              )}
+            </div>
+          </>
+        ) : !err ? (
+          <p
+            className="mt-3 text-xs"
+            style={{ color: "var(--qg-text-muted)" }}
+          >
+            Aucune catégorie de revenus ou de dépenses dans ce fichier
+            QuickBooks.
+          </p>
+        ) : null}
+        <div className="mt-3 flex items-center justify-end gap-2">
+          <button type="button" onClick={onClose} className="btn-ghost btn-sm">
+            Annuler
+          </button>
+          {comptes.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={saving}
+              className="btn-accent inline-flex items-center gap-1.5 text-sm disabled:opacity-50"
+            >
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Enregistrer ({nbInclus} sur {comptes.length})
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }
 

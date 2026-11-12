@@ -468,7 +468,7 @@ def test_endpoint_volet_financement(client, auth_headers, run, monkeypatch):
 
     appels: List[set] = []
 
-    async def _faux_detail(scope, comptes, d1, d2):
+    async def _faux_detail(scope, comptes, d1, d2, **k):
         appels.append(set(comptes))
         return []
 
