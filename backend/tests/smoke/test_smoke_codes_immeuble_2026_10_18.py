@@ -118,17 +118,25 @@ def test_crud_codes_immeuble(client, auth_headers, codes_seed):
     assert [x["libelle"] for x in client.get(f"{IMM}/{imm}/codes", headers=auth_headers).json()] == ["Lock box", "Porte d'entrée"]
 
 
-def test_codes_visibles_par_qui_voit_l_immeuble(client, emp_headers, codes_seed):
+def test_codes_visibles_par_qui_voit_l_immeuble(client, auth_headers, emp_headers, codes_seed):
+    """Depuis le 2026-11-13 (partage contrôlé) : être affecté à
+    l'immeuble ne suffit plus — l'employé ne voit que les codes qu'on lui
+    partage, et seul un gestionnaire ajoute / modifie."""
     imm, autre = codes_seed["imm"], codes_seed["autre"]
-    # Employé affecté au 710 Legendre : il voit et gère ses codes…
     r = client.get(f"{IMM}/{imm}/codes", headers=emp_headers)
     assert r.status_code == 200, r.text
-    assert {x["libelle"] for x in r.json()} == {"Lock box", "Porte d'entrée"}
-    r = client.post(f"{IMM}/{imm}/codes", headers=emp_headers,
-                    json={"libelle": "Boîte aux lettres", "code": "7"})
+    assert r.json() == []
+    assert client.post(f"{IMM}/{imm}/codes", headers=emp_headers,
+                       json={"libelle": "Boîte aux lettres", "code": "7"}).status_code == 403
+    # Partage de tout l'immeuble pour 2 jours → il voit les codes, cachés.
+    r = client.post("/api/v1/codes-acces/partages", headers=auth_headers,
+                    json={"user_ids": [codes_seed["emp"]], "immeuble_id": imm,
+                          "mode": "jours", "jours": 2})
     assert r.status_code == 201, r.text
-    assert r.json()["created_by_email"] == "smoke-codes-employe@example.com"
-    # … mais pas ceux du 9085 Millen, où il n'est pas affecté.
+    r = client.get(f"{IMM}/{imm}/codes", headers=emp_headers)
+    assert {x["libelle"] for x in r.json()} == {"Lock box", "Porte d'entrée"}
+    assert all(x["code"] is None and x["code_masque"] for x in r.json())
+    # … mais toujours pas ceux du 9085 Millen, où il n'est pas affecté.
     assert client.get(f"{IMM}/{autre}/codes", headers=emp_headers).status_code == 403
     assert client.post(f"{IMM}/{autre}/codes", headers=emp_headers,
                        json={"libelle": "Porte", "code": "1"}).status_code == 403
@@ -140,14 +148,14 @@ def test_cliquet_et_mcp_codes(client, api_key_headers, codes_seed):
     assert "imm_immeuble_codes" in TABLES_COUVERTES
     r = client.get("/api/v1/activity/entities/immeuble_codes", headers=api_key_headers)
     assert r.status_code == 200, r.text
-    assert r.json()["pole"] == "immobilier" and r.json()["count"] >= 3
+    assert r.json()["pole"] == "immobilier" and r.json()["count"] >= 2
     item = next(x for x in r.json()["items"] if x["libelle"] == "Lock box")
     assert item["entity_type"] == "imm_immeuble_code" and item["code"] == "0710"
     assert item["immeuble_id"] == codes_seed["imm"]
     assert item["note"] == "Boîte grise à gauche de la porte"
     # Alias « codes_acces » et détail d'un code.
     r = client.get("/api/v1/activity/entities/codes_acces", headers=api_key_headers)
-    assert r.status_code == 200 and r.json()["count"] >= 3
+    assert r.status_code == 200 and r.json()["count"] >= 2
     r = client.get(f"/api/v1/activity/entities/immeuble_code/{item['id']}", headers=api_key_headers)
     assert r.status_code == 200, r.text
     assert r.json()["code"] == "0710"

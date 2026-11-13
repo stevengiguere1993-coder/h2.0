@@ -309,6 +309,13 @@ class ImmeubleCode(Base, TimestampUpdateMixin):
     libelle: Mapped[str] = mapped_column(String(120), nullable=False)
     code: Mapped[str] = mapped_column(String(255), nullable=False)
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    #: Nature du code (Steven 2026-11-13, partage des codes) :
+    #: porte_unite | porte_entree | boite_cles | garage | alarme | autre.
+    #: NULL = ancien code, libellé seulement.
+    type_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    #: Où trouver la porte / la boîte à clés (« sur le garde-corps
+    #: arrière, à gauche ») — les photos sont dans imm_code_photos.
+    emplacement: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     #: Ordre d'affichage sur la fiche (0 = premier).
     position: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"

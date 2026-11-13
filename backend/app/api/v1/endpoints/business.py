@@ -471,6 +471,17 @@ def make_crud_router(
         if model is BonTravail and obj.created_by_user_id is None:
             obj.created_by_user_id = user.id
             await db.flush()
+        # Bon assigné dès la création, rattaché à un lieu : l'assigné
+        # reçoit l'accès aux codes du lieu jusqu'à la fin du bon (case
+        # « Donner accès aux codes », cochée d'office — Steven 2026-11-13).
+        if (
+            model is BonTravail
+            and obj.assignee_user_id
+            and getattr(data, "donner_acces_codes", None) is not False
+        ):
+            from app.services.codes_acces import accorder_pour_bon
+
+            await accorder_pour_bon(db, obj, par=user)
         # Achat : applique la logique payment_method + due_at apres
         # creation (avant l'autopush QBO pour que QB recoive le bon
         # statut Bill/Purchase).
@@ -809,6 +820,9 @@ def make_crud_router(
         prev_bon_client_id = (
             getattr(obj, "client_id", None) if model is BonTravail else None
         )
+        prev_bon_assignee = (
+            getattr(obj, "assignee_user_id", None) if model is BonTravail else None
+        )
         # Capture pre-update total Soumission — si le total change,
         # on propage au budget du projet lié pour que la kanban, le
         # header projet (« Budget » pill) et le champ « Budget (CAD) »
@@ -839,6 +853,19 @@ def make_crud_router(
                 actuelle=obj.due_at,
             )
         obj = await crud.update(obj, data)
+        # Bon (ré)assigné : l'accès aux codes du lieu suit l'assigné
+        # jusqu'à la fin du bon ; l'ancien assigné perd celui que ce bon
+        # lui avait donné (Steven 2026-11-13).
+        if model is BonTravail and obj.assignee_user_id != prev_bon_assignee:
+            from app.services.codes_acces import accorder_pour_bon
+
+            await accorder_pour_bon(
+                db,
+                obj,
+                par=user,
+                precedent_assignee=prev_bon_assignee,
+                donner=getattr(data, "donner_acces_codes", None) is not False,
+            )
         # (Dé)cocher « à refacturer » à la main POSE LE VERROU : les
         # automatismes (correct_billable_for_contract_projects, appelé à
         # chaque ouverture de la liste) ne recocheront plus cette
