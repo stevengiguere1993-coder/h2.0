@@ -30,6 +30,9 @@ class FauxIA:
         self.doublons: list[dict] = []
         #: Rencontres (mot repère) auxquelles l'IA répond n'importe quoi.
         self.illisibles: set[str] = set()
+        #: L'IA rend aussi les dossiers existants dont la rencontre n'a
+        #: PAS parlé, pour dire « non abordé » (vu en prod le 2026-11-13).
+        self.bavarde = False
 
     async def __call__(self, *, prompt, system=None, **_kw):
         self.prompts.append(prompt)
@@ -85,7 +88,7 @@ class FauxIA:
                     "responsable": "Phil",
                 }
             )
-        for titre in ("Pavage Vbnmq", "Clôture Ghjkl"):
+        for titre in ("Pavage Vbnmq", "Clôture Ghjkl", "Drainage Qwzxc"):
             if titre in rencontre:
                 dossiers.append(
                     {
@@ -94,6 +97,37 @@ class FauxIA:
                         "statut": "en_cours",
                         "resume": f"On a parlé de : {titre}.",
                         "etat": "En marche.",
+                    }
+                )
+        if "Serrures Plmko" in rencontre:
+            dossiers.append(
+                {
+                    "dossier_id": existant("Serrures Plmko"),
+                    "titre": "Serrures Plmko",
+                    "statut": "en_attente",
+                    "resume": "Les portes seront posées mercredi.",
+                    "etat": (
+                        "Les portes seront posées mercredi, mais la date "
+                        "de livraison des serrures n'a pas été abordée."
+                    ),
+                }
+            )
+        if self.bavarde:
+            rendus = {d["dossier_id"] for d in dossiers}
+            for no, titre in re.findall(r"#(\d+) — ([^·\n]+)", existants):
+                if int(no) in rendus:
+                    continue
+                dossiers.append(
+                    {
+                        "dossier_id": int(no),
+                        "titre": titre.strip(),
+                        "statut": "en_attente",
+                        "resume": (
+                            f"Il n'y a pas eu de discussion sur {titre.strip()} "
+                            "lors de cette rencontre."
+                        ),
+                        "etat": f"Le dossier {titre.strip()} n'a pas été abordé.",
+                        "prochaine_action": "À relancer",
                     }
                 )
         return CompletionResult(
@@ -452,6 +486,90 @@ def test_rencontre_illisible_ne_bloque_pas_les_suivantes(client, auth_headers, i
     assert d["analysees"] == 1 and d["restantes"] == 1, d
     assert [e["rencontre_id"] for e in d["echecs"]] == [a]
     assert _dossier(client, auth_headers, "Pavage Vbnmq") is not None
+
+
+def test_sans_non_aborde_ne_garde_que_ce_qui_a_ete_dit():
+    f = svc.sans_non_aborde
+    assert f("La réception des électros pour Adam n'a pas été abordée.") is None
+    assert f("Aucune mention de ce dossier lors de cette rencontre.") is None
+    assert f("Point non abordé cette semaine.") is None
+    assert f("Il n'a pas été question du déneigement.") is None
+    # Tournures relevées en prod (dossiers 2, 4 et 7).
+    assert (
+        f(
+            "Il n'y a pas eu de discussion sur l'accès de Zach à l'immeuble "
+            "Adam dans Kratos lors de cette rencontre."
+        )
+        is None
+    )
+    assert (
+        f(
+            "Les portes seront installées mercredi et les gars commenceront "
+            "jeudi, mais il n'y a pas de mention spécifique sur la réception "
+            "des électros."
+        )
+        == "Les portes seront installées mercredi et les gars commenceront jeudi."
+    )
+    assert f("Rien n'a été dit sur le camion.") is None
+    assert f(None) is None and f("") is None
+    assert (
+        f(
+            "Les portes seront installées mercredi, mais la date de "
+            "réception des électros n'a pas été abordée."
+        )
+        == "Les portes seront installées mercredi."
+    )
+    assert (
+        f("Le camion n'a pas été discuté mais Oli continue de chercher. Trois soumissions reçues.")
+        == "Oli continue de chercher. Trois soumissions reçues."
+    )
+    # De vrais états de dossier : rien n'est retiré.
+    for vrai in (
+        "Deux candidats à rappeler.",
+        "Le prêt n'a pas encore été discuté avec le banquier.",
+        "Aucune nouvelle du couvreur.",
+        "Les bugs n'ont pas été traités.",
+        "Phil n'a pas eu de discussion avec la banque.",
+        "Aucune discussion possible avec le voisin.",
+        "Zach n'a pas accès à l'immeuble Adam dans Kratos.",
+    ):
+        assert f(vrai) == vrai
+
+
+def test_dossier_non_aborde_ne_change_pas_d_etat(client, auth_headers, ia):
+    """En prod, l'IA a rendu des dossiers existants dont la deuxième
+    rencontre ne parlait pas, avec « n'a pas été abordé » : c'est devenu
+    leur dernier état. Une rencontre muette sur un dossier n'y touche pas."""
+    a = _importer(
+        client, auth_headers, "Hebdo M (non abordé)", "2026-04-06",
+        "Phil : le Drainage Qwzxc avance, le plombier passe jeudi.",
+    )
+    _analyser_tout(client, auth_headers)
+    avant = _dossier(client, auth_headers, "Drainage Qwzxc")
+    assert avant is not None and avant["nb_rencontres"] == 1
+
+    ia.bavarde = True
+    _importer(
+        client, auth_headers, "Hebdo N (non abordé)", "2026-04-13",
+        "Mick : les Serrures Plmko, les portes seront posées mercredi.",
+    )
+    _analyser_tout(client, auth_headers)
+
+    t = _dossier(client, auth_headers, "Drainage Qwzxc")
+    assert t["statut"] == "en_cours"
+    assert t["dernier_etat"] == "En marche."
+    assert t["prochaine_action"] is None
+    assert t["nb_rencontres"] == 1
+    assert t["derniere_discussion"] == "2026-04-06"
+    fiche = client.get(
+        f"/api/v1/rencontres/dossiers/{t['id']}", headers=auth_headers
+    ).json()
+    assert [h["rencontre_id"] for h in fiche["historique"]] == [a]
+
+    # Une phrase mixte garde ce qui a été dit.
+    s = _dossier(client, auth_headers, "Serrures Plmko")
+    assert s is not None
+    assert s["dernier_etat"] == "Les portes seront posées mercredi."
 
 
 def test_lecture_en_fond_suivie_par_l_ecran(client, auth_headers, ia):
