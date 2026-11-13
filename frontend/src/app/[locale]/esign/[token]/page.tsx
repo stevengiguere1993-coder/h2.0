@@ -5,8 +5,10 @@
    Étapes :
    1. (si exigé) vérification d'identité par code SMS ;
    2. lecture du document (pages rendues en PNG, zones surlignées) ;
-   3. remplissage : texte / cases inline, signature + initiales
-      dessinées ou tapées (encre foncée → lisible sur le PDF blanc) ;
+   3. signature GUIDÉE (Phil 2026-11-13, « comme Authentisign ») : chaque
+      endroit à signer se clique ; le premier ouvre le tracé (dessiné ou
+      tapé, encre foncée), les suivants s'apposent d'un clic, et la page
+      amène au prochain endroit. Texte et cases se remplissent sur place ;
    4. consentement + signature, ou refus motivé.
 
    Page volontairement claire (document blanc, encre foncée) et
@@ -371,6 +373,34 @@ function InkPad({
   );
 }
 
+/* Aperçu du tracé adopté, avec la possibilité de le refaire. */
+function ApercuTrace({
+  titre,
+  url,
+  onModifier
+}: {
+  titre: string;
+  url: string;
+  onModifier: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+      <div>
+        <p className="text-[11px] font-medium text-slate-500">{titre}</p>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={url} alt={titre} className="mt-0.5 h-10 w-36 object-contain object-left" />
+      </div>
+      <button
+        type="button"
+        onClick={onModifier}
+        className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100"
+      >
+        Modifier
+      </button>
+    </div>
+  );
+}
+
 /* ============================== Page ============================== */
 
 export default function PublicEsignPage() {
@@ -397,10 +427,19 @@ export default function PublicEsignPage() {
   const [declineOpen, setDeclineOpen] = useState(false);
   const [declineReason, setDeclineReason] = useState("");
 
-  const padsRef = useRef<HTMLDivElement | null>(null);
-  // Relecture directe des deux tracés au moment de signer.
-  const lireSignature = useRef<(() => string | null) | null>(null);
-  const lireInitiales = useRef<(() => string | null) | null>(null);
+  const finRef = useRef<HTMLDivElement | null>(null);
+  // Signature guidée : endroits déjà apposés, endroit en cours, fenêtre du tracé.
+  const [faits, setFaits] = useState<Set<number>>(new Set());
+  const [courant, setCourant] = useState<number | null>(null);
+  const [pad, setPad] = useState<{
+    kind: "signature" | "initiales";
+    /** Endroit à apposer une fois le tracé adopté ; null = simple changement de tracé. */
+    fieldId: number | null;
+  } | null>(null);
+  const [padErr, setPadErr] = useState<string | null>(null);
+  // Relecture directe du tracé au moment de l'adopter (ne dépend d'aucun événement de fin de trait).
+  const lirePad = useRef<(() => string | null) | null>(null);
+  const zones = useRef<Map<number, HTMLElement>>(new Map());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -439,8 +478,97 @@ export default function PublicEsignPage() {
     () => (info ? info.fields.filter((f) => f.mine) : []),
     [info]
   );
-  const needsSignature = myFields.some((f) => f.kind === "signature");
-  const needsInitials = myFields.some((f) => f.kind === "initiales");
+  // Mes endroits à remplir, dans l'ordre de lecture du document. Les dates se posent seules.
+  const etapes = useMemo(
+    () =>
+      myFields
+        .filter((f) => f.kind !== "date")
+        .sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x),
+    [myFields]
+  );
+  const estFait = (f: FieldT): boolean => {
+    if (f.kind === "signature" || f.kind === "initiales") return faits.has(f.id);
+    if (f.kind === "texte") return !!textValues[f.id]?.trim();
+    if (f.kind === "case") return textValues[f.id] === "oui";
+    return true;
+  };
+  const obligatoires = etapes.filter((f) => f.required);
+  const restants = obligatoires.filter((f) => !estFait(f));
+  const prochain = restants[0] ?? null;
+  const nbFaits = obligatoires.length - restants.length;
+
+  function retenirZone(id: number, el: HTMLElement | null) {
+    if (el) zones.current.set(id, el);
+    else zones.current.delete(id);
+  }
+
+  /** Amène à un endroit du document ; null = la dernière étape (consentement). */
+  function allerA(f: FieldT | null) {
+    if (!f) {
+      setCourant(null);
+      finRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    setCourant(f.id);
+    zones.current.get(f.id)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  /** L'endroit ``id`` vient d'être rempli : au prochain endroit obligatoire encore vide. */
+  function auSuivant(id: number) {
+    allerA(obligatoires.find((f) => f.id !== id && !estFait(f)) ?? null);
+  }
+
+  /** Clic sur un endroit (ou sur le bouton du bas) : on le remplit. */
+  function apposer(f: FieldT) {
+    setError(null);
+    if (f.kind === "signature" || f.kind === "initiales") {
+      const url = f.kind === "signature" ? signatureUrl : initialsUrl;
+      if (!url) {
+        // Première fois : on trace (ou on tape), puis ça s'appose ici.
+        setCourant(f.id);
+        setPadErr(null);
+        setPad({ kind: f.kind, fieldId: f.id });
+        return;
+      }
+      setFaits((prev) => new Set(prev).add(f.id));
+      auSuivant(f.id);
+      return;
+    }
+    if (f.kind === "case") {
+      const coche = textValues[f.id] === "oui";
+      setTextValues((prev) => ({ ...prev, [f.id]: coche ? "" : "oui" }));
+      if (!coche) auSuivant(f.id);
+      else setCourant(f.id);
+      return;
+    }
+    // Texte : le curseur va dans le champ.
+    setCourant(f.id);
+    const el = zones.current.get(f.id);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    (el as HTMLInputElement | undefined)?.focus?.({ preventScroll: true });
+  }
+
+  /** « Adopter » dans la fenêtre du tracé. */
+  function adopter() {
+    if (!pad) return;
+    const url = lirePad.current?.() ?? null;
+    if (!url) {
+      setPadErr(
+        pad.kind === "signature"
+          ? "Tracez votre signature avec le doigt ou la souris, ou tapez votre nom."
+          : "Tracez vos initiales avec le doigt ou la souris, ou tapez-les."
+      );
+      return;
+    }
+    if (pad.kind === "signature") setSignatureUrl(url);
+    else setInitialsUrl(url);
+    const id = pad.fieldId;
+    setPad(null);
+    if (id != null) {
+      setFaits((prev) => new Set(prev).add(id));
+      auSuivant(id);
+    }
+  }
 
   async function sendSms() {
     setSmsBusy(true);
@@ -488,33 +616,29 @@ export default function PublicEsignPage() {
   async function submitSign() {
     if (!info) return;
     setError(null);
+    if (restants.length > 0) {
+      setError(
+        `Il reste ${restants.length} endroit${restants.length > 1 ? "s" : ""} à remplir dans le document. Le bouton du bas de l'écran vous y amène.`
+      );
+      allerA(restants[0]);
+      return;
+    }
     if (!consent) {
       setError("Cochez la case de consentement pour signer.");
+      finRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
       return;
     }
-    // Ce qui est à l'écran fait foi : on relit les tracés maintenant.
-    const signature = lireSignature.current?.() ?? signatureUrl;
-    const initiales = lireInitiales.current?.() ?? initialsUrl;
-    if (needsSignature && !signature) {
-      setError("Tracez votre signature dans le premier encadré, puis appuyez de nouveau sur « Signer le document ».");
-      padsRef.current?.scrollIntoView({ behavior: "smooth" });
-      return;
-    }
-    if (needsInitials && !initiales) {
-      setError("Tracez vos initiales dans le deuxième encadré, puis appuyez de nouveau sur « Signer le document ».");
-      padsRef.current?.scrollIntoView({ behavior: "smooth" });
-      return;
-    }
-    for (const f of myFields) {
-      if (f.kind === "texte" && f.required && !textValues[f.id]?.trim()) {
-        setError(`Champ requis non rempli : ${f.label || "texte"} (page ${f.page}).`);
-        return;
-      }
-      if (f.kind === "case" && f.required && textValues[f.id] !== "oui") {
-        setError(`Case requise non cochée : ${f.label || "case"} (page ${f.page}).`);
-        return;
-      }
-    }
+    const signature = signatureUrl;
+    const initiales = initialsUrl;
+    // Endroits FACULTATIFS laissés vides : ils ne reçoivent ni signature ni initiales.
+    const sautes = etapes
+      .filter(
+        (f) =>
+          !f.required &&
+          (f.kind === "signature" || f.kind === "initiales") &&
+          !faits.has(f.id)
+      )
+      .map((f) => f.id);
     setSignBusy(true);
     try {
       const res = await fetch(`${base}/sign`, {
@@ -527,6 +651,7 @@ export default function PublicEsignPage() {
             field_id: Number(id),
             value
           })),
+          skipped_field_ids: sautes,
           consent: true
         })
       });
@@ -603,9 +728,24 @@ export default function PublicEsignPage() {
     info.status === "envoye" &&
     info.is_my_turn &&
     !smsGate;
+  const aujourdHui = new Date().toLocaleDateString("fr-CA", {
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  });
+  const libelleEtape = (f: FieldT): string =>
+    `${KIND_LABEL[f.kind] || f.kind} · page ${f.page}`;
+  const actionEtape = (f: FieldT): string =>
+    f.kind === "signature"
+      ? "Signer ici"
+      : f.kind === "initiales"
+        ? "Apposer mes initiales"
+        : f.kind === "case"
+          ? "Cocher la case"
+          : "Remplir le champ";
 
   return (
-    <main className="min-h-screen bg-slate-100 pb-24">
+    <main className="min-h-screen bg-slate-100 pb-40">
       {/* Bandeau */}
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-2 px-4 py-4">
@@ -832,6 +972,18 @@ export default function PublicEsignPage() {
           </div>
         ) : null}
 
+        {canSign && obligatoires.length > 0 ? (
+          <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+            <p className="font-semibold">
+              {obligatoires.length} endroit{obligatoires.length > 1 ? "s" : ""} à remplir dans ce document.
+            </p>
+            <p className="mt-0.5 text-xs text-blue-800">
+              Appuyez sur le bouton bleu, en bas de l&apos;écran : la page vous amène à chaque endroit, l&apos;un après
+              l&apos;autre. Vous tracez votre signature et vos initiales une seule fois ; ensuite un clic suffit.
+            </p>
+          </div>
+        ) : null}
+
         {/* Pages du document */}
         {Array.from({ length: info.page_count }, (_, i) => i + 1).map(
           (p) => (
@@ -867,6 +1019,8 @@ export default function PublicEsignPage() {
                       return (
                         <input
                           key={f.id}
+                          ref={(el) => retenirZone(f.id, el)}
+                          onFocus={() => setCourant(f.id)}
                           value={textValues[f.id] || ""}
                           onChange={(e) =>
                             setTextValues((prev) => ({
@@ -875,7 +1029,9 @@ export default function PublicEsignPage() {
                             }))
                           }
                           placeholder={f.label || "Texte…"}
-                          className="absolute rounded border-2 bg-blue-50/80 px-1 text-[11px] text-slate-900 outline-none placeholder:text-slate-400 focus:bg-white"
+                          className={`absolute rounded border-2 bg-blue-50/80 px-1 text-[11px] text-slate-900 outline-none placeholder:text-slate-400 focus:bg-white ${
+                            courant === f.id ? "z-10 ring-4 ring-blue-500/60" : ""
+                          }`}
                           style={style}
                         />
                       );
@@ -886,14 +1042,12 @@ export default function PublicEsignPage() {
                         <button
                           key={f.id}
                           type="button"
-                          onClick={() =>
-                            setTextValues((prev) => ({
-                              ...prev,
-                              [f.id]: checked ? "" : "oui"
-                            }))
-                          }
+                          ref={(el) => retenirZone(f.id, el)}
+                          onClick={() => apposer(f)}
                           title={f.label || "Case à cocher"}
-                          className="absolute flex items-center justify-center rounded border-2 bg-blue-50/80 text-blue-800"
+                          className={`absolute flex items-center justify-center rounded border-2 bg-blue-50/80 text-blue-800 ${
+                            courant === f.id && !checked ? "z-10 ring-4 ring-blue-500/60" : ""
+                          }`}
                           style={style}
                         >
                           {checked ? "✕" : ""}
@@ -907,28 +1061,44 @@ export default function PublicEsignPage() {
                     ) {
                       const url =
                         f.kind === "signature" ? signatureUrl : initialsUrl;
+                      const fait = faits.has(f.id) && !!url;
+                      const actif = courant === f.id && !fait;
                       return (
                         <button
                           key={f.id}
                           type="button"
-                          onClick={() =>
-                            padsRef.current?.scrollIntoView({
-                              behavior: "smooth"
-                            })
+                          ref={(el) => retenirZone(f.id, el)}
+                          onClick={() => apposer(f)}
+                          className={`absolute rounded border-2 ${
+                            fait
+                              ? "border-solid bg-white/50"
+                              : "border-dashed bg-amber-100/90"
+                          } ${actif ? "z-10 ring-4 ring-blue-500/70" : ""}`}
+                          style={{
+                            ...style,
+                            borderColor: fait
+                              ? "#059669"
+                              : actif
+                                ? "#1d4ed8"
+                                : "#d97706"
+                          }}
+                          title={
+                            fait
+                              ? `${KIND_LABEL[f.kind]} apposée`
+                              : f.kind === "signature"
+                                ? "Cliquez pour signer ici"
+                                : "Cliquez pour apposer vos initiales"
                           }
-                          className="absolute overflow-hidden rounded border-2 border-dashed bg-amber-50/80"
-                          style={{ ...style, borderColor: "#d97706" }}
-                          title={KIND_LABEL[f.kind]}
                         >
-                          {url ? (
+                          {fait && url ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img
                               src={url}
                               alt={KIND_LABEL[f.kind]}
-                              className="h-full w-full object-contain"
+                              className="h-full w-full object-contain object-left-bottom"
                             />
                           ) : (
-                            <span className="px-1 text-[10px] font-semibold text-amber-700">
+                            <span className="flex h-full items-center justify-center whitespace-nowrap px-0.5 text-[8px] font-bold leading-none text-amber-800 sm:text-[10px]">
                               {f.kind === "signature"
                                 ? "✍ Signer ici"
                                 : "Initiales"}
@@ -961,7 +1131,9 @@ export default function PublicEsignPage() {
                               f.kind === "initiales")
                               ? "✓ Signé"
                               : f.kind === "date"
-                              ? "Date automatique"
+                              ? mine && canSign
+                                ? aujourdHui
+                                : "Date automatique"
                               : `${KIND_LABEL[f.kind] || f.kind} · ${
                                   f.signer_name
                                 }`)}
@@ -974,17 +1146,47 @@ export default function PublicEsignPage() {
           )
         )}
 
-        {/* Zone de signature */}
+        {/* Dernière étape : consentement et signature */}
         {canSign ? (
           <div
-            ref={padsRef}
-            className="space-y-5 rounded-xl border border-slate-200 bg-white p-5"
+            ref={finRef}
+            className="space-y-4 rounded-xl border border-slate-200 bg-white p-5"
           >
-            {needsSignature ? (
-              <InkPad label="Votre signature" onChange={setSignatureUrl} lecteur={lireSignature} />
-            ) : null}
-            {needsInitials ? (
-              <InkPad label="Vos initiales" onChange={setInitialsUrl} lecteur={lireInitiales} />
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">
+                Dernière étape
+              </h2>
+              <p className="mt-1 text-xs text-slate-600">
+                {restants.length > 0
+                  ? `Il reste ${restants.length} endroit${
+                      restants.length > 1 ? "s" : ""
+                    } à remplir dans le document. Le bouton bleu, en bas de l'écran, vous y amène.`
+                  : "Tout est rempli. Confirmez pour signer le document."}
+              </p>
+            </div>
+            {signatureUrl || initialsUrl ? (
+              <div className="flex flex-wrap gap-3">
+                {signatureUrl ? (
+                  <ApercuTrace
+                    titre="Votre signature"
+                    url={signatureUrl}
+                    onModifier={() => {
+                      setPadErr(null);
+                      setPad({ kind: "signature", fieldId: null });
+                    }}
+                  />
+                ) : null}
+                {initialsUrl ? (
+                  <ApercuTrace
+                    titre="Vos initiales"
+                    url={initialsUrl}
+                    onModifier={() => {
+                      setPadErr(null);
+                      setPad({ kind: "initiales", fieldId: null });
+                    }}
+                  />
+                ) : null}
+              </div>
             ) : null}
 
             <label className="flex items-start gap-2.5 text-sm text-slate-700">
@@ -1036,6 +1238,100 @@ export default function PublicEsignPage() {
           Signature électronique sécurisée · Horizon Services Immobiliers
         </p>
       </div>
+
+      {/* Signature guidée : un seul gros bouton, toujours sous le pouce */}
+      {canSign && obligatoires.length > 0 && !pad && !declineOpen ? (
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 px-4 py-3 shadow-[0_-4px_16px_rgba(15,23,42,0.10)] backdrop-blur">
+          <div className="mx-auto flex max-w-4xl items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-slate-900">
+                {nbFaits} sur {obligatoires.length}
+                {prochain ? "" : " · tout est rempli"}
+              </p>
+              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200">
+                <div
+                  className="h-full rounded-full bg-emerald-500 transition-all"
+                  style={{
+                    width: `${(nbFaits / obligatoires.length) * 100}%`
+                  }}
+                />
+              </div>
+              <p className="mt-1 truncate text-[11px] text-slate-500">
+                {prochain
+                  ? `Prochain : ${libelleEtape(prochain)}`
+                  : "Il ne reste qu'à confirmer et signer."}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (!prochain) {
+                  allerA(null);
+                  return;
+                }
+                // Premier appui : la page amène à l'endroit. Une fois dessus, l'appui le remplit.
+                if (courant !== prochain.id) allerA(prochain);
+                else apposer(prochain);
+              }}
+              className="shrink-0 rounded-lg bg-blue-700 px-5 py-3 text-sm font-semibold text-white shadow hover:bg-blue-800"
+            >
+              {!prochain
+                ? "Terminer"
+                : courant !== prochain.id
+                  ? nbFaits === 0
+                    ? "Commencer"
+                    : "Suivant"
+                  : actionEtape(prochain)}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Fenêtre du tracé : la signature (ou les initiales) se fait une seule fois */}
+      {pad ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 sm:items-center sm:p-4"
+          onClick={() => setPad(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-lg rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-2xl"
+          >
+            <InkPad
+              key={pad.kind}
+              label={pad.kind === "signature" ? "Votre signature" : "Vos initiales"}
+              onChange={() => setPadErr(null)}
+              lecteur={lirePad}
+            />
+            <p className="mt-2 text-[11px] text-slate-500">
+              {pad.kind === "signature"
+                ? "Vous la tracez une seule fois. Ensuite, un clic sur chaque « Signer ici » suffit."
+                : "Vous les tracez une seule fois. Ensuite, un clic sur chaque case « Initiales » suffit."}
+            </p>
+            {padErr ? (
+              <p className="mt-2 rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                {padErr}
+              </p>
+            ) : null}
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPad(null)}
+                className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={adopter}
+                className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-800"
+              >
+                {pad.fieldId != null ? "Adopter et apposer" : "Adopter"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Modal refus */}
       {declineOpen ? (

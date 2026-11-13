@@ -150,6 +150,10 @@ class SignRequest(BaseModel):
     signature_data_url: Optional[str] = None
     initials_data_url: Optional[str] = None
     text_values: List[TextValue] = Field(default_factory=list)
+    #: Signature guidée (2026-11-13) : endroits de signature ou d'initiales
+    #: FACULTATIFS que le signataire a laissés vides — ils ne reçoivent
+    #: rien. Un endroit obligatoire listé ici est ignoré : il reste signé.
+    skipped_field_ids: List[int] = Field(default_factory=list)
     consent: bool = False
 
 
@@ -795,11 +799,29 @@ async def sign_esign(
         )
 
     my_fields = await _signer_fields(db, doc.id, signer.id)
+    # Endroits facultatifs laissés vides : marqués « non », ils ne seront
+    # pas tamponnés dans le PDF final.
+    sautes = {
+        f.id
+        for f in my_fields
+        if not f.required
+        and f.id in set(data.skipped_field_ids or [])
+        and f.kind
+        in (EsignFieldKind.SIGNATURE.value, EsignFieldKind.INITIALES.value)
+    }
+    for f in my_fields:
+        if f.kind in (
+            EsignFieldKind.SIGNATURE.value,
+            EsignFieldKind.INITIALES.value,
+        ):
+            f.value_text = "non" if f.id in sautes else None
     needs_signature = any(
-        f.kind == EsignFieldKind.SIGNATURE.value for f in my_fields
+        f.kind == EsignFieldKind.SIGNATURE.value and f.id not in sautes
+        for f in my_fields
     )
     needs_initials = any(
-        f.kind == EsignFieldKind.INITIALES.value for f in my_fields
+        f.kind == EsignFieldKind.INITIALES.value and f.id not in sautes
+        for f in my_fields
     )
     sig_bytes: Optional[bytes] = None
     ini_bytes: Optional[bytes] = None

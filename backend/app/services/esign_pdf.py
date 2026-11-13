@@ -135,6 +135,9 @@ def _draw_field(c, field: EsignField, signer: Optional[EsignSigner],
     kind = field.kind
 
     if kind in (EsignFieldKind.SIGNATURE.value, EsignFieldKind.INITIALES.value):
+        # Endroit facultatif que le signataire a laissé vide (signature guidée).
+        if (field.value_text or "") == "non":
+            return
         img_bytes = None
         if signer is not None:
             img_bytes = (
