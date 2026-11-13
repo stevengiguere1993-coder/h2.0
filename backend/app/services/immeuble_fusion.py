@@ -14,15 +14,8 @@ existants restent les mêmes ; le prix d'achat et l'hypothèque ont été
 divisés par 2, ils devront s'additionner lors de la fusion ») :
 
 - un numéro de logement n'est en conflit qu'à la MÊME adresse civique :
-  le « 1 » du 9085 Millen et le « 1 » du 710 Legendre peuvent coexister,
-  chacun avec son adresse ;
-- précision du même jour (« il peut y avoir par exemple 710-1 à 710-2,
-  selon ce qui est déjà entré dans chacun des immeubles ; je voulais
-  seulement dire de ne pas remplacer 710 Legendre par 9085 Millen ») : le
-  préfixe PROPOSÉ est le numéro civique de la fiche ABSORBÉE (« 710- » →
-  « 710-1 »), dès que les deux fiches portent les mêmes numéros ; il est
-  facultatif hors conflit à la même adresse, et un second préfixe,
-  facultatif, s'applique aux logements de la fiche gardée (« 9085- ») ;
+  le « 1 » du 9085 Millen et le « 1 » du 710 Legendre coexistent, chacun
+  avec son adresse ; aucun préfixe n'est demandé ;
 - le prix d'achat suggéré est la SOMME des deux fiches ;
 - les hypothèques d'un même prêteur (même taux) s'additionnent en un seul
   prêt (montant, versement, solde, tranches) ;
@@ -248,15 +241,11 @@ def _conflits_numeros(
     logs_cible: list[Logement],
     cible: Immeuble,
     prefixe: str,
-    prefixe_cible: str = "",
 ) -> list[str]:
     """Numéros de la source qui existent déjà dans la cible à la même
-    adresse civique (après préfixes éventuels)."""
+    adresse civique (après préfixe éventuel)."""
     cles_cible = {
-        cle_logement(
-            _numero_cible(l, cible, prefixe_cible), adresse_effective(l, cible)
-        )
-        for l in logs_cible
+        cle_logement(l.numero, adresse_effective(l, cible)) for l in logs_cible
     }
     out: list[str] = []
     for l in logs_source:
@@ -264,27 +253,6 @@ def _conflits_numeros(
         if cle_logement(nouveau, adresse_effective(l, source)) in cles_cible:
             out.append(nouveau)
     return out
-
-
-def _numero_cible(l: Logement, cible: Immeuble, prefixe_cible: str) -> str:
-    """Numéro d'un logement de la cible après son préfixe facultatif. Le
-    préfixe (numéro civique de la cible) ne vise que les logements à
-    l'adresse principale : ceux d'une adresse déjà absorbée gardent le leur."""
-    if prefixe_cible and _norm_adresse(adresse_effective(l, cible)) == _norm_adresse(
-        cible.address
-    ):
-        return f"{prefixe_cible}{l.numero}"
-    return l.numero
-
-
-def numeros_communs(
-    logs_source: list[Logement], logs_cible: list[Logement]
-) -> list[str]:
-    """Numéros de la source portés aussi par un logement de la cible,
-    quelle que soit l'adresse : sans préfixe, la fiche fusionnée aurait
-    deux « 1 » que seule leur adresse distingue."""
-    cles_cible = {cle_numero(l.numero) for l in logs_cible}
-    return [l.numero for l in logs_source if cle_numero(l.numero) in cles_cible]
 
 
 def prefixe_suggere(source: Immeuble) -> str:
@@ -436,7 +404,6 @@ async def apercu_fusion(db, cible: Immeuble, source: Immeuble) -> dict:
     logs_source = await _logements(db, source.id)
     logs_cible = await _logements(db, cible.id)
     conflits = _conflits_numeros(logs_source, source, logs_cible, cible, "")
-    communs = numeros_communs(logs_source, logs_cible)
 
     liste_cible = await _hypotheques(db, cible.id)
     hyps_cible = {_cle_hypotheque(h) for h in liste_cible}
@@ -471,13 +438,7 @@ async def apercu_fusion(db, cible: Immeuble, source: Immeuble) -> dict:
         "source": await _resume(db, source),
         "a_deplacer": a_deplacer,
         "numeros_en_conflit": conflits,
-        "numeros_communs": communs,
-        "numeros_source": [l.numero for l in logs_source],
-        "numeros_cible": [l.numero for l in logs_cible],
-        # Le préfixe est le numéro civique de CHAQUE fiche pour ses propres
-        # logements : « 710- » pour ceux du 710 Legendre, jamais « 9085- ».
-        "prefixe_suggere": prefixe_suggere(source) if (conflits or communs) else "",
-        "prefixe_cible_suggere": prefixe_suggere(cible),
+        "prefixe_suggere": prefixe_suggere(source) if conflits else "",
         "hypotheques_source": apercu_hyps,
         "hypotheques_en_double": en_double,
         "hypotheques_additionnables": len(paires),
@@ -491,7 +452,6 @@ async def fusionner(
     source: Immeuble,
     *,
     prefixe_numeros: Optional[str] = None,
-    prefixe_numeros_cible: Optional[str] = None,
     exclure_hypotheques: bool = False,
     hypotheques: Optional[str] = None,
     purchase_price: Optional[float] = None,
@@ -500,11 +460,6 @@ async def fusionner(
     """Absorbe ``source`` dans ``cible`` puis supprime ``source``. Lève
     ``FusionImpossible`` (rien n'est écrit) si des numéros de logement
     entreraient en conflit. Commit en fin de fusion.
-
-    ``prefixe_numeros`` se pose devant les numéros des logements de la
-    SOURCE (« 710- » → « 710-1 »), ``prefixe_numeros_cible`` devant ceux de
-    la cible (« 9085- ») ; vides = numéros inchangés. Dans tous les cas
-    chaque logement garde son adresse civique.
 
     ``hypotheques`` : « additionner » (les moitiés d'un même prêteur se
     fondent en un prêt), « transferer » (telles quelles), « exclure »
@@ -527,12 +482,9 @@ async def fusionner(
 
     # 1. Logements : préfixe éventuel, adresse propre, puis rattachement.
     prefixe = (prefixe_numeros or "").strip()
-    prefixe_cible = (prefixe_numeros_cible or "").strip()
     logs_source = await _logements(db, source_id)
     logs_cible = await _logements(db, cible.id)
-    conflits = _conflits_numeros(
-        logs_source, source, logs_cible, cible, prefixe, prefixe_cible
-    )
+    conflits = _conflits_numeros(logs_source, source, logs_cible, cible, prefixe)
     if conflits:
         raise FusionImpossible(
             f"Numéros de logement déjà présents à la même adresse dans « {cible.name} » : "
@@ -541,10 +493,6 @@ async def fusionner(
         )
     trop_longs = [
         f"{prefixe}{l.numero}" for l in logs_source if len(f"{prefixe}{l.numero}") > 32
-    ] + [
-        n
-        for n in (_numero_cible(l, cible, prefixe_cible) for l in logs_cible)
-        if len(n) > 32
     ]
     if trop_longs:
         raise FusionImpossible(
@@ -552,14 +500,6 @@ async def fusionner(
             + ", ".join(trop_longs)
         )
     adresse_differente = _norm_adresse(source.address) != _norm_adresse(cible.address)
-    if prefixe_cible:
-        renumerotes = 0
-        for l in logs_cible:
-            nouveau = _numero_cible(l, cible, prefixe_cible)
-            if nouveau != l.numero:
-                l.numero = nouveau
-                renumerotes += 1
-        _ajouter("logements de la fiche gardée renumérotés", renumerotes)
     for l in logs_source:
         if prefixe:
             l.numero = f"{prefixe}{l.numero}"

@@ -14,11 +14,8 @@
  * fiche source disparaît ; son adresse devient l'adresse secondaire.
  *
  * Retour Steven 2026-11-13 : deux adresses → chaque logement garde son
- * adresse, et le préfixe proposé est le numéro civique de SA fiche
- * (« 710- » pour les logements du 710 Legendre, jamais « 9085- ») ; il
- * n'est obligatoire que pour un même numéro à la même adresse, et un
- * second préfixe, facultatif, vise les logements de la fiche gardée ;
- * prix d'achat et hypothèque saisis en deux moitiés
+ * numéro et son adresse (préfixe demandé seulement pour un même numéro à
+ * la même adresse) ; prix d'achat et hypothèque saisis en deux moitiés
  * s'additionnent ; et comme l'action est irréversible, le serveur joue
  * la fusion sans rien écrire (« simulation ») pour montrer la fiche
  * telle qu'elle sera AVANT le bouton de confirmation.
@@ -79,11 +76,7 @@ type Apercu = {
   source: { id: number; name: string; address: string; nb_logements: number; purchase_price?: number | null };
   a_deplacer: Record<string, number>;
   numeros_en_conflit: string[];
-  numeros_communs?: string[];
-  numeros_source?: string[];
-  numeros_cible?: string[];
   prefixe_suggere: string;
-  prefixe_cible_suggere?: string;
   hypotheques_source: HypothequeApercu[];
   hypotheques_en_double: number;
   hypotheques_additionnables?: number;
@@ -107,23 +100,6 @@ const fmtMontant = (v: number | null | undefined) =>
         currency: "CAD",
         maximumFractionDigits: 0
       }).format(v);
-
-/** Versement mensuel : au cent près (« 7 307,38 $ »). */
-const fmtVersement = (v: number | null | undefined) =>
-  v == null
-    ? "—"
-    : new Intl.NumberFormat("fr-CA", {
-        style: "currency",
-        currency: "CAD",
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      }).format(v);
-
-/** Numéro civique + tiret : « 710, Rue Legendre Est » → « 710- ». */
-function prefixeCivique(adresse: string | null | undefined): string {
-  const m = /^\s*(\d+[A-Za-z]?)/.exec(adresse || "");
-  return m ? `${m[1]}-` : "";
-}
 
 /** « 6 logements, 1 bail, 2 codes d'accès » — pour le message de succès. */
 export function resumeDeplaces(res: FusionResultat): string {
@@ -156,7 +132,6 @@ export function FusionImmeubleModal({
   const [apercu, setApercu] = useState<Apercu | null>(null);
   const [apercuBusy, setApercuBusy] = useState(false);
   const [prefixe, setPrefixe] = useState("");
-  const [prefixeCible, setPrefixeCible] = useState("");
   const [modeHyp, setModeHyp] = useState<ModeHypotheques>("transferer");
   const [simulation, setSimulation] = useState<Simulation | null>(null);
   const [prix, setPrix] = useState("");
@@ -210,7 +185,6 @@ export function FusionImmeubleModal({
         if (cancelled) return;
         setApercu(ap);
         setPrefixe(ap.prefixe_suggere || "");
-        setPrefixeCible("");
         // Chaque fiche porte sa moitié du prêt : on additionne d'office.
         setModeHyp(
           (ap.hypotheques_additionnables ?? 0) > 0 ? "additionner" : "transferer"
@@ -244,14 +218,6 @@ export function FusionImmeubleModal({
 
   const conflits = apercu?.numeros_en_conflit ?? [];
   const prefixeRequis = conflits.length > 0 && !prefixe.trim();
-  const communs = apercu?.numeros_communs ?? [];
-  const numerosSource = apercu?.numeros_source ?? [];
-  const numerosCible = apercu?.numeros_cible ?? [];
-  const exempleSource = numerosSource[0] ?? "1";
-  const exempleCible = numerosCible[0] ?? "1";
-  const civiqueSource = prefixeCivique(apercu?.source.address);
-  const civiqueCible =
-    apercu?.prefixe_cible_suggere || prefixeCivique(apercu?.cible.address);
   const lignes = useMemo(
     () =>
       Object.entries(apercu?.a_deplacer ?? {}).filter(([, n]) => n > 0),
@@ -274,7 +240,6 @@ export function FusionImmeubleModal({
           body: JSON.stringify({
             source_immeuble_id: sourceId,
             prefixe_numeros: prefixe.trim() || null,
-            prefixe_numeros_cible: prefixeCible.trim() || null,
             hypotheques: modeHyp,
             exclure_hypotheques: modeHyp === "exclure",
             purchase_price:
@@ -357,7 +322,7 @@ export function FusionImmeubleModal({
                   </dd>
                   <dt className="text-white/60">Versements mensuels</dt>
                   <dd className="text-right font-semibold text-white">
-                    {fmtVersement(fiche.total_paiements_mensuels)}
+                    {fmtMontant(fiche.total_paiements_mensuels)}
                   </dd>
                   <dt className="text-white/60">Logements</dt>
                   <dd className="text-right font-semibold text-white">
@@ -395,7 +360,7 @@ export function FusionImmeubleModal({
                         <span className="text-white">{h.preteur}</span>
                         <span>{fmtMontant(h.montant_initial)}</span>
                         {h.paiement_mensuel != null ? (
-                          <span>{fmtVersement(h.paiement_mensuel)} / mois</span>
+                          <span>{fmtMontant(h.paiement_mensuel)} / mois</span>
                         ) : null}
                         {h.part_pct < 100 ? (
                           <span className="badge badge-sky">
@@ -527,83 +492,28 @@ export function FusionImmeubleModal({
                 )}
               </div>
 
-              {numerosSource.length || conflits.length ? (
-                <div className="rounded-lg border border-brand-800 bg-brand-900 p-3">
-                  <p className="text-xs font-semibold text-white">
-                    Numéros de logement
+              {conflits.length ? (
+                <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 p-3">
+                  <p className="flex items-center gap-2 text-xs font-semibold text-amber-200">
+                    <AlertTriangle className="h-3.5 w-3.5" /> Numéros déjà
+                    présents à la même adresse dans {cible.name} :{" "}
+                    {conflits.join(", ")}
                   </p>
-                  <p className="mt-1 text-xs text-white/70">
-                    Chaque logement garde son adresse : ceux de « {source.name}{" "}
-                    » restent au {source.address}, rien n&apos;est réécrit au
-                    nom de {cible.name}.
-                  </p>
-                  {conflits.length ? (
-                    <p className="mt-2 flex items-start gap-2 rounded-lg border border-amber-400/40 bg-amber-500/10 px-2 py-1.5 text-xs font-semibold text-amber-200">
-                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                      <span>
-                        Numéros déjà présents à la même adresse dans{" "}
-                        {cible.name} : {conflits.join(", ")}. Un préfixe est
-                        obligatoire.
-                      </span>
-                    </p>
-                  ) : communs.length ? (
-                    <p className="mt-2 text-xs text-white/70">
-                      Les deux fiches ont des logements « {communs.join(", ")}{" "}
-                      ». Le préfixe les distingue partout dans Kratos (loyers,
-                      baux, bons de travail).
-                    </p>
-                  ) : null}
-
-                  <label className="mt-3 block text-[11px] font-semibold text-white/60">
-                    Préfixe des logements du {source.address}
+                  <label className="mt-2 block text-[11px] font-semibold text-white/60">
+                    Préfixe des logements déplacés (ex. « 9085- » → « 9085-1 »)
                   </label>
                   <input
                     value={prefixe}
                     onChange={(e) => setPrefixe(e.target.value)}
                     className={`${inputCls} mt-1`}
-                    placeholder={
-                      civiqueSource
-                        ? `Vide = numéros inchangés (ex. « ${civiqueSource} »)`
-                        : "Vide = numéros inchangés"
-                    }
+                    placeholder={apercu.prefixe_suggere || "9085-"}
                   />
-                  <p className="mt-1 text-[11px] text-white/60">
-                    {prefixe.trim()
-                      ? `Le logement « ${exempleSource} » devient « ${prefixe.trim()}${exempleSource} ».`
-                      : `Sans préfixe, le logement « ${exempleSource} » reste « ${exempleSource} ».`}
-                  </p>
-
-                  {numerosCible.length ? (
-                    <>
-                      <label className="mt-3 block text-[11px] font-semibold text-white/60">
-                        Préfixe des logements du {apercu.cible.address}{" "}
-                        (facultatif)
-                      </label>
-                      <div className="mt-1 flex items-center gap-2">
-                        <input
-                          value={prefixeCible}
-                          onChange={(e) => setPrefixeCible(e.target.value)}
-                          className={inputCls}
-                          placeholder="Vide = numéros inchangés"
-                        />
-                        {civiqueCible && prefixeCible.trim() !== civiqueCible ? (
-                          <button
-                            type="button"
-                            onClick={() => setPrefixeCible(civiqueCible)}
-                            className="btn-secondary btn-sm shrink-0"
-                          >
-                            Mettre « {civiqueCible} »
-                          </button>
-                        ) : null}
-                      </div>
-                      <p className="mt-1 text-[11px] text-white/60">
-                        {prefixeCible.trim()
-                          ? `Le logement « ${exempleCible} » devient « ${prefixeCible.trim()}${exempleCible} ».`
-                          : `Sans préfixe, le logement « ${exempleCible} » reste « ${exempleCible} ».`}
-                      </p>
-                    </>
-                  ) : null}
                 </div>
+              ) : apercu.source.nb_logements > 0 ? (
+                <p className="rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-xs text-white/70">
+                  Les numéros de logement restent tels quels : chaque logement
+                  garde son numéro et son adresse ({source.address}).
+                </p>
               ) : null}
 
               {apercu.hypotheques_source.length ? (
