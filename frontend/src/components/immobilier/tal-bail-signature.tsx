@@ -12,6 +12,9 @@
  *
  * - Chaque personne se voit avec son courriel, corrigeable avant l'envoi (le
  *   formulaire transmis au TAL n'est pas touché).
+ * - Documents signés avec le bail, dans le même envoi (Phil 2026-11-13) : le
+ *   consentement aux communications électroniques et les modèles de documents
+ *   (règlement d'immeuble…). Le locataire les signe à la suite du bail.
  * - Une personne sans courriel ne reçoit rien : ses cases restent libres.
  * - Après l'envoi : qui a reçu, ouvert, signé ; renvoyer une invitation,
  *   corriger un courriel, annuler l'envoi puis le relancer.
@@ -20,6 +23,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Check, FileSignature, FileText, Loader2, Mail, Pencil, Send, X } from "lucide-react";
 
+import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 
 const BASE = "/api/v1/immobilier/tal-bail";
@@ -65,12 +69,26 @@ type Personne = {
   /** Renseigné quand la personne signe pour quelqu'un d'autre (représentant). */
   pour: string | null;
 };
+/** Document qui peut partir avec le bail, dans le même envoi. */
+type AnnexeDispo = {
+  /** « consentement » ou « modele:<id> ». */
+  cle: string;
+  titre: string;
+  /** Proposé coché (consentement, règlement d'immeuble). */
+  defaut: boolean;
+  /** Le locataire le signe (sinon il est joint pour information). */
+  signature: boolean;
+  source: string;
+};
+type AnnexeEnvoyee = { cle: string; titre: string; pages: [number, number]; signature: boolean };
 type EtatEnvoi = {
   transmission_id: number;
   personnes: Personne[];
   envoi_possible: boolean;
   motif: string | null;
   max_par_partie: number;
+  annexes?: AnnexeDispo[];
+  annexes_envoyees?: AnnexeEnvoyee[];
   signature: SignatureEtat | null;
   signe_le: string | null;
   document_signe_id: number | null;
@@ -124,6 +142,8 @@ export function TalBailSignature({
   const [info, setInfo] = useState<string | null>(null);
   const [edition, setEdition] = useState<{ id: number; valeur: string } | null>(null);
   const [confirmeAnnuler, setConfirmeAnnuler] = useState(false);
+  // Documents à signer avec le bail : null tant que rien n'a été choisi (les défauts s'appliquent).
+  const [annexes, setAnnexes] = useState<Set<string> | null>(null);
 
   const charger = useCallback(async () => {
     const r = await authedFetch(`${BASE}/transmissions/${transmissionId}/signature/personnes`);
@@ -142,6 +162,12 @@ export function TalBailSignature({
       const out: Record<string, string> = {};
       for (const p of e.personnes) out[p.cle] = c[p.cle] ?? dernier[p.cle] ?? p.courriel ?? "";
       return out;
+    });
+    // Premier affichage : ce qui était joint au dernier envoi, sinon les documents proposés d'office.
+    setAnnexes((a) => {
+      if (a !== null) return a;
+      const dejaJoints = (e.annexes_envoyees || []).map((x) => x.cle);
+      return new Set(dejaJoints.length ? dejaJoints : (e.annexes || []).filter((x) => x.defaut).map((x) => x.cle));
     });
   }, [transmissionId]);
 
@@ -173,7 +199,15 @@ export function TalBailSignature({
   function envoyer() {
     void agir(
       "envoyer",
-      () => authedFetch(`${base}/envoyer`, { method: "POST", body: JSON.stringify({ courriels }) }),
+      () =>
+        authedFetch(`${base}/envoyer`, {
+          method: "POST",
+          body: JSON.stringify({
+            courriels,
+            // Dans l'ordre proposé à l'écran : le locataire les signe à la suite du bail.
+            annexes: (etat?.annexes || []).filter((x) => annexes?.has(x.cle)).map((x) => x.cle)
+          })
+        }),
       (corps) => {
         const b = corps as { envoyes: number; erreurs: string[] };
         setInfo(
@@ -327,6 +361,11 @@ export function TalBailSignature({
               </li>
             ))}
           </ul>
+          {etat.annexes_envoyees?.length ? (
+            <p className="mt-2 text-[11px] text-white/60">
+              Envoyé avec le bail : {etat.annexes_envoyees.map((a) => a.titre).join(", ")}.
+            </p>
+          ) : null}
           <p className="mt-2 text-[11px] text-white/45">
             Chacun signe de son côté, dans l&apos;ordre qu&apos;il veut. Dès que tout le monde a signé, le bail signé s&apos;archive ici et
             chaque personne en reçoit une copie.
@@ -390,7 +429,53 @@ export function TalBailSignature({
                   );
                 })}
               </ul>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
+              {etat.annexes?.length ? (
+                <div className="mt-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">À signer avec le bail</p>
+                  <p className="mt-0.5 text-[11px] text-white/45">
+                    Dans le même envoi : le locataire signe le bail, puis chaque document coché, à la suite.
+                  </p>
+                  <ul className="mt-1.5 space-y-1">
+                    {etat.annexes.map((a) => (
+                      <li key={a.cle}>
+                        <label className="flex cursor-pointer items-start gap-2 text-xs text-white/80">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5"
+                            disabled={!!busy}
+                            checked={!!annexes?.has(a.cle)}
+                            onChange={(e) =>
+                              setAnnexes((prev) => {
+                                const next = new Set(prev || []);
+                                if (e.target.checked) next.add(a.cle);
+                                else next.delete(a.cle);
+                                return next;
+                              })
+                            }
+                          />
+                          <span>
+                            {a.titre}
+                            <span className="ml-1.5 text-[11px] text-white/40">
+                              {a.source}
+                              {a.signature ? "" : " · joint pour information, sans signature"}
+                            </span>
+                          </span>
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                  {etat.annexes.length === 1 ? (
+                    <p className="mt-1.5 text-[11px] text-white/45">
+                      Pour joindre un règlement d&apos;immeuble : crée-le dans{" "}
+                      <Link href={"/immobilier/modeles-documents" as never} target="_blank" className="underline hover:text-white/80">
+                        Paramètres, « Modèles de documents (locatif) »
+                      </Link>{" "}
+                      (texte ou PDF, avec « règlement » dans le nom). Il apparaîtra ici, déjà coché.
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   disabled={!!busy || !Object.values(courriels).some((c) => c.trim())}
