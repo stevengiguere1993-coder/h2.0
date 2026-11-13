@@ -172,6 +172,11 @@ class TalTransmission(Base, TimestampUpdateMixin):
     #: registre — mais il ne se signe plus et sort des listes. Colonne additive →
     #: ensure_critical_columns.
     remplacee_par_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    #: Documents joints au bail dans l'envoi en signature (Phil 2026-11-13 : consentement aux
+    #: communications électroniques, règlement d'immeuble…) : liste JSON
+    #: [{"cle", "titre", "pages": [première, dernière], "signature"}] — pages de l'enveloppe.
+    #: Colonne additive → ensure_critical_columns.
+    annexes_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     #: Coût TAL (2,99 $ en mode réel, 0 en simulation) et frais refacturé
     #: au propriétaire (tarif Paramètres, 8,99 $ par défaut).

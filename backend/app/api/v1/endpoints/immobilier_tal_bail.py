@@ -561,6 +561,9 @@ class EnvoiSignatureIn(BaseModel):
     #: remplace celui du formulaire ; vide = cette personne n'est pas invitée.
     courriels: Optional[Dict[str, Optional[str]]] = None
     message: Optional[str] = Field(default=None, max_length=2000)
+    #: Documents joints au bail dans le même envoi (clés de « annexes » de
+    #: /signature/personnes : « consentement », « modele:<id> »). Absent = le bail seul.
+    annexes: Optional[List[str]] = Field(default=None, max_length=12)
 
 
 class CourrielSignataireIn(BaseModel):
@@ -582,6 +585,7 @@ async def signature_envoyer(transmission_id: int, payload: Optional[EnvoiSignatu
         return await sig.envoyer(
             db, transmission_id, user=user,
             courriels=(payload.courriels if payload else None), message=(payload.message if payload else None),
+            annexes=(payload.annexes if payload else None),
         )
     except svc.TalBailError as exc:
         raise _erreur(exc) from exc
