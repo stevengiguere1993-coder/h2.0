@@ -154,7 +154,7 @@ const MOIS_LONGS = [
   "novembre",
   "décembre"
 ];
-const MOIS_ABREGES = [
+export const MOIS_ABREGES = [
   "janv.",
   "févr.",
   "mars",

@@ -635,6 +635,7 @@ export function CreerBailModal({
   immeubleName,
   logementNumero,
   logementEnChambres,
+  statutInitial = "propose",
   onClose,
   onDone
 }: {
@@ -643,6 +644,10 @@ export function CreerBailModal({
   logementNumero?: string | null;
   /** Logement « Louer indéfiniment (chambre) » → bail au mois imposé. */
   logementEnChambres?: boolean | null;
+  /** Choix coché à l'ouverture. « actif » quand la porte « Nouveau bail »
+   *  (refonte d'Immobilier) a déjà établi que le locataire habite le
+   *  logement ; le choix reste modifiable dans la fenêtre. */
+  statutInitial?: CreerBailStatut;
   onClose: () => void;
   onDone: (statut: CreerBailStatut) => void;
 }) {
@@ -676,7 +681,7 @@ export function CreerBailModal({
   const [jourEcheance, setJourEcheance] = useState(JOUR_ECHEANCE_DEFAUT);
   // Statut de création UNIFIÉ (même défaut que la page Baux) : proposé
   // → passe par le kanban Locations ; actif → bail déjà signé/en vigueur.
-  const [statut, setStatut] = useState<CreerBailStatut>("propose");
+  const [statut, setStatut] = useState<CreerBailStatut>(statutInitial);
   // Remplacement d'un locataire parti (Steven 2026-10-18) : son bail se
   // ferme dans le même geste, sa dette reste visible.
   const [remplacement, setRemplacement] = useState<RemplacementChoix>(null);

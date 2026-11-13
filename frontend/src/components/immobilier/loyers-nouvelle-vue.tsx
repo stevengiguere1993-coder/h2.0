@@ -20,16 +20,7 @@
  * `lib/loyers-lecture.ts`, testé à part.
  */
 
-import {
-  type ReactNode,
-  useEffect,
-  useCallback,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState
-} from "react";
-import { createPortal } from "react-dom";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -51,6 +42,14 @@ import { echeanceLabel } from "@/components/immobilier/fin-bail";
 import { ImmeubleFiltre } from "@/components/immobilier/immeuble-filtre";
 import type { LigneLoyer } from "@/components/immobilier/loyers-types";
 import { Fenetre } from "@/components/immobilier/paiement-modals";
+import {
+  CLS_PRINCIPAL,
+  type ItemMenu,
+  ItemsMenu,
+  MenuFlottant,
+  Tuile,
+  useLargeur
+} from "@/components/immobilier/refonte-commun";
 import {
   argent,
   compter,
@@ -90,28 +89,6 @@ function cleOccupee(l: LigneLoyer): number {
 function cleLigne(l: LigneLoyer): string {
   if (l.etat === "vacant") return `vac-${l.logement_id}`;
   return l.gestion_externe ? `ext-${l.logement_id}` : `bail-${l.bail_id}`;
-}
-
-/** Largeur de la zone de liste. C'est elle, et non celle de la fenêtre,
- *  qui décide entre tableau et cartes : le menu de gauche en prend une
- *  part. 0 au premier rendu (cartes d'abord, comme au cellulaire). */
-function useLargeur<T extends HTMLElement>() {
-  const ref = useRef<T | null>(null);
-  const [largeur, setLargeur] = useState(0);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const mesurer = () => setLargeur(el.clientWidth);
-    mesurer();
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", mesurer);
-      return () => window.removeEventListener("resize", mesurer);
-    }
-    const ro = new ResizeObserver(mesurer);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return [ref, largeur] as const;
 }
 
 /** Tableau à partir de cette largeur de liste ; en dessous, des cartes. */
@@ -378,13 +355,6 @@ function Relances({ l, mois }: { l: LigneLoyer; mois: string }) {
 
 // ── Menu « ⋯ » ────────────────────────────────────────────────────────
 
-type ItemMenu = {
-  cle: string;
-  libelle: string;
-  onClick?: () => void;
-  href?: string;
-};
-
 function itemsDuMenu(
   l: LigneLoyer,
   lecture: LectureLigne,
@@ -447,160 +417,7 @@ function itemsDuMenu(
   return items;
 }
 
-// Pas de fond au focus : un fond sombre posé au focus n'a pas d'équivalent
-// en thème clair (noir sur noir). Le survol, lui, est couvert.
-const CLS_ITEM =
-  "block w-full rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white transition hover:bg-brand-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500";
-
-function ItemsMenu({
-  items,
-  onChoisi
-}: {
-  items: ItemMenu[];
-  onChoisi: () => void;
-}) {
-  return (
-    <>
-      {items.map((it) =>
-        it.href ? (
-          <Link
-            key={it.cle}
-            href={vers(it.href)}
-            role="menuitem"
-            className={CLS_ITEM}
-            onClick={onChoisi}
-          >
-            {it.libelle}
-          </Link>
-        ) : (
-          <button
-            key={it.cle}
-            type="button"
-            role="menuitem"
-            className={CLS_ITEM}
-            onClick={() => {
-              onChoisi();
-              it.onClick?.();
-            }}
-          >
-            {it.libelle}
-          </button>
-        )
-      )}
-    </>
-  );
-}
-
-/** Menu flottant (ordinateur) : ancré sous le bouton, hors du tableau
- *  pour ne jamais être coupé par ses bords. */
-function MenuFlottant({
-  ancre,
-  items,
-  onFermer
-}: {
-  ancre: HTMLElement;
-  items: ItemMenu[];
-  onFermer: () => void;
-}) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [pos, setPos] = useState<{
-    top?: number;
-    bottom?: number;
-    right: number;
-  } | null>(null);
-  const fermer = useRef(onFermer);
-  useEffect(() => {
-    fermer.current = onFermer;
-  });
-  const nbItems = items.length;
-
-  // Placé sous le bouton, ou au-dessus s'il manque de place. Replacé
-  // quand la page défile ; fermé si le bouton sort de l'écran.
-  const placer = useCallback(() => {
-    const r = ancre.getBoundingClientRect();
-    if (r.bottom < 0 || r.top > window.innerHeight) {
-      fermer.current();
-      return;
-    }
-    const hauteur = ref.current?.offsetHeight ?? nbItems * 44 + 12;
-    const right = Math.max(window.innerWidth - r.right, 8);
-    setPos(
-      r.bottom + hauteur + 8 <= window.innerHeight
-        ? { top: r.bottom + 4, right }
-        : { bottom: window.innerHeight - r.top + 4, right }
-    );
-  }, [ancre, nbItems]);
-
-  useLayoutEffect(() => {
-    placer();
-  }, [placer]);
-
-  useEffect(() => {
-    function dehors(e: MouseEvent) {
-      const cible = e.target as Node;
-      if (!ref.current?.contains(cible) && !ancre.contains(cible)) {
-        fermer.current();
-      }
-    }
-    function touche(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        fermer.current();
-        ancre.focus();
-        return;
-      }
-      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-      const choix = Array.from(
-        ref.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []
-      );
-      if (choix.length === 0) return;
-      e.preventDefault();
-      const i = choix.indexOf(document.activeElement as HTMLElement);
-      const suivant =
-        e.key === "ArrowDown"
-          ? (i + 1) % choix.length
-          : (i - 1 + choix.length) % choix.length;
-      choix[suivant].focus();
-    }
-    document.addEventListener("mousedown", dehors);
-    document.addEventListener("keydown", touche);
-    window.addEventListener("scroll", placer, true);
-    window.addEventListener("resize", placer);
-    return () => {
-      document.removeEventListener("mousedown", dehors);
-      document.removeEventListener("keydown", touche);
-      window.removeEventListener("scroll", placer, true);
-      window.removeEventListener("resize", placer);
-    };
-  }, [ancre, placer]);
-
-  // Le premier choix prend le focus à l'ouverture (une seule fois).
-  const place = pos != null;
-  useEffect(() => {
-    if (place) {
-      ref.current
-        ?.querySelector<HTMLElement>('[role="menuitem"]')
-        ?.focus({ preventScroll: true });
-    }
-  }, [place]);
-
-  if (!pos) return null;
-  return createPortal(
-    <div
-      ref={ref}
-      role="menu"
-      style={{ position: "fixed", ...pos }}
-      className="z-[60] min-w-[250px] rounded-xl border border-brand-700 bg-brand-950 p-1 shadow-2xl"
-    >
-      <ItemsMenu items={items} onChoisi={onFermer} />
-    </div>,
-    document.body
-  );
-}
-
 // ── Boutons d'une ligne ───────────────────────────────────────────────
-
-const CLS_PRINCIPAL =
-  "inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-700 font-semibold text-neutral-50 shadow-sm transition hover:bg-emerald-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 disabled:opacity-60";
 
 function BoutonsLigne({
   l,
@@ -893,52 +710,6 @@ function LoyerDuMois({ l, lecture }: { l: LigneLoyer; lecture: LectureLigne }) {
       ) : null}
       {echeance ? <div className="text-xs text-white/70">{echeance}</div> : null}
     </div>
-  );
-}
-
-// ── Tuiles (filtres) ──────────────────────────────────────────────────
-
-function Tuile({
-  libelle,
-  valeur,
-  sous,
-  actif,
-  alerte = false,
-  className = "",
-  onClick
-}: {
-  libelle: string;
-  valeur: number;
-  sous: string;
-  actif: boolean;
-  /** Chiffre en rouge : il y a quelque chose à faire. */
-  alerte?: boolean;
-  className?: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={actif}
-      onClick={onClick}
-      className={`rounded-xl border px-3 py-2.5 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 lg:px-4 lg:py-3 ${
-        actif
-          ? "border-accent-500 bg-accent-500/10 ring-1 ring-accent-500"
-          : "border-brand-800 bg-brand-900 hover:bg-brand-800"
-      } ${className}`}
-    >
-      <span className="block text-[11px] font-semibold uppercase tracking-wider text-white/70">
-        {libelle}
-      </span>
-      <span
-        className={`mt-0.5 block text-xl font-bold tabular-nums lg:text-2xl ${
-          alerte ? "text-rose-300" : "text-white"
-        }`}
-      >
-        {valeur}
-      </span>
-      <span className="block truncate text-xs text-white/70">{sous}</span>
-    </button>
   );
 }
 

@@ -150,7 +150,7 @@ export function TransfertUniteButton({
   );
 }
 
-function TransfertUniteModal({
+export function TransfertUniteModal({
   bailId,
   locataireNom,
   immeubleId,

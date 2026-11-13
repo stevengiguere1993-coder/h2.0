@@ -1967,35 +1967,22 @@ export function ResilierBailButton({
 }
 
 
-export function BailDocActions({
+/** Gestes sur le document d'un bail, sans leurs boutons : ouvrir le PDF,
+ *  joindre ou remplacer le bail signé (date d'entrée, « au mois », puis
+ *  offre d'envoyer le consentement), déclarer ou retirer « aucun bail à
+ *  joindre ». `BailDocActions` en est le rendu en boutons ; l'écran des
+ *  baux en nouvelle présentation (refonte d'Immobilier, lot 3) branche
+ *  les mêmes gestes sur un bouton principal et un menu « ⋯ ». Rendre
+ *  `fenetres` une fois. */
+export function useBailDocActions({
   bailId,
   hasDoc,
   signedAt,
-  allowImportInitial = true,
-  compact = false,
-  entreBoutons,
-  exceptionMotif,
   onChanged
 }: {
   bailId: number;
-  /** bail.document_id présent (un bail importé existe). */
   hasDoc: boolean;
-  /** Bail signé en ligne (le PDF régénéré sert de repli). */
   signedAt?: string | null;
-  /** false = pas d'import INITIAL ici (remplacer / voir seulement) —
-   *  le bail initial s'importe depuis le kanban Locations. */
-  allowImportInitial?: boolean;
-  /** true = bouton d'import en ICÔNE seule (pages denses). */
-  compact?: boolean;
-  /** Boutons à intercaler entre « Bail » et « Remplacer » — l'ordre
-   *  voulu par Phil sur la page Baux (2026-08-14) : Bail · Avis ·
-   *  Mettre fin · Remplacer. */
-  entreBoutons?: ReactNode;
-  /** Motif d'EXCEPTION déjà déclaré (« aucun bail à joindre »). Quand
-   *  il est fourni, le bouton d'exception apparaît ici — c'est-à-dire
-   *  là où le bail vit, et non dans une alerte : une alerte y mène, elle
-   *  n'agit pas (règle Phil 2026-08-19). */
-  exceptionMotif?: string | null;
   onChanged?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -2144,8 +2131,8 @@ export function BailDocActions({
     }
   }
 
-  return (
-    <span className="inline-flex items-center gap-1.5">
+  const fenetres = (
+    <>
       {apercu ? (
         <PdfApercuModal
           url={apercu.url}
@@ -2197,6 +2184,174 @@ export function BailDocActions({
           </div>
         </div>
       ) : null}
+      {saisieException ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setSaisieException(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-sm font-bold text-amber-200">
+              ⚠️ Aucun bail à joindre
+            </h3>
+            <p className="mt-1 text-xs text-white/55">
+              Sans bail au dossier, tu n&apos;as aucune preuve du loyer ni
+              des conditions convenues. Le motif reste au dossier, avec
+              ton nom et la date.
+            </p>
+            <input
+              type="text"
+              value={motif}
+              onChange={(e) => setMotif(e.target.value)}
+              maxLength={255}
+              placeholder="Pourquoi n'y a-t-il pas de bail ? (obligatoire)"
+              className="input mt-2 w-full text-xs"
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setSaisieException(false)}
+                className="btn-ghost btn-xs"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                disabled={busy || motif.trim().length < 3}
+                onClick={() => void declarerException()}
+                className="btn-secondary btn-sm disabled:opacity-50"
+              >
+                Déclarer l&apos;exception
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {pendingFile ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setPendingFile(null)}
+        >
+          <div
+            className="w-full max-w-xs rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-sm font-bold text-white">
+              Date d&apos;entrée en vigueur du bail
+            </h3>
+            <p className="mt-1 text-xs text-white/50">
+              Affichée dans les Documents : « Bail signé 2026-07-01 ».
+              Laisse vide pour reprendre la date de début du bail.
+            </p>
+            <input
+              type="date"
+              value={dateEntree}
+              onChange={(e) => setDateEntree(e.target.value)}
+              className="input mt-3 w-full"
+            />
+            <label className="mt-3 flex cursor-pointer items-start gap-2">
+              <input
+                type="checkbox"
+                checked={importAuMois}
+                onChange={(e) => setImportAuMois(e.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-[var(--accent-500,#f59e0b)]"
+              />
+              <span className="text-xs text-white/60">
+                <span className="font-semibold text-white">Bail au mois</span>{" "}
+                (chambre) — reconduction automatique, jamais d&apos;avis de
+                renouvellement.
+              </span>
+            </label>
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                className="btn-secondary btn-xs"
+                onClick={() => setPendingFile(null)}
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                className="btn-accent btn-xs"
+                disabled={busy}
+                onClick={() => {
+                  const f = pendingFile;
+                  setPendingFile(null);
+                  if (f) void remplacer(f, dateEntree, importAuMois);
+                }}
+              >
+                {busy ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : null}
+                Importer
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+
+  return {
+    busy,
+    err,
+    ouvrable,
+    ouvrir,
+    /** Fichier choisi : demande la date d'entrée en vigueur, puis importe. */
+    demanderDate,
+    retirerException,
+    setSaisieException,
+    fenetres
+  };
+}
+
+export function BailDocActions({
+  bailId,
+  hasDoc,
+  signedAt,
+  allowImportInitial = true,
+  compact = false,
+  entreBoutons,
+  exceptionMotif,
+  onChanged
+}: {
+  bailId: number;
+  /** bail.document_id présent (un bail importé existe). */
+  hasDoc: boolean;
+  /** Bail signé en ligne (le PDF régénéré sert de repli). */
+  signedAt?: string | null;
+  /** false = pas d'import INITIAL ici (remplacer / voir seulement) —
+   *  le bail initial s'importe depuis le kanban Locations. */
+  allowImportInitial?: boolean;
+  /** true = bouton d'import en ICÔNE seule (pages denses). */
+  compact?: boolean;
+  /** Boutons à intercaler entre « Bail » et « Remplacer » — l'ordre
+   *  voulu par Phil sur la page Baux (2026-08-14) : Bail · Avis ·
+   *  Mettre fin · Remplacer. */
+  entreBoutons?: ReactNode;
+  /** Motif d'EXCEPTION déjà déclaré (« aucun bail à joindre »). Quand
+   *  il est fourni, le bouton d'exception apparaît ici — c'est-à-dire
+   *  là où le bail vit, et non dans une alerte : une alerte y mène, elle
+   *  n'agit pas (règle Phil 2026-08-19). */
+  exceptionMotif?: string | null;
+  onChanged?: () => void;
+}) {
+  const {
+    busy,
+    err,
+    ouvrable,
+    ouvrir,
+    demanderDate,
+    retirerException,
+    setSaisieException,
+    fenetres
+  } = useBailDocActions({ bailId, hasDoc, signedAt, onChanged });
+
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {fenetres}
       {ouvrable ? (
         <button
           type="button"
@@ -2265,117 +2420,10 @@ export function BailDocActions({
           </button>
         )
       ) : null}
-      {saisieException ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={() => setSaisieException(false)}
-        >
-          <div
-            className="w-full max-w-sm rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-card"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-sm font-bold text-amber-200">
-              ⚠️ Aucun bail à joindre
-            </h3>
-            <p className="mt-1 text-xs text-white/55">
-              Sans bail au dossier, tu n&apos;as aucune preuve du loyer ni
-              des conditions convenues. Le motif reste au dossier, avec
-              ton nom et la date.
-            </p>
-            <input
-              type="text"
-              value={motif}
-              onChange={(e) => setMotif(e.target.value)}
-              maxLength={255}
-              placeholder="Pourquoi n'y a-t-il pas de bail ? (obligatoire)"
-              className="input mt-2 w-full text-xs"
-            />
-            <div className="mt-3 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setSaisieException(false)}
-                className="btn-ghost btn-xs"
-              >
-                Annuler
-              </button>
-              <button
-                type="button"
-                disabled={busy || motif.trim().length < 3}
-                onClick={() => void declarerException()}
-                className="btn-secondary btn-sm disabled:opacity-50"
-              >
-                Déclarer l&apos;exception
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
       {err ? (
         <span className="text-[10px] text-rose-300" title={err}>
           {err.slice(0, 60)}
         </span>
-      ) : null}
-      {pendingFile ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={() => setPendingFile(null)}
-        >
-          <div
-            className="w-full max-w-xs rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-card"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-sm font-bold text-white">
-              Date d&apos;entrée en vigueur du bail
-            </h3>
-            <p className="mt-1 text-xs text-white/50">
-              Affichée dans les Documents : « Bail signé 2026-07-01 ».
-              Laisse vide pour reprendre la date de début du bail.
-            </p>
-            <input
-              type="date"
-              value={dateEntree}
-              onChange={(e) => setDateEntree(e.target.value)}
-              className="input mt-3 w-full"
-            />
-            <label className="mt-3 flex cursor-pointer items-start gap-2">
-              <input
-                type="checkbox"
-                checked={importAuMois}
-                onChange={(e) => setImportAuMois(e.target.checked)}
-                className="mt-0.5 h-4 w-4 accent-[var(--accent-500,#f59e0b)]"
-              />
-              <span className="text-xs text-white/60">
-                <span className="font-semibold text-white">Bail au mois</span>{" "}
-                (chambre) — reconduction automatique, jamais d&apos;avis de
-                renouvellement.
-              </span>
-            </label>
-            <div className="mt-3 flex justify-end gap-2">
-              <button
-                type="button"
-                className="btn-secondary btn-xs"
-                onClick={() => setPendingFile(null)}
-              >
-                Annuler
-              </button>
-              <button
-                type="button"
-                className="btn-accent btn-xs"
-                disabled={busy}
-                onClick={() => {
-                  const f = pendingFile;
-                  setPendingFile(null);
-                  if (f) void remplacer(f, dateEntree, importAuMois);
-                }}
-              >
-                {busy ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : null}
-                Importer
-              </button>
-            </div>
-          </div>
-        </div>
       ) : null}
     </span>
   );

@@ -31,7 +31,11 @@ import { useSearchParams } from "next/navigation";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar } from "../layout";
-import { useNomPageImmobilier } from "@/hooks/use-presentation-immobilier";
+import {
+  useNomPageImmobilier,
+  usePresentationImmobilier
+} from "@/hooks/use-presentation-immobilier";
+import { BauxNouvelleVue } from "@/components/immobilier/baux-nouvelle-vue";
 import { BandeauAvisRenouvellement } from "@/components/immobilier/bandeau-avis";
 import { BandeauBailManquant } from "@/components/immobilier/bandeau-bail-manquant";
 import { BandeauDepotARembourser } from "@/components/immobilier/bandeau-depot";
@@ -57,7 +61,54 @@ function money(n: number | null | undefined): string {
   return `${Math.round(n).toLocaleString("fr-CA")} $`;
 }
 
+/** `?immeuble_id=X` (la page sert de sous-page à la fiche immeuble). */
+function immeubleDeLUrl(valeur: string | null): number | null {
+  return valeur != null && /^\d+$/.test(valeur) ? Number(valeur) : null;
+}
+
+/**
+ * Refonte d'Immobilier (lot 3) : l'écran actuel (`BauxActuel`, inchangé)
+ * ou la nouvelle présentation, selon Paramètres → « Présentation
+ * d'Immobilier ». Même adresse, mêmes données, mêmes permissions.
+ */
 export default function BauxPage() {
+  const presentation = usePresentationImmobilier();
+  const titrePage = useNomPageImmobilier("Baux en vigueur", "Baux");
+  const searchParams = useSearchParams();
+
+  if (!presentation.pret) {
+    return (
+      <>
+        <ImmobilierTopbar
+          breadcrumbs={[
+            { label: "Immobilier", href: "/immobilier" },
+            { label: titrePage }
+          ]}
+        />
+        <div className="flex items-center justify-center py-24">
+          <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
+        </div>
+      </>
+    );
+  }
+  if (!presentation.baux) return <BauxActuel />;
+  return (
+    <>
+      <ImmobilierTopbar
+        breadcrumbs={[
+          { label: "Immobilier", href: "/immobilier" },
+          { label: titrePage }
+        ]}
+      />
+      <BauxNouvelleVue
+        titre={titrePage}
+        immeubleInitial={immeubleDeLUrl(searchParams.get("immeuble_id"))}
+      />
+    </>
+  );
+}
+
+function BauxActuel() {
   // Refonte : « Baux » et « Loyers » avec le nouveau menu.
   const titrePage = useNomPageImmobilier("Baux en vigueur", "Baux");
   const nomPageLoyers = useNomPageImmobilier("Paiements", "Loyers");
