@@ -72,6 +72,7 @@ from app.api.v1.endpoints import (
     codes_acces,
     entreprises_revenus_depenses,
     immobilier_fusion,
+    immeuble_drive,
     immobilier_extras,
     immobilier_import_excel,
     immobilier_locations,
@@ -604,6 +605,8 @@ api_router.include_router(immobilier_codes.router, dependencies=DEP_IMMOBILIER)
 api_router.include_router(codes_acces.router)
 # Fusion de deux fiches d'immeuble — 12 logements sur deux adresses (2026-10-29).
 api_router.include_router(immobilier_fusion.router, dependencies=DEP_IMMOBILIER)
+# Documents Drive de l'immeuble : certificat, taxes, assurance… (2026-11-13).
+api_router.include_router(immeuble_drive.router, dependencies=DEP_IMMOBILIER)
 # Page Communications — envois courriel sans signature + audit.
 api_router.include_router(
     immobilier_communications.router, dependencies=DEP_IMMOBILIER

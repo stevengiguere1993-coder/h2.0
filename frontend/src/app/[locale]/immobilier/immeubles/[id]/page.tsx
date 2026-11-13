@@ -15,6 +15,7 @@ import {
   Home,
   FileDown,
   FileSignature,
+  FolderOpen,
   GitMerge,
   KeyRound,
   Loader2,
@@ -50,7 +51,7 @@ import {
   TalPastille
 } from "@/components/immobilier/tal-garants";
 import { ImmobilierTopbar, useImmobilierLayout } from "../../layout";
-import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
+import { ImmeubleDocumentsDrive } from "@/components/immobilier/ImmeubleDocumentsDrive";
 import { ContratGestionTab } from "./contrat-gestion-tab";
 import { CodesAccesSection } from "@/components/immobilier/codes-acces";
 import { BandeauAvisRenouvellement } from "@/components/immobilier/bandeau-avis";
@@ -363,7 +364,10 @@ const TABS = [
   // « maintenance à l'interne » est cochée) — retour Phil 2026-07-22.
   { id: "factures-ext", label: "Factures ponctuelles", icon: Wrench },
   { id: "maintenance", label: "Maintenance", icon: Wrench },
-  { id: "contrat-gestion", label: "Contrat de gestion", icon: FileSignature }
+  { id: "contrat-gestion", label: "Contrat de gestion", icon: FileSignature },
+  // Documents du dossier Drive de l'immeuble : certificat de localisation,
+  // taxes, assurance… (Steven 2026-11-13).
+  { id: "documents-drive", label: "Documents Drive", icon: FolderOpen }
 ] as const;
 
 // Onglets masqués quand l'immeuble est en gestion externe : les baux,
@@ -878,13 +882,6 @@ export default function ImmeubleDetailPage({
 
       {/* pb-28 : le contenu ne doit pas passer sous le bouton Aide flottant */}
       <div className="p-4 pb-28 lg:p-6 lg:pb-28">
-        <EntityDriveSection
-          entityType="Immeuble"
-          entityId={immeuble.id}
-          pole="Gestion immobilière"
-          label="Immeuble"
-          route="/immobilier/immeubles/[id]"
-        />
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={"/immobilier/immeubles" as any}
@@ -1304,6 +1301,9 @@ export default function ImmeubleDetailPage({
           ) : null}
           {tab === "contrat-gestion" ? (
             <ContratGestionTab immeubleId={immeubleId} />
+          ) : null}
+          {tab === "documents-drive" ? (
+            <ImmeubleDocumentsDrive immeubleId={immeubleId} />
           ) : null}
         </div>
       </div>

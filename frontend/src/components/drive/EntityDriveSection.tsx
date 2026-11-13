@@ -100,6 +100,14 @@ export type EntityDriveSectionProps = {
    * <PageDriveSection> qui n'est qu'un appel pré-configuré de ce mode.
    */
   scope?: "entity" | "page";
+  /**
+   * Montre la section même si le module de ce type est désactivé dans
+   * Paramètres > Drive (ex. onglet « Documents Drive » de la fiche
+   * d'immeuble, qui est la raison d'être de la page).
+   */
+  toujoursActif?: boolean;
+  /** Prévenu quand le dossier relié change (id du dossier ou null). */
+  onLinkChange?: (folderId: string | null) => void;
 };
 
 type LoadState = "loading" | "disabled" | "ready" | "oauth" | "error";
@@ -112,7 +120,9 @@ export function EntityDriveSection({
   pole,
   label,
   route,
-  scope = "entity"
+  scope = "entity",
+  toujoursActif = false,
+  onLinkChange
 }: EntityDriveSectionProps) {
   const [state, setState] = useState<LoadState>("loading");
   const [status, setStatus] = useState<PageModuleStatus | null>(null);
@@ -219,7 +229,7 @@ export function EntityDriveSection({
         setState("oauth");
         return;
       }
-      if (!statusRes.ok) {
+      if (!statusRes.ok && !toujoursActif) {
         // Le statut est la PORTE de la section : tant qu'on n'a pas confirmé
         // `active: true`, on ne montre RIEN. Si l'appel échoue (403, 500,
         // hoquet réseau…), on masque en silence plutôt que d'afficher une
@@ -228,10 +238,12 @@ export function EntityDriveSection({
         setState("disabled");
         return;
       }
-      const statusJson = (await statusRes.json()) as PageModuleStatus;
+      const statusJson: PageModuleStatus | null = statusRes.ok
+        ? ((await statusRes.json()) as PageModuleStatus)
+        : null;
       setStatus(statusJson ?? null);
 
-      if (!statusJson?.active) {
+      if (!statusJson?.active && !toujoursActif) {
         // Section désactivée → rien à afficher.
         setState("disabled");
         return;
@@ -285,7 +297,20 @@ export function EntityDriveSection({
       setErrMsg((e as Error)?.message || "erreur_inconnue");
       setState("error");
     }
-  }, [entityType, entityId, validEntity]);
+  }, [entityType, entityId, validEntity, toujoursActif]);
+
+  // Prévient l'hôte quand le dossier relié change (lien créé, re-ciblé…).
+  const onLinkChangeRef = useRef(onLinkChange);
+  onLinkChangeRef.current = onLinkChange;
+  const linkedFolderId = link?.drive_folder_id ?? null;
+  const premierLien = useRef(true);
+  useEffect(() => {
+    if (premierLien.current) {
+      premierLien.current = false;
+      return;
+    }
+    onLinkChangeRef.current?.(linkedFolderId);
+  }, [linkedFolderId]);
 
   useEffect(() => {
     void load();

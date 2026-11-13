@@ -599,3 +599,25 @@ de l'ancien (`reassigne`). Le texto de partage ne contient JAMAIS le
 code, seulement le lien `/m/codes`. Écrans : fiche immeuble / logement
 (`CodesAccesSection`), bloc « Accès » du BT (`CodesDuBon`), page
 cellulaire `/m/codes` (`MesCodes`).
+
+## Immeubles — documents Drive dans la fiche (2026-11-13)
+
+Steven : « dans les fiches des immeubles, nous devrions avoir accès à
+toute la documentation que nous gardons à jour dans le Drive : certificat
+de localisation, taxes scolaires, taxes municipales, assurance, tous
+autres documents reçus ». Onglet « Documents Drive » de la fiche
+(`ImmeubleDocumentsDrive`, autonome : la nouvelle fiche de la refonte le
+monte dans son onglet Documents). Service
+`app/services/immeuble_drive.py`, routes
+`GET /immobilier/immeubles/{id}/drive`, `POST …/drive/relier`
+(`{"auto": true}` ou `{"dossier_id"}`), `POST
+/immobilier/immeubles-drive/relier-tous?simuler=` (admin). Réservé aux
+gestionnaires (manager+). Le lien est un `DriveEntityLink` « Immeuble »
+ordinaire. Repérage : sous-dossiers « Immeuble(s) » (pas « Vente ») des
+dossiers Drive reliés aux fiches Entreprise, puis leurs enfants ; numéro
+civique OBLIGATOIRE + un mot distinctif de la rue (`score_dossier`),
++5 sous une compagnie propriétaire ; relié d'office seulement si seul en
+tête et pas déjà pris (repli « nom contient le numéro » : jamais d'office).
+Classement par NOM du fichier d'abord, sinon par le sous-dossier le plus
+proche ; les quatre documents clés sont toujours affichés (vides en
+ambre). Lecture seule côté Drive, compte Drive partagé en repli.
