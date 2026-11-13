@@ -147,10 +147,14 @@ export function TachesEditor({
   const [importing, setImporting] = useState(false);
 
   const perDay = useMemo(() => {
-    const arr = new Array(DAYS).fill(0) as number[];
-    for (const l of lignes) arr[l.day_index] += parseHours(l.hours);
+    // Feuille de 7 ou 14 jours (période de paie réglée), moins pour une
+    // feuille de transition : la longueur vient des dates du serveur.
+    const arr = new Array(joursDates.length || DAYS).fill(0) as number[];
+    for (const l of lignes) {
+      if (l.day_index < arr.length) arr[l.day_index] += parseHours(l.hours);
+    }
     return arr.map((h) => Math.round(h * 100) / 100);
-  }, [lignes]);
+  }, [lignes, joursDates]);
   const total = Math.round(perDay.reduce((a, b) => a + b, 0) * 100) / 100;
 
   const dayLines = lignes.filter((l) => l.day_index === day);
@@ -204,7 +208,7 @@ export function TachesEditor({
 
   return (
     <div className="space-y-4">
-      {/* Bandeau des 14 jours */}
+      {/* Bandeau des jours de la feuille */}
       <div className="overflow-x-auto rounded-2xl border border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-2">
         <div className="flex min-w-max gap-1">
           {joursDates.map((iso, i) => {

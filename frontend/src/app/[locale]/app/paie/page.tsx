@@ -18,6 +18,9 @@ import { authedFetch } from "@/lib/auth";
 
 type Row = {
   employe_id: number;
+  //: "punch" (punch construction) ou "feuille" (feuille de temps approuvée).
+  source?: string;
+  user_id?: number | null;
   employe_name: string;
   hours_week_1: number;
   hours_week_2: number;
@@ -441,9 +444,15 @@ export default function PaiePage() {
                     </tr>
                   ) : (
                     report.rows.map((r) => (
-                      <tr key={r.employe_id} className="hover:bg-brand-800/30">
+                      <tr
+                        key={`${r.source ?? "punch"}-${r.employe_id}`}
+                        className="hover:bg-brand-800/30"
+                      >
                         <td className="px-3 py-2 font-semibold text-white">
                           {r.employe_name}
+                          <span className="ml-2 rounded border border-white/20 px-1.5 py-0.5 align-middle text-[10px] font-medium uppercase tracking-wide text-white/85">
+                            {r.source === "feuille" ? "Feuille" : "Punch"}
+                          </span>
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums text-white/85">
                           {r.hours_week_1.toFixed(2)} h

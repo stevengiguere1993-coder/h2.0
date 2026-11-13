@@ -55,6 +55,10 @@ export type EmployeZoneOut = {
   prochain_evenement: EvenementOut | null;
   /** Punch de feuille de temps en cours (employé « autre », bug 16). */
   punch_en_cours: PunchEnCoursOut | null;
+  /** Mode de calcul des heures (fiche) : punch construction, feuille de
+   *  temps ou les deux ; `mode_heures_choisi` faux = mode par défaut. */
+  mode_heures?: "punch" | "feuille" | "les_deux";
+  mode_heures_choisi?: boolean;
 };
 
 export type PunchEnCoursOut = {

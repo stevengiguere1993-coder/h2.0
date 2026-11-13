@@ -22,7 +22,8 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
-import { authedFetch } from "@/lib/auth";
+import { authedFetch, hasMinRole } from "@/lib/auth";
+import { useCurrentUser } from "@/hooks/use-current-user";
 import { NOTE_APPROX, lienCarte, positionsPunch, texteCoordonnees } from "@/lib/punch-geo";
 import { useConfirm } from "@/components/confirm-dialog";
 import {
@@ -191,6 +192,8 @@ function CarteEmploye({
         </div>
       </dl>
 
+      <ModeHeures employe={employe} onChanged={onChanged} />
+
       {employe.punch_en_cours ? (
         <PunchEnCours employe={employe} onChanged={onChanged} />
       ) : null}
@@ -220,6 +223,81 @@ function CarteEmploye({
           </Link>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Mode de calcul des heures (Steven, 2026-11-13) : par quel système ses
+ *  heures passent dans la paie. Par défaut, punch construction pour qui a
+ *  une fiche Employé, sinon feuille de temps. Admin+ pour changer. */
+function ModeHeures({
+  employe,
+  onChanged
+}: {
+  employe: EmployeZoneOut;
+  onChanged: () => Promise<void>;
+}) {
+  const { user } = useCurrentUser();
+  const peutModifier = hasMinRole(user, "admin");
+  const mode = employe.mode_heures ?? (employe.type === "construction" ? "punch" : "feuille");
+  const punch = mode === "punch" || mode === "les_deux";
+  const feuille = mode === "feuille" || mode === "les_deux";
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function changer(p: boolean, f: boolean) {
+    if (!p && !f) {
+      setErr("Garde au moins un mode de calcul.");
+      return;
+    }
+    setSaving(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(`/api/v1/users/${employe.id}/mode-heures`, {
+        method: "PUT",
+        body: JSON.stringify({ punch: p, feuille: f })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await onChanged();
+    } catch (e) {
+      setErr(`Changement refusé : ${(e as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      className="mt-4 rounded-lg border border-[var(--qg-border)] px-3 py-2"
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
+      <p className="text-[11px] uppercase tracking-wider text-[var(--qg-text-soft)]">
+        Calcul des heures
+        {employe.mode_heures_choisi ? "" : " · par défaut"}
+        {saving ? <Loader2 className="ml-1 inline h-3 w-3 animate-spin" /> : null}
+      </p>
+      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm text-[var(--qg-text)]">
+        <label className="inline-flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={punch}
+            disabled={!peutModifier || saving}
+            onChange={(e) => void changer(e.target.checked, feuille)}
+          />
+          Punch construction
+        </label>
+        <label className="inline-flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={feuille}
+            disabled={!peutModifier || saving}
+            onChange={(e) => void changer(punch, e.target.checked)}
+          />
+          Feuille de temps
+        </label>
+      </div>
+      {err ? <p className="mt-1 text-xs text-rose-600">{err}</p> : null}
     </div>
   );
 }

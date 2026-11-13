@@ -5,7 +5,7 @@
  *
  * Utile aux deux variantes : l'employé « autre » (seul pôle Entreprises)
  * et l'employé Construction qui a aussi le pôle Entreprises. L'employé
- * décrit sa période de paie (14 jours) ligne par ligne : jour, compagnie,
+ * décrit sa période de paie (réglage Paramètres → Période de paie) ligne par ligne : jour, compagnie,
  * tâche (importée de ses tâches Gestion d'entreprises ou saisie à la
  * main) et heures. La grille compagnie × jour est dérivée côté serveur ;
  * paie et refacturation ne changent pas (même API que le QG).
@@ -273,7 +273,7 @@ export default function MobileFeuilleDeTemps() {
       >
         <h1 className="text-base font-bold text-white">Feuille de temps</h1>
         <p className="mt-0.5 text-[11px] text-white/50">
-          Par tâche · période de paie de 14 jours
+          Par tâche · période de paie ({detail?.jours_dates.length ?? 0} jours)
         </p>
       </header>
 
@@ -310,7 +310,7 @@ export default function MobileFeuilleDeTemps() {
             type="button"
             disabled={!detail || loading}
             onClick={() =>
-              detail && void navigate(addDaysISO(detail.period_start, -14))
+              detail && void navigate(addDaysISO(detail.period_start, -1))
             }
             aria-label="Période précédente"
             className="rounded-lg border border-brand-800 bg-brand-900 p-2 text-white/70 disabled:opacity-50"
@@ -329,7 +329,7 @@ export default function MobileFeuilleDeTemps() {
             type="button"
             disabled={!detail || loading}
             onClick={() =>
-              detail && void navigate(addDaysISO(detail.period_start, 14))
+              detail && void navigate(addDaysISO(detail.period_end, 1))
             }
             aria-label="Période suivante"
             className="rounded-lg border border-brand-800 bg-brand-900 p-2 text-white/70 disabled:opacity-50"
@@ -352,7 +352,7 @@ export default function MobileFeuilleDeTemps() {
               <p className="mt-1 text-sm font-semibold text-white">
                 {formatPeriod(
                   detail.jours_dates[0] || detail.period_start,
-                  detail.jours_dates[DAYS - 1] || detail.period_end
+                  detail.period_end
                 )}
               </p>
               <div className="mt-2 flex items-center justify-between gap-2">

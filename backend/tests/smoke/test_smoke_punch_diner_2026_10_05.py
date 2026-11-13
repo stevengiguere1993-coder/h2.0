@@ -277,13 +277,13 @@ def test_paie_soustrait_le_diner(client, auth_headers, run):
     assert lignes[0] == (
         "nom_employe,heures_semaine_1,heures_semaine_2,"
         "heures_punchees_semaine_1,diner_semaine_1,"
-        "heures_punchees_semaine_2,diner_semaine_2,nb_diners"
+        "heures_punchees_semaine_2,diner_semaine_2,nb_diners,source"
     )
     colonnes = next(l for l in lignes if l.startswith('"Zz Paie Dîner"')).split(",")
     if semaine_1:
-        assert colonnes[1:] == ["8.0", "0.0", "8.5", "0.5", "0.0", "0.0", "1"]
+        assert colonnes[1:] == ["8.0", "0.0", "8.5", "0.5", "0.0", "0.0", "1", "punch"]
     else:
-        assert colonnes[1:] == ["0.0", "8.0", "0.0", "0.0", "8.5", "0.5", "1"]
+        assert colonnes[1:] == ["0.0", "8.0", "0.0", "0.0", "8.5", "0.5", "1", "punch"]
 
     r = client.get(
         "/api/v1/punch/payroll/bi-weekly-regimes.csv"
@@ -292,9 +292,9 @@ def test_paie_soustrait_le_diner(client, auth_headers, run):
     )
     assert r.status_code == 200, r.text
     lignes = r.text.splitlines()
-    assert lignes[0].endswith(",diner_semaine_1,diner_semaine_2,heures_diner,nb_diners")
+    assert lignes[0].endswith(",diner_semaine_1,diner_semaine_2,heures_diner,nb_diners,source")
     colonnes = next(l for l in lignes if l.startswith('"Zz Paie Dîner"')).split(",")
-    assert colonnes[-4:] == (["0.5", "0.0", "0.5", "1"] if semaine_1 else ["0.0", "0.5", "0.5", "1"])
+    assert colonnes[-5:-1] == (["0.5", "0.0", "0.5", "1"] if semaine_1 else ["0.0", "0.5", "0.5", "1"])
 
     # Vue hebdomadaire de l'employé : heures payées, punchées et dîner du jour.
     lundi = AUJOURD_HUI - timedelta(days=AUJOURD_HUI.weekday())

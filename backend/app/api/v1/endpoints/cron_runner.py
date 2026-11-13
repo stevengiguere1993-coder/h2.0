@@ -878,6 +878,19 @@ async def trigger_all_daily(
 
     await _safe("qbo-projets-conversion", _run_qbo_projets_conversion, details)
 
+    # Feuilles de temps (Steven 2026-11-13) : rappel à l'employé dont la
+    # journée ouvrable d'hier est vide, et aux gestionnaires le jour de la
+    # coupure s'il reste des feuilles à approuver.
+    async def _run_feuille_rappels():
+        from app.services.feuille_rappels import rappels_pour_cron
+
+        async with AsyncSessionLocal() as db:
+            r = await rappels_pour_cron(db)
+            await db.commit()
+            return r
+
+    await _safe("feuille-temps-rappels", _run_feuille_rappels, details)
+
     # Validation bancaire des loyers : import QBO (lecture seule) des
     # écritures « Loyer à remettre » + rapprochement déterministe.
     # Inerte tant que la feature n'est pas activée dans Paramètres.

@@ -540,6 +540,78 @@ async def apercu_utilisateur(
     )
 
 
+class ModeHeuresUpdate(BaseModel):
+    #: Cases de la fiche : punch construction et / ou feuille de temps.
+    #: Les deux à False = retour au mode par défaut (déduit).
+    punch: bool = False
+    feuille: bool = False
+
+
+class ModeHeuresRead(BaseModel):
+    user_id: int
+    mode: str
+    #: True = choisi sur la fiche ; False = mode par défaut déduit.
+    choisi: bool
+    punch: bool
+    feuille: bool
+    libelle: str
+
+
+async def _mode_heures_read(db, u: User) -> ModeHeuresRead:
+    from app.services import mode_heures as mh
+
+    mode = (await mh.modes_pour(db, [u]))[u.id]
+    return ModeHeuresRead(
+        user_id=u.id,
+        mode=mode,
+        choisi=mh.normaliser(u.mode_heures) is not None,
+        punch=mh.compte_punch(mode),
+        feuille=mh.compte_feuille(mode),
+        libelle=mh.MODES_LABELS[mode],
+    )
+
+
+@router.get("/{user_id}/mode-heures", response_model=ModeHeuresRead)
+async def get_mode_heures(
+    user_id: int, db: DBSession, admin: RequireAdminRole
+) -> ModeHeuresRead:
+    """Mode de calcul des heures d'une personne : punch construction,
+    feuille de temps ou les deux (rapport de paie, suivi, rappels)."""
+    u = await db.get(User, user_id)
+    if u is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    return await _mode_heures_read(db, u)
+
+
+@router.put("/{user_id}/mode-heures", response_model=ModeHeuresRead)
+async def set_mode_heures(
+    user_id: int, data: ModeHeuresUpdate, db: DBSession, admin: RequireAdminRole
+) -> ModeHeuresRead:
+    """Coche punch construction et / ou feuille de temps. Aucune case =
+    mode par défaut (punch construction si la personne a une fiche
+    Employé, sinon feuille de temps)."""
+    from app.services import mode_heures as mh
+
+    u = await db.get(User, user_id)
+    if u is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    _guard_rank(u, admin)
+    u.mode_heures = (
+        mh.depuis_cases(data.punch, data.feuille) if (data.punch or data.feuille) else None
+    )
+    await db.flush()
+    await log_action(
+        db,
+        user=admin,
+        action="user.mode_heures_changed",
+        entity_type="user",
+        entity_id=user_id,
+        details={"target_email": u.email, "mode_heures": u.mode_heures},
+    )
+    await db.commit()
+    return await _mode_heures_read(db, u)
+
+
 class CanAssignUpdate(BaseModel):
     can_assign_others: bool
 

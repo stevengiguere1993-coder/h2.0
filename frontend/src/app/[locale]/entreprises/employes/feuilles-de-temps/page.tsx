@@ -107,8 +107,11 @@ export default function FeuillesDeTempsPage() {
     useSectionEmployes();
 
   // Période affichée : null = période courante (le serveur la résout et la
-  // première ligne de /team nous donne period_start pour naviguer ±14 j).
+  // période la plus fréquente des lignes de /team donne les bornes ; la
+  // navigation passe à la veille du début / au lendemain de la fin, les
+  // périodes suivant Paramètres → Période de paie).
   const [periodStart, setPeriodStart] = useState<string | null>(null);
+  const [periodEnd, setPeriodEnd] = useState<string | null>(null);
   const [rows, setRows] = useState<TeamRow[]>([]);
   const [rowsLoading, setRowsLoading] = useState(true);
   const [detail, setDetail] = useState<Detail | null>(null);
@@ -126,7 +129,17 @@ export default function FeuillesDeTempsPage() {
       if (!r.ok) throw new Error(await lireErreur(r));
       const data = (await r.json()) as TeamRow[];
       setRows(data);
-      if (data[0]?.period_start) setPeriodStart(data[0].period_start);
+      const freq = new Map<string, number>();
+      for (const row of data) {
+        const k = `${row.period_start}|${row.period_end}`;
+        freq.set(k, (freq.get(k) ?? 0) + 1);
+      }
+      const top = [...freq.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+      if (top) {
+        const [debut, fin] = top.split("|");
+        setPeriodStart(debut);
+        setPeriodEnd(fin);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -171,7 +184,10 @@ export default function FeuillesDeTempsPage() {
 
   function naviguer(sens: -1 | 1) {
     if (!periodStart) return;
-    const p = addDaysISO(periodStart, sens * PERIODE_JOURS);
+    const p =
+      sens > 0
+        ? addDaysISO(periodEnd ?? addDaysISO(periodStart, PERIODE_JOURS - 1), 1)
+        : addDaysISO(periodStart, -1);
     setPeriodStart(p);
     void loadTeam(p);
   }
@@ -194,9 +210,6 @@ export default function FeuillesDeTempsPage() {
     }
   }
 
-  const periodEnd = periodStart
-    ? addDaysISO(periodStart, PERIODE_JOURS - 1)
-    : null;
   const totalEquipe = rows.reduce((a, r) => a + r.total_heures, 0);
 
   return (

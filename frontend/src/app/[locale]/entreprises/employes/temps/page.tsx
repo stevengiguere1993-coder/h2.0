@@ -38,7 +38,32 @@ type Ligne = {
   jours_travailles: number;
   taches_terminees: number;
   taches_ouvertes: number;
+  mode_heures?: string;
+  heures_par_jour?: Record<string, number>;
+  jours_sans_saisie?: string[];
+  feuille_statut?: string | null;
 };
+
+const MODE_LIBELLE: Record<string, string> = {
+  punch: "Punch construction",
+  feuille: "Feuille de temps",
+  les_deux: "Punch + feuille"
+};
+
+const STATUT_LIBELLE: Record<string, string> = {
+  brouillon: "brouillon",
+  soumis: "soumise",
+  approuve: "approuvée"
+};
+
+function fmtJour(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("fr-CA", {
+    weekday: "short",
+    day: "numeric",
+    month: "short"
+  });
+}
 
 type Suivi = {
   debut: string;
@@ -282,6 +307,24 @@ export default function SuiviTempsPage() {
                           </span>
                           <TypeEmployeBadge type={l.type} />
                         </div>
+                        {l.mode_heures ? (
+                          <div className="mt-0.5 text-xs text-[var(--qg-text-muted)]">
+                            {MODE_LIBELLE[l.mode_heures] ?? l.mode_heures}
+                            {l.feuille_statut
+                              ? ` · feuille ${STATUT_LIBELLE[l.feuille_statut] ?? l.feuille_statut}`
+                              : ""}
+                          </div>
+                        ) : null}
+                        {l.jours_sans_saisie && l.jours_sans_saisie.length > 0 ? (
+                          <div
+                            className="mt-0.5 text-xs font-medium text-amber-300"
+                            title={l.jours_sans_saisie.map(fmtJour).join(", ")}
+                          >
+                            {l.jours_sans_saisie.length} jour(s) sans heures :{" "}
+                            {l.jours_sans_saisie.slice(0, 4).map(fmtJour).join(", ")}
+                            {l.jours_sans_saisie.length > 4 ? "…" : ""}
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums text-[var(--qg-text)]">
                         {l.heures_feuille ? fmtHm(l.heures_feuille) : "—"}

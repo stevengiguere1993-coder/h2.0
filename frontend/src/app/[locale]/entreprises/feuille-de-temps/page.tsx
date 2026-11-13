@@ -592,7 +592,12 @@ export default function FeuilleDeTempsPage() {
 
   const changePeriod = (delta: number) => {
     if (!periodStart) return;
-    void navigate(addDaysISO(periodStart, delta * DAYS), selectedUserId);
+    // Navigation par date : la feuille voisine commence le lendemain de la
+    // fin (ou finit la veille du début) — les périodes suivent le réglage
+    // de paie et une feuille de transition peut être plus courte.
+    const fin = detail?.period_end ?? addDaysISO(periodStart, DAYS - 1);
+    const cible = delta > 0 ? addDaysISO(fin, 1) : addDaysISO(periodStart, -1);
+    void navigate(cible, selectedUserId);
   };
 
   const changeEmployee = (uid: number | null) => {
@@ -873,7 +878,7 @@ export default function FeuilleDeTempsPage() {
               <div className="min-w-[200px] rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-4 py-2 text-center text-sm font-medium">
                 <CalendarDays className="mr-2 inline h-4 w-4 opacity-60" />
                 {periodStart
-                  ? formatPeriod(periodStart, addDaysISO(periodStart, DAYS - 1))
+                  ? formatPeriod(periodStart, detail?.period_end ?? addDaysISO(periodStart, DAYS - 1))
                   : "—"}
               </div>
               <button className={BTN_GHOST} onClick={() => changePeriod(1)} aria-label="Période suivante">
@@ -1356,6 +1361,9 @@ function Grille({
 }) {
   const notesOk = notesEditable ?? canEdit;
   const dates = detail.jours_dates.map(parseISO);
+  const nbJours = Math.min(dates.length || DAYS, DAYS);
+  const semaine1 = Math.min(7, nbJours);
+  const semaine2 = nbJours - semaine1;
   const isWeekend = (i: number) => {
     const dow = dates[i].getDay();
     return dow === 0 || dow === 6;
@@ -1383,17 +1391,19 @@ function Grille({
               Compagnie
             </th>
             <th
-              colSpan={7}
+              colSpan={semaine1}
               className="border-b border-r border-[var(--qg-border)] px-2 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-[var(--qg-text-muted)]"
             >
-              Semaine 1
+              {semaine2 > 0 ? "Semaine 1" : "Semaine"}
             </th>
-            <th
-              colSpan={7}
-              className="border-b border-r border-[var(--qg-border)] px-2 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-[var(--qg-text-muted)]"
-            >
-              Semaine 2
-            </th>
+            {semaine2 > 0 && (
+              <th
+                colSpan={semaine2}
+                className="border-b border-r border-[var(--qg-border)] px-2 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-[var(--qg-text-muted)]"
+              >
+                Semaine 2
+              </th>
+            )}
             <th
               rowSpan={2}
               className="border-b border-r border-[var(--qg-border)] bg-amber-500/5 px-3 py-2 text-center font-semibold"
@@ -1409,7 +1419,7 @@ function Grille({
           </tr>
           {/* Ligne jours */}
           <tr className="bg-[var(--qg-bg)]/60">
-            {Array.from({ length: DAYS }).map((_, i) => {
+            {Array.from({ length: nbJours }).map((_, i) => {
               const h = dayHeader(i);
               return (
                 <th
@@ -1438,7 +1448,7 @@ function Grille({
                     {l.label}
                   </div>
                 </td>
-                {Array.from({ length: DAYS }).map((_, i) => (
+                {Array.from({ length: nbJours }).map((_, i) => (
                   <td
                     key={i}
                     className={`border-[var(--qg-border)]/40 px-0.5 py-1 ${
@@ -1488,7 +1498,7 @@ function Grille({
             <>
               <tr>
                 <td
-                  colSpan={DAYS + 3}
+                  colSpan={nbJours + 3}
                   className="border-b border-t-2 border-[var(--qg-border)] bg-rose-500/[0.06] px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-rose-400/90"
                 >
                   Heures non refacturables — payées, non facturées
@@ -1512,7 +1522,7 @@ function Grille({
                           </span>
                         </div>
                       </td>
-                      {Array.from({ length: DAYS }).map((_, i) => (
+                      {Array.from({ length: nbJours }).map((_, i) => (
                         <td
                           key={i}
                           className={`border-[var(--qg-border)]/40 px-0.5 py-1 ${

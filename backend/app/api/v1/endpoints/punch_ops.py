@@ -1009,8 +1009,14 @@ async def payroll_reglages_modifier(
 
 
 class BiWeeklyPayrollRow(BaseModel):
+    #: Fiche Employé (punch). Ligne « feuille » : -user_id (le compte n'a
+    #: pas toujours de fiche Employé).
     employe_id: int
     employe_name: str
+    #: « punch » (punch construction) ou « feuille » (feuille de temps
+    #: approuvée) — mode de calcul des heures de la fiche (2026-11-13).
+    source: str = "punch"
+    user_id: Optional[int] = None
     hours_week_1: float  # semaine 1 de la période
     hours_week_2: float  # semaine 2 (toujours 0 en paie hebdomadaire)
     total_hours: float
@@ -1070,6 +1076,93 @@ class BiWeeklyPayrollReport(BaseModel):
     total_hours_diner: float = 0.0
     total_diners: int = 0
     total_hours_brutes: float = 0.0
+
+
+async def _ajouter_feuilles_de_temps(
+    db, agg: dict, periode, p_start: date, p_end: date
+) -> None:
+    from app.models.timesheet import Timesheet, TimesheetEntry
+    from app.models.user import User
+    from app.services import mode_heures
+
+    users = (
+        await db.execute(select(User).where(User.is_active.is_(True)))
+    ).scalars().all()
+    modes = await mode_heures.modes_pour(db, users)
+    par_email = {(u.email or "").lower(): u for u in users if u.email}
+
+    # 1) Punchs d'un compte réglé « feuille de temps » seulement : retirés.
+    if agg:
+        emps = (
+            await db.execute(select(Employe).where(Employe.id.in_(list(agg))))
+        ).scalars().all()
+        for e in emps:
+            u = par_email.get((e.email or "").lower())
+            if u is not None and not mode_heures.compte_punch(modes[u.id]):
+                agg.pop(int(e.id), None)
+
+    # 2) Feuilles de temps des comptes « feuille » ou « les deux ».
+    cibles = {u.id: u for u in users if mode_heures.compte_feuille(modes[u.id])}
+    if not cibles:
+        return
+    sheets = (
+        await db.execute(
+            select(Timesheet).where(
+                Timesheet.user_id.in_(list(cibles)),
+                Timesheet.period_start <= p_end,
+                Timesheet.period_end >= p_start,
+            )
+        )
+    ).scalars().all()
+    if not sheets:
+        return
+    par_feuille = {s_.id: s_ for s_ in sheets}
+    entries = (
+        await db.execute(
+            select(TimesheetEntry).where(
+                TimesheetEntry.timesheet_id.in_(list(par_feuille))
+            )
+        )
+    ).scalars().all()
+    for e in entries:
+        ts = par_feuille[e.timesheet_id]
+        h = float(e.hours or 0.0)
+        jour = ts.period_start + timedelta(days=int(e.day_index))
+        if h <= 0 or not (p_start <= jour <= p_end):
+            continue
+        u = cibles[ts.user_id]
+        cle = -int(u.id)
+        if cle not in agg:
+            agg[cle] = BiWeeklyPayrollRow(
+                employe_id=cle,
+                employe_name=u.display_name or u.email or f"#{u.id}",
+                source="feuille",
+                user_id=u.id,
+                hours_week_1=0.0,
+                hours_week_2=0.0,
+                total_hours=0.0,
+                pending_hours=0.0,
+            )
+        row = agg[cle]
+        approuvee = ts.status == "approuve"
+        sem1 = periode.semaine_de(jour) == 0
+        row.total_hours += h
+        row.hours_brutes += h
+        row.hours_hors_decret += h
+        if sem1:
+            row.hours_week_1 += h
+            row.hours_hd_week_1 += h
+            row.hours_brutes_week_1 += h
+        else:
+            row.hours_week_2 += h
+            row.hours_hd_week_2 += h
+            row.hours_brutes_week_2 += h
+        if approuvee:
+            montant = round(h * float(ts.taux_horaire or 0.0), 2)
+            row.montant_hors_decret += montant
+            row.montant_total += montant
+        else:
+            row.pending_hours += h
 
 
 @router.get(
@@ -1197,6 +1290,11 @@ async def payroll_bi_weekly(
         else:
             agg[emp_id].hours_brutes_week_2 += h + diner_h
 
+    # Mode de calcul des heures (fiche) : un compte en « feuille de
+    # temps » seulement ne passe plus par ses punchs ; les heures de ses
+    # feuilles de temps entrent dans la paie (approuvées = à payer).
+    await _ajouter_feuilles_de_temps(db, agg, periode, p_start, p_end)
+
     for row in agg.values():
         for champ in (
             "hours_week_1", "hours_week_2", "total_hours", "pending_hours",
@@ -1261,14 +1359,14 @@ async def payroll_bi_weekly_csv(
     lines = [
         "nom_employe,heures_semaine_1,heures_semaine_2,"
         "heures_punchees_semaine_1,diner_semaine_1,"
-        "heures_punchees_semaine_2,diner_semaine_2,nb_diners"
+        "heures_punchees_semaine_2,diner_semaine_2,nb_diners,source"
     ]
     for r in report.rows:
         name = (r.employe_name or "").replace('"', "'")
         lines.append(
             f'"{name}",{r.hours_week_1},{r.hours_week_2},'
             f"{r.hours_brutes_week_1},{r.hours_diner_week_1},"
-            f"{r.hours_brutes_week_2},{r.hours_diner_week_2},{r.diners}"
+            f"{r.hours_brutes_week_2},{r.hours_diner_week_2},{r.diners},{r.source}"
         )
     body = "\n".join(lines)
     filename = (
@@ -1303,7 +1401,7 @@ async def payroll_bi_weekly_regimes_csv(
         "nom_employe,heures_ccq_semaine_1,heures_ccq_semaine_2,"
         "heures_hd_semaine_1,heures_hd_semaine_2,heures_ccq,heures_hors_decret,"
         "heures_en_attente,montant_ccq,montant_hors_decret,montant_total,"
-        "diner_semaine_1,diner_semaine_2,heures_diner,nb_diners"
+        "diner_semaine_1,diner_semaine_2,heures_diner,nb_diners,source"
     ]
     for r in report.rows:
         name = (r.employe_name or "").replace('"', "'")
@@ -1311,7 +1409,7 @@ async def payroll_bi_weekly_regimes_csv(
             f'"{name}",{r.hours_ccq_week_1},{r.hours_ccq_week_2},'
             f"{r.hours_hd_week_1},{r.hours_hd_week_2},{r.hours_ccq},{r.hours_hors_decret},"
             f"{r.pending_hours},{r.montant_ccq},{r.montant_hors_decret},{r.montant_total},"
-            f"{r.hours_diner_week_1},{r.hours_diner_week_2},{r.hours_diner},{r.diners}"
+            f"{r.hours_diner_week_1},{r.hours_diner_week_2},{r.hours_diner},{r.diners},{r.source}"
         )
     body = "\n".join(lines)
     filename = (

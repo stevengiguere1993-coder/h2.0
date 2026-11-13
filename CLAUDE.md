@@ -411,5 +411,37 @@ d'une période connue, ramené sur `jour_debut`), `jours_coupure` /
 réglage ; en hebdomadaire `week_2_start` est null et les colonnes semaine 2
 du CSV EmployeurD restent à 0. Journées de Montréal (plus de bornes UTC).
 Défaut sans réglage = ancien cycle (dimanche → samedi, 19 avril 2026, 14 j).
-Les feuilles de temps du pôle Entreprises (`timesheets.py`, 14 jours
-alignés sur le lundi 2026-06-01) ne lisent PAS encore ce réglage.
+Les feuilles de temps du pôle Entreprises suivent ce réglage depuis le
+2026-11-13 (section suivante).
+
+## Feuilles de temps hors construction (2026-11-13)
+
+Steven : « les employés hors construction indiquent par jour le nombre
+d'heures travaillées et ce qu'ils ont fait […] choisir dans la fiche par
+quel système de calcul […] les employés qui punchent doivent rester en
+punch construction ». Choix « les 4 volets » :
+
+1. **Mode de calcul** `User.mode_heures` (`app/services/mode_heures.py`) :
+   `punch` / `feuille` / `les_deux`, NULL = défaut DÉDUIT (`punch` si une
+   fiche Employé active porte le courriel du compte, sinon `feuille`).
+   Deux cases sur la carte de l'employé (Entreprises → Employés),
+   `GET/PUT /users/{id}/mode-heures` (admin) ; deux cases décochées =
+   retour au défaut.
+2. **Feuilles alignées sur la période de paie** : `timesheets._get_or_create`
+   crée la feuille sur la période du réglage `periode_paie`, rognée pour ne
+   jamais chevaucher une feuille existante (feuille de TRANSITION plus
+   courte après les anciennes feuilles de 14 jours ancrées au lundi
+   2026-06-01). Le nombre de jours = `jours_dates` de la feuille ; un
+   `day_index` hors feuille → 422. Navigation par date (veille du début /
+   lendemain de la fin), jamais ±14 jours.
+3. **Suivi et rappels** : `suivi-temps` porte `mode_heures`,
+   `heures_par_jour`, `jours_sans_saisie` (jours ouvrables passés à 0 h),
+   `feuille_statut`. Cron quotidien `feuille_rappels.rappels_pour_cron` :
+   `feuille_temps_jour_vide` à l'employé (jour ouvrable précédent vide),
+   `feuilles_a_approuver` aux gestionnaires le jour de la coupure.
+4. **Rapport de paie** : `_ajouter_feuilles_de_temps` (`punch_ops.py`)
+   retire les punchs des comptes dont le mode exclut le punch et ajoute une
+   ligne `source="feuille"` (clé `employe_id = -user_id`) par compte dont le
+   mode comprend la feuille ; feuille approuvée = payée (heures ×
+   `taux_horaire`, hors décret), sinon heures « en attente ». Les CSV ont
+   une colonne finale `source`.

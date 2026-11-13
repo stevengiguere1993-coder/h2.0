@@ -36,8 +36,8 @@ from app.models.entreprise import Entreprise
 from app.models.entreprise_tache import EntrepriseTache, TacheStatus
 from app.models.entreprise_tache_assignee import EntrepriseTacheAssignee
 from app.models.punch import Punch
+from app.services import mode_heures
 from app.models.timesheet import (
-    TIMESHEET_DAYS,
     Timesheet,
     TimesheetCompany,
     TimesheetEntry,
@@ -93,12 +93,28 @@ def _aware(dt: Optional[datetime]) -> Optional[datetime]:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
-def _periode_courante() -> date:
-    """Début de la période de paie courante (même alignement que la
-    feuille de temps)."""
-    from app.api.v1.endpoints.timesheets import _period_start_for
+async def _periode_courante(db) -> tuple[date, date]:
+    """(début, fin) de la période de paie courante (Paramètres → Période
+    de paie), jour de Montréal."""
+    from app.services import periode_paie
 
-    return _period_start_for(_now().date())
+    r = await periode_paie.charger_reglages(db)
+    p = periode_paie.periode_contenant(_now().astimezone(TZ_LOCAL).date(), r)
+    return p.debut, p.fin
+
+
+def jours_sans_saisie(
+    heures: Dict[date, float], debut: date, fin: date, aujourd_hui: date
+) -> List[date]:
+    """Jours ouvrables (lundi → vendredi) passés de la plage sans aucune
+    heure inscrite (aujourd'hui non compris : la journée n'est pas finie)."""
+    out: List[date] = []
+    j = debut
+    while j <= fin and j < aujourd_hui:
+        if j.weekday() < 5 and heures.get(j, 0.0) <= 0:
+            out.append(j)
+        j += timedelta(days=1)
+    return out
 
 
 async def _employes_par_email(db, emails: List[str]) -> Dict[str, Employe]:
@@ -261,6 +277,10 @@ class EmployeZoneOut(BaseModel):
     prochain_evenement: Optional[EvenementOut] = None
     #: Punch de feuille de temps en cours (None = aucun).
     punch_en_cours: Optional[PunchEnCoursOut] = None
+    #: Mode de calcul des heures (punch / feuille / les_deux) et s'il a
+    #: été choisi sur la fiche (sinon déduit).
+    mode_heures: str = "feuille"
+    mode_heures_choisi: bool = False
 
 
 class SuiviTempsLigne(BaseModel):
@@ -273,6 +293,13 @@ class SuiviTempsLigne(BaseModel):
     jours_travailles: int
     taches_terminees: int
     taches_ouvertes: int
+    mode_heures: str = "feuille"
+    #: Heures par jour (feuille + punch), clé = date ISO.
+    heures_par_jour: Dict[str, float] = {}
+    #: Jours ouvrables passés sans heure (mode feuille de temps seulement).
+    jours_sans_saisie: List[date] = []
+    #: Statut de la feuille qui couvre le début de la plage (None = aucune).
+    feuille_statut: Optional[str] = None
 
 
 class SuiviTempsOut(BaseModel):
@@ -362,11 +389,17 @@ async def lister_equipe(
     taches = await _taches_par_assigne(db, ids)
     il_y_a_30j = _now() - timedelta(days=30)
 
-    debut = _periode_courante()
-    fin = debut + timedelta(days=TIMESHEET_DAYS - 1)
+    debut, fin = await _periode_courante(db)
     sheets, entries = await _feuilles_dans_plage(db, ids, debut, fin)
-    heures = _heures_feuilles_par_jour(sheets, entries)
-    statut_feuille = {s.user_id: s.status for s in sheets if s.period_start == debut}
+    heures = {
+        uid: {j: h for j, h in parj.items() if debut <= j <= fin}
+        for uid, parj in _heures_feuilles_par_jour(sheets, entries).items()
+    }
+    aujourd = _now().astimezone(TZ_LOCAL).date()
+    statut_feuille = {
+        s.user_id: s.status for s in sheets if s.period_start <= aujourd <= s.period_end
+    }
+    modes = await mode_heures.modes_pour(db, users)
 
     now = _now()
     emp_ids = [e.id for e in employes.values()]
@@ -446,6 +479,8 @@ async def lister_equipe(
                 feuille_statut=statut_feuille.get(u.id),
                 prochain_evenement=_evenement_out(ev) if ev else None,
                 punch_en_cours=punchs.get(u.id),
+                mode_heures=modes[u.id],
+                mode_heures_choisi=mode_heures.normaliser(u.mode_heures) is not None,
             )
         )
     return out
@@ -464,8 +499,7 @@ async def suivi_temps(
     punch (Construction), jours travaillés, tâches terminées et ouvertes.
     Sans plage → la période de paie courante."""
     if debut is None or fin is None:
-        debut = _periode_courante()
-        fin = debut + timedelta(days=TIMESHEET_DAYS - 1)
+        debut, fin = await _periode_courante(db)
     if fin < debut:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Plage de dates invalide.")
     if (fin - debut).days > 400:
@@ -508,6 +542,12 @@ async def suivi_temps(
             cumul[jour] = cumul.get(jour, 0.0) + float(p.hours)
 
     taches = await _taches_par_assigne(db, ids)
+    modes = await mode_heures.modes_pour(db, users)
+    aujourd = _now().astimezone(TZ_LOCAL).date()
+    statut_debut = {}
+    for s_ in sorted(sheets, key=lambda x: x.period_start):
+        if s_.period_start <= debut <= s_.period_end or s_.user_id not in statut_debut:
+            statut_debut[s_.user_id] = s_.status
     t0 = datetime.combine(debut, time.min, tzinfo=TZ_LOCAL)
     t1 = datetime.combine(fin + timedelta(days=1), time.min, tzinfo=TZ_LOCAL)
 
@@ -529,6 +569,10 @@ async def suivi_temps(
         ouvertes = sum(1 for t in mes_taches if t.status != TacheStatus.DONE.value)
         jours = {j for j, h in hf.items() if h > 0} | {j for j, h in hp.items() if h > 0}
         total += somme_f + somme_p
+        par_jour: Dict[date, float] = {}
+        for j, h in list(hf.items()) + list(hp.items()):
+            par_jour[j] = par_jour.get(j, 0.0) + h
+        mode = modes[u.id]
         lignes.append(
             SuiviTempsLigne(
                 user_id=u.id,
@@ -540,6 +584,16 @@ async def suivi_temps(
                 jours_travailles=len(jours),
                 taches_terminees=terminees,
                 taches_ouvertes=ouvertes,
+                mode_heures=mode,
+                heures_par_jour={
+                    j.isoformat(): round(h, 2) for j, h in sorted(par_jour.items()) if h > 0
+                },
+                jours_sans_saisie=(
+                    jours_sans_saisie(par_jour, debut, fin, aujourd)
+                    if mode_heures.compte_feuille(mode)
+                    else []
+                ),
+                feuille_statut=statut_debut.get(u.id),
             )
         )
     return SuiviTempsOut(debut=debut, fin=fin, lignes=lignes, total_heures=round(total, 2))

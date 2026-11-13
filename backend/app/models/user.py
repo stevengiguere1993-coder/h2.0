@@ -140,6 +140,12 @@ class User(Base, TimestampMixin):
         server_default="false",
     )
 
+    #: Mode de calcul des heures (``app/services/mode_heures.py``) :
+    #: « punch », « feuille » ou « les_deux » ; NULL = déduit (punch
+    #: construction si une fiche Employé porte ce courriel, sinon feuille
+    #: de temps). Colonne additive nullable (schema_check l'ajoute).
+    mode_heures: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+
     # Token opaque pour l'auto-confirmation des RDV agenda par email.
     # L'invité reçoit un lien /agenda/confirm/{event_id}?token=XXX qui
     # valide sans login. Régénérable par l'utilisateur.

@@ -37,12 +37,16 @@ from app.models.timesheet import (
     TimesheetUserRate,
 )
 from app.models.user import User
+from app.services import periode_paie
 
 log = logging.getLogger("timesheets")
 
 router = APIRouter(prefix="/timesheets", tags=["timesheets"])
 
-# Lundi de référence pour aligner les périodes bi-hebdomadaires.
+# Lundi de référence des anciennes périodes bi-hebdomadaires. Depuis le
+# 2026-11-13, les NOUVELLES feuilles suivent la période de paie réglée dans
+# Paramètres → Période de paie (``app/services/periode_paie.py``) ; les
+# feuilles existantes gardent leurs dates.
 ANCHOR_MONDAY = date(2026, 6, 1)
 
 # Liste initiale des compagnies (reprise du fichier Excel). (label, taux)
@@ -79,9 +83,38 @@ def _is_manager(user: User) -> bool:
 
 
 def _period_start_for(d: date) -> date:
-    """Début de la période bi-hebdomadaire (alignée sur ANCHOR_MONDAY)."""
+    """Début de l'ancienne période bi-hebdomadaire (ANCHOR_MONDAY)."""
     block = (d - ANCHOR_MONDAY).days // TIMESHEET_DAYS
     return ANCHOR_MONDAY + timedelta(days=block * TIMESHEET_DAYS)
+
+
+def _nb_jours(ts: Timesheet) -> int:
+    """Nombre de jours de la feuille (7 en paie hebdomadaire, 14 aux 2
+    semaines ; moins pour une feuille de transition)."""
+    n = (ts.period_end - ts.period_start).days + 1
+    return max(1, min(TIMESHEET_DAYS, n))
+
+
+async def _periode_pour(db, d: date) -> tuple[date, date]:
+    """(début, fin) de la période de paie qui contient ``d``."""
+    r = await periode_paie.charger_reglages(db)
+    p = periode_paie.periode_contenant(d, r)
+    return p.debut, p.fin
+
+
+async def _feuille_contenant(db, user_id: int, d: date) -> Optional[Timesheet]:
+    return (
+        await db.execute(
+            select(Timesheet)
+            .where(
+                Timesheet.user_id == user_id,
+                Timesheet.period_start <= d,
+                Timesheet.period_end >= d,
+            )
+            .order_by(Timesheet.period_start.desc())
+            .limit(1)
+        )
+    ).scalars().first()
 
 
 def _today() -> date:
@@ -772,15 +805,16 @@ async def _build_detail(
             )
         )
     ).scalars().all()
+    n_jours = _nb_jours(ts)
     grid_r: Dict[int, List[float]] = {
-        c.id: [0.0] * TIMESHEET_DAYS for c in companies
+        c.id: [0.0] * n_jours for c in companies
     }
     grid_n: Dict[int, List[float]] = {
-        c.id: [0.0] * TIMESHEET_DAYS for c in companies
+        c.id: [0.0] * n_jours for c in companies
     }
     for e in entries:
         tgt = grid_r if getattr(e, "refacturable", True) else grid_n
-        if e.company_id in tgt and 0 <= e.day_index < TIMESHEET_DAYS:
+        if e.company_id in tgt and 0 <= e.day_index < n_jours:
             tgt[e.company_id][e.day_index] = float(e.hours or 0.0)
 
     notes: Dict[str, str] = {}
@@ -797,8 +831,8 @@ async def _build_detail(
     # côté serveur, panneau caché côté écran). Il voit sa paie.
     manager_view = _is_manager(user)
     lignes: List[LigneOut] = []
-    totaux_jour = [0.0] * TIMESHEET_DAYS
-    totaux_jour_nr = [0.0] * TIMESHEET_DAYS
+    totaux_jour = [0.0] * n_jours
+    totaux_jour_nr = [0.0] * n_jours
     total_heures = 0.0
     total_refac = 0.0
     for c in companies:
@@ -808,8 +842,8 @@ async def _build_detail(
         # d'anciennes heures « refacturables » sont basculées dans le
         # bloc NR (retour Phil 2026-07-22).
         if bool(getattr(c, "heures_nr_autorisees", False)):
-            jn = [round(jn[i] + jr[i], 2) for i in range(TIMESHEET_DAYS)]
-            jr = [0.0] * TIMESHEET_DAYS
+            jn = [round(jn[i] + jr[i], 2) for i in range(n_jours)]
+            jr = [0.0] * n_jours
         tot_r = round(sum(jr), 2)
         tot_n = round(sum(jn), 2)
         ov = overrides.get(c.id)
@@ -817,7 +851,7 @@ async def _build_detail(
         if not manager_view:
             rate, source, ov = 0.0, "defaut", None
         refac = round(tot_r * rate, 2)
-        for i in range(TIMESHEET_DAYS):
+        for i in range(n_jours):
             totaux_jour[i] += jr[i]
             totaux_jour_nr[i] += jn[i]
         total_heures += tot_r + tot_n
@@ -866,7 +900,7 @@ async def _build_detail(
 
     jours_dates = [
         (ts.period_start + timedelta(days=i)).isoformat()
-        for i in range(TIMESHEET_DAYS)
+        for i in range(n_jours)
     ]
 
     return TimesheetDetail(
@@ -914,18 +948,29 @@ async def _build_detail(
 async def _get_or_create(
     db, target_user_id: int, period_start: date
 ) -> Timesheet:
-    period_start = _period_start_for(period_start)
-    period_end = period_start + timedelta(days=TIMESHEET_DAYS - 1)
-    existing = (
+    """La feuille de l'employé qui contient ce jour, sinon une nouvelle
+    feuille sur la période de paie réglée. Une nouvelle feuille ne
+    chevauche jamais une feuille existante : au changement de période (ex.
+    14 jours → hebdomadaire), elle commence le lendemain de l'ancienne."""
+    jour = period_start
+    existing = await _feuille_contenant(db, target_user_id, jour)
+    if existing:
+        return existing
+    period_start, period_end = await _periode_pour(db, jour)
+    voisines = (
         await db.execute(
             select(Timesheet).where(
                 Timesheet.user_id == target_user_id,
-                Timesheet.period_start == period_start,
+                Timesheet.period_start <= period_end,
+                Timesheet.period_end >= period_start,
             )
         )
-    ).scalar_one_or_none()
-    if existing:
-        return existing
+    ).scalars().all()
+    for v in voisines:
+        if v.period_end < jour:
+            period_start = max(period_start, v.period_end + timedelta(days=1))
+        elif v.period_start > jour:
+            period_end = min(period_end, v.period_start - timedelta(days=1))
     # Taux par défaut : ceux de la dernière feuille de l'employé, sinon 11/33.
     last = (
         await db.execute(
@@ -969,7 +1014,7 @@ async def resolve_timesheet(
         if not _is_manager(user):
             raise HTTPException(status_code=403, detail="Accès refusé")
         target = user_id
-    ps = period_start or _period_start_for(_today())
+    ps = period_start or _today()
     ts = await _get_or_create(db, target, ps)
     await db.commit()
     return await _build_detail(db, ts, user)
@@ -986,20 +1031,26 @@ async def team_overview(
     if not _is_manager(user):
         raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
     await _ensure_seed(db)
-    ps = _period_start_for(period_start or _today())
-    pe = ps + timedelta(days=TIMESHEET_DAYS - 1)
+    ps, pe = await _periode_pour(db, period_start or _today())
     employees = (
         await db.execute(select(User).where(User.is_active.is_(True)))
     ).scalars().all()
     employees = sorted(
         employees, key=lambda u: (u.display_name or u.email or "").lower()
     )
+    # La feuille de chaque employé qui touche la période (celle qui
+    # contient son premier jour d'abord : au changement de période, une
+    # ancienne feuille de 14 jours peut la couvrir).
     sheets = (
         await db.execute(
-            select(Timesheet).where(Timesheet.period_start == ps)
+            select(Timesheet).where(
+                Timesheet.period_start <= pe, Timesheet.period_end >= ps
+            )
         )
     ).scalars().all()
-    by_user = {s.user_id: s for s in sheets}
+    by_user: Dict[int, Timesheet] = {}
+    for s_ in sorted(sheets, key=lambda x: (x.period_start > ps, x.period_start)):
+        by_user.setdefault(s_.user_id, s_)
     out: List[TimesheetSummary] = []
     for emp in employees:
         s = by_user.get(emp.id)
@@ -1010,8 +1061,8 @@ async def team_overview(
                     id=s.id,
                     user_id=emp.id,
                     employee_name=(emp.display_name or emp.email or ""),
-                    period_start=ps.isoformat(),
-                    period_end=pe.isoformat(),
+                    period_start=s.period_start.isoformat(),
+                    period_end=s.period_end.isoformat(),
                     status=s.status,
                     total_heures=detail.total_heures,
                     montant_paie=detail.montant_paie,
@@ -2228,6 +2279,17 @@ async def get_timesheet(
 # ── Mutations ──────────────────────────────────────────────────────────
 
 
+def _verifier_jours(ts: Timesheet, jours: List[int]) -> None:
+    """Un jour hors de la feuille (ex. jour 10 d'une feuille de 7 jours)."""
+    n = _nb_jours(ts)
+    hors = sorted({j for j in jours if j >= n})
+    if hors:
+        raise HTTPException(
+            status_code=422,
+            detail=f"La feuille compte {n} jours : jour {hors[0] + 1} hors période.",
+        )
+
+
 def _assert_editable(ts: Timesheet, user: User) -> None:
     manager = _is_manager(user)
     if manager:
@@ -2285,6 +2347,7 @@ async def replace_entries(
     if not ts:
         raise HTTPException(status_code=404, detail="Feuille introuvable")
     _assert_editable(ts, user)
+    _verifier_jours(ts, [e.day_index for e in payload.entries])
     # Feuille « par tâche » : la grille est dérivée des lignes — on ne
     # garde que les notes.
     if await _load_task_lines(db, ts.id):
@@ -2511,6 +2574,7 @@ async def replace_task_lines(
     if not ts:
         raise HTTPException(status_code=404, detail="Feuille introuvable")
     _assert_editable(ts, user)
+    _verifier_jours(ts, [ln.day_index for ln in payload.lignes])
     await _verifier_compagnies(
         db, ts, user, {ln.company_id for ln in payload.lignes}
     )

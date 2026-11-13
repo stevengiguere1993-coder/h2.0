@@ -32,6 +32,26 @@ T0 = datetime(2026, 3, 3, 9, 0, tzinfo=MTL).astimezone(timezone.utc)
 T1 = datetime(2026, 4, 7, 10, 0, tzinfo=MTL).astimezone(timezone.utc)
 
 
+@pytest.fixture(scope="module", autouse=True)
+def periode_lundi_14_jours(client, auth_headers):
+    """Les feuilles suivent la période de paie réglée (2026-11-13) : ce
+    module garde l'ancienne grille (14 jours, lundi 2026-06-01)."""
+    r = client.put(
+        "/api/v1/punch/payroll/reglages",
+        headers=auth_headers,
+        json={"frequence": "aux_2_semaines", "jour_debut": 0,
+              "debut_reference": "2026-06-01"},
+    )
+    assert r.status_code == 200, r.text
+    yield
+    client.put(
+        "/api/v1/punch/payroll/reglages",
+        headers=auth_headers,
+        json={"frequence": "aux_2_semaines", "jour_debut": 6,
+              "debut_reference": "2026-04-19"},
+    )
+
+
 @pytest.fixture(scope="module")
 def video(run) -> dict:
     """Employé « autre » avec une tâche assignée dans son entreprise."""
