@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import DBSession, RequireAdminOrOwner, RequireManager
+from app.core.apres_commit import lancer_apres_commit
 from app.models.achat import Achat, AchatStatus, PaymentMethod
 from app.services.achat_payment import mark_achat_paid
 from app.services.achat_qbo_pull import QboPullError, pull_new_bills_from_qbo
@@ -99,8 +100,6 @@ async def mark_paid(
     # conditionné à l'interrupteur de migration. Idempotent
     # (qbo_bill_payment_id).
     if achat.qbo_bill_id:
-        import asyncio
-
         from app.db.session import AsyncSessionLocal
         from app.services.achat_qbo import push_bill_payment_to_qbo
 
@@ -112,7 +111,11 @@ async def mark_paid(
                 except Exception:
                     await fresh_db.rollback()
 
-        asyncio.create_task(_push_async(int(achat.id)))
+        # APRÈS le commit de la requête : la tâche relit l'achat dans sa
+        # propre session ; lancée avant, elle le voyait parfois encore « non
+        # payé » et ne créait pas le paiement dans QB.
+        _achat_paye_id = int(achat.id)
+        lancer_apres_commit(db, lambda: _push_async(_achat_paye_id))
 
     return AchatPaymentRead.model_validate(achat)
 

@@ -12,11 +12,12 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
+from app.core.apres_commit import lancer_apres_commit
 from app.models.achat import Achat, AchatStatus
 from app.models.employe import Employe
 from app.models.fournisseur import Fournisseur
@@ -300,7 +301,6 @@ async def convert_po_to_achat(
     data: ConvertToAchatRequest,
     db: DBSession,
     current_user: CurrentUser,
-    background: BackgroundTasks,
     defer_sync: bool = False,
 ) -> AchatRead:
     """Crée un Achat (transaction comptable) lié à ce PO. Pré-remplit
@@ -393,15 +393,16 @@ async def convert_po_to_achat(
 
     # Auto-push vers QBO en arrière-plan, sauf si on diffère pour
     # permettre l'upload d'une pièce jointe avant le push.
-    # On passe par BackgroundTasks (dépendance injectée) plutôt qu'un
-    # asyncio.create_task : la tâche détachée n'était référencée nulle
-    # part et pouvait être ramassée par le GC avant de s'exécuter.
-    # BackgroundTasks garantit l'exécution après l'envoi de la réponse.
+    # La tâche part APRÈS le commit de la requête (elle relit l'achat dans
+    # sa propre session) et reste référencée jusqu'à sa fin. Une
+    # BackgroundTask s'exécute AVANT ce commit : elle ne voyait pas l'achat
+    # (« Achat introuvable ») et le push attendait le filet horaire.
     if not defer_sync:
         try:
             from app.api.v1.endpoints.achat_qbo import autopush_achat
 
-            background.add_task(autopush_achat, int(achat.id))
+            _achat_id = int(achat.id)
+            lancer_apres_commit(db, lambda: autopush_achat(_achat_id))
         except Exception as exc:
             log.warning("Auto-push QBO planning échoué: %s", exc)
 
