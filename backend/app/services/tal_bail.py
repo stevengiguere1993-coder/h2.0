@@ -1090,6 +1090,8 @@ def resume_transmission(t: TalTransmission, *, avec_form: bool = False) -> dict[
         "a_verifier": _charger_json(t.a_verifier_json, []),
         "independant": bool(getattr(t, "independant", False)),
         "libelle": getattr(t, "libelle", None),
+        # Bail corrigé après sa génération : la transmission qui le remplace.
+        "remplacee_par_id": getattr(t, "remplacee_par_id", None),
     }
     if out["independant"]:
         # Pas de fiche Kratos derrière : les noms viennent du formulaire.
@@ -1362,6 +1364,57 @@ async def generer(
     )
     await db.commit()
     return t
+
+
+async def corriger(db: AsyncSession, t: TalTransmission, *, user) -> tuple[TalTransmission, Rapport]:
+    """Phil 2026-11-13 : « quand je révise le bail avant d'envoyer pour signature, je me rends
+    compte d'une erreur. Faudrait pouvoir le modifier, avec une alerte : vous serez chargé une
+    2e fois ». Un PDF du TAL ne se modifie pas : la correction ouvre un NOUVEAU brouillon,
+    rempli comme le bail généré, que l'on corrige puis génère (nouveau formulaire, donc
+    nouvelle facturation). Le bail d'origine est marqué remplacé ; il reste compté.
+
+    Refusé si le bail est signé, ou si des personnes l'ont en main pour le signer (il faut
+    d'abord annuler l'envoi)."""
+    import copy
+
+    from app.models.esign import EsignDocument
+    from app.services.audit import log_action
+
+    if t.statut != "transmise":
+        raise TalBailError("Ce bail n'a pas encore été généré : il se modifie directement dans le formulaire.", http_status=409)
+    if t.document_signe_id or t.signe_le:
+        raise TalBailError("Ce bail est signé : il ne se corrige plus.", http_status=409)
+    if getattr(t, "remplacee_par_id", None):
+        raise TalBailError("Ce bail a déjà été remplacé par une version corrigée.", http_status=409,
+                           details={"transmission_id": t.remplacee_par_id})
+    if t.esign_document_id:
+        doc = await db.get(EsignDocument, t.esign_document_id)
+        if doc is not None and doc.status == "envoye":
+            raise TalBailError(
+                "Ce bail est en signature : annule d'abord l'envoi (les personnes l'ont reçu), puis corrige-le.",
+                http_status=409,
+            )
+        if doc is not None and doc.status == "complete":
+            raise TalBailError("Ce bail est signé : il ne se corrige plus.", http_status=409)
+    form = _charger_json(t.payload_json, None)
+    if not isinstance(form, dict) or not form:
+        raise TalBailError("Le formulaire de ce bail est introuvable.", http_status=422)
+    form = copy.deepcopy(form)
+    if getattr(t, "independant", False):
+        nouveau, rapport = await creer_independant(db, user=user, form=form, libelle=getattr(t, "libelle", None))
+    else:
+        nouveau, rapport = await creer_transmission(
+            db, bail_id=t.bail_id, user=user, dossier_id=t.dossier_id, form=form, remplacer=True,
+        )
+    nouveau.langue = getattr(t, "langue", None)
+    t.remplacee_par_id = nouveau.id
+    t.updated_at = datetime.now(timezone.utc)
+    await log_action(
+        db, user=user, action="tal_bail.corrige", entity_type="tal_transmission", entity_id=t.id,
+        details={"remplacee_par": nouveau.id, "bail_id": t.bail_id, "mode": t.mode, "independant": bool(getattr(t, "independant", False))},
+    )
+    await db.flush()
+    return nouveau, rapport
 
 
 async def annuler(db: AsyncSession, t: TalTransmission, *, user) -> TalTransmission:
@@ -2380,5 +2433,5 @@ __all__ = [
     "registre", "TPS_PCT", "TVQ_PCT", "FORFAIT_LICENCE", "normaliser_montants", "REGLES",
     "rangs_reels", "resume_avec_cout",
     "nom_fichier_bail", "lire_duree", "fin_de_bail", "completer_derives",
-    "preparation_independante_vierge", "prefill_immeuble", "personnes_pour_carnet",
+    "preparation_independante_vierge", "prefill_immeuble", "personnes_pour_carnet", "corriger",
 ]
