@@ -57,6 +57,7 @@ from app.services.invest_documents import (
     titre_de,
     type_de,
 )
+from app.services.invest_saisies import prets_de, resume_prets
 from app.services.invest_portfolio import (
     ajuster_capital_avec_soldes_qbo,
     avances_par_actionnaire,
@@ -274,6 +275,7 @@ async def build_portefeuille(
     tot_valeur_parts = 0.0
     tot_valeur_projets = 0.0
     flux_global: list[tuple[date, float]] = []
+    tous_prets: list[dict] = []
 
     for part, det, pct_eff in triples:
         ent = await db.get(Entreprise, part.entreprise_id)
@@ -291,6 +293,8 @@ async def build_portefeuille(
         pct = pct_eff / 100.0
         valeur_parts = round(snap["equite"] * pct, 2)
         k = kpis_participation(flux, valeur_parts)
+        prets = await prets_de(db, ident.user_id or 0, part.entreprise_id)
+        tous_prets.extend(prets)
         profil = await get_or_default_profil(db, part.entreprise_id)
         phase = await phase_projet(db, part.entreprise_id, profil)
         serie = await serie_mensuelle(db, part.entreprise_id, months=12)
@@ -327,6 +331,10 @@ async def build_portefeuille(
                 "cashflow_moyen_part": cash_part,
                 "statut": part.statut,
                 **k,
+                # Prêts de l'investisseur à la compagnie (saisie
+                # manuelle, hors parts et hors TRI).
+                "prets": prets,
+                **resume_prets(prets),
             }
         )
         tot_capital_actuel += k["capital_actuel"]
@@ -366,6 +374,7 @@ async def build_portefeuille(
         else None,
         "tvpi": tvpi_global,
         "serie_valeur": serie_valeur,
+        **resume_prets(tous_prets),
         "projets": projets,
         "compagnies": compagnies,
     }
@@ -432,6 +441,7 @@ async def build_projet(
     valeur_parts = round(snap["equite"] * pct, 2)
     flux = await _flux_of(db, part.id)
     k = kpis_participation(flux, valeur_parts)
+    prets = await prets_de(db, ident.user_id or 0, entreprise_id)
     phase = await phase_projet(db, entreprise_id, profil)
     serie = await serie_mensuelle(db, entreprise_id)
     timeline = await timeline_projet(db, entreprise_id, flux, phase)
@@ -544,6 +554,8 @@ async def build_projet(
             for f in flux
         ],
         "actionnaires": actionnaires,
+        "prets": prets,
+        **resume_prets(prets),
         # La sync QBO (avances d'actionnaires) a-t-elle déjà tourné ?
         # Tant que non, un capital à 0 = « pas encore de données » ;
         # après, il veut dire « remboursé complètement ».
