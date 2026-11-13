@@ -414,6 +414,24 @@ Défaut sans réglage = ancien cycle (dimanche → samedi, 19 avril 2026, 14 j).
 Les feuilles de temps du pôle Entreprises (`timesheets.py`, 14 jours
 alignés sur le lundi 2026-06-01) ne lisent PAS encore ce réglage.
 
+## Fusion d'immeubles — deux adresses, aperçu avant de confirmer (2026-11-13)
+
+Steven : « il compte 2 adresses donc les suffixes existants restent les
+mêmes ; le prix d'achat et l'hypothèque ont été divisés par 2, ils devront
+s'additionner […] l'action est irréversible, nous devrions avoir un
+visuel ». `app/services/immeuble_fusion.py` : un numéro de logement n'est
+un doublon qu'à la MÊME adresse civique (`cle_logement` = adresse du
+logement, sinon celle de l'immeuble, + numéro ; même règle à la création,
+à la création en lot et dans le diagnostic des doublons) → le « 1 » du
+9085 Millen et le « 1 » du 710 Legendre coexistent, sans préfixe. Prix
+d'achat suggéré = somme des deux fiches. Hypothèques : option
+`hypotheques` = `additionner` (même prêteur, même taux, non conjointes :
+montant, versement, solde et tranches réunis sur le prêt de la cible),
+`transferer` ou `exclure`. `POST …/fusion/simulation` joue la fusion dans
+la transaction, relève la fiche résultante (`etat_fiche`) puis fait un
+rollback : c'est l'étape « Voir le résultat » de la fenêtre, obligatoire
+avant « Confirmer ». Pas d'annulation après coup (la source est supprimée).
+
 ## Rencontres — questions sur toutes les rencontres (2026-11-13)
 
 Steven : « si je pose une question à Kratos sur un élément, il doit être
