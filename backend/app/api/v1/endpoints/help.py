@@ -244,7 +244,14 @@ logiciel, Zone employés mobile (/m), Espace investisseur.
 APPELS
 On peut te transmettre des appels qui mentionnent les mots-clés de la \
 question (volet téléphonie). Utilise-les seulement s'ils sont pertinents et \
-cite l'Appel #ID."""
+cite l'Appel #ID.
+
+RENCONTRES
+On peut aussi te transmettre des passages des rencontres (réunions \
+d'équipe, conseils d'actionnaires). Pour « a-t-on parlé de X » ou « où en \
+est le dossier Y », réponds à partir d'eux en citant la Rencontre #ID et \
+sa date ; la recherche complète est sur Entreprises → Rencontres \
+(« Demander à Kratos »)."""
 
 
 def _sig_out(s: "kb.SignalementLie") -> SignalementLieOut:
@@ -308,6 +315,26 @@ async def ask(
             "APPELS QUI MENTIONNENT CES MOTS :\n"
             + "\n\n---\n".join(_format_call_for_context(c) for c in call_matches)
         )
+    # Rencontres (2026-11-13) : « a-t-on discuté de X, où en est le
+    # dossier Y » — passages des rencontres qui couvrent la question,
+    # seulement pour qui voit la page Rencontres (conseils
+    # d'actionnaires).
+    try:
+        from app.services.assistant_catalogue import utilisateur_a_acces_page
+        from app.services.rencontre_recherche import contexte_pour_assistant
+
+        if await utilisateur_a_acces_page(db, user, "entreprises.rencontres"):
+            rencontres_ctx = await contexte_pour_assistant(
+                db, body.question, limite=6
+            )
+            if rencontres_ctx:
+                blocs.append(
+                    "PASSAGES DES RENCONTRES QUI EN PARLENT (ordre "
+                    "chronologique, la plus récente fait foi) :\n"
+                    + rencontres_ctx
+                )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("help: recherche rencontres échouée: %s", exc)
     blocs.append(f"Question de l'utilisateur : {body.question}")
     user_content = "\n\n".join(blocs)
 

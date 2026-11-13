@@ -17,6 +17,7 @@ import {
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { Link } from "@/i18n/navigation";
+import { RencontresDemander } from "@/components/entreprises/rencontres-demander";
 import { QGTopbar, useEntreprisesLayout } from "../layout";
 
 /**
@@ -388,6 +389,10 @@ export default function RencontresListPage() {
           <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
             {error}
           </p>
+        ) : null}
+
+        {rows.length > 0 ? (
+          <RencontresDemander entrepriseId={filterEntId} />
         ) : null}
 
         {loading ? (
