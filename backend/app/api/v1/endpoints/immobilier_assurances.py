@@ -38,6 +38,7 @@ from app.models.immobilier import (
     LocataireCommunication,
     Logement,
 )
+from app.services.locatif_chambres import cle_tri_numero
 
 log = logging.getLogger(__name__)
 
@@ -190,7 +191,7 @@ async def assurances_overview(
     # À traiter en premier : jamais confirmées, puis à reconfirmer, OK en bas.
     ordre = {"jamais": 0, "a_reconfirmer": 1, "ok": 2}
     rows.sort(
-        key=lambda r: (ordre.get(r.statut, 9), r.immeuble_name or "", r.logement_numero or "")
+        key=lambda r: (ordre.get(r.statut, 9), r.immeuble_name or "", cle_tri_numero(r.logement_numero))
     )
     return AssuranceOverview(
         rows=rows,

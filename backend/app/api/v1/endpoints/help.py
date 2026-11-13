@@ -16,7 +16,7 @@ import re
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
 
@@ -25,6 +25,7 @@ from app.integrations.ai import Message, chat
 from app.integrations.ai._base import AIProviderError, AIProviderUnavailable
 from app.models.help_request import HelpRequest, HelpRequestKind, HelpRequestStatus
 from app.models.voice import Call
+from app.services import aide_connaissances as kb
 
 
 # Mots à 4+ lettres considérés non-pertinents pour la recherche
@@ -116,9 +117,34 @@ class AskIn(BaseModel):
     context_url: Optional[str] = Field(default=None, max_length=500)
 
 
+class SignalementLieOut(BaseModel):
+    id: int
+    status: str
+    statut_libelle: str
+    section: Optional[str] = None
+    message: str
+    resolution_notes: Optional[str] = None
+    created_at: datetime
+    traite_le: Optional[datetime] = None
+
+
+class LivraisonOut(BaseModel):
+    date: str
+    sujet: str
+
+
 class AskOut(BaseModel):
     id: int
     answer: str
+    # Ce que l'assistant a trouvé, affiché tel quel sous la réponse :
+    # un problème déjà réglé reste visible même si l'IA le résume mal.
+    signalements: List[SignalementLieOut] = []
+    livraisons: List[LivraisonOut] = []
+
+
+class SimilairesOut(BaseModel):
+    signalements: List[SignalementLieOut] = []
+    livraisons: List[LivraisonOut] = []
 
 
 class ReportIn(BaseModel):
@@ -142,76 +168,96 @@ class ReportOut(BaseModel):
     resolved_at: Optional[datetime]
     has_screenshot: bool = False
     resolution_notes: Optional[str] = None
+    section: Optional[str] = None
+    rejected_at: Optional[datetime] = None
+    traite_le: Optional[datetime] = None
+    traite_par: Optional[str] = None
+
+
+class MonSignalementOut(BaseModel):
+    """Vue « Mes signalements » du déclarant (sans user agent ni
+    courriel)."""
+
+    id: int
+    status: str
+    statut_libelle: str
+    message: str
+    section: Optional[str] = None
+    context_url: Optional[str] = None
+    resolution_notes: Optional[str] = None
+    created_at: datetime
+    traite_le: Optional[datetime] = None
 
 
 class ReportPatch(BaseModel):
-    status: Optional[str] = None  # accepted | rejected | resolved
+    status: Optional[str] = None  # accepted | rejected | resolved | pending
     resolution_notes: Optional[str] = None
+    section: Optional[str] = Field(default=None, max_length=64)
 
 
 class BulkAction(BaseModel):
     ids: List[int]
     action: str  # accept | reject | resolve
+    # Note commune facultative (ex. « réglé dans la livraison du 13 »),
+    # posée sur chaque signalement qui n'en a pas déjà une.
+    resolution_notes: Optional[str] = None
 
 
 # ------------------------------ Question (cascade IA gratuite) ------------------------------
 
 SYSTEM_PROMPT = """Tu es l'assistant du Centre d'aide de Kratos, le portail \
-interne de Horizon Services Immobiliers (Montréal, Québec — construction et \
-rénovation, RBQ 5868-5991-01). Le propriétaire est Steven ; les employés qui \
-te consultent sont notamment Jérôme et Gabriel.
+interne de Horizon Services Immobiliers (Montréal, Québec : construction et \
+rénovation, gestion immobilière, prospection, entreprises). Le propriétaire \
+est Steven.
 
-RÔLE
-- Tu aides les employés et le bureau à utiliser le portail. Réponds en \
-français québécois, ton concis et pragmatique, et oriente toujours vers la \
-bonne page.
-- Si l'utilisateur décrit une vraie anomalie (bug, erreur, page cassée), \
-suggère le bouton « Signaler un bug » du Centre d'aide pour faire monter le \
-sujet à Steven.
-- N'invente jamais une page ou une fonctionnalité qui n'existe pas. Si tu ne \
-sais pas, dis-le clairement et propose de signaler un bug.
-- Tes réponses sont indicatives ; termine en le rappelant (« Réponse \
-indicative »).
+TON RÔLE
+- Expliquer comment fonctionne une chose dans Kratos et dire si un problème \
+est DÉJÀ CONNU, EN COURS ou DÉJÀ RÉGLÉ, pour éviter de signaler à nouveau un \
+bug déjà corrigé.
+- Réponds en français québécois, concis et concret (5 à 10 lignes), et \
+oriente vers la bonne page quand tu la connais.
 
-LE PORTAIL KRATOS (découpé en volets)
+COMMENT RÉPONDRE
+- Appuie-toi D'ABORD sur le CONTEXTE fourni avec la question : \
+signalements déjà faits (avec statut, date et note de traitement), \
+livraisons datées (corrections et nouveautés mises en ligne) et notes de \
+fonctionnement. Ce contexte est la vérité ; tes connaissances générales ne \
+le sont pas.
+- Si un signalement semblable est « réglé », dis-le en premier avec son \
+numéro, sa date et la note ; s'il est « accepté », dis que c'est connu et \
+prévu ; s'il est « refusé », donne la raison de la note. Si une livraison \
+correspond, cite sa date et ce qu'elle a changé, et suggère de recharger la \
+page (ou de vider le cache de l'application) si la personne voit encore \
+l'ancien comportement.
+- Si rien dans le contexte ne correspond, dis clairement que tu ne trouves \
+rien là-dessus et propose l'onglet « Signaler un bug ». N'invente JAMAIS une \
+page, un bouton ou une fonctionnalité.
+- Termine par « Réponse indicative ».
 
-Punch / Temps
-- /app/punch : démarrer ou terminer un punch. On choisit un projet OU un \
-prospect, puis une tâche ; la géolocalisation est capturée au punch. Versions \
-mobiles sous /m/*.
-- Les heures travaillées s'affichent en heures/minutes (ex. « 7 h 53 »).
-- /app/punch/gestion (admin) : vue par semaine, mois ou période de paie ; \
-approbation des punchs ; saisie manuelle d'un temps.
-- /app/paie : rapport de paie, où les heures sont en décimal (pour la paie).
-- Employé « autre » (pôle Entreprises, sans chantier) : /m/feuille-de-temps \
-(aussi sur l'accueil de sa zone employés) a un punch. On choisit la compagnie \
-et la tâche, « Commencer », puis « Arrêter » : la durée s'ajoute à la ligne \
-du jour de sa feuille de temps. Un punch oublié s'arrête en indiquant l'heure \
-de fin réelle ; un gestionnaire voit les punchs en cours dans Entreprises → \
-Employés et peut les arrêter.
+VOLETS DU PORTAIL : Construction (/app : punch, projets, soumissions, PO, \
+achats, factures, agenda, paie), Immobilier (/immobilier : immeubles, \
+logements, baux, locataires, loyers, hypothèques, gestion locative), \
+Entreprises (/entreprises : comptabilité, rencontres, employés, feuilles de \
+temps), Prospection, Communication (téléphonie, textos), Développement \
+logiciel, Zone employés mobile (/m), Espace investisseur.
 
-Construction
-- Pipeline des contacts : new → contacted → rdv_prevu → qualified → quoted → \
-won / lost / spam.
-- Projets et planification par phases : on assigne des employés ou des \
-sous-traitants à une phase.
-- Sous-traitant payé à l'heure : cocher « payé à l'heure » + indiquer le \
-nombre de travailleurs ; son coût entre alors dans le « Coût projeté – main \
-d'œuvre ». Les sous-traitants au forfait sont exclus de ce calcul.
-- Bons de commande (PO) : /app/po. Plus : soumissions (devis), \
-achats/dépenses, facturation. Un PO est une autorisation d'achat \
-(planification, sans impact comptable) ; quand la facture fournisseur arrive, \
-on convertit le PO en Achat (qui pousse dans QuickBooks comme Bill ou Purchase \
-selon le mode de paiement).
-- Paramètres : numérotation QB, comptes QB, employés, sous-traitants.
+APPELS
+On peut te transmettre des appels qui mentionnent les mots-clés de la \
+question (volet téléphonie). Utilise-les seulement s'ils sont pertinents et \
+cite l'Appel #ID."""
 
-Autres volets (mentionne-les seulement si pertinents) : prospection, \
-immobilier, gestion locative, courtage, développement logiciel (devlog).
 
-CONTEXTE FOURNI
-On peut te transmettre quelques appels récents qui mentionnent les mots-clés \
-de la question (volet téléphonie). Utilise-les seulement s'ils sont \
-pertinents, et cite l'Appel #ID si tu t'appuies sur leur contenu."""
+def _sig_out(s: "kb.SignalementLie") -> SignalementLieOut:
+    return SignalementLieOut(
+        id=s.id,
+        status=s.status,
+        statut_libelle=s.statut_libelle,
+        section=s.section,
+        message=s.message,
+        resolution_notes=s.resolution_notes,
+        created_at=s.created_at,
+        traite_le=s.traite_le,
+    )
 
 
 @router.post(
@@ -228,30 +274,42 @@ async def ask(
     # automatique Gemini puis Anthropic). Aucune clé Anthropic n'est
     # requise : il suffit qu'un fournisseur soit configuré.
 
-    # Pré-recherche les appels qui mentionnent les mots-clés de la
-    # question — permet de répondre à « est-ce qu'on a parlé de X avec
-    # Y ? » en se basant sur les verbatim et transcriptions réels
-    # stockés dans le volet téléphonie.
+    # Base de connaissances : signalements déjà faits (statut + note),
+    # livraisons datées, notes de fonctionnement du dépôt.
+    try:
+        signalements = await kb.chercher_signalements(db, body.question, limite=6)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("help: recherche des signalements impossible: %s", exc)
+        signalements = []
+    livraisons = kb.chercher_livraisons(body.question, limite=10)
+    notes = kb.chercher_notes(body.question, limite=2)
+
+    # Appels qui mentionnent les mots-clés de la question — permet de
+    # répondre à « est-ce qu'on a parlé de X avec Y ? ».
     try:
         call_matches = await _find_calls_for_question(db, body.question)
     except Exception as exc:  # noqa: BLE001
         log.warning("help: call search failed: %s", exc)
         call_matches = []
 
+    blocs: list[str] = []
+    section = kb.section_depuis_url(body.context_url)
+    if section:
+        blocs.append(f"La personne pose sa question depuis la section : {section}.")
+    connaissances = kb.contexte_ia(signalements, livraisons, notes)
+    blocs.append(
+        "CONTEXTE :\n" + connaissances
+        if connaissances
+        else "CONTEXTE : aucun signalement, aucune livraison ni note ne "
+        "correspond aux mots de la question."
+    )
     if call_matches:
-        calls_ctx = "\n\n---\n".join(
-            _format_call_for_context(c) for c in call_matches
+        blocs.append(
+            "APPELS QUI MENTIONNENT CES MOTS :\n"
+            + "\n\n---\n".join(_format_call_for_context(c) for c in call_matches)
         )
-        user_content = (
-            "Voici quelques appels récents qui mentionnent les mots-clés "
-            "de la question. Utilise-les si pertinents pour répondre, "
-            "ignore-les sinon. Cite les Appel #ID si tu t'appuies sur "
-            "leur contenu.\n\n"
-            f"{calls_ctx}\n\n---\n\n"
-            f"Question de l'utilisateur : {body.question}"
-        )
-    else:
-        user_content = body.question
+    blocs.append(f"Question de l'utilisateur : {body.question}")
+    user_content = "\n\n".join(blocs)
 
     # Cascade IA gratuite : Groq en priorité (gratuit/rapide), repli
     # automatique Gemini puis Anthropic via app.integrations.ai.chat().
@@ -260,8 +318,8 @@ async def ask(
             messages=[Message(role="user", content=user_content)],
             system=SYSTEM_PROMPT,
             prefer="groq",
-            max_tokens=1024,
-            temperature=0.3,
+            max_tokens=900,
+            temperature=0.2,
         )
         answer = (res.text or "").strip() or "(réponse vide)"
     except AIProviderUnavailable as e:
@@ -298,11 +356,38 @@ async def ask(
         message=body.question,
         ai_response=answer,
         context_url=body.context_url,
+        section=section,
     )
     db.add(rec)
     await db.commit()
     await db.refresh(rec)
-    return AskOut(id=rec.id, answer=answer)
+    return AskOut(
+        id=rec.id,
+        answer=answer,
+        signalements=[_sig_out(s) for s in signalements],
+        livraisons=[LivraisonOut(date=l.date, sujet=l.sujet) for l in livraisons],
+    )
+
+
+@router.get(
+    "/similaires",
+    response_model=SimilairesOut,
+    summary="Signalements et livraisons semblables à un texte (déjà réglé ?)",
+)
+async def similaires(
+    db: DBSession,
+    _: CurrentUser,
+    q: str = Query(min_length=2, max_length=4000),
+) -> SimilairesOut:
+    """Sert l'onglet « Signaler un bug » : avant d'envoyer, la personne
+    voit les signalements semblables (réglés, en cours, refusés) et les
+    corrections déjà livrées."""
+    signalements = await kb.chercher_signalements(db, q, limite=5)
+    livraisons = kb.chercher_livraisons(q, limite=5)
+    return SimilairesOut(
+        signalements=[_sig_out(s) for s in signalements],
+        livraisons=[LivraisonOut(date=l.date, sujet=l.sujet) for l in livraisons],
+    )
 
 
 # ------------------------------ Bug reports ------------------------------
@@ -325,7 +410,11 @@ def _serialize_report(rec: HelpRequest) -> ReportOut:
         accepted_at=rec.accepted_at,
         resolved_at=rec.resolved_at,
         has_screenshot=rec.screenshot_blob is not None,
-        resolution_notes=getattr(rec, "resolution_notes", None),
+        resolution_notes=rec.resolution_notes,
+        section=rec.section or kb.section_depuis_url(rec.context_url),
+        rejected_at=rec.rejected_at,
+        traite_le=kb.date_traitement(rec),
+        traite_par=rec.traite_par,
     )
 
 
@@ -390,11 +479,43 @@ async def create_report(
         user_agent=user_agent,
         screenshot_blob=blob,
         screenshot_content_type=content_type,
+        section=kb.section_depuis_url(context_url),
     )
     db.add(rec)
     await db.commit()
     await db.refresh(rec)
     return _serialize_report(rec)
+
+
+@router.get(
+    "/mes-signalements",
+    response_model=List[MonSignalementOut],
+    summary="Mes signalements : statut, note et date de traitement",
+)
+async def mes_signalements(db: DBSession, user: CurrentUser) -> List[MonSignalementOut]:
+    rows = (
+        await db.execute(
+            select(HelpRequest)
+            .where(HelpRequest.kind == HelpRequestKind.BUG.value)
+            .where(HelpRequest.user_id == user.id)
+            .order_by(HelpRequest.created_at.desc())
+            .limit(200)
+        )
+    ).scalars().all()
+    return [
+        MonSignalementOut(
+            id=r.id,
+            status=r.status,
+            statut_libelle=kb.STATUT_LIBELLE.get(r.status, r.status),
+            message=r.message,
+            section=r.section or kb.section_depuis_url(r.context_url),
+            context_url=r.context_url,
+            resolution_notes=r.resolution_notes,
+            created_at=r.created_at,
+            traite_le=kb.date_traitement(r),
+        )
+        for r in rows
+    ]
 
 
 @router.get(
@@ -439,6 +560,72 @@ async def list_reports(
     return [_serialize_report(r) for r in rows]
 
 
+_STATUTS_DECISION = {
+    HelpRequestStatus.ACCEPTED.value: "accepté",
+    HelpRequestStatus.REJECTED.value: "refusé",
+    HelpRequestStatus.RESOLVED.value: "réglé",
+}
+
+KIND_NOTIF_BUG = "bug_traite"
+
+
+def _appliquer_statut(rec: HelpRequest, new_status: str, par, now: datetime) -> bool:
+    """Pose le statut et les dates d'historique. Renvoie vrai si le
+    statut a changé (une notification au déclarant est alors due)."""
+    if rec.status == new_status:
+        return False
+    rec.status = new_status
+    if new_status == HelpRequestStatus.ACCEPTED.value and rec.accepted_at is None:
+        rec.accepted_at = now
+    if new_status == HelpRequestStatus.RESOLVED.value:
+        rec.resolved_at = now
+    if new_status == HelpRequestStatus.REJECTED.value:
+        rec.rejected_at = now
+    if new_status == HelpRequestStatus.PENDING.value:
+        rec.traite_le = None
+        rec.traite_par = None
+    else:
+        rec.traite_le = now
+        rec.traite_par = getattr(par, "email", None)
+    if not rec.section:
+        rec.section = kb.section_depuis_url(rec.context_url)
+    return True
+
+
+async def _notifier_declarant(db, rec: HelpRequest, par) -> None:
+    """Cloche (et push) au déclarant : signalement accepté, refusé ou
+    réglé, avec la note. Pas de notification à soi-même."""
+    verbe = _STATUTS_DECISION.get(rec.status)
+    if verbe is None or rec.user_id is None:
+        return
+    if par is not None and getattr(par, "id", None) == rec.user_id:
+        return
+    from app.services.notifications import notify
+
+    extrait = " ".join(rec.message.split())
+    if len(extrait) > 90:
+        extrait = extrait[:90] + "…"
+    lignes = [f"« {extrait} »"]
+    if rec.section:
+        lignes.append(f"Section : {rec.section}")
+    if rec.resolution_notes:
+        lignes.append(f"Note : {rec.resolution_notes.strip()[:300]}")
+    chemin = kb.chemin_sans_langue(rec.context_url)
+    if not chemin or chemin == "/":
+        chemin = "/app"
+    try:
+        await notify(
+            db,
+            user_id=rec.user_id,
+            kind=KIND_NOTIF_BUG,
+            title=f"Ton signalement #{rec.id} a été {verbe}",
+            body="\n".join(lignes),
+            href=f"{chemin}?aide=mes-signalements",
+        )
+    except Exception:  # noqa: BLE001 — jamais bloquant pour le triage
+        log.exception("help: notification du déclarant impossible (#%s)", rec.id)
+
+
 @router.patch(
     "/reports/{report_id}",
     response_model=ReportOut,
@@ -448,8 +635,15 @@ async def patch_report(
     report_id: int,
     body: ReportPatch,
     db: DBSession,
-    _: RequireOwner,
+    owner: RequireOwner,
 ) -> ReportOut:
+    """Accepter, refuser, régler (ou remettre en attente) un signalement,
+    avec note et section. Le déclarant reçoit une notification à chaque
+    décision (accepté / refusé / réglé), note comprise.
+
+    Pour Claude Code : après avoir livré la correction d'un bug, faire
+    ``PATCH`` avec ``status=resolved``, ``resolution_notes`` (ce qui a été
+    corrigé, date de livraison) et ``section``."""
     rec = (
         await db.execute(
             select(HelpRequest).where(HelpRequest.id == report_id)
@@ -460,6 +654,14 @@ async def patch_report(
 
     now = datetime.now(timezone.utc)
 
+    # La note et la section d'abord : la notification les reprend.
+    if body.resolution_notes is not None:
+        # Vide → null (effacement)
+        rec.resolution_notes = body.resolution_notes.strip() or None
+    if body.section is not None:
+        rec.section = body.section.strip() or None
+
+    change = False
     if body.status is not None:
         new_status = body.status.lower().strip()
         if new_status not in (
@@ -469,17 +671,10 @@ async def patch_report(
             HelpRequestStatus.PENDING.value,
         ):
             raise HTTPException(status_code=400, detail="Statut invalide")
+        change = _appliquer_statut(rec, new_status, owner, now)
 
-        rec.status = new_status
-        if new_status == HelpRequestStatus.ACCEPTED.value and rec.accepted_at is None:
-            rec.accepted_at = now
-        if new_status == HelpRequestStatus.RESOLVED.value:
-            rec.resolved_at = now
-
-    if body.resolution_notes is not None:
-        # Vide → null (effacement)
-        rec.resolution_notes = body.resolution_notes.strip() or None
-
+    if change:
+        await _notifier_declarant(db, rec, owner)
     await db.commit()
     await db.refresh(rec)
     return _serialize_report(rec)
@@ -492,7 +687,7 @@ async def patch_report(
 async def bulk_reports(
     body: BulkAction,
     db: DBSession,
-    _: RequireOwner,
+    owner: RequireOwner,
 ) -> dict:
     if not body.ids:
         return {"updated": 0}
@@ -507,20 +702,23 @@ async def bulk_reports(
 
     new_status = mapping[action]
     now = datetime.now(timezone.utc)
-    values: dict = {"status": new_status}
-    if action == "accept":
-        values["accepted_at"] = now
-    elif action == "resolve":
-        values["resolved_at"] = now
-
-    res = await db.execute(
-        update(HelpRequest)
-        .where(HelpRequest.id.in_(body.ids))
-        .where(HelpRequest.kind == HelpRequestKind.BUG.value)
-        .values(**values)
-    )
+    note = (body.resolution_notes or "").strip() or None
+    rows = (
+        await db.execute(
+            select(HelpRequest)
+            .where(HelpRequest.id.in_(body.ids))
+            .where(HelpRequest.kind == HelpRequestKind.BUG.value)
+        )
+    ).scalars().all()
+    updated = 0
+    for rec in rows:
+        if note and not rec.resolution_notes:
+            rec.resolution_notes = note
+        if _appliquer_statut(rec, new_status, owner, now):
+            await _notifier_declarant(db, rec, owner)
+        updated += 1
     await db.commit()
-    return {"updated": res.rowcount or 0}
+    return {"updated": updated}
 
 
 @router.get(
@@ -536,8 +734,9 @@ async def accepted_reports(
 
     Idée : quand Steven revient parler à Claude Code, il dit « regarde
     les bugs acceptés ». L'agent appelle cet endpoint, traite chaque
-    item, puis appelle PATCH .../reports/{id} avec status=resolved
-    pour marquer chaque bug livré.
+    item, puis appelle PATCH .../reports/{id} avec status=resolved,
+    resolution_notes et section pour marquer chaque bug livré (le
+    déclarant en est notifié).
     """
     rows = (
         await db.execute(
