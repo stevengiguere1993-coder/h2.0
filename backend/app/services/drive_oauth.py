@@ -394,6 +394,15 @@ async def _refresh(
                     success=False,
                     error_message=f"http_{r.status_code}: {r.text[:200]}",
                 )
+                # Panne passagère de Google (429 / 5xx) : la session n'est
+                # PAS morte — erreur temporaire, jamais « reconnecte-toi »
+                # (Steven, 2026-11-13 : la connexion des reçus vers le Drive
+                # reste active tant qu'un humain ne la coupe pas).
+                if r.status_code == 429 or r.status_code >= 500:
+                    raise DriveAPIError(
+                        "Google Drive est momentanément indisponible. "
+                        "Réessaie dans un instant."
+                    )
                 # Refresh token expiré ou révoqué (invalid_grant) : ce n'est
                 # PAS une erreur serveur — l'utilisateur doit reconnecter son
                 # compte. On lève une DriveAuthError typée pour que l'endpoint

@@ -124,14 +124,18 @@ class QuickBooksClient:
         # entre processus, c'est le verrou de ligne pris par ``_refresh``.
         self._refresh_lock: Optional[asyncio.Lock] = None
 
-    def _requete_ligne(self, *, verrou: bool = False) -> Any:
+    def _requete_ligne(
+        self, *, verrou: bool = False, scope: Optional[str] = None
+    ) -> Any:
         """SELECT de la ligne qui porte le refresh token de référence du
-        scope : qbo_tokens id=1 (Construction) ou qbo_connections."""
-        if self.scope == "construction":
+        scope (par défaut celui du client) : qbo_tokens id=1
+        (Construction) ou qbo_connections."""
+        scope = scope or self.scope
+        if scope == "construction":
             stmt = select(QboToken).where(QboToken.id == 1)
         else:
             stmt = select(QboConnection).where(
-                QboConnection.scope == self.scope
+                QboConnection.scope == scope
             )
         # FOR UPDATE : ignoré par SQLite (tests), effectif sur Postgres.
         return stmt.with_for_update() if verrou else stmt
@@ -204,6 +208,47 @@ class QuickBooksClient:
         """
         if not (self.client_id and self.client_secret):
             raise RuntimeError("QuickBooks client is not configured")
+        # Relais (Steven, 2026-11-13 : « s'assurer que les connexions
+        # restent activées sauf si un humain les désactive ») : la
+        # connexion propre du scope est refusée par Intuit, mais une AUTRE
+        # connexion saine vise la même compagnie (même realm, même app
+        # Intuit) — p. ex. « inc:4 » (Horizon Services Immobiliers, reçus →
+        # Drive) et la connexion Construction. On renouvelle alors avec la
+        # ligne saine au lieu de bloquer : aucun bouton « Reconnecter » à
+        # cliquer tant qu'une connexion vivante couvre la compagnie.
+        if await self._ligne_refusee():
+            jumeau = await scope_relais(self.scope)
+            if jumeau:
+                await self._refresh_ligne(jumeau)
+                return
+        try:
+            await self._refresh_ligne(self.scope)
+        except QuickBooksReconnexionRequise:
+            jumeau = await scope_relais(self.scope)
+            if not jumeau:
+                raise
+            log.warning(
+                "QBO %s : jeton refusé par Intuit — relais par la "
+                "connexion %s (même compagnie).",
+                self.scope,
+                jumeau,
+            )
+            await self._refresh_ligne(jumeau)
+
+    async def _ligne_refusee(self) -> bool:
+        """La ligne du scope est-elle déjà marquée « à reconnecter » ?"""
+        try:
+            async with AsyncSessionLocal() as db:
+                row = (
+                    await db.execute(self._requete_ligne())
+                ).scalar_one_or_none()
+                return bool(row is not None and row.reconnect_required_at)
+        except Exception:  # noqa: BLE001 — base injoignable : chemin normal
+            return False
+
+    async def _refresh_ligne(self, scope_ligne: str) -> None:
+        """Renouvellement sur la ligne de ``scope_ligne`` (celle du client,
+        ou celle du relais), verrouillée le temps de l'échange."""
         utilise: Optional[str] = None
         nouveau: Optional[str] = None
         async with AsyncSessionLocal() as db:
@@ -211,7 +256,9 @@ class QuickBooksClient:
             base_ok = True
             try:
                 row = (
-                    await db.execute(self._requete_ligne(verrou=True))
+                    await db.execute(
+                        self._requete_ligne(verrou=True, scope=scope_ligne)
+                    )
                 ).scalar_one_or_none()
             except Exception as exc:  # noqa: BLE001 — base injoignable
                 base_ok = False
@@ -225,7 +272,7 @@ class QuickBooksClient:
             if row is not None:
                 self._adopter(row)
                 self._db_loaded = True
-            elif base_ok and self.scope != "construction":
+            elif base_ok and scope_ligne != "construction":
                 # Connexion supprimée entre-temps (déconnexion) : la copie
                 # mémoire n'a plus de légitimité.
                 self.tokens = QBOTokens()
@@ -247,10 +294,10 @@ class QuickBooksClient:
             nouveau = data.get("refresh_token") or utilise
             self.tokens.refresh_token = nouveau
             if base_ok:
-                await self._enregistrer(db, row, nouveau)
+                await self._enregistrer(db, row, nouveau, scope_ligne)
             else:
-                await self._enregistrer_hors_verrou(nouveau)
-        if nouveau and nouveau != utilise:
+                await self._enregistrer_hors_verrou(nouveau, scope_ligne)
+        if nouveau and nouveau != utilise and scope_ligne == "construction":
             await self._miroir_render(nouveau)
 
     async def _echanger(self, jeton: Optional[str]) -> Dict[str, Any]:
@@ -318,13 +365,16 @@ class QuickBooksClient:
             )
             await _rollback_silencieux(db)
 
-    async def _enregistrer(self, db: Any, row: Any, nouveau: str) -> None:
+    async def _enregistrer(
+        self, db: Any, row: Any, nouveau: str, scope_ligne: Optional[str] = None
+    ) -> None:
         """Écrit le jeton (tourné ou non) dans la ligne verrouillée et lève
         l'état « à reconnecter ». Le commit rend le verrou. Sans
         changement, aucun UPDATE n'est émis."""
         try:
+            scope_ligne = scope_ligne or self.scope
             if row is None:
-                if self.scope == "construction":
+                if scope_ligne == "construction":
                     db.add(QboToken(id=1, refresh_token=nouveau))
             else:
                 row.refresh_token = nouveau
@@ -334,22 +384,25 @@ class QuickBooksClient:
         except Exception as exc:  # noqa: BLE001
             log.error(
                 "QBO %s : jeton renouvelé NON enregistré (%s) — 2e essai.",
-                self.scope,
+                scope_ligne or self.scope,
                 exc,
             )
             await _rollback_silencieux(db)
-            await self._enregistrer_hors_verrou(nouveau)
+            await self._enregistrer_hors_verrou(nouveau, scope_ligne)
 
-    async def _enregistrer_hors_verrou(self, nouveau: str) -> None:
+    async def _enregistrer_hors_verrou(
+        self, nouveau: str, scope_ligne: Optional[str] = None
+    ) -> None:
         """Dernier recours (base indisponible pendant le verrou) : session
         fraîche, sans verrou. Best-effort."""
+        scope_ligne = scope_ligne or self.scope
         try:
             async with AsyncSessionLocal() as db:
                 row = (
-                    await db.execute(self._requete_ligne())
+                    await db.execute(self._requete_ligne(scope=scope_ligne))
                 ).scalar_one_or_none()
                 if row is None:
-                    if self.scope != "construction":
+                    if scope_ligne != "construction":
                         return
                     db.add(QboToken(id=1, refresh_token=nouveau))
                 else:
@@ -1970,6 +2023,75 @@ def reset_qbo(scope: str) -> None:
         _qbo_by_scope.pop(scope, None)
 
 
+def _ordre_relais(scope: str) -> tuple:
+    """Préférence entre plusieurs connexions saines d'une même compagnie :
+    Construction (la plus servie), puis les pôles, puis les inc."""
+    if scope == "construction":
+        return (0, scope)
+    if not scope.startswith("inc:"):
+        return (1, scope)
+    return (2, scope)
+
+
+def choisir_relais(
+    scope: str, connexions: Dict[str, Dict[str, Any]]
+) -> Optional[str]:
+    """Scope d'une connexion SAINE qui vise la même compagnie (realm) que
+    ``scope``, quand celle de ``scope`` est refusée par Intuit (ou sans
+    jeton). ``connexions`` : scope → {realm_id, refresh_token,
+    reconnect_required_at}. None si la connexion du scope est saine ou si
+    aucune autre ne couvre sa compagnie."""
+    propre = connexions.get(scope)
+    if propre is None or not propre.get("realm_id"):
+        return None
+    if propre.get("refresh_token") and not propre.get("reconnect_required_at"):
+        return None
+    realm = str(propre["realm_id"])
+    candidats = [
+        s
+        for s, c in connexions.items()
+        if s != scope
+        and str(c.get("realm_id") or "") == realm
+        and c.get("refresh_token")
+        and not c.get("reconnect_required_at")
+    ]
+    return min(candidats, key=_ordre_relais) if candidats else None
+
+
+async def connexions_qbo(db: Any) -> Dict[str, Dict[str, Any]]:
+    """Toutes les connexions QuickBooks enregistrées, par scope (lecture
+    seule, sans jeton d'accès)."""
+    out: Dict[str, Dict[str, Any]] = {}
+    tok = (
+        await db.execute(select(QboToken).where(QboToken.id == 1))
+    ).scalar_one_or_none()
+    if tok is not None:
+        out["construction"] = {
+            "realm_id": tok.realm_id or settings.qbo_realm_id,
+            "refresh_token": tok.refresh_token,
+            "reconnect_required_at": tok.reconnect_required_at,
+        }
+    for c in (await db.execute(select(QboConnection))).scalars().all():
+        out[c.scope] = {
+            "realm_id": c.realm_id,
+            "refresh_token": c.refresh_token,
+            "reconnect_required_at": c.reconnect_required_at,
+        }
+    return out
+
+
+async def scope_relais(scope: str, db: Any = None) -> Optional[str]:
+    """``choisir_relais`` lu en base (session fournie ou fraîche)."""
+    try:
+        if db is not None:
+            return choisir_relais(scope, await connexions_qbo(db))
+        async with AsyncSessionLocal() as s:
+            return choisir_relais(scope, await connexions_qbo(s))
+    except Exception as exc:  # noqa: BLE001 — pas de relais, chemin normal
+        log.warning("QBO %s : relais introuvable (%s)", scope, exc)
+        return None
+
+
 async def garder_connexions_vivantes() -> Dict[str, str]:
     """Renouvelle une fois par jour (cron all-daily) le jeton de CHAQUE
     connexion QuickBooks enregistrée : Construction (qbo_tokens id=1) et
@@ -2003,6 +2125,16 @@ async def garder_connexions_vivantes() -> Dict[str, str]:
         except Exception as exc:  # noqa: BLE001 — n'arrête pas les autres
             log.warning("QBO %s : maintien de la connexion échoué : %s", scope, exc)
             out[scope] = f"erreur : {str(exc)[:200]}"
+    # Connexions refusées mais couvertes par une autre connexion saine de
+    # la même compagnie : elles fonctionnent (relais), rien à reconnecter.
+    async with AsyncSessionLocal() as db:
+        toutes = await connexions_qbo(db)
+    for scope, c in toutes.items():
+        if not c.get("reconnect_required_at"):
+            continue
+        relais = choisir_relais(scope, toutes)
+        if relais:
+            out[scope] = f"relais par {relais}"
     return out
 
 

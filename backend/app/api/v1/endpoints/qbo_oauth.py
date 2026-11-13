@@ -151,6 +151,9 @@ class StatusResponse(BaseModel):
     needs_reconnect: bool = False
     reconnect_required_at: Optional[datetime] = None
     last_refresh_error: Optional[str] = None
+    # Jeton refusé, mais une autre connexion saine vise la même compagnie :
+    # Kratos passe par elle (relais), aucune reconnexion à faire.
+    relais_scope: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +394,11 @@ async def qbo_status(
             connected=False, active_environment=active_env
         )
     conn_env = (row.environment or settings.quickbooks_env or "").lower()
+    relais = None
+    if row.reconnect_required_at is not None:
+        from app.integrations.quickbooks import scope_relais
+
+        relais = await scope_relais(scope, db)
     return StatusResponse(
         connected=True,
         environment=conn_env,
@@ -399,7 +407,8 @@ async def qbo_status(
         realm_id=row.realm_id,
         company_name=row.company_name,
         connected_at=row.connected_at,
-        needs_reconnect=row.reconnect_required_at is not None,
+        needs_reconnect=row.reconnect_required_at is not None and not relais,
+        relais_scope=relais,
         reconnect_required_at=row.reconnect_required_at,
         last_refresh_error=row.last_refresh_error,
     )

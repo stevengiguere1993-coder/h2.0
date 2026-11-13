@@ -361,7 +361,9 @@ def test_cron_quotidien_garde_chaque_connexion_vivante(intuit, run):
                 QboConnection(
                     scope=SCOPE_INC,
                     refresh_token="rt-mort",
-                    realm_id=REALM,
+                    # Autre compagnie : sinon Construction la relaie
+                    # (voir test_smoke_qbo_relais_meme_compagnie_2026_11_13).
+                    realm_id="autre-compagnie",
                     environment="sandbox",
                     company_name="Inc (test)",
                 )

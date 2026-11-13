@@ -578,6 +578,12 @@ async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
         ).all()
         if eid is not None
     }
+    # Connexion refusée mais couverte par une autre connexion saine de la
+    # même compagnie : les reçus passent par celle-ci (relais, voir
+    # ``QuickBooksClient._refresh``) → rien à reconnecter.
+    from app.integrations.quickbooks import choisir_relais, connexions_qbo
+
+    toutes = await connexions_qbo(db)
     out: List[Dict[str, Any]] = []
     for e in ents:
         scope = scope_de(e)
@@ -592,6 +598,9 @@ async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
             qbo_nom = c.company_name if c else None
             qbo_realm = c.realm_id if c else None
             qbo_expiree = bool(c and c.reconnect_required_at)
+        relais = choisir_relais(scope, toutes) if qbo_expiree else None
+        if relais:
+            qbo_expiree = False
         folder, url, source, nom_dossier = await _dossier_entreprise(db, e, liens, convention, drive_user_id)
         n, last = stats.get(e.id, (0, None))
         out.append(
@@ -601,6 +610,7 @@ async def entreprises_etat(db: AsyncSession) -> List[Dict[str, Any]]:
                 "qbo_scope": scope,
                 "qbo_connectee": qbo_ok,
                 "qbo_reconnexion_requise": bool(qbo_ok and qbo_expiree),
+                "qbo_relais": relais,
                 "qbo_company_name": qbo_nom,
                 "qbo_realm_id": qbo_realm,
                 "qbo_construction_disponible": construction["connectee"],

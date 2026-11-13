@@ -527,3 +527,25 @@ au locataire (sans courriel : un message texte) ».
    en fin immédiate (date réelle, même passée). `GET /immobilier/baux/{id}`
    existe enfin (dernière route du fichier, après `/baux/sans-document`) :
    la fenêtre le lisait déjà pour le dépôt et recevait 405.
+
+## QuickBooks — connexion toujours active, relais même compagnie (2026-11-13)
+
+Steven : « s'assurer que les connexions des reçus envoyés vers le Drive
+restent activées sauf si un humain le désactive ». Constat : Horizon
+Services Immobiliers avait deux connexions vers la même compagnie QB
+(Construction, saine, et « inc:4 » des reçus → Drive, refusée par Intuit
+depuis le 2026-10-09) → plus aucune copie de reçus, bouton « Reconnecter »
+permanent. Désormais, quand la ligne d'un scope est refusée
+(`reconnect_required_at`) et qu'une AUTRE connexion saine vise le même
+realm (même app Intuit), `QuickBooksClient._refresh` renouvelle avec la
+ligne saine (`choisir_relais` : Construction, puis pôles, puis inc ;
+jamais une autre compagnie) et écrit le jeton tourné sur CETTE ligne,
+sous son verrou. La ligne refusée n'est plus présentée à Intuit ; une
+reconnexion OAuth la remet en service. Le statut (`/qbo/status`
+`relais_scope`, reçus → Drive `qbo_relais`) ne demande plus de
+reconnexion dans ce cas ; le cron quotidien rapporte « relais par … ».
+Drive : un 429 / 5xx de Google au renouvellement est une panne passagère
+(`DriveAPIError`), jamais « reconnecte-toi ». Ne JAMAIS copier un refresh
+token d'une ligne à l'autre (deux lignes feraient tourner le même jeton).
+`.claude/settings.json` autorise d'office les outils GitHub et Kratos
+dans les fils (moins de demandes de permission).
