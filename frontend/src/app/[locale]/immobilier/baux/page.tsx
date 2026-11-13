@@ -31,6 +31,7 @@ import { useSearchParams } from "next/navigation";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar } from "../layout";
+import { useNomPageImmobilier } from "@/hooks/use-presentation-immobilier";
 import { BandeauAvisRenouvellement } from "@/components/immobilier/bandeau-avis";
 import { BandeauBailManquant } from "@/components/immobilier/bandeau-bail-manquant";
 import { BandeauDepotARembourser } from "@/components/immobilier/bandeau-depot";
@@ -57,6 +58,9 @@ function money(n: number | null | undefined): string {
 }
 
 export default function BauxPage() {
+  // Refonte : « Baux » et « Loyers » avec le nouveau menu.
+  const titrePage = useNomPageImmobilier("Baux en vigueur", "Baux");
+  const nomPageLoyers = useNomPageImmobilier("Paiements", "Loyers");
   // La page sert aussi de sous-page « Baux & locataires » de la fiche
   // immeuble (?immeuble_id=X) : le bandeau d'avis se limite alors aux
   // alertes de CET immeuble ; sans paramètre → toutes les alertes.
@@ -133,7 +137,7 @@ export default function BauxPage() {
       <ImmobilierTopbar
         breadcrumbs={[
           { label: "Immobilier", href: "/immobilier" },
-          { label: "Baux en vigueur" }
+          { label: titrePage }
         ]}
       />
       <div className="space-y-4 p-4 sm:p-6">
@@ -145,11 +149,11 @@ export default function BauxPage() {
             <ClipboardList className="h-5 w-5" />
           </span>
           <div>
-            <h1 className="text-2xl font-bold text-white">Baux en vigueur</h1>
+            <h1 className="text-2xl font-bold text-white">{titrePage}</h1>
             <p className="mt-1 max-w-2xl text-sm text-white/60">
               Une ligne par logement : créer le bail, importer le PDF
               signé (il devient actif) et mettre fin au bail. La collecte
-              des loyers, elle, se fait sur la page Paiements.
+              des loyers, elle, se fait sur la page {nomPageLoyers}.
             </p>
           </div>
         </header>

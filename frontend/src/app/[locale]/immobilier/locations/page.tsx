@@ -4,6 +4,7 @@ import { KeyRound } from "lucide-react";
 
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
 import { LocationsBoard } from "@/components/immobilier/locations-board";
+import { useNomPageImmobilier } from "@/hooks/use-presentation-immobilier";
 
 /**
  * Page « Locations » — pipeline de relocation des logements (vacances) :
@@ -12,12 +13,14 @@ import { LocationsBoard } from "@/components/immobilier/locations-board";
 
 export default function LocationsPage() {
   const { currentEntrepriseId } = useImmobilierLayout();
+  // Refonte : la page s'appelle « À louer » avec le nouveau menu.
+  const titrePage = useNomPageImmobilier("Locations & nouveaux baux", "À louer");
   return (
     <>
       <ImmobilierTopbar
         breadcrumbs={[
           { label: "Immobilier", href: "/immobilier" },
-          { label: "Locations & nouveaux baux" }
+          { label: titrePage }
         ]}
       />
       <div className="p-4 pb-28 lg:p-6 lg:pb-28">
@@ -26,7 +29,7 @@ export default function LocationsPage() {
             <KeyRound className="h-5 w-5" />
           </span>
           <div>
-            <h1 className="text-2xl font-bold text-white">Locations &amp; nouveaux baux</h1>
+            <h1 className="text-2xl font-bold text-white">{titrePage}</h1>
             <p className="mt-1 max-w-2xl text-sm text-white/60">
               Chaque logement qui se libère devient un dossier : départ
               confirmé, annonces publiées, visites de candidats, jusqu&apos;au
