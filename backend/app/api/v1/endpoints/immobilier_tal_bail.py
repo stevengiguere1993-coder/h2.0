@@ -17,6 +17,7 @@ Préfixe ``/immobilier/tal-bail`` (volet Immobilier, gestionnaires) :
 - POST /transmissions/{id}/generer → {confirme: true} : FRW111 + FRW122, PDF archivé, frais
 - POST /transmissions/{id}/relancer→ FRW122 à nouveau avec le même ShortGuid (après échec)
 - POST /transmissions/{id}/annuler
+- POST /transmissions/{id}/corriger → bail déjà généré : nouveau brouillon rempli pareil (nouvelle facturation), l'ancien marqué remplacé
 - GET  /compteur?mois=AAAA-MM
 - POST /independants              → brouillon d'un bail INDÉPENDANT (petit formulaire, ou copie d'un autre)
 - GET  /independants              → baux indépendants (essais, baux pour un tiers hors système)
@@ -519,6 +520,23 @@ async def annuler_transmission(transmission_id: int, db: DBSession, user: Requir
     return svc.resume_transmission(t)
 
 
+@router.post("/transmissions/{transmission_id}/corriger", summary="Corriger un bail déjà généré (nouveau bail, facturé une 2e fois)", status_code=201)
+async def corriger_transmission(transmission_id: int, db: DBSession, user: RequireManager) -> Dict[str, Any]:
+    """Un PDF du TAL ne se modifie pas : la correction ouvre un nouveau brouillon rempli comme
+    le bail généré. L'écran avertit avant : un nouveau formulaire, donc une 2e facturation."""
+    t = await _transmission_or_404(db, transmission_id)
+    try:
+        nouveau, rapport = await svc.corriger(db, t, user=user)
+    except svc.TalBailError as exc:
+        raise _erreur(exc) from exc
+    await db.commit()
+    await db.refresh(nouveau)
+    out = svc.resume_transmission(nouveau, avec_form=True)
+    out["rapport"] = rapport.as_dict()
+    out["remplace_id"] = t.id
+    return out
+
+
 # ─── Signature interne (eSign) ────────────────────────────────────────
 
 
@@ -543,6 +561,9 @@ class EnvoiSignatureIn(BaseModel):
     #: remplace celui du formulaire ; vide = cette personne n'est pas invitée.
     courriels: Optional[Dict[str, Optional[str]]] = None
     message: Optional[str] = Field(default=None, max_length=2000)
+    #: Documents joints au bail dans le même envoi (clés de « annexes » de
+    #: /signature/personnes : « consentement », « modele:<id> »). Absent = le bail seul.
+    annexes: Optional[List[str]] = Field(default=None, max_length=12)
 
 
 class CourrielSignataireIn(BaseModel):
@@ -564,6 +585,7 @@ async def signature_envoyer(transmission_id: int, payload: Optional[EnvoiSignatu
         return await sig.envoyer(
             db, transmission_id, user=user,
             courriels=(payload.courriels if payload else None), message=(payload.message if payload else None),
+            annexes=(payload.annexes if payload else None),
         )
     except svc.TalBailError as exc:
         raise _erreur(exc) from exc
@@ -736,7 +758,9 @@ async def lister_independants(
 ) -> Dict[str, Any]:
     q = select(TalTransmission).where(TalTransmission.independant.is_(True)).order_by(TalTransmission.id.desc()).limit(limit)
     if not inclure_annules:
-        q = q.where(TalTransmission.statut != "annulee")
+        # Ni les brouillons annulés ni les baux remplacés par une version corrigée (ils
+        # restent au registre : le TAL les a produits).
+        q = q.where(TalTransmission.statut != "annulee", TalTransmission.remplacee_par_id.is_(None))
     rows = (await db.execute(q)).scalars().all()
     items = []
     for t in rows:

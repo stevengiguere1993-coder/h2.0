@@ -37,6 +37,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.tal import gabarit_signature as gab
+from app.services import tal_bail_annexes as annexes_bail
 from app.models.immobilier import ImmDocument
 from app.models.tal_bail import TalTransmission
 from app.services import tal_bail as svc
@@ -52,6 +53,14 @@ MESSAGE_DEFAUT = (
 _VERDICTS: dict[str, gab.Verdict] = {}
 
 _NOMS_PARTIES = {"locateur": "locateurs", "locataire": "locataires", "autre": "autres signataires"}
+
+
+def _phrase_documents_joints(description: list[dict[str, Any]]) -> str:
+    """Suite du message d'invitation quand des documents partent avec le bail."""
+    titres = [str(a.get("titre") or "").strip() for a in description or [] if str(a.get("titre") or "").strip()]
+    if not titres:
+        return ""
+    return " À la suite du bail, dans le même document : " + " ; ".join(titres) + "."
 
 
 def _iso(v: Any) -> Optional[str]:
@@ -112,6 +121,8 @@ async def _motif_refus(db: AsyncSession, t: TalTransmission, liste: list[dict[st
     """Pourquoi la signature en ligne automatique n'est pas offerte pour ce bail (None = offerte)."""
     if t.statut != "transmise" or not t.document_id:
         return "le bail officiel n'a pas encore été généré"
+    if getattr(t, "remplacee_par_id", None):
+        return "ce bail a été remplacé par une version corrigée"
     if (t.langue or "fr") != "fr":
         return "le placement automatique des signatures est validé pour le bail en français seulement"
     motif = _motif_limites(liste)
@@ -131,6 +142,9 @@ async def etat_envoi(db: AsyncSession, t: TalTransmission, *, user) -> dict[str,
         "envoi_possible": motif is None,
         "motif": motif,
         "max_par_partie": gab.MAX_PAR_PARTIE,
+        # Documents qui peuvent partir avec le bail, et ceux du dernier envoi.
+        "annexes": await annexes_bail.disponibles(db),
+        "annexes_envoyees": svc._charger_json(getattr(t, "annexes_json", None), []),
         "signature": await svc.etat_signature(db, t.esign_document_id),
         "signe_le": _iso(t.signe_le),
         "document_signe_id": t.document_signe_id,
@@ -165,13 +179,16 @@ async def _verrouiller(db: AsyncSession, transmission_id: int) -> TalTransmissio
 async def envoyer(
     db: AsyncSession, transmission_id: int, *, user,
     courriels: Optional[dict[str, Optional[str]]] = None, message: Optional[str] = None,
+    annexes: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """« Envoyer pour signature » : crée le document sur le PDF officiel, pose les zones
     du gabarit pour chaque personne invitée et fait partir les invitations.
 
     ``courriels`` : courriel par personne (clé « partie:rang »), tel que vu à l'écran —
     une clé présente remplace celui du formulaire, une valeur vide retire la personne de
-    l'envoi. Valide ses transactions lui-même (brouillon complet, puis envoi).
+    l'envoi. ``annexes`` : documents joints au bail dans le même envoi (clé « consentement »
+    ou « modele:<id> ») ; chaque locataire invité les signe à la suite du bail. Valide ses
+    transactions lui-même (brouillon complet, puis envoi).
     """
     from app.api.v1.endpoints import esign as moteur
     from app.models.esign import EsignDocument, EsignDocumentStatus, EsignEvent, EsignField, EsignSigner
@@ -218,6 +235,18 @@ async def envoyer(
         )
     form = svc._charger_json(t.payload_json, {}) or {}
     zones = gab.zones_a_poser(form, {(pers["partie"], pers["rang"]) for pers in retenus})
+    # Documents joints (consentement aux communications, règlement d'immeuble…) : à la suite du
+    # bail dans la même enveloppe, signés par chaque locataire invité.
+    locataires_invites = [(pers["rang"], pers["nom"]) for pers in retenus if pers["partie"] == "locataire"]
+    demandees = [c for c in (annexes or []) if str(c or "").strip()]
+    if demandees and not locataires_invites:
+        raise svc.TalBailError(
+            "Aucun locataire n'est invité à signer : les documents joints au bail ne pourraient pas être signés. "
+            "Inscris le courriel d'un locataire, ou retire les documents joints.",
+            http_status=422,
+        )
+    construites = await annexes_bail.construire(db, demandees, form, locataires_invites)
+    enveloppe, zones_annexes, description = await asyncio.to_thread(annexes_bail.assembler, pdf, construites)
 
     # ── 1. Le document, ses signataires, leurs zones et leurs liens : enregistrés avant tout courriel.
     if ancien is not None and ancien.status == EsignDocumentStatus.BROUILLON.value:
@@ -226,10 +255,11 @@ async def envoyer(
     doc = EsignDocument(
         entreprise_id=await svc.entreprise_proprietaire(db, t), created_by_user_id=getattr(user, "id", None),
         title=(f"Bail de logement — {t.adresse}" if t.adresse else "Bail de logement (TAL)")[:255],
-        message=((message or "").strip() or MESSAGE_DEFAUT)[:2000],
+        message=((message or "").strip() or (MESSAGE_DEFAUT + _phrase_documents_joints(description)))[:2000],
         status=EsignDocumentStatus.BROUILLON.value, use_signing_order=False,
-        filename=svc.nom_fichier_bail(form), content_type="application/pdf", pdf_blob=pdf,
-        page_count=max(1, (await _verdict(pdf)).pages), sha256=hashlib.sha256(pdf).hexdigest(),
+        filename=svc.nom_fichier_bail(form), content_type="application/pdf", pdf_blob=enveloppe,
+        page_count=max(1, description[-1]["pages"][1] if description else (await _verdict(pdf)).pages),
+        sha256=hashlib.sha256(enveloppe).hexdigest(),
         origine=svc.ORIGINE_ESIGN,
     )
     db.add(doc)
@@ -251,10 +281,18 @@ async def envoyer(
             document_id=doc.id, signer_id=signataires[(zone.partie, zone.rang)].id, kind=zone.kind, page=zone.page,
             required=True, label=zone.libelle[:120], **gab.fractions(zone),
         ))
+    for za in zones_annexes:
+        db.add(EsignField(
+            document_id=doc.id, signer_id=signataires[("locataire", za["rang"])].id, kind=za["kind"], page=za["page"],
+            required=True, label=("Signature du locataire" if za["kind"] == "signature" else "Date"),
+            x=za["x"], y=za["y"], w=za["w"], h=za["h"],
+        ))
+    joints = (" — documents joints : " + ", ".join(a["titre"] for a in description)) if description else ""
     db.add(EsignEvent(
         document_id=doc.id, type="cree",
-        detail=(f"Bail officiel TAL (transmission #{t.id}) — {len(zones)} zones posées selon le gabarit officiel — par {getattr(user, 'email', '')}")[:500],
+        detail=(f"Bail officiel TAL (transmission #{t.id}) — {len(zones)} zones posées selon le gabarit officiel{joints} — par {getattr(user, 'email', '')}")[:500],
     ))
+    t.annexes_json = svc._json(description) if description else None
     t.esign_document_id = doc.id
     t.updated_at = maintenant
     doc_id = doc.id
@@ -275,7 +313,8 @@ async def envoyer(
     await log_action(
         db, user=user, action="tal_bail.signature_envoyee", entity_type="tal_transmission", entity_id=t.id,
         details={
-            "esign_document_id": doc_id, "bail_id": t.bail_id, "zones": len(zones),
+            "esign_document_id": doc_id, "bail_id": t.bail_id, "zones": len(zones) + len(zones_annexes),
+            "documents_joints": [a["titre"] for a in description],
             "signataires": [{"role": pers["role"], "rang": pers["rang"], "courriel": pers["courriel"]} for pers in retenus],
             "sans_courriel": sans_courriel, "envoyes": resultat.sent, "erreurs": resultat.errors,
         },
@@ -283,7 +322,7 @@ async def envoyer(
     await db.commit()
     return {
         "esign_document_id": doc_id, "envoyes": resultat.sent, "erreurs": list(resultat.errors),
-        "sans_courriel": sans_courriel, "zones": len(zones),
+        "sans_courriel": sans_courriel, "zones": len(zones) + len(zones_annexes), "annexes": description,
         "signature": await svc.etat_signature(db, doc_id),
     }
 

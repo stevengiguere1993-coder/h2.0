@@ -1090,6 +1090,8 @@ def resume_transmission(t: TalTransmission, *, avec_form: bool = False) -> dict[
         "a_verifier": _charger_json(t.a_verifier_json, []),
         "independant": bool(getattr(t, "independant", False)),
         "libelle": getattr(t, "libelle", None),
+        # Bail corrigé après sa génération : la transmission qui le remplace.
+        "remplacee_par_id": getattr(t, "remplacee_par_id", None),
     }
     if out["independant"]:
         # Pas de fiche Kratos derrière : les noms viennent du formulaire.
@@ -1362,6 +1364,57 @@ async def generer(
     )
     await db.commit()
     return t
+
+
+async def corriger(db: AsyncSession, t: TalTransmission, *, user) -> tuple[TalTransmission, Rapport]:
+    """Phil 2026-11-13 : « quand je révise le bail avant d'envoyer pour signature, je me rends
+    compte d'une erreur. Faudrait pouvoir le modifier, avec une alerte : vous serez chargé une
+    2e fois ». Un PDF du TAL ne se modifie pas : la correction ouvre un NOUVEAU brouillon,
+    rempli comme le bail généré, que l'on corrige puis génère (nouveau formulaire, donc
+    nouvelle facturation). Le bail d'origine est marqué remplacé ; il reste compté.
+
+    Refusé si le bail est signé, ou si des personnes l'ont en main pour le signer (il faut
+    d'abord annuler l'envoi)."""
+    import copy
+
+    from app.models.esign import EsignDocument
+    from app.services.audit import log_action
+
+    if t.statut != "transmise":
+        raise TalBailError("Ce bail n'a pas encore été généré : il se modifie directement dans le formulaire.", http_status=409)
+    if t.document_signe_id or t.signe_le:
+        raise TalBailError("Ce bail est signé : il ne se corrige plus.", http_status=409)
+    if getattr(t, "remplacee_par_id", None):
+        raise TalBailError("Ce bail a déjà été remplacé par une version corrigée.", http_status=409,
+                           details={"transmission_id": t.remplacee_par_id})
+    if t.esign_document_id:
+        doc = await db.get(EsignDocument, t.esign_document_id)
+        if doc is not None and doc.status == "envoye":
+            raise TalBailError(
+                "Ce bail est en signature : annule d'abord l'envoi (les personnes l'ont reçu), puis corrige-le.",
+                http_status=409,
+            )
+        if doc is not None and doc.status == "complete":
+            raise TalBailError("Ce bail est signé : il ne se corrige plus.", http_status=409)
+    form = _charger_json(t.payload_json, None)
+    if not isinstance(form, dict) or not form:
+        raise TalBailError("Le formulaire de ce bail est introuvable.", http_status=422)
+    form = copy.deepcopy(form)
+    if getattr(t, "independant", False):
+        nouveau, rapport = await creer_independant(db, user=user, form=form, libelle=getattr(t, "libelle", None))
+    else:
+        nouveau, rapport = await creer_transmission(
+            db, bail_id=t.bail_id, user=user, dossier_id=t.dossier_id, form=form, remplacer=True,
+        )
+    nouveau.langue = getattr(t, "langue", None)
+    t.remplacee_par_id = nouveau.id
+    t.updated_at = datetime.now(timezone.utc)
+    await log_action(
+        db, user=user, action="tal_bail.corrige", entity_type="tal_transmission", entity_id=t.id,
+        details={"remplacee_par": nouveau.id, "bail_id": t.bail_id, "mode": t.mode, "independant": bool(getattr(t, "independant", False))},
+    )
+    await db.flush()
+    return nouveau, rapport
 
 
 async def annuler(db: AsyncSession, t: TalTransmission, *, user) -> TalTransmission:
@@ -2286,10 +2339,40 @@ async def apres_signature_complete(
     t.signe_le = now
     t.document_signe_id = imm_doc.id
     t.updated_at = now
+    # Consentement aux communications électroniques signé AVEC le bail (Phil 2026-11-13) : il
+    # entre au dossier comme un consentement signé — Kratos ne le redemandera pas.
+    consentement_id: Optional[int] = None
+    try:
+        from app.services import tal_bail_annexes as annexes_bail
+
+        joint = next((a for a in _charger_json(getattr(t, "annexes_json", None), []) if a.get("cle") == annexes_bail.CLE_CONSENTEMENT), None)
+        if joint:
+            pages = joint.get("pages") or [0, 0]
+            consentement = ImmDocument(
+                bail_id=t.bail_id, locataire_id=t.locataire_id, immeuble_id=t.immeuble_id, logement_id=t.logement_id,
+                type="consentement_communications",
+                titre="Consentement aux communications électroniques (signé avec le bail)"[:255],
+                source="genere", filename="Consentement_communications_signe.pdf",
+                params_json=_json({"transmission_id": t.id, "esign_document_id": doc.id, "signe_avec_le_bail": True}),
+                pdf_blob=annexes_bail.extraire_pages(octets, int(pages[0]), int(pages[1])),
+                created_by_email=t.created_by_email, signed_at=now,
+                # Seuls les locataires signent le consentement (le locateur ne le signe pas).
+                signed_by_name=(", ".join(
+                    f"{s.first_name} {s.last_name}".strip() for s in signers
+                    if str(s.contact_ref or "").startswith("tal:locataire:")
+                )[:255] or None),
+            )
+            # Point de reprise : un échec du classement n'emporte pas le bail signé.
+            async with db.begin_nested():
+                db.add(consentement)
+                await db.flush()
+            consentement_id = consentement.id
+    except Exception:  # noqa: BLE001 — le bail signé prime sur le classement du consentement
+        log.exception("bail TAL #%s : consentement signé non versé au dossier", t.id)
     await log_action(
         db, user=None, action="tal_bail.bail_signe", entity_type="tal_transmission", entity_id=t.id,
         details={"bail_id": t.bail_id, "esign_document_id": doc.id, "document_signe_id": imm_doc.id,
-                 "signataires": noms, "activation": activation},
+                 "signataires": noms, "activation": activation, "consentement_document_id": consentement_id},
     )
     await db.commit()
     return {"transmission_id": t.id, "bail_id": t.bail_id, "document_signe_id": imm_doc.id, "activation": activation}
@@ -2380,5 +2463,5 @@ __all__ = [
     "registre", "TPS_PCT", "TVQ_PCT", "FORFAIT_LICENCE", "normaliser_montants", "REGLES",
     "rangs_reels", "resume_avec_cout",
     "nom_fichier_bail", "lire_duree", "fin_de_bail", "completer_derives",
-    "preparation_independante_vierge", "prefill_immeuble", "personnes_pour_carnet",
+    "preparation_independante_vierge", "prefill_immeuble", "personnes_pour_carnet", "corriger",
 ]

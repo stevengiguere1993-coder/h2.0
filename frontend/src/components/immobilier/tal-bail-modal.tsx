@@ -32,6 +32,7 @@ import {
   FileSignature,
   FileText,
   Loader2,
+  Pencil,
   Plus,
   RefreshCw,
   ShieldCheck,
@@ -39,6 +40,7 @@ import {
   X
 } from "lucide-react";
 
+import { useConfirm } from "@/components/confirm-dialog";
 import { authedFetch } from "@/lib/auth";
 
 import { TalBailSignature } from "./tal-bail-signature";
@@ -97,6 +99,8 @@ export type TalTransmission = {
   adresse?: string | null;
   independant?: boolean;
   libelle?: string | null;
+  /** Bail corrigé après sa génération : la transmission qui le remplace. */
+  remplacee_par_id?: number | null;
   /** Langue du bail produit par le TAL : « fr » (défaut) ou « en ». */
   langue?: string;
   /** Bail réel compté parmi les essais gratuits (rang_reel sur gratuits_total). */
@@ -474,8 +478,59 @@ function lireMontant(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Phrase écrite par Kratos dans « autres conditions » pour un bail qui commence en cours de mois. */
+const PHRASE_PRORATA =
+  /Premier terme, du [^:]+ : [^.]*\(\d+ jours sur \d+, au prorata du loyer\)\. Les termes suivants sont payables le 1er de chaque mois\.\s*/;
+
+function argentFr(n: number): string {
+  return `${new Intl.NumberFormat("fr-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    .format(n)
+    .replace(/[\u00a0\u202f]/g, " ")} $`;
+}
+
+/** Bail au MOIS qui commence un autre jour que le 1er (Phil 2026-11-13 : « si quelqu'un rentre
+ * disons le 5 du mois, ramener le loyer au 1er pour les mois subséquents ») : montant du premier
+ * terme au prorata des jours restants. null si le bail commence le 1er ou si une donnée manque. */
+function prorataDuPremierTerme(form: Form): { phrase: string; montant: number; jour: number } | null {
+  const debut = texteDe(form.typeBail) === "dureeIndeterminee" ? texteDe(form.dateDebutBailDureeIndeterminee) : texteDe(form.dateDebutBail);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(debut);
+  if (!m || texteDe(form.frequenceCoutLoyer) !== "mois") return null;
+  const [annee, mois, jour] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (jour === 1) return null;
+  const loyer = lireMontant(form.coutTotalLoyer) ?? lireMontant(form.coutLoyer);
+  if (loyer === null || loyer <= 0) return null;
+  const joursMois = new Date(Date.UTC(annee, mois, 0)).getUTCDate();
+  const jours = joursMois - jour + 1;
+  const montant = Math.round(((loyer * jours) / joursMois) * 100) / 100;
+  const moisTexte = new Date(Date.UTC(annee, mois - 1, 1)).toLocaleDateString("fr-CA", { month: "long", year: "numeric", timeZone: "UTC" });
+  return {
+    jour,
+    montant,
+    phrase: `Premier terme, du ${jour} au ${joursMois} ${moisTexte} : ${argentFr(montant)} (${jours} jours sur ${joursMois}, au prorata du loyer). Les termes suivants sont payables le 1er de chaque mois.`
+  };
+}
+
+/** Premier paiement à l'entrée, autres termes le 1er, et la phrase du prorata dans « autres conditions ». */
+function appliquerProrata(form: Form): Form {
+  const debut = texteDe(form.typeBail) === "dureeIndeterminee" ? texteDe(form.dateDebutBailDureeIndeterminee) : texteDe(form.dateDebutBail);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(debut)) return form;
+  const f: Form = { ...form, premierTermePaiement: debut };
+  const p = prorataDuPremierTerme(f);
+  const reste = texteDe(f.precisionAutresServicesConditionsRestriction).replace(PHRASE_PRORATA, "").trim();
+  if (p) {
+    f.termesPaiement = "permierJourMois";
+    f.possedeAutresServicesConditionsRestriction = "true";
+    f.precisionAutresServicesConditionsRestriction = [p.phrase, reste].filter(Boolean).join(" ");
+  } else if (PHRASE_PRORATA.test(texteDe(f.precisionAutresServicesConditionsRestriction))) {
+    f.precisionAutresServicesConditionsRestriction = reste;
+    if (!reste) f.possedeAutresServicesConditionsRestriction = "false";
+  }
+  return f;
+}
+
 /** Ce que le formulaire calcule seul quand une réponse change (Phil 2026-11-13) :
- * la date de fin (début + durée) et le loyer total (loyer + services). */
+ * la date de fin (début + durée), le loyer total (loyer + services) et, pour un bail qui
+ * commence en cours de mois, le premier terme au prorata puis les suivants le 1er. */
 function deriver(form: Form, cle: string): Form {
   let f = form;
   if ((cle === "nbSemainesMoisAnnees" || cle === "dateDebutBail") && texteDe(f.typeBail) !== "dureeIndeterminee") {
@@ -488,6 +543,11 @@ function deriver(form: Form, cle: string): Form {
       const services = texteDe(f.bailIncluServices) === "true" ? (lireMontant(f.coutServices) ?? 0) : 0;
       f = { ...f, coutTotalLoyer: (Math.round((loyer + services) * 100) / 100).toFixed(2) };
     }
+  }
+  if (
+    ["dateDebutBail", "dateDebutBailDureeIndeterminee", "typeBail", "frequenceCoutLoyer", "coutLoyer", "coutServices", "bailIncluServices"].includes(cle)
+  ) {
+    f = appliquerProrata(f);
   }
   return f;
 }
@@ -557,6 +617,7 @@ export function TalBailModal({
   /** Quelque chose a changé (transmission, PDF, signature) → recharger. */
   onDone: () => void;
 }) {
+  const confirmer = useConfirm();
   const independant = transmissionId != null || !!nouveauIndependant;
   // Brouillon indépendant en cours : celui qu'on a ouvert, ou celui que la première vérification crée.
   const brouillonId = useRef<number | undefined>(transmissionId);
@@ -757,13 +818,40 @@ export function TalBailModal({
     }
   }
 
-  function nouvelleVersion() {
-    if (!prep) return;
-    setRemplacer(true);
-    setForm(prep.form);
-    setRapport(prep.rapport);
-    setTransmission(null);
-    setEtape("formulaire");
+  /** Bail déjà généré où l'on voit une erreur (Phil 2026-11-13) : un PDF du TAL ne se modifie
+   *  pas, donc la correction repart du même formulaire et génère un NOUVEAU bail. On avertit
+   *  avant : c'est une 2e facturation. */
+  async function corriger() {
+    if (!transmission) return;
+    const reel = transmission.mode === "reel";
+    const ok = await confirmer({
+      title: "Corriger ce bail ?",
+      description: reel
+        ? "Le TAL a déjà produit ce bail : il reste compté. La correction génère un NOUVEAU bail, donc tu seras chargé une 2e fois (2,99 $ + taxes, ou un essai gratuit de moins). Le bail actuel sera marqué remplacé."
+        : "Le bail actuel sera marqué remplacé et un nouveau sera généré à partir du formulaire corrigé (mode simulation : 0 $).",
+      confirmLabel: "Corriger et générer de nouveau",
+      destructive: true
+    });
+    if (!ok) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authedFetch(`${BASE}/transmissions/${transmission.id}/corriger`, { method: "POST" });
+      if (!r.ok) throw new Error(await lireErreur(r));
+      const t = (await r.json()) as TalTransmission;
+      if (independant) brouillonId.current = t.id;
+      setRemplacer(true);
+      setTransmission(t);
+      setForm(t.form || {});
+      setRapport(t.rapport ?? null);
+      setConfirme(false);
+      setEtape("formulaire");
+      onDone();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   // ── Classement des clés racine ──
@@ -929,6 +1017,7 @@ export function TalBailModal({
 
             <ContexteBandeau contexte={independant ? contexteDuFormulaire(form) : prep.contexte} />
             {independant ? <RemplirDepuisImmeuble onAppliquer={(valeurs) => setForm((f) => ({ ...f, ...valeurs }))} /> : null}
+            <NoteProrata form={form} />
 
             {aVerifier.length ? (
               <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2">
@@ -1280,18 +1369,17 @@ export function TalBailModal({
             <TalBailSignature key={`${transmission.id}-${transmission.genere_le ?? ""}`} transmissionId={transmission.id} onChange={onDone} />
 
             <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-brand-800 pt-3">
-              {!independant ? (
+              {!transmission.signe_le && !transmission.document_signe_id ? (
                 <button
                   type="button"
-                  onClick={nouvelleVersion}
-                  className="text-[11px] text-white/40 hover:text-white/70"
-                  title="Repart du formulaire pré-rempli ; un nouveau formulaire sera facturé par le TAL en mode réel."
+                  disabled={busy}
+                  onClick={() => void corriger()}
+                  className="btn-ghost btn-xs disabled:opacity-60"
+                  title="Une erreur dans le bail ? La correction repart du même formulaire et génère un nouveau bail. En mode réel, le TAL facture ce nouveau bail."
                 >
-                  Générer une nouvelle version{transmission.mode === "reel" ? " (facturée)" : ""}
+                  <Pencil className="h-3 w-3" /> Corriger ce bail{transmission.mode === "reel" ? " (nouveau bail facturé)" : ""}
                 </button>
-              ) : (
-                <span className="text-[11px] text-white/40">Pour une nouvelle version : « Dupliquer » dans la liste des baux indépendants.</span>
-              )}
+              ) : null}
               <button type="button" onClick={onClose} className="btn-secondary btn-sm ml-auto">
                 Fermer
               </button>
@@ -1592,6 +1680,18 @@ function RemplirDepuisImmeuble({ onAppliquer }: { onAppliquer: (valeurs: Form) =
       </div>
       {note ? <p className="mt-1 text-[11px] text-white/60">{note}</p> : null}
     </div>
+  );
+}
+
+/** Rappel visible quand le bail commence en cours de mois : ce que Kratos a inscrit pour le loyer. */
+function NoteProrata({ form }: { form: Form }) {
+  const p = prorataDuPremierTerme(form);
+  if (!p || !PHRASE_PRORATA.test(texteDe(form.precisionAutresServicesConditionsRestriction))) return null;
+  return (
+    <p className="mt-3 rounded-lg border border-brand-800 bg-brand-900/60 px-3 py-2 text-[11px] text-white/70">
+      Le bail commence le {p.jour} du mois : le premier terme est au prorata, <b className="text-white/90">{argentFr(p.montant)}</b>, payable
+      à l&apos;entrée. Les loyers suivants sont dus le 1er de chaque mois. C&apos;est inscrit aux sections D et E, et ça se corrige là.
+    </p>
   );
 }
 
