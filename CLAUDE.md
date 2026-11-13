@@ -470,6 +470,11 @@ lot) date l'historique (`traite_le`, `traite_par`, `rejected_at`), pose la
 section (déduite de la page) et notifie le déclarant (`bug_traite`, lien
 `?aide=mes-signalements` qui ouvre le panneau), sauf s'il s'agit de
 soi-même. Mode dev → Demandes d'aide → onglet « Historique ».
+« Accepter » = « régler » (Steven, même jour : « lorsque je clique sur
+accepté, cela veut dire qu'il a été réglé ») : l'API transforme
+`accepted` / `accept` en `resolved`, le mode dev n'offre plus que Réglé et
+Refuser, et `ensure_bugs_acceptes_regles` (démarrage) a passé les anciens
+« acceptés » à « réglé » sans notifier personne.
 **À faire par Claude Code** : quand une tâche règle un bug signalé, le
 marquer réglé (`PATCH /api/v1/help/reports/{id}` avec `status:
 "resolved"`, `resolution_notes` : ce qui a été corrigé et la date,

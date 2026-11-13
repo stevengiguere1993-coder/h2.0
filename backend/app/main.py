@@ -22,6 +22,7 @@ from app.db.session import (
     ensure_critical_columns,
     ensure_esign_tables,
     ensure_invest_portal_tables,
+    ensure_bugs_acceptes_regles,
     ensure_immobilier_aux_tables,
     ensure_project_corrections_tables,
     ensure_raci_tables,
@@ -580,6 +581,9 @@ async def _run_startup_tasks() -> None:
         logger.warning(
             "ensure_invest_portal_tables failed during startup: %s", exc
         )
+
+    # Signalements : « accepté » veut dire « réglé » (Steven, 2026-11-13).
+    await ensure_bugs_acceptes_regles()
 
     # Backfill : crée le projet (+ facture d'acompte DRAFT) pour les
     # soumissions ACCEPTED qui n'en ont pas encore. Rattrape les
