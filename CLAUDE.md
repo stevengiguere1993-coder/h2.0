@@ -719,6 +719,47 @@ un interrupteur, et les écrans actuels RESTENT dans le code.
    (`Fenetre pleinEcranMobile`, activé par `usePaiementActions({
    nouvellePresentation })`). La page « Aujourd'hui » compte les loyers
    à encaisser en interne ET en gestion externe, comme l'écran.
+7. **Lot « baux »** (livré) : deux écrans, mêmes adresses.
+   `/immobilier/baux` : `baux/page.tsx` choisit entre
+   `components/immobilier/baux-nouvelle-vue.tsx` et l'écran actuel
+   (`BauxActuel`, intact) ; `/immobilier/locations` :
+   `locations-board.tsx` porte les deux rendus (mêmes fenêtres, sorties
+   dans `fenetres`). Lecture pure et tests vitest dans
+   `lib/baux-lecture.ts` et `lib/a-louer-lecture.ts` ; pièces communes
+   aux écrans refaits (`useLargeur`, `Tuile`, `MenuFlottant`,
+   `MessageBas`, `CLS_PRINCIPAL`) dans
+   `components/immobilier/refonte-commun.tsx`.
+   **Baux** : cinq tuiles qui filtrent (`?filtre=` : `sans_bail`,
+   `a_importer`, `fins`, `avis`), à la place des bandeaux. Le chiffre de
+   « Bail signé à importer » est celui du serveur
+   (`/baux/sans-document`, la liste que compte « Aujourd'hui ») : un bail
+   à importer qu'aucune ligne ne porte s'affiche sous la liste (« Autres
+   baux signés à importer »), jamais un chiffre sans ses lignes. Un
+   bouton principal par ligne (importer le bail signé, préparer l'avis,
+   ouvrir le bail, nouveau bail), le reste en mots sous « ⋯ ».
+   Supprimer un bail exige de taper le nom du locataire et rappelle
+   « Mettre fin au bail » ; le serveur refuse toujours (409) un bail qui a
+   des paiements ou des frais. Les gestes sur le document
+   (`useBailDocActions`) sont tenus UNE fois au niveau de l'écran : la
+   ligne quitte la liste filtrée dès l'import, la fenêtre de consentement
+   doit lui survivre. Messages de confirmation en bas de l'écran
+   (`MessageBas`). Le bandeau des dépôts n'y est plus (il est sur
+   « Aujourd'hui »).
+   **« Nouveau bail »** (`nouveau-bail-porte.tsx`) : une seule porte qui
+   demande la situation et mène aux parcours EXISTANTS, sans règle
+   nouvelle — locataire déjà en place (`CreerBailModal` en « actif »),
+   nouveau locataire (bail du TAL, `/immobilier/locations?nouveau_bail=1`),
+   remplacement (`FinBailModal`), changement d'unité
+   (`TransfertUniteModal`).
+   **À louer** : cinq colonnes de front quand la LISTE fait au moins
+   900 px, sinon une étape à la fois en onglets ; le bouton principal
+   d'une carte fait avancer le dossier d'une étape par le même geste que
+   le glisser-déposer (`gesteSuivant`, `avancer`) ; « Reloué » montre les
+   cinq derniers, le reste sur demande ; les tuiles du haut deviennent
+   une phrase. `useLargeur` rend une référence-fonction : la zone est
+   mesurée même si elle n'apparaît qu'après la roue d'attente.
+   Reste pour le lot « fiches » : le libellé unique « Mettre fin au bail »
+   sur les fiches logement et locataire.
 
 ## Investisseurs — saisies manuelles : apports hors QB, prêts (2026-11-13)
 

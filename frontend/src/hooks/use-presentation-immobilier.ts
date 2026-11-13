@@ -31,7 +31,7 @@ const LOTS: LotPresentation[] = ["menu", "loyers", "baux", "fiches", "suivis"];
 const DEFAUT: PresentationImmobilier = {
   menu: true,
   loyers: true,
-  baux: false,
+  baux: true,
   fiches: false,
   suivis: false
 };

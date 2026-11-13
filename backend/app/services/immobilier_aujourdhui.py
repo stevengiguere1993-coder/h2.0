@@ -180,7 +180,10 @@ def composer(c: Chiffres) -> tuple[list[Ligne], list[str]]:
                 ),
                 detail=detail,
                 ton="attention",
-                href="/immobilier/baux",
+                # Tuile « Bail signé à importer » de la page Baux (refonte,
+                # lot 3) : elle affiche cette même liste. L'écran actuel
+                # ignore le paramètre.
+                href="/immobilier/baux?filtre=a_importer",
             )
         )
     else:

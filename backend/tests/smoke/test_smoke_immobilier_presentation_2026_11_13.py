@@ -81,6 +81,8 @@ def test_api_retour_a_la_presentation_actuelle(client, auth_headers, employee_he
     # Les autres lots n'ont pas bougé ; une clé inconnue ou un corps vide
     # sont refusés.
     assert next(lot for lot in corps["lots"] if lot["cle"] == "loyers")["nouvelle"] is True
+    # Lot 3 (baux et logements à louer) : livré, donc nouveau par défaut.
+    assert next(lot for lot in corps["lots"] if lot["cle"] == "baux")["nouvelle"] is True
     r = client.put(
         "/api/v1/immobilier/presentation", headers=auth_headers, json={"autre": True}
     )
@@ -129,6 +131,8 @@ def test_composer_lignes_et_rien_a_signaler():
     assert par_cle["renouvellements"].bouton == "Préparer"
     assert par_cle["baux_a_importer"].titre == "15 baux signés à importer"
     assert par_cle["baux_a_importer"].detail == "dans 2 immeubles"
+    # Le lien ouvre la tuile qui montre cette même liste.
+    assert par_cle["baux_a_importer"].href == "/immobilier/baux?filtre=a_importer"
     assert par_cle["a_louer"].detail == "le plus ancien libre depuis 13 jours"
     assert par_cle["bons_travail"].detail == "aucun urgent"
     assert par_cle["bons_travail"].ton == "info"

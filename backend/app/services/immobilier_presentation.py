@@ -52,10 +52,11 @@ LOTS: tuple[dict[str, Any], ...] = (
         "cle": "baux",
         "titre": "Baux et logements à louer",
         "description": (
-            "Un seul « Nouveau bail », « Mettre fin au bail » partout, "
+            "Un seul « Nouveau bail » qui demande la situation, tuiles "
+            "qui filtrent les baux, un bouton principal par ligne, "
             "tableau des logements à louer qui tient dans l'écran."
         ),
-        "livre": False,
+        "livre": True,
     },
     {
         "cle": "fiches",
