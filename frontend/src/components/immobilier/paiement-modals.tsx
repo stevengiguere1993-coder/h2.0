@@ -24,13 +24,18 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Loader2, Lock, Pencil, Trash2 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { FinBailModal } from "@/components/immobilier/fin-bail";
 import {
+  confirmationLibelle,
   dateCourte,
   duMois,
+  impayesAnterieurs,
+  moisCourt,
   moisCouvertPourPaiement,
   ORIGINE_AJUSTEMENT,
   ORIGINE_RABAIS,
   type FraisMois,
+  type MoisImpaye,
   type PaiementMois
 } from "@/components/immobilier/paiements-actions";
 
@@ -740,6 +745,207 @@ export function LoyerDuModal({
   );
 }
 
+// ─── Périodes de prix de loyer (Steven 2026-11-13, point 10) ──────────
+// « Le loyer était à 470, il est maintenant 500 — ça modifie le calcul
+// des mois passés. » Un nouveau prix se pose À PARTIR D'UN MOIS : les
+// mois d'avant gardent leur prix, donc leur dû et le solde ne bougent pas.
+
+type LoyerPeriode = { depuis: string | null; loyer: number; courante: boolean };
+
+export function LoyerPeriodesModal({
+  bailId,
+  locataireName,
+  moisDefaut,
+  fmt,
+  niveau = 70,
+  onClose,
+  onChanged
+}: {
+  bailId: number;
+  locataireName?: string | null;
+  /** Mois proposé pour le nouveau prix (AAAA-MM) — défaut : ce mois-ci. */
+  moisDefaut?: string;
+  fmt: (n: number) => string;
+  niveau?: 70 | 80;
+  onClose: () => void;
+  onChanged: (msg: string) => void | Promise<void>;
+}) {
+  const [periodes, setPeriodes] = useState<LoyerPeriode[] | null>(null);
+  const [depuis, setDepuis] = useState(
+    (moisDefaut ?? aujourdhuiIso()).slice(0, 7)
+  );
+  const [montant, setMontant] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let annule = false;
+    (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/immobilier/baux/${bailId}/loyer-periodes`
+        );
+        if (!r.ok) throw new Error(await lireErreur(r));
+        const d = (await r.json()) as { periodes: LoyerPeriode[] };
+        if (!annule) setPeriodes(d.periodes);
+      } catch (e) {
+        if (!annule) setErr((e as Error).message || "Chargement échoué.");
+      }
+    })();
+    return () => {
+      annule = true;
+    };
+  }, [bailId]);
+
+  async function ajouter() {
+    const v = lireMontant(montant);
+    if (v == null || v < 0) {
+      setErr("Entre le nouveau loyer mensuel (0 ou plus).");
+      return;
+    }
+    if (!/^\d{4}-\d{2}$/.test(depuis)) {
+      setErr("Choisis le premier mois au nouveau prix.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${bailId}/loyer-periodes`,
+        { method: "POST", body: JSON.stringify({ depuis, loyer: v }) }
+      );
+      if (!r.ok) throw new Error(await lireErreur(r));
+      const d = (await r.json()) as { periodes: LoyerPeriode[] };
+      setPeriodes(d.periodes);
+      setMontant("");
+      await onChanged(
+        `Loyer de ${fmt(v)} à partir de ${moisLisible(depuis)} — les mois d'avant gardent leur prix.`
+      );
+    } catch (e) {
+      setErr((e as Error).message || "Échec.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function retirer(p: LoyerPeriode) {
+    if (!p.depuis) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${bailId}/loyer-periodes?depuis=${p.depuis.slice(0, 7)}`,
+        { method: "DELETE" }
+      );
+      if (!r.ok) throw new Error(await lireErreur(r));
+      const d = (await r.json()) as { periodes: LoyerPeriode[] };
+      setPeriodes(d.periodes);
+      await onChanged(
+        `Période de ${moisLisible(p.depuis.slice(0, 7))} retirée — ces mois reprennent le prix précédent.`
+      );
+    } catch (e) {
+      setErr((e as Error).message || "Échec.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Fenetre
+      titre="Loyer du bail — périodes de prix"
+      sousTitre={locataireName}
+      teinte="text-sky-300"
+      niveau={niveau}
+      onClose={onClose}
+    >
+      <p className="text-xs text-white/60">
+        Chaque mois est dû au prix de SA période. Changer le loyer à partir
+        d&apos;un mois ne touche ni les mois passés ni le solde déjà calculé.
+      </p>
+      {periodes === null ? (
+        <p className="flex items-center gap-2 text-xs text-white/60">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
+        </p>
+      ) : (
+        <ul className="divide-y divide-brand-800 rounded-xl border border-brand-800">
+          {periodes.map((p, i) => (
+            <li
+              key={p.depuis ?? i}
+              className="flex items-center gap-2 px-3 py-2 text-xs"
+            >
+              <div className="min-w-0 flex-1">
+                <span className="font-semibold tabular-nums text-white">
+                  {fmt(p.loyer)}
+                </span>
+                <span className="text-white/60">
+                  {" "}
+                  {i === 0 ? "depuis le début du bail" : "à partir de"}
+                  {p.depuis ? ` (${moisLisible(p.depuis.slice(0, 7))})` : ""}
+                </span>
+                {p.courante ? (
+                  <span className="badge badge-emerald ml-1.5">en vigueur</span>
+                ) : null}
+              </div>
+              {i > 0 ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void retirer(p)}
+                  title="Retirer ce changement de prix — ses mois reprennent le prix précédent"
+                  className="rounded-md border border-brand-700 p-2 text-white/60 transition hover:text-rose-300 disabled:opacity-50"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="grid grid-cols-2 gap-2">
+        <Champ label="Nouveau loyer ($ / mois)">
+          <input
+            inputMode="decimal"
+            value={montant}
+            onChange={(e) => setMontant(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void ajouter();
+            }}
+            placeholder="500"
+            className="input mt-0.5 block w-full"
+          />
+        </Champ>
+        <Champ label="À partir du mois de">
+          <input
+            type="month"
+            value={depuis}
+            onChange={(e) => setDepuis(e.target.value)}
+            className="input mt-0.5 block w-full"
+          />
+        </Champ>
+      </div>
+      <p className="text-[10px] text-white/50">
+        Le mois du début du bail corrige le prix de départ. Un mois à venir
+        est accepté : le nouveau prix prendra effet tout seul à cette date.
+      </p>
+      <Erreur msg={err} />
+      <div className="flex justify-end gap-2 border-t border-brand-800 pt-3">
+        <button type="button" onClick={onClose} className="btn-secondary btn-sm">
+          Fermer
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void ajouter()}
+          className="btn-accent btn-sm disabled:opacity-60"
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+          Appliquer le nouveau loyer
+        </button>
+      </div>
+    </Fenetre>
+  );
+}
+
 // ─── Correction du mois : les versements un par un ────────────────────
 
 /** Ligne de paiement minimale commune aux trois surfaces. */
@@ -753,6 +959,12 @@ export type PaiementRowBase = {
   etat: string;
   solde_total?: number;
   bail_termine_le?: string | null;
+  /** « actif », « resilie », « termine » — absent = bail en cours. */
+  bail_statut?: string;
+  /** Détail du solde : chaque mois encore dû (2026-11-13). */
+  mois_impayes?: MoisImpaye[];
+  immeuble_name?: string | null;
+  logement_numero?: string | null;
 };
 
 function Chiffre({
@@ -785,7 +997,9 @@ export function CorrectionModal<R extends PaiementRowBase>({
   onSupprimer,
   onRetirerTout,
   onLoyerDu,
-  onSupprimerFrais
+  onSupprimerFrais,
+  onPeriodes,
+  onLocataireParti
 }: {
   row: R;
   mois: string;
@@ -798,7 +1012,13 @@ export function CorrectionModal<R extends PaiementRowBase>({
   onRetirerTout: () => void;
   onLoyerDu: () => void;
   onSupprimerFrais: (f: FraisMois) => void;
+  /** Changer le loyer du bail à partir d'un mois (périodes de prix). */
+  onPeriodes: () => void;
+  /** Le locataire est parti : ouvrir « Mettre fin au bail ». */
+  onLocataireParti: () => void;
 }) {
+  const anterieurs = impayesAnterieurs(row.mois_impayes, mois);
+  const bailEnCours = (row.bail_statut ?? "actif") === "actif";
   const du = duMois(row);
   const recu = row.montant_paye ?? 0;
   const restant = arrondi(du - recu);
@@ -869,7 +1089,50 @@ export function CorrectionModal<R extends PaiementRowBase>({
         >
           Modifier le loyer dû de ce mois
         </button>
+        {bailEnCours ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onPeriodes}
+            title="Nouveau prix à partir d'un mois : les mois passés gardent leur prix"
+            className="mt-2 w-full rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-2 text-[11px] font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
+          >
+            Changer le loyer du bail (nouvelle période de prix)
+          </button>
+        ) : null}
       </div>
+
+      {anterieurs.length > 0 ? (
+        <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-xs">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-rose-300">
+            Mois antérieurs impayés
+          </p>
+          {anterieurs.map((x) => (
+            <div key={x.mois} className="mt-1 flex justify-between gap-2">
+              <span className="text-white/80">
+                {moisCourt(x.mois)}
+                <span className="text-white/60">
+                  {" "}
+                  · dû {fmt(x.du)}, reçu {fmt(x.recu)}
+                </span>
+              </span>
+              <span className="font-semibold tabular-nums text-rose-300">
+                {fmt(x.restant)}
+              </span>
+            </div>
+          ))}
+          <div className="mt-2 flex justify-between border-t border-rose-500/30 pt-2 font-semibold">
+            <span className="text-white/80">Solde total du bail</span>
+            <span className="tabular-nums text-rose-300">
+              {fmt(row.solde_total ?? 0)}
+            </span>
+          </div>
+          <p className="mt-1.5 text-[10px] text-white/60">
+            Un versement plus grand que le restant du mois rembourse d&apos;abord
+            ces mois, du plus ancien au plus récent.
+          </p>
+        </div>
+      ) : null}
 
       <div>
         <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
@@ -907,6 +1170,11 @@ export function CorrectionModal<R extends PaiementRowBase>({
                   ) : p.cree_par ? (
                     <div className="text-[10px] text-white/40">
                       Saisi par {p.cree_par}
+                    </div>
+                  ) : null}
+                  {confirmationLibelle(p) ? (
+                    <div className="text-[10px] text-white/60">
+                      {confirmationLibelle(p)}
                     </div>
                   ) : null}
                 </div>
@@ -952,6 +1220,17 @@ export function CorrectionModal<R extends PaiementRowBase>({
             className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20 disabled:opacity-50"
           >
             Retirer tous les versements du mois
+          </button>
+        ) : null}
+        {bailEnCours ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onLocataireParti}
+            title="Le locataire n'habite plus ici : mettre fin au bail à sa date de départ — plus aucun loyer ne sera réclamé après"
+            className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
+          >
+            Locataire parti — mettre fin au bail
           </button>
         ) : null}
       </div>
@@ -1020,6 +1299,8 @@ export function usePaiementActions<R extends PaiementRowBase>({
     snapshot: R;
   } | null>(null);
   const [loyerDu, setLoyerDu] = useState<R | null>(null);
+  const [periodes, setPeriodes] = useState<R | null>(null);
+  const [finBail, setFinBail] = useState<R | null>(null);
   const [confirm, setConfirm] = useState<EtatConfirm | null>(null);
   const [saisie, setSaisie] = useState<EtatSaisie | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1041,6 +1322,18 @@ export function usePaiementActions<R extends PaiementRowBase>({
 
   function ouvrirLoyerDu(row: R) {
     setLoyerDu(row);
+  }
+
+  /** Périodes de prix du bail (nouveau loyer à partir d'un mois). */
+  function ouvrirPeriodes(row: R) {
+    setPeriodes(row);
+  }
+
+  /** « Locataire parti » : la fenêtre « Mettre fin au bail » de partout
+   *  ailleurs (la correction se referme : elle passerait par-dessus). */
+  function ouvrirFinBail(row: R) {
+    setCorrection(null);
+    setFinBail(row);
   }
 
   function modifierVersement(
@@ -1276,6 +1569,37 @@ export function usePaiementActions<R extends PaiementRowBase>({
           onRetirerTout={() => retirerTout(rowCorrection)}
           onLoyerDu={() => ouvrirLoyerDu(rowCorrection)}
           onSupprimerFrais={(f) => supprimerFrais(f.id)}
+          onPeriodes={() => ouvrirPeriodes(rowCorrection)}
+          onLocataireParti={() => ouvrirFinBail(rowCorrection)}
+        />
+      ) : null}
+      {periodes ? (
+        <LoyerPeriodesModal
+          bailId={periodes.bail_id}
+          locataireName={periodes.locataire_name}
+          moisDefaut={mois}
+          fmt={fmt}
+          niveau={dessus}
+          onClose={() => setPeriodes(null)}
+          onChanged={async (msg) => {
+            onInfo?.(msg);
+            await onChanged();
+          }}
+        />
+      ) : null}
+      {finBail ? (
+        <FinBailModal
+          bailId={finBail.bail_id}
+          locataireNom={finBail.locataire_name}
+          immeubleName={finBail.immeuble_name ?? undefined}
+          logementNumero={finBail.logement_numero ?? undefined}
+          modeInitial="immediat"
+          onClose={() => setFinBail(null)}
+          onDone={(msg) => {
+            setFinBail(null);
+            onInfo?.(msg);
+            void onChanged();
+          }}
         />
       ) : null}
       {versement ? (
@@ -1355,6 +1679,8 @@ export function usePaiementActions<R extends PaiementRowBase>({
     ouvrirVersement,
     ouvrirCorrection,
     ouvrirLoyerDu,
+    ouvrirPeriodes,
+    ouvrirFinBail,
     modifierVersement,
     supprimerVersement,
     supprimerFrais,

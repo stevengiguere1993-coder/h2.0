@@ -31,6 +31,7 @@ from app.models.immobilier import (
 )
 from app.services.locatif_demarrage import get_demarrage
 from app.services.loyer_echeance import seuil_retard
+from app.services.loyer_periodes import loyer_du_mois
 from app.services.notifications import notify_role
 
 
@@ -99,14 +100,14 @@ async def _run() -> None:
             b
             for b in baux
             if b.id not in paid
-            and float(b.loyer_mensuel or 0) + frais_mois.get(b.id, 0.0) > 0.005
+            and loyer_du_mois(b, month_start) + frais_mois.get(b.id, 0.0) > 0.005
             and today > seuil_retard(month_start, b.jour_echeance)
         ]
         if not retards:
             return
 
         n = len(retards)
-        montant = sum(float(b.loyer_mensuel or 0) for b in retards)
+        montant = sum(loyer_du_mois(b, month_start) for b in retards)
         await notify_role(
             db,
             min_role="manager",

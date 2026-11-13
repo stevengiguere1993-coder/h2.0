@@ -77,6 +77,38 @@ def nb_mois_echus(
     return (fin.year - debut.year) * 12 + (fin.month - debut.month) + 1
 
 
+def bornes_echues(
+    bail: Bail, *, depuis: date, jusqua: date, today: Optional[date] = None
+) -> Optional[tuple[date, date]]:
+    """Premier et dernier 1er de mois échus (mêmes bornes que
+    ``nb_mois_echus``), ou None si aucun mois n'est échu."""
+    today = today or date.today()
+    if bail.date_debut is None:
+        return None
+    debut = max(bail.date_debut.replace(day=1), depuis.replace(day=1))
+    fin = min(jusqua.replace(day=1), today.replace(day=1))
+    fr = fin_reelle(bail)
+    if fr is not None:
+        fin = min(fin, fr.replace(day=1))
+    if fin < debut:
+        return None
+    return debut, fin
+
+
+def loyers_echus(
+    bail: Bail, *, depuis: date, jusqua: date, today: Optional[date] = None
+) -> float:
+    """SOMME des loyers des mois échus — chaque mois à SON prix (périodes
+    de loyer du bail, ``services/loyer_periodes``). Sans période : nombre
+    de mois × loyer, comme avant."""
+    from app.services.loyer_periodes import loyers_entre
+
+    b = bornes_echues(bail, depuis=depuis, jusqua=jusqua, today=today)
+    if b is None:
+        return 0.0
+    return loyers_entre(bail, b[0], b[1])
+
+
 def debut_collecte(immeuble, solde_depuis: date) -> date:
     """Début de la collecte pour un immeuble : la date posée sur sa fiche
     (ramenée au 1er du mois), jamais avant le démarrage du pôle."""
@@ -148,10 +180,10 @@ async def soldes_par_bail(
 
     out: Dict[int, float] = {}
     for b in baux:
-        n = nb_mois_echus(
+        dus = loyers_echus(
             b, depuis=depuis_bail.get(b.id, solde_depuis), jusqua=mois_courant, today=today
         )
-        solde = n * float(b.loyer_mensuel or 0) + frais.get(b.id, 0.0) - paye.get(b.id, 0.0)
+        solde = dus + frais.get(b.id, 0.0) - paye.get(b.id, 0.0)
         out[b.id] = max(0.0, round(solde, 2))
     return out
 
@@ -178,6 +210,8 @@ async def nb_frais_et_paiements(db: AsyncSession, bail_id: int) -> int:
 
 __all__ = [
     "apres_la_fin",
+    "bornes_echues",
+    "loyers_echus",
     "debut_collecte",
     "fin_reelle",
     "nb_frais_et_paiements",

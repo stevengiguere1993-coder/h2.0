@@ -19,6 +19,7 @@
  * garantir qu'une fiche ait le tableau sans les actions.
  */
 
+import { LoyerPeriodesInline } from "@/components/immobilier/loyer-periodes";
 import { useState } from "react";
 import { FileDown, Plus, Trash2 } from "lucide-react";
 
@@ -201,6 +202,15 @@ export function TableauSuiviBaux({
                       bailId={r.bail_id}
                       jour={r.jour_echeance}
                       onChanged={load}
+                    />
+                    {/* Nouveau prix à partir d'un mois (périodes de
+                        loyer, 2026-11-13) : le passé ne bouge pas. */}
+                    <LoyerPeriodesInline
+                      bailId={r.bail_id}
+                      locataireName={r.locataire_nom}
+                      fmt={money}
+                      onChanged={load}
+                      onFlash={setFlash}
                     />
                     {/* Rabais sur les premiers mois (bug 10) : même
                         fenêtre que sur la fiche du logement. */}

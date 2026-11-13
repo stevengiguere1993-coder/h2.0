@@ -190,6 +190,9 @@ async def ensure_critical_columns() -> None:
         ("imm_paiements_loyer", "cree_par", "VARCHAR(256)"),
         ("imm_paiements_loyer", "modifie_par", "VARCHAR(256)"),
         ("imm_paiements_loyer", "modifie_le", "TIMESTAMP WITH TIME ZONE"),
+        ("imm_paiements_loyer", "confirmation_envoyee_le", "TIMESTAMP WITH TIME ZONE"),
+        ("imm_paiements_loyer", "confirmation_canal", "VARCHAR(16)"),
+        ("imm_baux", "loyer_periodes_json", "TEXT"),
         # Refus d'un document signable (consentement notamment).
         ("imm_documents", "refuse_le", "TIMESTAMP WITH TIME ZONE"),
         ("imm_documents", "refuse_par", "VARCHAR(255)"),

@@ -57,6 +57,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import func, select
 
+from app.services.loyer_periodes import loyer_du_mois as _loyer_du_mois
 from app.models.immobilier import (
     Bail,
     BailStatus,
@@ -1243,11 +1244,11 @@ def _match_deterministe(
         POUR août glisse sur août au lieu d'écraser juillet (constaté
         en prod : toute la fin de mois s'imputait au mois de la date
         déjà réglé, et août restait « sans trace »)."""
-        loyer = float(bail.loyer_mensuel or 0)
+        loyer = _loyer_du_mois(bail, m)
         return couverts.get((bail.id, m), 0.0) >= loyer - _TOL > 0
 
     def _du_restant_bail(bail: Bail, m: date) -> float:
-        loyer = float(bail.loyer_mensuel or 0)
+        loyer = _loyer_du_mois(bail, m)
         du = loyer + frais_map.get((bail.id, m), 0.0)
         return round(du - paye_map.get((bail.id, m), 0.0), 2)
 
@@ -1316,7 +1317,7 @@ def _match_deterministe(
                 continue
             if _mois_couvert_par_banque(bail, m):
                 continue
-            loyer = float(bail.loyer_mensuel or 0)
+            loyer = _loyer_du_mois(bail, m)
             if loyer <= 0:
                 continue
             frais = frais_map.get((bail.id, m), 0.0)
@@ -1424,7 +1425,7 @@ def _match_deterministe(
                     if repli is None:
                         repli = m
                     du_restant = round(
-                        float(bail.loyer_mensuel or 0)
+                        _loyer_du_mois(bail, m)
                         + frais_map.get((bail.id, m), 0.0)
                         - paye_map.get((bail.id, m), 0.0),
                         2,

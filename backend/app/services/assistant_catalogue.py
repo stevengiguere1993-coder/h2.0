@@ -543,7 +543,11 @@ async def _h_solde_bail(
         ).scalar() or 0
     )
     loyer = float(bail.loyer_mensuel or 0)
-    solde = max(0.0, round(nb_mois * loyer + frais_total - paye_total, 2))
+    # Chaque mois à SON prix (périodes de loyer du bail, 2026-11-13).
+    from app.services.loyer_periodes import loyers_entre
+
+    loyers_dus = loyers_entre(bail, debut, fin) if nb_mois else 0.0
+    solde = max(0.0, round(loyers_dus + frais_total - paye_total, 2))
 
     ctx = await _bail_contexte(db, bail)
     return {
@@ -556,7 +560,7 @@ async def _h_solde_bail(
         "solde_du": solde,
         "detail": {
             "mois_echus": nb_mois,
-            "loyers_echus": round(nb_mois * loyer, 2),
+            "loyers_echus": round(loyers_dus, 2),
             "frais": round(frais_total, 2),
             "paye": round(paye_total, 2),
             "depuis": depuis.isoformat(),
