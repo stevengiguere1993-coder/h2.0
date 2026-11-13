@@ -290,15 +290,6 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "relance_plans",
     "rencontre_sections",
     "rencontres",
-    #: Tableau des dossiers suivis en rencontres + consignes à Kratos
-    #: (2026-11-13). Lecture IA par kratos_lire : GET /rencontres/dossiers
-    #: (tableau), /rencontres/dossiers/{id} (historique, fusions),
-    #: /rencontres/dossiers/doublons, /rencontres/dossiers/ordre-du-jour,
-    #: /rencontres/consignes ; écritures par kratos_action.
-    "rencontre_dossiers",
-    "rencontre_dossier_mentions",
-    "rencontre_dossier_doublons",
-    "rencontre_consignes",
     "rental_listings",
     "req_companies",
     "role_permissions",

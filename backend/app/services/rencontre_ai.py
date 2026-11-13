@@ -298,7 +298,6 @@ async def summarize_section(
     title: str,
     transcript: str,
     entreprises_context: Optional[list[dict]] = None,
-    consignes: str = "",
 ) -> dict:
     """Résume une section. Retourne toujours un dict valide.
 
@@ -327,8 +326,7 @@ async def summarize_section(
             )
 
     prompt = (
-        (consignes or "")
-        + f"## Section\n{title}\n\n"
+        f"## Section\n{title}\n\n"
         + ents_block
         + f"## Transcript brut\n{text[:30_000]}\n\n"
         "Génère le JSON selon le schéma."
@@ -358,7 +356,7 @@ async def summarize_section(
     return parsed
 
 
-async def summarize_global(sections: list[dict], consignes: str = "") -> str:
+async def summarize_global(sections: list[dict]) -> str:
     """sections = [{ title, summary, decisions, action_items, ... }]
     Retourne un résumé global texte (narratif).
 
@@ -402,9 +400,7 @@ async def summarize_global(sections: list[dict], consignes: str = "") -> str:
 
     try:
         res = await complete(
-            prompt=(consignes or "")
-            + "## Sections de la rencontre\n\n"
-            + fallback_text,
+            prompt="## Sections de la rencontre\n\n" + fallback_text,
             system=GLOBAL_SUMMARY_PROMPT,
             max_tokens=3000,
             temperature=SUMMARY_TEMPERATURE,

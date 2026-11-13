@@ -447,10 +447,6 @@ mots à chercher.
 - Les transcripts sont souvent bruités (dictée, mots mal transcrits) : \
 reconstitue le sens sans le signaler, mais garde les mentions \
 « [à vérifier] » quand le passage les porte.
-- Si un « Tableau des dossiers suivis » est fourni, commence par le \
-statut actuel du dossier d'après ce tableau (il est tenu à jour d'une \
-rencontre à l'autre), puis l'historique d'après les passages.
-- Respecte les consignes permanentes du dirigeant quand il y en a.
 - Cite toujours la rencontre (#ID et date) pour chaque fait.
 - Sois concis : quelques paragraphes ou une courte liste, pas de \
 préambule."""
@@ -546,41 +542,6 @@ def reponse_sans_ia(question: str, choisis: list[Passage], motif: str = "") -> s
     return "\n".join(lignes)
 
 
-def _ligne_dossier_suivi(d: dict) -> str:
-    bouts = [f"Dossier « {d['titre']} » — {d.get('statut_libelle') or d['statut']}"]
-    if d.get("responsable"):
-        bouts.append(f"responsable : {d['responsable']}")
-    if d.get("dernier_etat"):
-        bouts.append("dernier état : " + " ".join(d["dernier_etat"].split()))
-    if d.get("prochaine_action"):
-        bouts.append("prochaine action : " + " ".join(d["prochaine_action"].split()))
-    if d.get("derniere_discussion"):
-        bouts.append(f"dernière discussion : {d['derniere_discussion']}")
-    return "- " + " · ".join(bouts)
-
-
-def _bloc_dossiers(dossiers: list[dict]) -> str:
-    if not dossiers:
-        return ""
-    return (
-        "## Tableau des dossiers suivis (état tenu à jour d'une rencontre "
-        "à l'autre ; il fait foi pour le statut actuel)\n"
-        + "\n".join(_ligne_dossier_suivi(d) for d in dossiers)
-        + "\n\n"
-    )
-
-
-def _avec_dossiers(texte: str, dossiers: list[dict]) -> str:
-    """Réponse sans IA : le tableau des dossiers d'abord."""
-    if not dossiers:
-        return texte
-    lignes = ["**Dans le tableau des dossiers :**"]
-    lignes += [_ligne_dossier_suivi(d) for d in dossiers]
-    if texte.startswith("Je ne trouve pas"):
-        return "\n".join(lignes)
-    return "\n".join(lignes) + "\n\n" + texte
-
-
 async def repondre(
     db,
     question: str,
@@ -593,26 +554,12 @@ async def repondre(
     )
     choisis: list[Passage] = res.pop("_choisis")
     donnees = res.pop("_donnees")
-    # Tableau des dossiers : le statut suivi d'une rencontre à l'autre
-    # (2026-11-13) complète les passages.
-    dossiers: list[dict] = []
-    consignes = ""
-    try:
-        from app.services.rencontre_consignes import bloc_consignes
-        from app.services.rencontre_dossiers import chercher_pour_question
-
-        if entreprise_id is None:
-            dossiers = await chercher_pour_question(db, res["mots_cles"])
-        consignes = await bloc_consignes(db, "tout")
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        log.warning("rencontre_recherche: dossiers indisponibles (%s)", exc)
     base = {
         "question": question,
         "mots_cles": res["mots_cles"],
         "rencontres_lues": res["rencontres_lues"],
         "rencontres_trouvees": res["rencontres_trouvees"],
         "sources": _sources(choisis),
-        "dossiers": dossiers,
     }
     if not donnees:
         return {
@@ -632,7 +579,7 @@ async def repondre(
             "ia": False,
             "fournisseur": None,
         }
-    if not choisis and not dossiers:
+    if not choisis:
         return {
             **base,
             "reponse": (
@@ -648,17 +595,15 @@ async def repondre(
     if not is_configured():
         return {
             **base,
-            "reponse": _avec_dossiers(reponse_sans_ia(question, choisis), dossiers),
+            "reponse": reponse_sans_ia(question, choisis),
             "ia": False,
             "fournisseur": None,
         }
     prompt = (
-        consignes
-        + "## Index des rencontres (plus récentes d'abord)\n"
+        "## Index des rencontres (plus récentes d'abord)\n"
         f"{_bloc_index(donnees)}\n\n"
-        + _bloc_dossiers(dossiers)
-        + "## Passages trouvés (ordre chronologique)\n"
-        f"{_bloc_passages(choisis) or '(aucun passage)'}\n\n"
+        "## Passages trouvés (ordre chronologique)\n"
+        f"{_bloc_passages(choisis)}\n\n"
         f"## Question\n{question}"
     )
     try:
@@ -677,13 +622,10 @@ async def repondre(
         log.warning("rencontre_recherche: IA indisponible (%s)", exc)
         return {
             **base,
-            "reponse": _avec_dossiers(
-                reponse_sans_ia(
-                    question,
-                    choisis,
-                    "(L'IA ne répond pas pour le moment ; voici la recherche brute.)",
-                ),
-                dossiers,
+            "reponse": reponse_sans_ia(
+                question,
+                choisis,
+                "(L'IA ne répond pas pour le moment ; voici la recherche brute.)",
             ),
             "ia": False,
             "fournisseur": None,

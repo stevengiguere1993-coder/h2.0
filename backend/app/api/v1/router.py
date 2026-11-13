@@ -93,7 +93,6 @@ from app.api.v1.endpoints import (
     org_seed_canonical,
     optimisation,
     depenses_construction,
-    rencontre_dossiers,
     rencontres,
     rencontres_teams,
     timesheets,
@@ -543,8 +542,6 @@ api_router.include_router(qbo_conversions.router, dependencies=DEP_ENTREPRISES)
 # Clients en double dans QuickBooks (Comptabilité → Clients en double, 2026-10-18).
 api_router.include_router(qbo_doublons.router, dependencies=DEP_ENTREPRISES)
 api_router.include_router(rencontres_teams.router)
-# Dossiers et consignes AVANT rencontres, pour la même raison.
-api_router.include_router(rencontre_dossiers.router)
 api_router.include_router(rencontres.router)
 api_router.include_router(timesheets.router)
 api_router.include_router(ai.router)

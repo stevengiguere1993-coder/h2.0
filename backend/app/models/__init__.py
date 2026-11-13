@@ -134,12 +134,6 @@ from app.models.rencontre import (  # noqa: F401
     RencontreSection,
     RencontreStatus,
 )
-from app.models.rencontre_dossier import (  # noqa: F401
-    RencontreConsigne,
-    RencontreDossier,
-    RencontreDossierDoublon,
-    RencontreDossierMention,
-)
 from app.models.qg_strategic import (  # noqa: F401
     Activity,
     ActivityKind,

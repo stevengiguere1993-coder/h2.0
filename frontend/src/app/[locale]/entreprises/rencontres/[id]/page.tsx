@@ -20,7 +20,6 @@ import {
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { Link, useRouter } from "@/i18n/navigation";
-import { DemanderModification } from "@/components/entreprises/rencontres-consignes";
 import { QGTopbar, useEntreprisesLayout } from "../../layout";
 import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { RencontreEnvoiModal } from "@/components/entreprises/rencontre-envoi-modal";
@@ -408,26 +407,6 @@ export default function RencontreDetailPage() {
     } catch {
       setError("Suppression échouée.");
     }
-  }
-
-  /** Après une demande de modification : refait les résumés de la
-   *  rencontre (sections qui ont un transcript, puis résumé global)
-   *  avec la nouvelle consigne. */
-  async function refaireResumes() {
-    if (!data) return;
-    for (const sec of data.sections) {
-      if (!(sec.transcript || "").trim()) continue;
-      const r = await authedFetch(
-        `/api/v1/rencontres/${id}/sections/${sec.id}/summarize`,
-        { method: "POST" }
-      );
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    }
-    const r = await authedFetch(`/api/v1/rencontres/${id}/summarize`, {
-      method: "POST"
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    await load();
   }
 
   async function generateGlobal() {
@@ -885,16 +864,6 @@ export default function RencontreDetailPage() {
                   les sections sont résumées.
                 </p>
               )}
-              {data.sections.some((x) => (x.transcript || "").trim()) ? (
-                <div className="mt-3">
-                  <DemanderModification
-                    portee="resumes"
-                    exemple="ex. Résumé plus court, les tâches par personne en premier"
-                    libelleAppliquer="Retenir et refaire le résumé"
-                    onAppliquer={refaireResumes}
-                  />
-                </div>
-              ) : null}
               {parseEnvois(data.envois_json).length > 0 ? (
                 <div className="mt-3 space-y-1">
                   {parseEnvois(data.envois_json)

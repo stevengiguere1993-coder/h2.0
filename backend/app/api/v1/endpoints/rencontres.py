@@ -483,13 +483,8 @@ async def summarize_section_endpoint(
         entreprises_context = [
             {"id": e.id, "name": e.name} for e in rows
         ]
-    from app.services.rencontre_consignes import bloc_consignes
-
     summary = await summarize_section(
-        s.title,
-        s.transcript or "",
-        entreprises_context=entreprises_context,
-        consignes=await bloc_consignes(db, "resumes"),
+        s.title, s.transcript or "", entreprises_context=entreprises_context
     )
     s.ai_summary_json = json.dumps(summary, default=str)[:20_000]
     await db.commit()
@@ -525,23 +520,11 @@ async def summarize_global_endpoint(
             except Exception:  # noqa: BLE001
                 pass
         sections_dicts.append(d)
-    from app.services.rencontre_consignes import bloc_consignes
-
-    global_text = await summarize_global(
-        sections_dicts, consignes=await bloc_consignes(db, "resumes")
-    )
+    global_text = await summarize_global(sections_dicts)
     r.global_summary = global_text[:20_000]
     r.status = RencontreStatus.DONE.value
     await db.commit()
     await db.refresh(r)
-    # Tableau des dossiers : la rencontre résumée est analysée en
-    # arrière-plan (rien sans IA ; le job quotidien rattrape).
-    try:
-        from app.services.rencontre_dossiers import planifier_analyse
-
-        planifier_analyse()
-    except Exception as exc:  # noqa: BLE001
-        log.warning("rencontres: analyse des dossiers non planifiée: %s", exc)
     out = RencontreRead.model_validate(r)
     out.sections = [SectionRead.model_validate(s) for s in sections]
     return out
