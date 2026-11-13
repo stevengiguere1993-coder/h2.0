@@ -935,6 +935,16 @@ async def trigger_all_daily(
 
     await _safe("devlog-nps-dispatch", _run_devlog_nps_dispatch, details)
 
+    # Rencontres : tableau des dossiers (rencontres pas encore analysées,
+    # puis passe de doublons — fusion d'office des certains, liste des
+    # douteux). Steven, 2026-11-13.
+    async def _run_rencontre_dossiers():
+        from app.services.rencontre_dossiers import pour_cron
+
+        return await pour_cron()
+
+    await _safe("rencontre-dossiers", _run_rencontre_dossiers, details)
+
     ok_count = sum(1 for v in details.values() if v.get("ok"))
     fail_count = sum(1 for v in details.values() if not v.get("ok"))
     return MegaCronResult(

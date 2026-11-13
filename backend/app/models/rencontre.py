@@ -90,6 +90,14 @@ class Rencontre(Base, TimestampUpdateMixin):
     #: Colonne additive → ensure_critical_columns.
     envois_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    #: Empreinte du contenu (titre, date, résumés, transcripts) lors de la
+    #: dernière analyse des DOSSIERS (``rencontre_dossiers``). NULL ou
+    #: différente du contenu courant = à (ré)analyser. Colonne additive,
+    #: nullable → ajoutée au démarrage par ``ajouter_colonnes_manquantes``.
+    dossiers_empreinte: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+
 
 class RencontreSection(Base, TimestampUpdateMixin):
     """Une section = un topic discuté pendant la rencontre. Une retraite
