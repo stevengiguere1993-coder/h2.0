@@ -406,11 +406,6 @@ AVANT celui des rencontres), réservées à qui voit `entreprises.rencontres`.
    plus récente en reparle (`etat_manuel_le`). `Rencontre.dossiers_empreinte`
    (sha256 du contenu) dit quelles rencontres sont à (re)lire ; « oublié » =
    ouvert sans discussion depuis `JOURS_OUBLI` (21 jours).
-   Une rencontre qui ne parle PAS d'un dossier n'y touche pas : à la
-   première lecture en prod, l'IA avait rendu des dossiers existants avec
-   « n'a pas été abordé », devenu leur dernier état (dossiers 2, 4 et 7).
-   Le prompt l'interdit et `sans_non_aborde` retire ces phrases ; un item
-   qui ne dit rien d'autre ne laisse aucune mention.
 2. **Doublons** (`_verifier_doublons`) : même clé de titre et entreprise
    compatible → fusion d'office ; groupes proposés par l'IA → fusion d'office
    seulement si « certain » ET un mot distinctif commun ET entreprise
