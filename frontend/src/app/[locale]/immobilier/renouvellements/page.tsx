@@ -894,6 +894,19 @@ export default function RenouvellementsPage() {
   // directement la fiche « Préparer » de ce bail, une seule fois.
   const searchParams = useSearchParams();
   const bailIdParam = searchParams.get("bail_id");
+  // Lien déjà filtré (page « Aujourd'hui ») : ?onglet=assurances,
+  // consentements, releves31 ou renouvellements.
+  const ongletParam = searchParams.get("onglet");
+  useEffect(() => {
+    if (
+      ongletParam === "renouvellements" ||
+      ongletParam === "releves31" ||
+      ongletParam === "assurances" ||
+      ongletParam === "consentements"
+    ) {
+      setTab(ongletParam);
+    }
+  }, [ongletParam]);
   const lienProfondTraite = useRef(false);
   useEffect(() => {
     if (!list || lienProfondTraite.current) return;

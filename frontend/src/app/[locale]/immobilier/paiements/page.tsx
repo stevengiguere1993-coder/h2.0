@@ -53,6 +53,7 @@ import {
   indexValidations
 } from "@/components/immobilier/validation-bancaire";
 import { ImmeubleFiltre } from "@/components/immobilier/immeuble-filtre";
+import { useNomPageImmobilier } from "@/hooks/use-presentation-immobilier";
 
 /**
  * Paiements — vue transversale « collection des loyers »
@@ -250,6 +251,8 @@ function currentMonth(): string {
 
 export default function PaiementsPage() {
   const { currentEntrepriseId } = useImmobilierLayout();
+  // Refonte : la page s'appelle « Loyers » avec le nouveau menu.
+  const titrePage = useNomPageImmobilier("Paiements", "Loyers");
   const [mois, setMois] = useState(currentMonth());
   const [data, setData] = useState<Overview | null>(null);
   const [externe, setExterne] = useState<OverviewExterne | null>(null);
@@ -270,6 +273,21 @@ export default function PaiementsPage() {
     // portefeuille (retour Steven 2026-10-29) ; « Tous » reste à un clic.
   >("retard");
   const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
+  // Lien déjà filtré (page « Aujourd'hui ») : ?etat=retard, partiel,
+  // paye, attente, vacant ou all. Lu une fois à l'ouverture.
+  useEffect(() => {
+    const voulu = new URLSearchParams(window.location.search).get("etat");
+    if (
+      voulu === "all" ||
+      voulu === "paye" ||
+      voulu === "partiel" ||
+      voulu === "retard" ||
+      voulu === "attente" ||
+      voulu === "vacant"
+    ) {
+      setEtatFilter(voulu);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -692,7 +710,7 @@ export default function PaiementsPage() {
       <ImmobilierTopbar
         breadcrumbs={[
           { label: "Immobilier", href: "/immobilier" },
-          { label: "Paiements" }
+          { label: titrePage }
         ]}
       />
       <div className="p-4 pb-28 lg:p-6 lg:pb-28">
@@ -702,7 +720,7 @@ export default function PaiementsPage() {
               <ClipboardList className="h-5 w-5" />
             </span>
             <div>
-              <h1 className="text-2xl font-bold text-white">Paiements</h1>
+              <h1 className="text-2xl font-bold text-white">{titrePage}</h1>
               <p className="mt-1 max-w-2xl text-sm text-white/60">
                 Tous les baux actifs du portefeuille — qui a payé, qui est
                 en retard, et marquer payé en un clic.

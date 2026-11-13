@@ -600,6 +600,56 @@ code, seulement le lien `/m/codes`. Écrans : fiche immeuble / logement
 (`CodesAccesSection`), bloc « Accès » du BT (`CodesDuBon`), page
 cellulaire `/m/codes` (`MesCodes`).
 
+## Refonte d'Immobilier — présentation réglable, page « Aujourd'hui » (2026-11-13)
+
+Steven, après la revue écran par écran du pôle : « mettre tout ce qui est
+recommandé pour toutes les étapes », avec une condition : « avant de mettre
+tout en place, on s'assure de pouvoir backer à l'état actuel si c'est trop
+difficile d'utilisation ». La refonte se livre donc en LOTS, chacun derrière
+un interrupteur, et les écrans actuels RESTENT dans le code.
+
+1. **Interrupteur** (`app/services/immobilier_presentation.py`,
+   `AutomationSetting("immobilier_presentation")`, aucune table) : un
+   booléen par lot (`menu`, `loyers`, `baux`, `fiches`, `suivis`), vrai =
+   nouvelle présentation (le défaut). Commun à l'équipe, changé par un
+   admin dans Paramètres → Immobilier → « Présentation d'Immobilier »
+   (`/parametres/immobilier-presentation`), effet immédiat, aucune donnée
+   touchée. Routes `GET /api/v1/immobilier/presentation` (tout compte
+   connecté) et `PUT` (admin, corps partiel, clé inconnue → 422). `actif`
+   ne vaut vrai que pour un lot LIVRÉ (`LOTS[].livre`) : livrer un lot =
+   passer `livre` à vrai ET mettre à jour `DEFAUT` de
+   `frontend/src/hooks/use-presentation-immobilier.ts`.
+2. **Règle pour tout écran refait** : construire le nouvel écran À CÔTÉ
+   de l'actuel et choisir avec `usePresentationImmobilier()` ; ne pas
+   modifier le comportement de l'écran actuel ; mêmes adresses et mêmes
+   permissions (aucune clé de `access_registry` ne change) ; aucun
+   changement de forme des données. Les écrans actuels ne sont retirés
+   que sur demande de Steven.
+3. **Lot « menu »** (livré) : 10 entrées en 4 blocs (`NAV_BLOCS` de
+   `immobilier/layout.tsx`) au lieu de 14 à plat (`NAV`, gardé). Les pages
+   réunies sous une entrée (Loyers + Dépôts, Immeubles + Logements, Baux +
+   À louer, Finances + Frais de gestion) gardent leur adresse et
+   s'affichent en onglets en haut de la page (`ongletsPage`, rendu par
+   `ImmobilierTopbar`). Nouveaux noms : « Aujourd'hui » (vue d'ensemble),
+   « Loyers » (Paiements), « Baux » (Baux en vigueur), « À louer »
+   (Locations & nouveaux baux), « Baux hors Kratos » (Admin locative),
+   « Frais de gestion » (Facturation) — `useNomPageImmobilier(actuel,
+   nouveau)` pour le titre et le fil d'Ariane.
+4. **Page « Aujourd'hui »** (`GET /api/v1/immobilier/aujourdhui`,
+   `endpoints/immobilier_presentation.py`, textes composés par
+   `app/services/immobilier_aujourdhui.py`) : une seule liste de choses à
+   faire — loyers à encaisser, avis de renouvellement, baux signés à
+   importer, logements à louer, bons de travail ouverts, dépôts à rendre,
+   preuves d'assurance (demandées depuis plus de 14 jours) et
+   consentements (envoyés depuis plus de 7 jours) à relancer. Chaque
+   compte vient de la vue de la page où la ligne mène (aucune règle
+   métier recopiée) ; une vue illisible est annoncée (`indisponibles`), pas
+   passée sous silence. `nb_urgent` (loyers + avis en retard + bons
+   urgents) = pastille rouge du menu. Liens déjà filtrés :
+   `/immobilier/paiements?etat=`, `/immobilier/renouvellements?onglet=`.
+5. **Promotion** : chaque lot va d'abord sur le site d'essai ; il ne passe
+   en production qu'après le test de Steven (règle de promotion ci-dessus).
+
 ## Investisseurs — saisies manuelles : apports hors QB, prêts (2026-11-13)
 
 Steven : « Éric Brabant et Vincent Clark […] ont investi chacun 150 000 $

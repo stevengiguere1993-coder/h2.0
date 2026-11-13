@@ -19,6 +19,7 @@ import {
   History,
   Home,
   KeyRound,
+  LayoutDashboard,
   Mail,
   Map as MapIcon,
   Percent,
@@ -250,6 +251,15 @@ export const SECTIONS: Section[] = [
     icon: Home,
     volet: "immobilier",
     cards: [
+      {
+        // Refonte d'Immobilier (Steven, 2026-11-13) : l'interrupteur de
+        // retour à la présentation actuelle, lot par lot.
+        title: "Présentation d'Immobilier",
+        desc: "Nouvelle présentation ou présentation actuelle, lot par lot, pour toute l'équipe. Retour d'un clic.",
+        href: "/parametres/immobilier-presentation",
+        icon: LayoutDashboard,
+        minRole: "manager"
+      },
       {
         title: "Démarrage de la gestion locative",
         desc: "Date à partir de laquelle les soldes, historiques et mois facturables comptent.",
