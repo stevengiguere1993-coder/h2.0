@@ -369,3 +369,26 @@ def test_regles_de_calcul():
     assert svc.part_hors_taxes(1149.75, None, None) == 1000
     # Sous-total incohérent (plus grand que le total) : on ne s'y fie pas.
     assert svc.part_hors_taxes(1149.75, 2000, 1149.75) == 1000
+
+
+def test_onglet_de_comptabilite_garde_sa_cle():
+    """Steven 2026-11-13 : la page est un onglet de Comptabilité. Son
+    adresse doit rester régie par SA clé (préfixe le plus long), pas par
+    celle de Comptabilité ; l'ancienne adresse reste couverte."""
+    from app.core.access_registry import PAGES
+
+    def cle(chemin: str):
+        best = None
+        for p in PAGES:
+            for r in p.routes:
+                if chemin == r or chemin.startswith(r + "/"):
+                    if best is None or len(r) > best[1]:
+                        best = (p.key, len(r))
+        return best[0] if best else None
+
+    assert (
+        cle("/entreprises/comptabilite/depenses-construction")
+        == "entreprises.depenses_construction_dev"
+    )
+    assert cle("/entreprises/depenses-construction") == "entreprises.depenses_construction_dev"
+    assert cle("/entreprises/comptabilite") == "entreprises.comptabilite"

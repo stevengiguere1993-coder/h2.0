@@ -1284,3 +1284,32 @@ html[data-portal-theme="light"] .badge-neutral { color: #1e293b !important; back
 html[data-portal-theme="light"] .section-title { color: rgb(15 23 42 / 0.7) !important; }
 html[data-portal-theme="light"] .btn-outline-accent { color: #98651c !important; }
 html[data-portal-theme="light"] .btn-outline-rose { color: #9f1239 !important; }
+
+/* ── Police du portail réglable (Steven 2026-11-13) ─────────────────────
+   `--echelle-police` et `--police-portail` sont posés sur <html> par le
+   ThemeProvider (src/lib/police.ts, Paramètres → Affichage et police).
+   Les tailles Tailwind (text-xs…text-4xl) le multiplient déjà
+   (tailwind.config.ts) ; ici : le texte sans classe et les tailles en
+   pixels. Les plus petites (8 à 11 px) sont remontées d'un cran : c'était
+   l'essentiel du « c'est écrit petit ». Le site public n'a pas
+   l'attribut data-portal-theme → rien ne change pour lui. */
+html[data-portal-theme] body { font-size: calc(1rem * var(--echelle-police, 1)); }
+html[data-portal-theme] .text-\[8px\] { font-size: calc(10px * var(--echelle-police, 1)); }
+html[data-portal-theme] .text-\[9px\] { font-size: calc(10px * var(--echelle-police, 1)); }
+html[data-portal-theme] .text-\[10px\] { font-size: calc(11px * var(--echelle-police, 1)); }
+html[data-portal-theme] .text-\[10\.5px\] { font-size: calc(11.5px * var(--echelle-police, 1)); }
+html[data-portal-theme] .text-\[11px\] { font-size: calc(12px * var(--echelle-police, 1)); }
+html[data-portal-theme] .text-\[12px\] { font-size: calc(12.5px * var(--echelle-police, 1)); }
+html[data-portal-theme] .text-\[13px\] { font-size: calc(13px * var(--echelle-police, 1)); }
+html[data-portal-theme] .text-\[14px\] { font-size: calc(14px * var(--echelle-police, 1)); }
+html[data-portal-theme] .text-\[15px\] { font-size: calc(15px * var(--echelle-police, 1)); }
+html[data-portal-theme] .text-\[18px\] { font-size: calc(18px * var(--echelle-police, 1)); }
+html[data-portal-theme] .file\:text-\[10px\]::file-selector-button { font-size: calc(11px * var(--echelle-police, 1)); }
+html[data-portal-police] body,
+html[data-portal-police] h1,
+html[data-portal-police] h2,
+html[data-portal-police] h3,
+html[data-portal-police] h4,
+html[data-portal-police] .font-sans {
+  font-family: var(--police-portail);
+}
