@@ -413,8 +413,12 @@ AVANT celui des rencontres), réservées à qui voit `entreprises.rencontres`.
    qui ne dit rien d'autre ne laisse aucune mention.
 2. **Doublons** (`_verifier_doublons`) : même clé de titre et entreprise
    compatible → fusion d'office ; groupes proposés par l'IA → fusion d'office
-   seulement si « certain » ET un mot distinctif commun ET entreprise
+   seulement si « certain » ET un mot de SUJET commun ET entreprise
    compatible, sinon paire « à trancher » (`rencontre_dossier_doublons`).
+   Le lieu n'est pas le sujet (`_mots_sujet`) : les mots du contexte et de
+   l'entreprise ne comptent pas, sinon deux dossiers du même immeuble se
+   fusionnent (« Demande déboursé 1660 Saint-Clément » avait été fusionné
+   dans « Rencontre inspectrice ville 1660 Saint-Clément » en prod).
    Fusion DOUCE (`fusionne_dans_id`, mentions déplacées avec
    `dossier_origine_id`) : elle se défait d'un clic, et une paire « gardés
    séparés » n'est plus jamais proposée ni fusionnée.
