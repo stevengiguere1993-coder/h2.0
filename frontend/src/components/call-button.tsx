@@ -26,6 +26,8 @@ export type CallButtonProps = {
   className?: string;
   /** Petit format (icône seule) ou inline texte. */
   variant?: "icon" | "full";
+  /** Couleur : teal (défaut) ou ambre (rappel d'un appel manqué). */
+  tone?: "teal" | "amber";
 };
 
 export function CallButton({
@@ -34,7 +36,8 @@ export function CallButton({
   entityId,
   label = "Appeler",
   className,
-  variant = "full"
+  variant = "full",
+  tone = "teal"
 }: CallButtonProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,9 +90,11 @@ export function CallButton({
   const base = isIcon
     ? "inline-flex items-center justify-center rounded-full border h-7 w-7 text-[11px] transition disabled:opacity-40 disabled:cursor-not-allowed"
     : "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed";
-  const cls = normalized
-    ? "border-teal-500/40 bg-teal-500/10 text-teal-300 hover:bg-teal-500/20"
-    : "border-white/10 bg-white/5 text-white/40";
+  const cls = !normalized
+    ? "border-white/10 bg-white/5 text-white/40"
+    : tone === "amber"
+      ? "border-amber-500/40 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25"
+      : "border-teal-500/40 bg-teal-500/10 text-teal-300 hover:bg-teal-500/20";
 
   return (
     <span className="inline-flex flex-col items-start gap-1">
