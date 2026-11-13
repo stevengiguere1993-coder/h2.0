@@ -112,6 +112,8 @@ async def _motif_refus(db: AsyncSession, t: TalTransmission, liste: list[dict[st
     """Pourquoi la signature en ligne automatique n'est pas offerte pour ce bail (None = offerte)."""
     if t.statut != "transmise" or not t.document_id:
         return "le bail officiel n'a pas encore été généré"
+    if getattr(t, "remplacee_par_id", None):
+        return "ce bail a été remplacé par une version corrigée"
     if (t.langue or "fr") != "fr":
         return "le placement automatique des signatures est validé pour le bail en français seulement"
     motif = _motif_limites(liste)
