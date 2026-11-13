@@ -698,6 +698,10 @@ async def patch_report(
             HelpRequestStatus.PENDING.value,
         ):
             raise HTTPException(status_code=400, detail="Statut invalide")
+        # « Accepter » = « régler » (Steven, 2026-11-13) : plus d'étape
+        # intermédiaire, le statut « accepté » n'est plus posé.
+        if new_status == HelpRequestStatus.ACCEPTED.value:
+            new_status = HelpRequestStatus.RESOLVED.value
         change = _appliquer_statut(rec, new_status, owner, now)
 
     if change:
@@ -720,7 +724,8 @@ async def bulk_reports(
         return {"updated": 0}
     action = body.action.lower().strip()
     mapping = {
-        "accept": HelpRequestStatus.ACCEPTED.value,
+        # « Accepter » = « régler » (Steven, 2026-11-13).
+        "accept": HelpRequestStatus.RESOLVED.value,
         "reject": HelpRequestStatus.REJECTED.value,
         "resolve": HelpRequestStatus.RESOLVED.value,
     }
