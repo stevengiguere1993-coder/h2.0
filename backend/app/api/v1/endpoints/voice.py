@@ -5397,10 +5397,19 @@ async def list_sms(
     peer_e164: Optional[str] = Query(default=None, description="Filtre par numéro pair (entrant ou sortant)"),
     entity_type: Optional[str] = Query(default=None),
     entity_id: Optional[int] = Query(default=None),
+    sms_id: Optional[int] = Query(
+        default=None,
+        description=(
+            "Un seul SMS par son id (lien de notification "
+            "/telephonie?sms={id} → retrouver la conversation)"
+        ),
+    ),
 ) -> List[SmsRead]:
     from sqlalchemy import or_
 
     stmt = select(VoiceSms)
+    if sms_id is not None:
+        stmt = stmt.where(VoiceSms.id == sms_id)
     if peer_e164:
         stmt = stmt.where(
             or_(VoiceSms.from_e164 == peer_e164, VoiceSms.to_e164 == peer_e164)

@@ -10,9 +10,15 @@
  *
  * Depuis la fiche CIBLE : on choisit l'immeuble à absorber, le serveur
  * dit ce qu'il apporterait (logements, baux, hypothèques, codes…), on
- * règle les détails (préfixe des numéros en conflit, hypothèques saisies
- * en double à ne pas transférer, prix d'achat), puis on confirme. La
+ * règle les détails (hypothèques, prix d'achat), puis on confirme. La
  * fiche source disparaît ; son adresse devient l'adresse secondaire.
+ *
+ * Retour Steven 2026-11-13 : deux adresses → chaque logement garde son
+ * numéro et son adresse (préfixe demandé seulement pour un même numéro à
+ * la même adresse) ; prix d'achat et hypothèque saisis en deux moitiés
+ * s'additionnent ; et comme l'action est irréversible, le serveur joue
+ * la fusion sans rien écrire (« simulation ») pour montrer la fiche
+ * telle qu'elle sera AVANT le bouton de confirmation.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -36,6 +42,33 @@ type HypothequeApercu = {
   status: string;
   conjointe: boolean;
   en_double: boolean;
+  additionnable_avec?: number | null;
+  montant_additionne?: number | null;
+};
+
+type ModeHypotheques = "additionner" | "transferer" | "exclure";
+
+type Simulation = {
+  deplaces: Record<string, number>;
+  hypotheques_exclues: number;
+  hypotheques_additionnees: number;
+  resultat: {
+    name: string;
+    address: string;
+    address_secondaire?: string | null;
+    nb_logements?: number | null;
+    purchase_price?: number | null;
+    logements: { id: number; numero: string; adresse: string }[];
+    hypotheques: {
+      id: number;
+      preteur: string;
+      montant_initial: number;
+      paiement_mensuel?: number | null;
+      part_pct: number;
+    }[];
+    total_hypotheques: number;
+    total_paiements_mensuels: number;
+  };
 };
 
 type Apercu = {
@@ -46,6 +79,7 @@ type Apercu = {
   prefixe_suggere: string;
   hypotheques_source: HypothequeApercu[];
   hypotheques_en_double: number;
+  hypotheques_additionnables?: number;
   purchase_price_suggere?: number | null;
 };
 
@@ -53,6 +87,7 @@ export type FusionResultat = {
   immeuble: { id: number; name: string; address_secondaire?: string | null };
   deplaces: Record<string, number>;
   hypotheques_exclues: number;
+  hypotheques_additionnees?: number;
   immeuble_supprime_id: number;
   immeuble_supprime_nom: string;
 };
@@ -71,6 +106,10 @@ export function resumeDeplaces(res: FusionResultat): string {
   const parts = Object.entries(res.deplaces)
     .filter(([, n]) => n > 0)
     .map(([lib, n]) => `${n} ${lib}`);
+  if (res.hypotheques_additionnees)
+    parts.push(
+      `${res.hypotheques_additionnees} hypothèque(s) additionnée(s) en un seul prêt`
+    );
   if (res.hypotheques_exclues)
     parts.push(
       `${res.hypotheques_exclues} hypothèque(s) en double retirée(s)`
@@ -93,7 +132,8 @@ export function FusionImmeubleModal({
   const [apercu, setApercu] = useState<Apercu | null>(null);
   const [apercuBusy, setApercuBusy] = useState(false);
   const [prefixe, setPrefixe] = useState("");
-  const [exclure, setExclure] = useState(false);
+  const [modeHyp, setModeHyp] = useState<ModeHypotheques>("transferer");
+  const [simulation, setSimulation] = useState<Simulation | null>(null);
   const [prix, setPrix] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -122,6 +162,7 @@ export function FusionImmeubleModal({
 
   // Aperçu dès qu'une source est choisie.
   useEffect(() => {
+    setSimulation(null);
     if (sourceId == null) {
       setApercu(null);
       return;
@@ -144,7 +185,10 @@ export function FusionImmeubleModal({
         if (cancelled) return;
         setApercu(ap);
         setPrefixe(ap.prefixe_suggere || "");
-        setExclure(ap.hypotheques_en_double > 0);
+        // Chaque fiche porte sa moitié du prêt : on additionne d'office.
+        setModeHyp(
+          (ap.hypotheques_additionnables ?? 0) > 0 ? "additionner" : "transferer"
+        );
         setPrix(
           ap.purchase_price_suggere != null
             ? String(ap.purchase_price_suggere)
@@ -180,21 +224,24 @@ export function FusionImmeubleModal({
     [apercu]
   );
 
-  async function confirmer() {
+  /** Étape 1 → 2 (simuler = true) : la fusion est jouée sans rien écrire
+   *  et la fiche résultante s'affiche. Étape 2 : la vraie fusion. */
+  async function envoyer(simuler: boolean) {
     if (sourceId == null || !apercu) return;
     setBusy(true);
     setErr(null);
     try {
       const prixNum = prix.trim() === "" ? null : Number(prix.replace(/[^\d.,-]/g, "").replace(",", "."));
       const r = await authedFetch(
-        `/api/v1/immobilier/immeubles/${cible.id}/fusion`,
+        `/api/v1/immobilier/immeubles/${cible.id}/fusion${simuler ? "/simulation" : ""}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             source_immeuble_id: sourceId,
             prefixe_numeros: prefixe.trim() || null,
-            exclure_hypotheques: exclure,
+            hypotheques: modeHyp,
+            exclure_hypotheques: modeHyp === "exclure",
             purchase_price:
               prixNum != null && Number.isFinite(prixNum) ? prixNum : null
           })
@@ -206,7 +253,8 @@ export function FusionImmeubleModal({
         } | null;
         throw new Error(j?.detail || `HTTP ${r.status}`);
       }
-      onDone((await r.json()) as FusionResultat);
+      if (simuler) setSimulation((await r.json()) as Simulation);
+      else onDone((await r.json()) as FusionResultat);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -215,6 +263,17 @@ export function FusionImmeubleModal({
   }
 
   const source = apercu?.source;
+  const fiche = simulation?.resultat;
+  // Logements de la fiche simulée, regroupés par adresse civique.
+  const parAdresse = useMemo(() => {
+    const groupes: { adresse: string; numeros: string[] }[] = [];
+    for (const l of fiche?.logements ?? []) {
+      const g = groupes.find((x) => x.adresse === l.adresse);
+      if (g) g.numeros.push(l.numero);
+      else groupes.push({ adresse: l.adresse, numeros: [l.numero] });
+    }
+    return groupes;
+  }, [fiche]);
   const inputCls =
     "w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500";
 
@@ -238,6 +297,121 @@ export function FusionImmeubleModal({
         </div>
 
         <div className="space-y-4 overflow-y-auto p-5 text-sm text-white/80">
+          {fiche && source ? (
+            <>
+              <p className="text-xs font-semibold text-white">
+                Voici la fiche telle qu&apos;elle sera après la fusion. Rien
+                n&apos;est encore changé.
+              </p>
+              <div className="rounded-lg border border-brand-800 bg-brand-900 p-3">
+                <p className="text-sm font-bold text-white">{fiche.name}</p>
+                <p className="mt-0.5 text-xs text-white/70">
+                  {fiche.address}
+                  {fiche.address_secondaire
+                    ? ` · ${fiche.address_secondaire}`
+                    : ""}
+                </p>
+                <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                  <dt className="text-white/60">Prix d&apos;achat</dt>
+                  <dd className="text-right font-semibold text-white">
+                    {fmtMontant(fiche.purchase_price)}
+                  </dd>
+                  <dt className="text-white/60">Hypothèques (montant initial)</dt>
+                  <dd className="text-right font-semibold text-white">
+                    {fmtMontant(fiche.total_hypotheques)}
+                  </dd>
+                  <dt className="text-white/60">Versements mensuels</dt>
+                  <dd className="text-right font-semibold text-white">
+                    {fmtMontant(fiche.total_paiements_mensuels)}
+                  </dd>
+                  <dt className="text-white/60">Logements</dt>
+                  <dd className="text-right font-semibold text-white">
+                    {fiche.logements.length}
+                  </dd>
+                </dl>
+              </div>
+
+              <div className="rounded-lg border border-brand-800 bg-brand-900 p-3">
+                <p className="text-xs font-semibold text-white">
+                  Logements, par adresse
+                </p>
+                {parAdresse.map((g) => (
+                  <div key={g.adresse} className="mt-2">
+                    <p className="text-[11px] font-semibold text-white/70">
+                      {g.adresse} ({g.numeros.length})
+                    </p>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {g.numeros.map((n, i) => (
+                        <span key={`${n}-${i}`} className="badge badge-neutral">
+                          {n}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="rounded-lg border border-brand-800 bg-brand-900 p-3">
+                <p className="text-xs font-semibold text-white">Hypothèques</p>
+                {fiche.hypotheques.length ? (
+                  <ul className="mt-1 space-y-0.5 text-xs text-white/70">
+                    {fiche.hypotheques.map((h) => (
+                      <li key={h.id} className="flex flex-wrap items-center gap-2">
+                        <span className="text-white">{h.preteur}</span>
+                        <span>{fmtMontant(h.montant_initial)}</span>
+                        {h.paiement_mensuel != null ? (
+                          <span>{fmtMontant(h.paiement_mensuel)} / mois</span>
+                        ) : null}
+                        {h.part_pct < 100 ? (
+                          <span className="badge badge-sky">
+                            Part de {h.part_pct} %
+                          </span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-1 text-xs text-white/60">Aucune.</p>
+                )}
+                {simulation.hypotheques_additionnees ? (
+                  <p className="mt-1 text-[11px] text-white/60">
+                    {simulation.hypotheques_additionnees} prêt(s) saisi(s) en
+                    deux moitiés réuni(s) en un seul.
+                  </p>
+                ) : null}
+                {simulation.hypotheques_exclues ? (
+                  <p className="mt-1 text-[11px] text-white/60">
+                    {simulation.hypotheques_exclues} hypothèque(s) de «{" "}
+                    {source.name} » non transférée(s).
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="rounded-lg border border-brand-800 bg-brand-900 p-3">
+                <p className="text-xs font-semibold text-white">
+                  Rattaché à la fiche depuis « {source.name} »
+                </p>
+                <ul className="mt-1 grid grid-cols-2 gap-x-3 text-xs text-white/70">
+                  {Object.entries(simulation.deplaces)
+                    .filter(([, n]) => n > 0)
+                    .map(([lib, n]) => (
+                      <li key={lib}>
+                        <span className="font-semibold text-white">{n}</span>{" "}
+                        {lib}
+                      </li>
+                    ))}
+                </ul>
+              </div>
+
+              <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                ⚠ Dernière étape : en confirmant, la fiche « {source.name} »
+                est supprimée et la fusion ne peut plus être annulée. «
+                Retour » pour changer un réglage, rien n&apos;est encore
+                écrit.
+              </p>
+            </>
+          ) : (
+            <>
           <p className="text-xs text-white/60">
             Un seul bâtiment saisi en deux fiches (deux entrées, deux
             adresses) ? Choisis la fiche à absorber : ses logements, baux,
@@ -322,7 +496,8 @@ export function FusionImmeubleModal({
                 <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 p-3">
                   <p className="flex items-center gap-2 text-xs font-semibold text-amber-200">
                     <AlertTriangle className="h-3.5 w-3.5" /> Numéros déjà
-                    présents dans {cible.name} : {conflits.join(", ")}
+                    présents à la même adresse dans {cible.name} :{" "}
+                    {conflits.join(", ")}
                   </p>
                   <label className="mt-2 block text-[11px] font-semibold text-white/60">
                     Préfixe des logements déplacés (ex. « 9085- » → « 9085-1 »)
@@ -334,6 +509,11 @@ export function FusionImmeubleModal({
                     placeholder={apercu.prefixe_suggere || "9085-"}
                   />
                 </div>
+              ) : apercu.source.nb_logements > 0 ? (
+                <p className="rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-xs text-white/70">
+                  Les numéros de logement restent tels quels : chaque logement
+                  garde son numéro et son adresse ({source.address}).
+                </p>
               ) : null}
 
               {apercu.hypotheques_source.length ? (
@@ -349,7 +529,12 @@ export function FusionImmeubleModal({
                         {h.conjointe ? (
                           <span className="badge badge-sky">Conjointe</span>
                         ) : null}
-                        {h.en_double ? (
+                        {h.montant_additionne != null ? (
+                          <span className="badge badge-amber">
+                            Même prêteur que sur {cible.name} : ensemble{" "}
+                            {fmtMontant(h.montant_additionne)}
+                          </span>
+                        ) : h.en_double ? (
                           <span className="badge badge-amber">
                             Même prêteur et montant que sur {cible.name}
                           </span>
@@ -357,20 +542,43 @@ export function FusionImmeubleModal({
                       </li>
                     ))}
                   </ul>
-                  <label className="mt-2 flex items-start gap-2 text-xs text-white/80">
-                    <input
-                      type="checkbox"
-                      checked={exclure}
-                      onChange={(e) => setExclure(e.target.checked)}
-                      className="mt-0.5 h-3.5 w-3.5 accent-accent-500"
-                    />
-                    <span>
-                      Ces hypothèques sont les mêmes que celles de{" "}
-                      {cible.name} (hypothèque conjointe saisie deux fois) :
-                      ne pas les transférer. Elles disparaissent avec la
-                      fiche absorbée et ne sont plus comptées en double.
-                    </span>
-                  </label>
+                  <div className="mt-2 space-y-1.5">
+                    {(
+                      [
+                        [
+                          "additionner",
+                          "Additionner : chaque fiche porte sa moitié du même prêt, les réunir en un seul (montant et versement additionnés).",
+                          (apercu.hypotheques_additionnables ?? 0) > 0
+                        ],
+                        [
+                          "transferer",
+                          "Transférer telles quelles : des prêts distincts, tous comptés sous la fiche fusionnée.",
+                          true
+                        ],
+                        [
+                          "exclure",
+                          `Ne pas transférer : le même prêt saisi deux fois en entier, déjà sur ${cible.name}.`,
+                          true
+                        ]
+                      ] as [ModeHypotheques, string, boolean][]
+                    )
+                      .filter(([, , offert]) => offert)
+                      .map(([mode, texte]) => (
+                        <label
+                          key={mode}
+                          className="flex items-start gap-2 text-xs text-white/80"
+                        >
+                          <input
+                            type="radio"
+                            name="fusion-hypotheques"
+                            checked={modeHyp === mode}
+                            onChange={() => setModeHyp(mode)}
+                            className="mt-0.5 h-3.5 w-3.5 accent-accent-500"
+                          />
+                          <span>{texte}</span>
+                        </label>
+                      ))}
+                  </div>
                 </div>
               ) : null}
 
@@ -387,20 +595,22 @@ export function FusionImmeubleModal({
                 />
                 <p className="mt-1 text-[11px] text-white/50">
                   {cible.name} : {fmtMontant(apercu.cible.purchase_price)} ·{" "}
-                  {source.name} : {fmtMontant(source.purchase_price)}. Un prix
-                  saisi en deux moitiés s&apos;additionne ; le même prix saisi
-                  deux fois ne se compte qu&apos;une fois.
+                  {source.name} : {fmtMontant(source.purchase_price)}. Les
+                  deux s&apos;additionnent ; corrige le montant si le prix
+                  complet avait été saisi sur chaque fiche.
                 </p>
               </div>
 
-              <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
-                ⚠ Action irréversible : la fiche « {source.name} » sera
-                supprimée après le transfert. Les évaluations des deux fiches
-                sont conservées ; refais une évaluation du bâtiment complet
-                si chacune ne valait que sa moitié.
+              <p className="rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-xs text-white/70">
+                Prochaine étape : un aperçu de la fiche fusionnée, avant de
+                confirmer. Les évaluations des deux fiches sont conservées ;
+                refais une évaluation du bâtiment complet si chacune ne
+                valait que sa moitié.
               </p>
             </>
           ) : null}
+            </>
+          )}
 
           {err ? (
             <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
@@ -418,9 +628,19 @@ export function FusionImmeubleModal({
           >
             Annuler
           </button>
+          {simulation ? (
+            <button
+              type="button"
+              onClick={() => setSimulation(null)}
+              disabled={busy}
+              className="btn-secondary btn-sm"
+            >
+              Retour
+            </button>
+          ) : null}
           <button
             type="button"
-            onClick={() => void confirmer()}
+            onClick={() => void envoyer(!simulation)}
             disabled={busy || !apercu || apercuBusy || prefixeRequis}
             className="btn-primary btn-sm disabled:opacity-50"
             title={
@@ -434,7 +654,9 @@ export function FusionImmeubleModal({
             ) : (
               <GitMerge className="h-3.5 w-3.5" />
             )}
-            Fusionner dans {cible.name}
+            {simulation
+              ? `Confirmer la fusion dans ${cible.name}`
+              : "Voir le résultat avant de fusionner"}
           </button>
         </div>
       </div>
