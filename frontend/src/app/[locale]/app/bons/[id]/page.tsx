@@ -31,6 +31,7 @@ import { AddressInput } from "@/components/address-input";
 import { authedFetch } from "@/lib/auth";
 import { fetchAllPages } from "@/lib/fetch-all";
 import { useConfirm } from "@/components/confirm-dialog";
+import { CodesDuBon } from "@/components/immobilier/codes-acces";
 
 type Bon = {
   id: number;
@@ -45,6 +46,8 @@ type Bon = {
   bon_type?: string;
   requires_signature?: boolean;
   assignee_user_id?: number | null;
+  /** Envoi seulement : donner à l'assigné l'accès aux codes du lieu. */
+  donner_acces_codes?: boolean;
   kind?: string | null;
   owner_entreprise_id?: number | null;
   immeuble_id?: number | null;
@@ -195,6 +198,9 @@ export default function BonDetailPage() {
   // retourne ; sinon vers le board des bons de travail.
   const fromCockpit = search.get("from") === "cockpit";
   const id = Number(params.id);
+  // Assignation : accès aux codes du lieu jusqu'à la fin du BT (coché
+  // d'office, Steven 2026-11-13).
+  const [accesCodes, setAccesCodes] = useState(true);
   const router = useNextRouter();
 
   const [b, setB] = useState<Bon | null>(null);
@@ -1367,7 +1373,8 @@ export default function BonDetailPage() {
                         patchBon({
                           assignee_user_id: e.target.value
                             ? Number(e.target.value)
-                            : null
+                            : null,
+                          donner_acces_codes: accesCodes
                         })
                       }
                       className="input"
@@ -1379,10 +1386,26 @@ export default function BonDetailPage() {
                         </option>
                       ))}
                     </select>
+                    {b.immeuble_id || b.logement_id ? (
+                      <label className="mt-2 flex items-start gap-2 text-xs text-white/80">
+                        <input
+                          type="checkbox"
+                          checked={accesCodes}
+                          onChange={(e) => setAccesCodes(e.target.checked)}
+                          className="mt-0.5 h-4 w-4"
+                        />
+                        Donner à l&apos;assigné l&apos;accès aux codes du
+                        logement jusqu&apos;à la fin du BT
+                      </label>
+                    ) : null}
                   </div>
                 </div>
               </section>
             ) : null}
+
+            {/* Codes d'accès du lieu (Steven 2026-11-13) : visibles par
+                l'assigné tant que le BT est ouvert. */}
+            <CodesDuBon bonId={id} />
 
             {/* Tâches cochables (point 12) : à faire au même endroit — une
                 par bon fusionné ou saisies à la main. Toutes cochées →

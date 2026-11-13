@@ -1006,6 +1006,11 @@ async def ensure_immobilier_aux_tables() -> None:
             RelanceLoyer,
             Releve31,
         )
+        from app.models.code_acces import (  # noqa: F401
+            CodeAccesConsultation,
+            CodeAccesPartage,
+            ImmeubleCodePhoto,
+        )
 
         async with engine.begin() as conn:
             await conn.run_sync(
@@ -1033,6 +1038,11 @@ async def ensure_immobilier_aux_tables() -> None:
                         FraisManuelGestion.__table__,
                         # Codes d'accès de l'immeuble (2026-10-18).
                         ImmeubleCode.__table__,
+                        # Partage contrôlé des codes (2026-11-13) : photos
+                        # d'emplacement, accès temporaires, journal.
+                        ImmeubleCodePhoto.__table__,
+                        CodeAccesPartage.__table__,
+                        CodeAccesConsultation.__table__,
                         # Hypothèque conjointe : répartition entre
                         # immeubles (2026-10-18).
                         HypothequeImmeuble.__table__,

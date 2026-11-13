@@ -197,6 +197,11 @@ from app.models.immobilier import (  # noqa: F401
     MaintenanceStatus,
     PaiementLoyer,
 )
+from app.models.code_acces import (
+    CodeAccesConsultation,
+    CodeAccesPartage,
+    ImmeubleCodePhoto,
+)
 from app.models.kratos_message import (  # noqa: F401
     KratosIntentKind,
     KratosMessage,
@@ -400,6 +405,9 @@ __all__ = [
     "DepenseImmeuble",
     "Immeuble",
     "ImmeubleCode",
+    "ImmeubleCodePhoto",
+    "CodeAccesPartage",
+    "CodeAccesConsultation",
     "ImmeubleOwnership",
     "Investissement",
     "InvestDocument",

@@ -16,6 +16,12 @@ La fiche de l'immeuble ne liste que ses propres codes (``logement_id``
 NULL) sauf ``?inclure_logements=true`` ; la fiche du logement a ses
 routes ``/logements/{id}/codes`` (mêmes règles de visibilité que
 l'immeuble du logement).
+
+Partage contrôlé (Steven 2026-11-13, « je ne peux pas donner accès au
+code à tous mes employés ») : ajout, modification et retrait réservés aux
+gestionnaires (manager+) ; les listes CACHENT la valeur du code
+(``code_masque``) et un employé n'y voit que les codes qu'on lui a
+partagés (``app/services/codes_acces.py``, routes ``/codes-acces``).
 """
 
 from __future__ import annotations
@@ -28,12 +34,15 @@ from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, DBSession
 from app.core.permissions import visible_immeuble_ids
+from app.models.code_acces import ImmeubleCodePhoto
 from app.models.immobilier import Immeuble, ImmeubleCode, Logement
 from app.schemas.immobilier import (
     ImmeubleCodeCreate,
+    ImmeubleCodePhotoRead,
     ImmeubleCodeRead,
     ImmeubleCodeUpdate,
 )
+from app.services import codes_acces as svc
 
 router = APIRouter(prefix="/immobilier", tags=["immobilier-codes"])
 
@@ -45,6 +54,59 @@ def _require_volet(user: CurrentUser) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Volet « Immobilier » non autorisé pour cet utilisateur.",
         )
+
+
+def _require_gestionnaire(user) -> None:
+    if not svc.peut_gerer(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Seul un gestionnaire peut ajouter ou modifier les codes "
+                "d'accès. Demande-lui de te partager le code."
+            ),
+        )
+
+
+async def lire_codes(
+    db, codes: list[ImmeubleCode], *, reveler: bool = False
+) -> List[ImmeubleCodeRead]:
+    """Codes + métadonnées de leurs photos ; valeur cachée sauf
+    ``reveler``."""
+    ids = [c.id for c in codes]
+    photos: dict[int, list[ImmeubleCodePhotoRead]] = {}
+    if ids:
+        rows = (
+            await db.execute(
+                select(ImmeubleCodePhoto)
+                .where(ImmeubleCodePhoto.code_id.in_(ids))
+                .order_by(ImmeubleCodePhoto.id.asc())
+            )
+        ).scalars().all()
+        for ph in rows:
+            photos.setdefault(ph.code_id, []).append(
+                ImmeubleCodePhotoRead.model_validate(ph)
+            )
+    out = []
+    for c in codes:
+        out.append(
+            ImmeubleCodeRead(
+                id=c.id,
+                immeuble_id=c.immeuble_id,
+                logement_id=c.logement_id,
+                libelle=c.libelle,
+                code=c.code if reveler else None,
+                code_masque=not reveler,
+                note=c.note,
+                type_code=c.type_code,
+                emplacement=c.emplacement,
+                photos=photos.get(c.id, []),
+                position=c.position or 0,
+                created_by_email=c.created_by_email,
+                created_at=c.created_at,
+                updated_at=c.updated_at,
+            )
+        )
+    return out
 
 
 async def _immeuble_visible_ou_404(db, user, immeuble_id: int) -> Immeuble:
@@ -77,6 +139,7 @@ async def _code_ou_404(db, immeuble_id: int, code_id: int) -> ImmeubleCode:
 
 async def _liste(
     db,
+    user,
     immeuble_id: int,
     *,
     logement_id: Optional[int] = None,
@@ -90,12 +153,16 @@ async def _liste(
         q = select(ImmeubleCode).where(ImmeubleCode.immeuble_id == immeuble_id)
         if not inclure_logements:
             q = q.where(ImmeubleCode.logement_id.is_(None))
-    rows = (
-        await db.execute(
-            q.order_by(ImmeubleCode.position.asc(), ImmeubleCode.id.asc())
-        )
-    ).scalars().all()
-    return [ImmeubleCodeRead.model_validate(r) for r in rows]
+    rows = list(
+        (
+            await db.execute(
+                q.order_by(ImmeubleCode.position.asc(), ImmeubleCode.id.asc())
+            )
+        ).scalars().all()
+    )
+    # Employé : seulement les codes qu'on lui a partagés.
+    visibles = await svc.codes_visibles(db, user, rows)
+    return await lire_codes(db, [c for c in rows if c.id in visibles])
 
 
 async def _creer(
@@ -120,6 +187,8 @@ async def _creer(
         libelle=payload.libelle,
         code=payload.code,
         note=(payload.note or "").strip() or None,
+        type_code=payload.type_code,
+        emplacement=(payload.emplacement or "").strip() or None,
         position=int(derniere if derniere is not None else -1) + 1,
         created_by_email=getattr(user, "email", None),
     )
@@ -129,19 +198,20 @@ async def _creer(
     db.add(obj)
     await db.commit()
     await db.refresh(obj)
-    return ImmeubleCodeRead.model_validate(obj)
+    return (await lire_codes(db, [obj], reveler=True))[0]
 
 
 async def _modifier(db, obj: ImmeubleCode, payload: ImmeubleCodeUpdate):
     data = payload.model_dump(exclude_unset=True)
-    if "note" in data:
-        data["note"] = (data["note"] or "").strip() or None
+    for champ in ("note", "emplacement"):
+        if champ in data:
+            data[champ] = (data[champ] or "").strip() or None
     for k, v in data.items():
         setattr(obj, k, v)
     obj.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(obj)
-    return ImmeubleCodeRead.model_validate(obj)
+    return (await lire_codes(db, [obj], reveler=True))[0]
 
 
 async def _logement_visible_ou_404(db, user, logement_id: int) -> Logement:
@@ -180,7 +250,9 @@ async def list_codes_immeuble(
     logements (``logement_id`` renseigné)."""
     _require_volet(user)
     await _immeuble_visible_ou_404(db, user, immeuble_id)
-    return await _liste(db, immeuble_id, inclure_logements=inclure_logements)
+    return await _liste(
+        db, user, immeuble_id, inclure_logements=inclure_logements
+    )
 
 
 @router.post(
@@ -196,6 +268,7 @@ async def create_code_immeuble(
     user: CurrentUser,
 ) -> ImmeubleCodeRead:
     _require_volet(user)
+    _require_gestionnaire(user)
     await _immeuble_visible_ou_404(db, user, immeuble_id)
     return await _creer(db, user, immeuble_id, payload)
 
@@ -213,6 +286,7 @@ async def update_code_immeuble(
     user: CurrentUser,
 ) -> ImmeubleCodeRead:
     _require_volet(user)
+    _require_gestionnaire(user)
     await _immeuble_visible_ou_404(db, user, immeuble_id)
     obj = await _code_ou_404(db, immeuble_id, code_id)
     return await _modifier(db, obj, payload)
@@ -227,6 +301,7 @@ async def delete_code_immeuble(
     immeuble_id: int, code_id: int, db: DBSession, user: CurrentUser
 ) -> None:
     _require_volet(user)
+    _require_gestionnaire(user)
     await _immeuble_visible_ou_404(db, user, immeuble_id)
     obj = await _code_ou_404(db, immeuble_id, code_id)
     await db.delete(obj)
@@ -246,7 +321,7 @@ async def list_codes_logement(
 ) -> List[ImmeubleCodeRead]:
     _require_volet(user)
     lg = await _logement_visible_ou_404(db, user, logement_id)
-    return await _liste(db, lg.immeuble_id, logement_id=logement_id)
+    return await _liste(db, user, lg.immeuble_id, logement_id=logement_id)
 
 
 @router.post(
@@ -262,6 +337,7 @@ async def create_code_logement(
     user: CurrentUser,
 ) -> ImmeubleCodeRead:
     _require_volet(user)
+    _require_gestionnaire(user)
     lg = await _logement_visible_ou_404(db, user, logement_id)
     return await _creer(db, user, lg.immeuble_id, payload, logement_id)
 
@@ -279,6 +355,7 @@ async def update_code_logement(
     user: CurrentUser,
 ) -> ImmeubleCodeRead:
     _require_volet(user)
+    _require_gestionnaire(user)
     await _logement_visible_ou_404(db, user, logement_id)
     obj = await _code_logement_ou_404(db, logement_id, code_id)
     return await _modifier(db, obj, payload)
@@ -293,6 +370,7 @@ async def delete_code_logement(
     logement_id: int, code_id: int, db: DBSession, user: CurrentUser
 ) -> None:
     _require_volet(user)
+    _require_gestionnaire(user)
     await _logement_visible_ou_404(db, user, logement_id)
     obj = await _code_logement_ou_404(db, logement_id, code_id)
     await db.delete(obj)

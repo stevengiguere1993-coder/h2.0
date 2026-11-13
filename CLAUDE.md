@@ -413,3 +413,29 @@ du CSV EmployeurD restent à 0. Journées de Montréal (plus de bornes UTC).
 Défaut sans réglage = ancien cycle (dimanche → samedi, 19 avril 2026, 14 j).
 Les feuilles de temps du pôle Entreprises (`timesheets.py`, 14 jours
 alignés sur le lundi 2026-06-01) ne lisent PAS encore ce réglage.
+
+## Codes d'accès — partage contrôlé (2026-11-13)
+
+Steven : « je ne peux pas donner accès au code à tous mes employés […] le
+gestionnaire a accès à la liste de codes, il peut envoyer à un employé le
+code d'un endroit avec un nombre de jours défini, ou jusqu'à la fin d'un
+BT ou d'un projet ». Service `app/services/codes_acces.py`, routes
+`/api/v1/codes-acces` (ouvertes à tout compte connecté, chaque route
+vérifie gestionnaire ou partage actif). Seuls les gestionnaires
+(manager+) voient tous les codes et les ajoutent / modifient ; être
+affecté à l'immeuble NE suffit PLUS. Les listes cachent la valeur
+(`code_masque`) ; « Afficher » (`POST /codes-acces/codes/{id}/afficher`)
+la renvoie et journalise (`imm_code_consultations`). Code : `type_code`,
+`emplacement`, photos (`imm_code_photos`). Partage (`imm_code_partages`) :
+portée code / logement (+ codes de son immeuble) / immeuble ; fin
+`jours` / `date` (23 h 59 Montréal), `bt` (BT signé, complété, facturé ou
+annulé), `projet` (livré) ; l'état actif est TOUJOURS recalculé à la
+lecture, le filet horaire (`qbo_nets` → `filet_partages`) note la
+fermeture et alerte les gestionnaires une fois quand un compte désactivé
+avait reçu des codes. Assigner un BT rattaché à un lieu donne d'office
+l'accès à l'assigné jusqu'à la fin du BT (`donner_acces_codes: false`
+pour l'éviter, champ exclu du `model_dump`) ; réassigner ferme l'accès
+de l'ancien (`reassigne`). Le texto de partage ne contient JAMAIS le
+code, seulement le lien `/m/codes`. Écrans : fiche immeuble / logement
+(`CodesAccesSection`), bloc « Accès » du BT (`CodesDuBon`), page
+cellulaire `/m/codes` (`MesCodes`).
