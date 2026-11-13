@@ -32,45 +32,13 @@ type HelpReport = {
   resolved_at: string | null;
   has_screenshot?: boolean;
   resolution_notes?: string | null;
-  section?: string | null;
-  rejected_at?: string | null;
-  traite_le?: string | null;
-  traite_par?: string | null;
 };
-
-type Onglet = "pending" | "accepted" | "historique" | "all";
-
-/** Sections proposées au traitement (saisie libre aussi possible). */
-const SECTIONS = [
-  "Construction",
-  "Construction · Punch",
-  "Construction · Projets",
-  "Construction · Soumissions",
-  "Construction · Facturation",
-  "Construction · Achats",
-  "Immobilier",
-  "Immobilier · Gestion locative",
-  "Entreprises",
-  "Entreprises · Comptabilité",
-  "Entreprises · Rencontres",
-  "Entreprises · Employés",
-  "Prospection",
-  "Communication",
-  "Développement logiciel",
-  "Zone employés (mobile)",
-  "Espace investisseur",
-  "Paramètres"
-];
-
-function dateHeure(iso: string | null | undefined): string {
-  return iso ? new Date(iso).toLocaleString("fr-CA") : "";
-}
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "En attente",
   accepted: "Accepté",
-  rejected: "Refusé",
-  resolved: "Réglé"
+  rejected: "Rejeté",
+  resolved: "Résolu"
 };
 
 const STATUS_BG: Record<string, string> = {
@@ -84,7 +52,7 @@ export function HelpRequestsSection() {
   const [items, setItems] = useState<HelpReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Onglet>("pending");
+  const [tab, setTab] = useState<"pending" | "accepted" | "all">("pending");
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
 
@@ -106,20 +74,8 @@ export function HelpRequestsSection() {
     void load();
   }, [load]);
 
-  // Historique : signalements traités (réglés ou refusés), la décision la
-  // plus récente en premier.
   const filtered =
-    tab === "all"
-      ? items
-      : tab === "historique"
-        ? items
-            .filter((r) => r.status === "resolved" || r.status === "rejected")
-            .sort((a, b) =>
-              (b.traite_le || b.resolved_at || b.created_at).localeCompare(
-                a.traite_le || a.resolved_at || a.created_at
-              )
-            )
-        : items.filter((r) => r.status === tab);
+    tab === "all" ? items : items.filter((r) => r.status === tab);
 
   function toggle(id: number) {
     setSelected((prev) => {
@@ -156,36 +112,32 @@ export function HelpRequestsSection() {
     }
   }
 
-  function onUpdated(rep: HelpReport) {
-    setItems((prev) => prev.map((r) => (r.id === rep.id ? rep : r)));
+  function onNotesUpdated(reportId: number, notes: string) {
+    // Mise à jour locale après save d'une note de résolution.
+    setItems((prev) =>
+      prev.map((r) =>
+        r.id === reportId ? { ...r, resolution_notes: notes || null } : r
+      )
+    );
   }
 
-  /** Décision sur un signalement, avec la note et la section saisies sur
-   *  la carte : le déclarant reçoit la notification avec cette note. */
   async function singleAct(
     id: number,
-    action: "accept" | "reject" | "resolve" | "pending",
-    notes: string,
-    section: string
+    action: "accept" | "reject" | "resolve"
   ) {
     setBusy(true);
     try {
       const map: Record<string, string> = {
         accept: "accepted",
         reject: "rejected",
-        resolve: "resolved",
-        pending: "pending"
+        resolve: "resolved"
       };
       const res = await authedFetch(`/api/v1/help/reports/${id}`, {
         method: "PATCH",
-        body: JSON.stringify({
-          status: map[action],
-          resolution_notes: notes,
-          section
-        })
+        body: JSON.stringify({ status: map[action] })
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      onUpdated((await res.json()) as HelpReport);
+      await load();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -196,9 +148,6 @@ export function HelpRequestsSection() {
   const counts = {
     pending: items.filter((r) => r.status === "pending").length,
     accepted: items.filter((r) => r.status === "accepted").length,
-    historique: items.filter(
-      (r) => r.status === "resolved" || r.status === "rejected"
-    ).length,
     all: items.length
   };
 
@@ -214,10 +163,8 @@ export function HelpRequestsSection() {
             {counts.accepted} acceptés)
           </h2>
           <p className="mt-0.5 text-xs text-white/60">
-            Bugs signalés via le bouton « Aide ». Chaque décision (accepté,
-            refusé, réglé) avise le déclarant avec ta note. Les bugs réglés
-            nourrissent l&apos;onglet « Question » : l&apos;assistant les cite
-            quand quelqu&apos;un repose la même question.
+            Bugs signalés via le bouton « Aide ». Quand tu reviens parler
+            à Claude, dis « regarde les bugs acceptés » et il les traite.
           </p>
         </div>
         <CopyAllButton reports={filtered} />
@@ -238,7 +185,7 @@ export function HelpRequestsSection() {
       ) : null}
 
       <div className="mt-4 flex gap-2 border-b border-brand-800">
-        {(["pending", "accepted", "historique", "all"] as const).map((t) => (
+        {(["pending", "accepted", "all"] as const).map((t) => (
           <button
             key={t}
             type="button"
@@ -256,9 +203,7 @@ export function HelpRequestsSection() {
               ? `En attente (${counts.pending})`
               : t === "accepted"
                 ? `Acceptés (${counts.accepted})`
-                : t === "historique"
-                  ? `Historique (${counts.historique})`
-                  : `Tous (${counts.all})`}
+                : `Tous (${counts.all})`}
           </button>
         ))}
       </div>
@@ -284,7 +229,7 @@ export function HelpRequestsSection() {
             className="inline-flex items-center gap-1 rounded-md bg-rose-500/15 px-2.5 py-1 text-rose-300 hover:bg-rose-500/25 disabled:opacity-50"
           >
             <XCircle className="h-3.5 w-3.5" />
-            Refuser
+            Rejeter
           </button>
           <button
             type="button"
@@ -293,7 +238,7 @@ export function HelpRequestsSection() {
             className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-2.5 py-1 text-emerald-300 hover:bg-emerald-500/25 disabled:opacity-50"
           >
             <CheckCircle2 className="h-3.5 w-3.5" />
-            Marquer réglés
+            Marquer résolus
           </button>
         </div>
       ) : null}
@@ -319,235 +264,100 @@ export function HelpRequestsSection() {
             />
             Tout sélectionner ({filtered.length})
           </label>
-          {filtered.map((r) => (
-            <ReportCard
-              key={r.id}
-              report={r}
-              checked={selected.has(r.id)}
-              onToggle={() => toggle(r.id)}
-              busy={busy}
-              onAct={(action, notes, section) =>
-                singleAct(r.id, action, notes, section)
-              }
-              onUpdated={onUpdated}
-            />
-          ))}
+          {filtered.map((r) => {
+            const checked = selected.has(r.id);
+            return (
+              <div
+                key={r.id}
+                className={`rounded-lg border p-3 ${
+                  checked
+                    ? "border-accent-500/50 bg-accent-500/5"
+                    : "border-brand-800 bg-brand-950/30"
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggle(r.id)}
+                    className="mt-1 rounded border-brand-700 bg-brand-900"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                          STATUS_BG[r.status] ||
+                          "border-white/20 bg-white/10 text-white/70"
+                        }`}
+                      >
+                        {STATUS_LABEL[r.status] || r.status}
+                      </span>
+                      <span className="text-[11px] text-white/50">
+                        {r.user_email || "(anonyme)"} ·{" "}
+                        {new Date(r.created_at).toLocaleString("fr-CA")}
+                      </span>
+                    </div>
+                    <p className="mt-1.5 whitespace-pre-wrap text-sm text-white/85">
+                      {r.message}
+                    </p>
+                    {r.context_url ? (
+                      <p className="mt-1 text-[11px] text-white/40">
+                        URL :{" "}
+                        <span className="font-mono">{r.context_url}</span>
+                      </p>
+                    ) : null}
+                    {r.has_screenshot ? (
+                      <ScreenshotThumb reportId={r.id} />
+                    ) : null}
+                    <ResolutionNoteEditor
+                      reportId={r.id}
+                      initial={r.resolution_notes || ""}
+                      onSaved={(notes) => onNotesUpdated(r.id, notes)}
+                    />
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <CopyReportButton report={r} />
+                      {r.status === "pending" ? (
+                        <>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => singleAct(r.id, "accept")}
+                            className="inline-flex items-center gap-1 rounded-md border border-blue-500/40 bg-blue-500/10 px-2.5 py-1 text-[11px] text-blue-300 hover:bg-blue-500/20 disabled:opacity-50"
+                          >
+                            <CheckSquare className="h-3 w-3" />
+                            Accepter
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => singleAct(r.id, "reject")}
+                            className="inline-flex items-center gap-1 rounded-md border border-rose-500/40 bg-rose-500/10 px-2.5 py-1 text-[11px] text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
+                          >
+                            <XCircle className="h-3 w-3" />
+                            Rejeter
+                          </button>
+                        </>
+                      ) : null}
+                      {r.status === "accepted" ? (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => singleAct(r.id, "resolve")}
+                          className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+                        >
+                          <CheckCircle2 className="h-3 w-3" />
+                          Marquer résolu
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </section>
-  );
-}
-
-/** Carte d'un signalement : note et section saisies AVANT la décision
- *  (le déclarant reçoit la note dans sa notification), dates
- *  d'historique, actions. */
-function ReportCard({
-  report: r,
-  checked,
-  onToggle,
-  busy,
-  onAct,
-  onUpdated
-}: {
-  report: HelpReport;
-  checked: boolean;
-  onToggle: () => void;
-  busy: boolean;
-  onAct: (
-    action: "accept" | "reject" | "resolve" | "pending",
-    notes: string,
-    section: string
-  ) => void;
-  onUpdated: (rep: HelpReport) => void;
-}) {
-  const [notes, setNotes] = useState(r.resolution_notes || "");
-  const [section, setSection] = useState(r.section || "");
-  const [saving, setSaving] = useState(false);
-  const [savedFlash, setSavedFlash] = useState(false);
-
-  // Rechargement de la liste : on reprend les valeurs du serveur.
-  useEffect(() => {
-    setNotes(r.resolution_notes || "");
-    setSection(r.section || "");
-  }, [r.resolution_notes, r.section]);
-
-  const dirty =
-    (notes.trim() || null) !== (r.resolution_notes?.trim() || null) ||
-    (section.trim() || null) !== (r.section?.trim() || null);
-
-  async function enregistrer() {
-    setSaving(true);
-    try {
-      const res = await authedFetch(`/api/v1/help/reports/${r.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ resolution_notes: notes, section })
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      onUpdated((await res.json()) as HelpReport);
-      setSavedFlash(true);
-      setTimeout(() => setSavedFlash(false), 1500);
-    } catch {
-      /* silencieux : le bouton reste affiché */
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const decision =
-    r.status === "resolved"
-      ? `Réglé le ${dateHeure(r.traite_le || r.resolved_at)}`
-      : r.status === "rejected"
-        ? `Refusé le ${dateHeure(r.traite_le || r.rejected_at)}`
-        : r.status === "accepted"
-          ? `Accepté le ${dateHeure(r.traite_le || r.accepted_at)}`
-          : null;
-
-  const listeId = `sections-bug-${r.id}`;
-
-  return (
-    <div
-      className={`rounded-lg border p-3 ${
-        checked
-          ? "border-accent-500/50 bg-accent-500/5"
-          : "border-brand-800 bg-brand-950/30"
-      }`}
-    >
-      <div className="flex items-start gap-3">
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={onToggle}
-          className="mt-1 rounded border-brand-700 bg-brand-900"
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-                STATUS_BG[r.status] ||
-                "border-white/20 bg-white/10 text-white/70"
-              }`}
-            >
-              {STATUS_LABEL[r.status] || r.status}
-            </span>
-            <span className="text-[11px] text-white/70">
-              #{r.id} · {r.user_email || "(anonyme)"} · {dateHeure(r.created_at)}
-            </span>
-          </div>
-          <p className="mt-1.5 whitespace-pre-wrap text-sm text-white/85">
-            {r.message}
-          </p>
-          {r.context_url ? (
-            <p className="mt-1 text-[11px] text-white/70">
-              URL : <span className="font-mono">{r.context_url}</span>
-            </p>
-          ) : null}
-          {decision ? (
-            <p className="mt-1 text-[11px] font-semibold text-white">
-              {decision}
-              {r.traite_par ? ` par ${r.traite_par}` : ""}
-            </p>
-          ) : null}
-          {r.has_screenshot ? <ScreenshotThumb reportId={r.id} /> : null}
-
-          <div className="mt-2 grid gap-2 rounded-md border border-brand-800 bg-brand-950/40 p-2">
-            <label className="block">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-white/70">
-                Section
-              </span>
-              <input
-                list={listeId}
-                value={section}
-                onChange={(e) => setSection(e.target.value)}
-                maxLength={64}
-                placeholder="Ex. Immobilier · Gestion locative"
-                className="mt-1 w-full rounded-md border border-brand-800 bg-brand-900 px-2 py-1.5 text-xs text-white placeholder:text-white/40 focus:border-accent-500 focus:outline-none"
-              />
-              <datalist id={listeId}>
-                {SECTIONS.map((s) => (
-                  <option key={s} value={s} />
-                ))}
-              </datalist>
-            </label>
-            <label className="block">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-white/70">
-                Note pour le déclarant et l&apos;historique
-              </span>
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                rows={2}
-                placeholder="Ce qui causait le bug, ce qui a été corrigé, ou pourquoi c'est refusé…"
-                className="mt-1 w-full rounded-md border border-brand-800 bg-brand-900 px-2 py-1.5 text-xs text-white placeholder:text-white/40 focus:border-accent-500 focus:outline-none"
-              />
-            </label>
-            {dirty || savedFlash ? (
-              <div className="flex items-center gap-2">
-                {dirty ? (
-                  <button
-                    type="button"
-                    onClick={enregistrer}
-                    disabled={saving}
-                    className="rounded border border-accent-500/40 bg-accent-500/10 px-2 py-0.5 text-[11px] font-semibold text-accent-500 hover:bg-accent-500/20 disabled:opacity-50"
-                  >
-                    {saving ? "Enregistrement…" : "Enregistrer sans changer le statut"}
-                  </button>
-                ) : null}
-                {savedFlash ? (
-                  <span className="text-[11px] text-emerald-300">Enregistré ✓</span>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-
-          <div className="mt-2 flex flex-wrap gap-2">
-            <CopyReportButton report={r} />
-            {r.status === "pending" ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => onAct("accept", notes, section)}
-                className="inline-flex items-center gap-1 rounded-md border border-blue-500/40 bg-blue-500/10 px-2.5 py-1 text-[11px] text-blue-300 hover:bg-blue-500/20 disabled:opacity-50"
-              >
-                <CheckSquare className="h-3 w-3" />
-                Accepter
-              </button>
-            ) : null}
-            {r.status === "pending" || r.status === "accepted" ? (
-              <>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => onAct("reject", notes, section)}
-                  className="inline-flex items-center gap-1 rounded-md border border-rose-500/40 bg-rose-500/10 px-2.5 py-1 text-[11px] text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
-                >
-                  <XCircle className="h-3 w-3" />
-                  Refuser
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => onAct("resolve", notes, section)}
-                  className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
-                >
-                  <CheckCircle2 className="h-3 w-3" />
-                  Marquer réglé
-                </button>
-              </>
-            ) : null}
-            {r.status === "resolved" || r.status === "rejected" ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => onAct("pending", notes, section)}
-                className="inline-flex items-center gap-1 rounded-md border border-white/20 bg-brand-950 px-2.5 py-1 text-[11px] text-white/85 hover:border-accent-500/50 disabled:opacity-50"
-              >
-                Remettre en attente
-              </button>
-            ) : null}
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -791,5 +601,75 @@ function CopyReportButton({ report }: { report: HelpReport }) {
         </>
       )}
     </button>
+  );
+}
+
+// ─── Notes de résolution (admin) ──────────────────────────────────
+//
+// Permet à Steven (ou tout owner) d'écrire ce qui causait le bug
+// et ce qu'on a fait pour régler. Devient une référence pour la
+// base de connaissances et pour Claude à la prochaine occurrence.
+
+function ResolutionNoteEditor({
+  reportId,
+  initial,
+  onSaved
+}: {
+  reportId: number;
+  initial: string;
+  onSaved: (notes: string) => void;
+}) {
+  const [val, setVal] = useState(initial);
+  const [saving, setSaving] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  const dirty = (val.trim() || null) !== (initial.trim() || null);
+
+  async function save() {
+    setSaving(true);
+    try {
+      const r = await authedFetch(`/api/v1/help/reports/${reportId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ resolution_notes: val })
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      onSaved(val);
+      setSavedFlash(true);
+      setTimeout(() => setSavedFlash(false), 1500);
+    } catch {
+      /* silent — l'utilisateur reverra dirty=true */
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-2 rounded-md border border-brand-800 bg-brand-950/40 p-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
+          Notes de résolution
+        </span>
+        {savedFlash ? (
+          <span className="text-[10px] text-emerald-400">Enregistré ✓</span>
+        ) : null}
+      </div>
+      <textarea
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        rows={2}
+        placeholder="Ce qui causait le bug, ce qu'on a fait pour régler…"
+        className="mt-1 w-full rounded-md border border-brand-800 bg-brand-900 px-2 py-1.5 text-xs text-white placeholder:text-white/30 focus:border-accent-500 focus:outline-none"
+      />
+      {dirty ? (
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving}
+          className="mt-1 rounded border border-accent-500/40 bg-accent-500/10 px-2 py-0.5 text-[10px] font-semibold text-accent-300 hover:bg-accent-500/20 disabled:opacity-50"
+        >
+          {saving ? "Enregistrement…" : "Enregistrer"}
+        </button>
+      ) : null}
+    </div>
   );
 }
