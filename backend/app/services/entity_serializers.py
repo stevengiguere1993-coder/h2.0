@@ -1235,8 +1235,6 @@ def serialize_imm_immeuble_code(obj: Any, level: str = "summary") -> dict:
         "libelle": libelle,
         "code": _str(_get(obj, "code")),
         "note": _str(_get(obj, "note")),
-        "type_code": _str(_get(obj, "type_code")),
-        "emplacement": _str(_get(obj, "emplacement")),
         "position": _get(obj, "position"),
         "updated_at": _iso(_get(obj, "updated_at")),
     }
@@ -1245,52 +1243,6 @@ def serialize_imm_immeuble_code(obj: Any, level: str = "summary") -> dict:
             "created_by_email": _str(_get(obj, "created_by_email")),
             "created_at": _iso(_get(obj, "created_at")),
         })
-    return _drop_none(data)
-
-
-def serialize_imm_code_partage(obj: Any, level: str = "summary") -> dict:
-    """Accès temporaire d'un employé aux codes (2026-11-13). ``ferme_le``
-    NULL = pas encore fermé ; l'état exact (date passée, BT terminé…) est
-    recalculé par GET /codes-acces/partages."""
-    data: dict[str, Any] = {
-        "entity_type": "imm_code_partage",
-        "type": "imm_code_partage",
-        "id": _get(obj, "id"),
-        "label": f"Partage #{_get(obj, 'id')}",
-        "pole": "immobilier",
-        "user_id": _get(obj, "user_id"),
-        "immeuble_id": _get(obj, "immeuble_id"),
-        "logement_id": _get(obj, "logement_id"),
-        "code_id": _get(obj, "code_id"),
-        "mode": _str(_get(obj, "mode")),
-        "fin_le": _iso(_get(obj, "fin_le")),
-        "bon_travail_id": _get(obj, "bon_travail_id"),
-        "project_id": _get(obj, "project_id"),
-        "motif": _str(_get(obj, "motif")),
-        "accorde_par_email": _str(_get(obj, "accorde_par_email")),
-        "ferme_le": _iso(_get(obj, "ferme_le")),
-        "ferme_motif": _str(_get(obj, "ferme_motif")),
-        "created_at": _iso(_get(obj, "created_at")),
-        "updated_at": _iso(_get(obj, "updated_at")),
-    }
-    return _drop_none(data)
-
-
-def serialize_imm_code_consultation(obj: Any, level: str = "summary") -> dict:
-    """Une consultation d'un code (« Afficher », 2026-11-13)."""
-    data: dict[str, Any] = {
-        "entity_type": "imm_code_consultation",
-        "type": "imm_code_consultation",
-        "id": _get(obj, "id"),
-        "label": f"Consultation du code {_get(obj, 'code_id')}",
-        "pole": "immobilier",
-        "code_id": _get(obj, "code_id"),
-        "user_id": _get(obj, "user_id"),
-        "user_email": _str(_get(obj, "user_email")),
-        "via": _str(_get(obj, "via")),
-        "partage_id": _get(obj, "partage_id"),
-        "created_at": _iso(_get(obj, "created_at")),
-    }
     return _drop_none(data)
 
 
@@ -1395,8 +1347,6 @@ SERIALIZERS: dict[str, Callable[..., dict]] = {
     "lot_paiement": serialize_lot_paiement,
     "tal_transmission": serialize_tal_transmission,
     "imm_immeuble_code": serialize_imm_immeuble_code,
-    "imm_code_partage": serialize_imm_code_partage,
-    "imm_code_consultation": serialize_imm_code_consultation,
     "imm_hypotheque": serialize_imm_hypotheque,
     "prospection_courtier": serialize_prospection_courtier,
 }

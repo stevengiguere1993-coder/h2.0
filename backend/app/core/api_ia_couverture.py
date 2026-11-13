@@ -186,13 +186,6 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     #: kratos_list_entities(immeuble_codes) + détail immeuble_code ; routes
     #: REST /immobilier/immeubles/{id}/codes.
     "imm_immeuble_codes",
-    #: Partage contrôlé des codes (2026-11-13) — accès temporaires et
-    #: journal des consultations : kratos_list_entities(code_partages /
-    #: code_consultations) ; photos d'emplacement (blobs) par REST
-    #: GET /codes-acces/codes/{id}/photos.
-    "imm_code_consultations",
-    "imm_code_partages",
-    "imm_code_photos",
     "imm_immeuble_ownerships",
     "imm_immeubles",
     "imm_locataire_communications",

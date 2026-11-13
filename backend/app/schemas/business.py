@@ -314,9 +314,6 @@ class BonTravailCreate(BaseModel):
     executant_type: Optional[str] = Field(default=None, max_length=16)
     sous_traitant_id: Optional[int] = None
     marge_pct: Optional[float] = None
-    #: Assignation : donner à l'assigné l'accès aux codes du lieu jusqu'à
-    #: la fin du BT (défaut oui). Pas une colonne — exclu du model_dump.
-    donner_acces_codes: Optional[bool] = Field(default=None, exclude=True)
 
 
 class BonTravailUpdate(BaseModel):
@@ -344,8 +341,6 @@ class BonTravailUpdate(BaseModel):
     sous_traitant_id: Optional[int] = None
     marge_pct: Optional[float] = None
     is_urgent: Optional[bool] = None
-    #: Voir BonTravailCreate.donner_acces_codes.
-    donner_acces_codes: Optional[bool] = Field(default=None, exclude=True)
 
 
 class BonTravailRead(_Base):

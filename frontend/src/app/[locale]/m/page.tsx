@@ -9,7 +9,6 @@ import {
   ChevronRight,
   Clock,
   DollarSign,
-  KeyRound,
   Loader2,
   MapPin,
   Palmtree,
@@ -144,8 +143,6 @@ function MobileHomeConstruction() {
   const [error, setError] = useState<string | null>(null);
   const [punchBusy, setPunchBusy] = useState(false);
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
-  // Codes d'accès partagés en cours (Steven 2026-11-13).
-  const [nbAcces, setNbAcces] = useState(0);
   // Most recent leave decision (pending/approved/rejected), shown as a
   // banner on the home so employees see the outcome without having to
   // dig through menus.
@@ -198,10 +195,6 @@ function MobileHomeConstruction() {
       if (woRes.ok) {
         setWorkOrders((await woRes.json()) as WorkOrder[]);
       }
-      void authedFetch("/api/v1/codes-acces/moi")
-        .then(async (r) => (r.ok ? ((await r.json()) as unknown[]) : []))
-        .then((rows) => setNbAcces(rows.length))
-        .catch(() => setNbAcces(0));
       if (leavesRes.ok) {
         const rows = (await leavesRes.json()) as Array<{
           id: number;
@@ -377,20 +370,6 @@ function MobileHomeConstruction() {
                 </div>
               </div>
             </section>
-
-            {nbAcces > 0 ? (
-              <Link
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                href={"/m/codes" as any}
-                className="flex items-center gap-3 rounded-2xl border border-accent-500/50 bg-accent-500/10 p-4"
-              >
-                <KeyRound className="h-5 w-5 text-accent-500" />
-                <span className="flex-1 text-sm font-semibold text-white">
-                  Mes codes d&apos;accès ({nbAcces})
-                </span>
-                <ChevronRight className="h-4 w-4 text-white/60" />
-              </Link>
-            ) : null}
 
             {/* À faire dans mon temps libre — ordres de travail assignés */}
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">

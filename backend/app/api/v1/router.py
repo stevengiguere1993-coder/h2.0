@@ -69,7 +69,6 @@ from app.api.v1.endpoints import (
     immobilier_tal_bail,
     immobilier_admin_locatif,
     immobilier_codes,
-    codes_acces,
     entreprises_revenus_depenses,
     immobilier_fusion,
     immobilier_extras,
@@ -598,10 +597,6 @@ api_router.include_router(
 )
 # Codes d'accès d'un immeuble : porte, lock box, garage… (2026-10-18).
 api_router.include_router(immobilier_codes.router, dependencies=DEP_IMMOBILIER)
-# Partage contrôlé des codes (2026-11-13) : ouvert à tout compte connecté
-# (employé de Construction compris), chaque route vérifie gestionnaire ou
-# partage actif.
-api_router.include_router(codes_acces.router)
 # Fusion de deux fiches d'immeuble — 12 logements sur deux adresses (2026-10-29).
 api_router.include_router(immobilier_fusion.router, dependencies=DEP_IMMOBILIER)
 # Page Communications — envois courriel sans signature + audit.

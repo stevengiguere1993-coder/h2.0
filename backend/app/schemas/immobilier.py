@@ -146,32 +146,12 @@ class ImmeubleOwnershipRead(ImmeubleOwnershipBase):
 # ─── Codes d'accès d'un immeuble ───────────────────────────────────────
 
 
-_TYPES_CODE = (
-    "porte_unite", "porte_entree", "boite_cles", "garage", "alarme", "autre",
-)
-
-
-def _type_code_ok(v: Optional[str]) -> Optional[str]:
-    if v is None:
-        return None
-    v = v.strip()
-    if not v:
-        return None
-    if v not in _TYPES_CODE:
-        raise ValueError("type inconnu (" + ", ".join(_TYPES_CODE) + ")")
-    return v
-
-
 class ImmeubleCodeBase(BaseModel):
     """Code d'accès (porte d'entrée, lock box, garage, alarme…)."""
 
     libelle: str = Field(..., min_length=1, max_length=120)
     code: str = Field(..., min_length=1, max_length=255)
     note: Optional[str] = Field(default=None, max_length=2000)
-    #: porte_unite | porte_entree | boite_cles | garage | alarme | autre
-    type_code: Optional[str] = Field(default=None, max_length=32)
-    #: Où trouver la porte / la boîte à clés.
-    emplacement: Optional[str] = Field(default=None, max_length=2000)
 
     @field_validator("libelle", "code")
     @classmethod
@@ -180,11 +160,6 @@ class ImmeubleCodeBase(BaseModel):
         if not v:
             raise ValueError("ne peut pas être vide")
         return v
-
-    @field_validator("type_code")
-    @classmethod
-    def _type(cls, v: Optional[str]) -> Optional[str]:
-        return _type_code_ok(v)
 
 
 class ImmeubleCodeCreate(ImmeubleCodeBase):
@@ -196,8 +171,6 @@ class ImmeubleCodeUpdate(BaseModel):
     code: Optional[str] = Field(default=None, min_length=1, max_length=255)
     note: Optional[str] = Field(default=None, max_length=2000)
     position: Optional[int] = Field(default=None, ge=0)
-    type_code: Optional[str] = Field(default=None, max_length=32)
-    emplacement: Optional[str] = Field(default=None, max_length=2000)
 
     @field_validator("libelle", "code")
     @classmethod
@@ -209,38 +182,13 @@ class ImmeubleCodeUpdate(BaseModel):
             raise ValueError("ne peut pas être vide")
         return v
 
-    @field_validator("type_code")
-    @classmethod
-    def _type(cls, v: Optional[str]) -> Optional[str]:
-        return _type_code_ok(v)
 
-
-class ImmeubleCodePhotoRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    caption: Optional[str] = None
-    content_type: str
-    created_at: datetime
-
-
-class ImmeubleCodeRead(BaseModel):
-    """Code tel que listé : la VALEUR est cachée (``code`` None,
-    ``code_masque`` vrai) — « Afficher » passe par
-    POST /codes-acces/codes/{id}/afficher, journalisé. Création et
-    modification renvoient la valeur (l'auteur vient de la saisir)."""
-
+class ImmeubleCodeRead(ImmeubleCodeBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     immeuble_id: int
     #: NULL = code de l'immeuble ; sinon code propre à ce logement.
     logement_id: Optional[int] = None
-    libelle: str
-    code: Optional[str] = None
-    code_masque: bool = False
-    note: Optional[str] = None
-    type_code: Optional[str] = None
-    emplacement: Optional[str] = None
-    photos: List[ImmeubleCodePhotoRead] = Field(default_factory=list)
     position: int = 0
     created_by_email: Optional[str] = None
     created_at: datetime

@@ -815,18 +815,6 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet classe Construction échoué", exc_info=True)
 
-    # ── Codes d'accès partagés : fin des accès, comptes désactivés ──
-    # Pas QuickBooks, mais la même boucle horaire : note la fermeture des
-    # partages arrivés à leur fin (date, BT terminé, projet livré) et
-    # prévient les gestionnaires quand un compte désactivé avait reçu des
-    # codes (« penser à les changer », Steven 2026-11-13).
-    try:
-        from app.services.codes_acces import filet_partages_une_session
-
-        out["codes_acces"] = await filet_partages_une_session()
-    except Exception:  # noqa: BLE001
-        log.warning("Filet codes d'accès partagés échoué", exc_info=True)
-
     # ── Compteur de factures au-dessus de QuickBooks ──
     # Une facture créée directement dans QB (ou importée) doit faire
     # avancer le compteur de Kratos : prochain numéro = plus haut numéro

@@ -49,7 +49,6 @@ from app.models.employe import Employe
 from app.models.entreprise import Entreprise, EntreprisePartner
 from app.models.paiement_fournisseur import LotPaiement
 from app.models.entreprise_tache import EntrepriseTache
-from app.models.code_acces import CodeAccesConsultation, CodeAccesPartage
 from app.models.immobilier import (
     Hypotheque,
     ImmLocataireContact,
@@ -1660,17 +1659,6 @@ _DETAIL_ENTITIES: dict[str, tuple] = {
         ImmeubleCode, "immobilier", "imm_immeuble_code",
         "immobilier:immeubles:read",
     ),
-    # Partage contrôlé des codes (2026-11-13) : accès temporaires d'un
-    # employé (fin à une date, d'un BT ou d'un projet) et journal des
-    # « Afficher le code ».
-    "code_partage": (
-        CodeAccesPartage, "immobilier", "imm_code_partage",
-        "immobilier:immeubles:read",
-    ),
-    "code_consultation": (
-        CodeAccesConsultation, "immobilier", "imm_code_consultation",
-        "immobilier:immeubles:read",
-    ),
     # Hypothèques (2026-10-18) — une conjointe porte ses immeubles
     # couverts et leurs parts dans le détail REST ; ici le résumé.
     "hypotheque": (
@@ -2075,21 +2063,6 @@ _LIST_ENTITIES: dict[str, _ListSpec] = {
         entity_type="imm_immeuble_code",
         list_cap="immobilier:immeubles:list",
         order_attr="updated_at", stage_attr="libelle", supports_active=False,
-    ),
-    # Partage contrôlé des codes (2026-11-13) : `stage` filtre le mode
-    # (jours | date | bt | projet) ; ferme_le NULL = pas encore fermé
-    # (l'état exact est recalculé par GET /codes-acces/partages).
-    "code_partages": _ListSpec(
-        model=CodeAccesPartage, pole="immobilier",
-        entity_type="imm_code_partage",
-        list_cap="immobilier:immeubles:list",
-        order_attr="updated_at", stage_attr="mode", supports_active=False,
-    ),
-    "code_consultations": _ListSpec(
-        model=CodeAccesConsultation, pole="immobilier",
-        entity_type="imm_code_consultation",
-        list_cap="immobilier:immeubles:list",
-        order_attr="created_at", stage_attr="via", supports_active=False,
     ),
     # Immobilier (2026-10-18) : hypothèques des immeubles ; `stage` filtre
     # le statut (active | remboursee | refinancee).
