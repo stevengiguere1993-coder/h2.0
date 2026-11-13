@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, DBSession, RequireManager
+from app.core.apres_commit import lancer_apres_commit
 from app.db.base import Base
 from app.models.achat import Achat
 from app.models.agenda_event import AgendaEvent
@@ -528,11 +529,14 @@ def make_crud_router(
             "received",
             "paid",
         ):
-            import asyncio
-
             from app.api.v1.endpoints.achat_qbo import autopush_achat
 
-            asyncio.create_task(autopush_achat(int(obj.id)))
+            # APRÈS le commit de la requête : la tâche relit l'achat dans sa
+            # propre session. Lancée avant, elle ne le voyait pas toujours
+            # (« Achat introuvable » : push abandonné en silence, l'achat
+            # attendait le filet horaire).
+            _achat_cree_id = int(obj.id)
+            lancer_apres_commit(db, lambda: autopush_achat(_achat_cree_id))
         # Synchro QBO automatique (Facture / Soumission). Inerte tant que
         # l'interrupteur `qbo_auto_sync` est OFF (fail-closed) : ne
         # s'active qu'après validation de la migration de masse.
@@ -961,11 +965,15 @@ def make_crud_router(
             if became_active or (
                 new_status in ("received", "paid") and safe_for_repush
             ):
-                import asyncio
-
                 from app.api.v1.endpoints.achat_qbo import autopush_achat
 
-                asyncio.create_task(autopush_achat(int(obj.id)))
+                # APRÈS le commit de la requête : lancée avant, la tâche
+                # relisait parfois l'achat d'AVANT la modification et
+                # poussait les anciennes valeurs dans QB.
+                _achat_modifie_id = int(obj.id)
+                lancer_apres_commit(
+                    db, lambda: autopush_achat(_achat_modifie_id)
+                )
             # (Dé)cocher « à refacturer » dans Kratos ⇒ (dé)cocher la case
             # FACTURABLE de la transaction QB liée — mise à jour CIBLÉE du
             # drapeau (fonctionne aussi pour les achats importés de QB que

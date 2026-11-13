@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import time
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -352,14 +353,20 @@ def _corps(ch: dict, **extra: Any) -> Dict[str, Any]:
     return base
 
 
-def _attendre(run, cond, essais: int = 100) -> None:
-    """Laisse tourner les tâches de fond (asyncio.create_task) jusqu'à ce
-    que ``cond()`` soit vraie."""
-    for _ in range(essais):
-        if cond():
-            return
+def _attendre(run, cond, delai: float = 10.0) -> None:
+    """Laisse tourner les tâches de fond jusqu'à ce que ``cond()`` soit
+    vraie, et rend la main dès qu'elle l'est.
+
+    ``delai`` (secondes) n'est qu'un plafond pour une machine lente : il ne
+    ralentit rien quand tout va bien. Une tâche de fond qui abandonne ne
+    remplit jamais la condition — c'est ce cas que l'échec signale (voir
+    test_smoke_apres_commit_2026_11_13.py : avant le 2026-11-13, l'envoi vers
+    QuickBooks partait parfois avant le commit et abandonnait en silence)."""
+    limite = time.monotonic() + delai
+    while not cond():
+        if time.monotonic() >= limite:
+            raise AssertionError("la tâche de fond n'a pas abouti")
         run(asyncio.sleep(0.02))
-    assert cond(), "la tâche de fond n'a pas abouti"
 
 
 def _f(v) -> Optional[float]:
