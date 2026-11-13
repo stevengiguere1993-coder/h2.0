@@ -442,7 +442,15 @@ visuel ». `app/services/immeuble_fusion.py` : un numéro de logement n'est
 un doublon qu'à la MÊME adresse civique (`cle_logement` = adresse du
 logement, sinon celle de l'immeuble, + numéro ; même règle à la création,
 à la création en lot et dans le diagnostic des doublons) → le « 1 » du
-9085 Millen et le « 1 » du 710 Legendre coexistent, sans préfixe. Prix
+9085 Millen et le « 1 » du 710 Legendre peuvent coexister. Précision de
+Steven le même jour (« il peut y avoir par exemple 710-1 à 710-2 […] je
+voulais seulement dire de ne pas remplacer 710 Legendre par 9085
+Millen ») : le préfixe PROPOSÉ d'office est le numéro civique de la fiche
+ABSORBÉE (`prefixe_numeros`, « 710- » → « 710-1 ») dès que les deux
+fiches portent les mêmes numéros (`numeros_communs`), obligatoire
+seulement en cas de conflit à la même adresse ; `prefixe_numeros_cible`,
+facultatif, préfixe les logements de la fiche gardée (« 9085- »). Chaque
+logement garde son adresse civique dans tous les cas. Prix
 d'achat suggéré = somme des deux fiches. Hypothèques : option
 `hypotheques` = `additionner` (même prêteur, même taux, non conjointes :
 montant, versement, solde et tranches réunis sur le prêt de la cible),
