@@ -10,7 +10,6 @@ import {
 } from "react";
 
 import { authedFetch } from "@/lib/auth";
-import { initialiserPolice } from "@/lib/police";
 
 export type Theme = "light" | "dark";
 
@@ -73,11 +72,6 @@ export function ThemeProvider({
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
-
-  // Police réglée par l'utilisateur (Paramètres → Affichage et police).
-  useEffect(() => {
-    void initialiserPolice();
-  }, []);
 
   // If the parent passes an initialTheme later (after fetching the
   // user from /me), adopt it once.

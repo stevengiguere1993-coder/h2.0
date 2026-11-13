@@ -252,10 +252,6 @@ PAGES: list[PageEntry] = [
     # seed ne réécrit jamais un seuil déjà semé.
     _p("entreprises.depenses_construction_dev",
        "Dépenses construction (en développement)", "entreprises", "owner",
-       # Onglet de Comptabilité depuis le 2026-11-13 (Steven) ; l'ancienne
-       # adresse redirige. Préfixe le plus long → cette clé, pas celle de
-       # Comptabilité.
-       "/entreprises/comptabilite/depenses-construction",
        "/entreprises/depenses-construction"),
     _p("entreprises.kratos", "Kratos · Cerveau", "entreprises", "admin",
        "/entreprises/kratos"),

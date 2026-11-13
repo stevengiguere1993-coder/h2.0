@@ -30,7 +30,6 @@ import {
   ScrollText,
   ShieldCheck,
   TrendingUp,
-  Type,
   UserCog,
   Users,
   Wrench,
@@ -75,13 +74,6 @@ export const SECTIONS: Section[] = [
     title: "Général — sécurité & transverse",
     icon: ShieldCheck,
     cards: [
-      {
-        // Chacun règle SA police (Steven 2026-11-13) — tous les rôles.
-        title: "Affichage et police",
-        desc: "Taille et style du texte de Kratos, pour toi seulement, sur tous tes appareils.",
-        href: "/parametres/affichage",
-        icon: Type
-      },
       {
         title: "Permissions",
         desc: "Rôle minimum requis pour les actions sensibles (suppressions, etc.).",

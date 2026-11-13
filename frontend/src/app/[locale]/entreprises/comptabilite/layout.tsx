@@ -41,12 +41,6 @@ const ONGLETS: Array<{
   },
   // Sous-clients QuickBooks à convertir en projet (Steven 2026-10-14).
   { href: "/entreprises/comptabilite/projets-quickbooks", label: "Projets QB" },
-  // Coût à l'heure de la construction contre les entrées de fonds
-  // (Steven 2026-10-03, bug 14), sorti du menu Entreprises (2026-11-13).
-  {
-    href: "/entreprises/comptabilite/depenses-construction",
-    label: "Dépenses construction"
-  },
   // Clients en double dans chaque QuickBooks connecté (Steven 2026-10-18).
   {
     href: "/entreprises/comptabilite/clients-en-double",
@@ -71,7 +65,7 @@ export default function ComptabiliteLayout({
     <>
       <QGTopbar
         greeting="Comptabilité"
-        subtitle="Pôle Entreprises · reçus, paiements, Drive des factures et dépenses construction"
+        subtitle="Pôle Entreprises · reçus, paiements et Drive des factures"
         rightSlot={
           <span
             className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-red-500/50 px-2.5 py-1 text-xs font-semibold text-red-400"

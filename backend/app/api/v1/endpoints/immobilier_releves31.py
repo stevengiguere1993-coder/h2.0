@@ -46,7 +46,6 @@ from app.models.immobilier import (
     LogementStatus,
     Releve31,
 )
-from app.services.locatif_chambres import cle_tri_numero
 
 router = APIRouter(prefix="/immobilier", tags=["immobilier-releves31"])
 
@@ -339,7 +338,7 @@ async def _occupations_annee(db, annee: int) -> List[dict]:
     out.sort(
         key=lambda o: (
             o["immeuble"].name if o["immeuble"] else "",
-            cle_tri_numero(o["logement"].numero),
+            str(o["logement"].numero or ""),
             o["debut"],
             o["bail"].id or 0,
         )

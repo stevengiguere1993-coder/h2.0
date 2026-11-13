@@ -47,7 +47,6 @@ from app.models.optimisation import OptimisationProjet
 from app.services.hypotheque_calc import balance_calculee_de, balance_effective
 from app.services.hypotheque_partage import part_de
 from app.services.invest_tri import xirr
-from app.services.locatif_chambres import cle_tri_numero
 
 log = logging.getLogger(__name__)
 
@@ -330,7 +329,7 @@ async def entreprise_snapshot(db: AsyncSession, entreprise_id: int) -> dict:
                     "loyer": round(m_aff, 2) if m_aff is not None else None,
                 }
             )
-        logements_rows.sort(key=lambda r: cle_tri_numero(r["numero"]))
+        logements_rows.sort(key=lambda r: str(r["numero"] or ""))
         nb_log = nb_actifs
         nb_baux = nb_loues
 

@@ -43,7 +43,6 @@ from app.models.immobilier import (
     PaiementExterne,
 )
 from app.services.loyer_echeance import seuil_retard
-from app.services.locatif_chambres import cle_tri_numero
 
 log = logging.getLogger(__name__)
 
@@ -293,7 +292,7 @@ async def _rows_externes(
             )
         )
     rows.sort(
-        key=lambda r: (_ORDRE_ETAT.get(r.etat, 9), cle_tri_numero(r.logement_numero))
+        key=lambda r: (_ORDRE_ETAT.get(r.etat, 9), r.logement_numero or "")
     )
     return rows
 
@@ -448,7 +447,7 @@ async def loyers_externes_overview(
         key=lambda r: (
             _ORDRE_ETAT.get(r.etat, 9),
             r.immeuble_name,
-            cle_tri_numero(r.logement_numero),
+            r.logement_numero or "",
         )
     )
     return LoyersExternesOverview(

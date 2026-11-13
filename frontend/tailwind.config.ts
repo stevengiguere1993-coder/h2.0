@@ -50,30 +50,6 @@ const config: Config = {
           700: "#98651c"
         }
       },
-      // Tailles de texte × `--echelle-police` (réglage de l'utilisateur,
-      // Paramètres → Affichage et police, Steven 2026-11-13). Le facteur
-      // n'est posé que dans le portail : sur le site public il vaut 1 et
-      // ces valeurs sont celles de Tailwind.
-      fontSize: Object.fromEntries(
-        (
-          [
-            ["xs", 0.75, 1],
-            ["sm", 0.875, 1.25],
-            ["base", 1, 1.5],
-            ["lg", 1.125, 1.75],
-            ["xl", 1.25, 1.75],
-            ["2xl", 1.5, 2],
-            ["3xl", 1.875, 2.25],
-            ["4xl", 2.25, 2.5]
-          ] as const
-        ).map(([cle, taille, interligne]) => [
-          cle,
-          [
-            `calc(${taille}rem * var(--echelle-police, 1))`,
-            { lineHeight: `calc(${interligne}rem * var(--echelle-police, 1))` }
-          ]
-        ])
-      ),
       fontFamily: {
         sans: ["'Inter'", "ui-sans-serif", "system-ui", "sans-serif"],
         display: ["'Plus Jakarta Sans'", "'Inter'", "sans-serif"]
