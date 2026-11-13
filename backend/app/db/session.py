@@ -2268,6 +2268,10 @@ async def init_db() -> None:
             ("help_requests", "screenshot_blob", "BYTEA"),
             ("help_requests", "screenshot_content_type", "VARCHAR(64)"),
             ("help_requests", "resolution_notes", "TEXT"),
+            ("help_requests", "section", "VARCHAR(64)"),
+            ("help_requests", "rejected_at", "TIMESTAMP WITH TIME ZONE"),
+            ("help_requests", "traite_le", "TIMESTAMP WITH TIME ZONE"),
+            ("help_requests", "traite_par", "VARCHAR(320)"),
             # Type de soumission (forfaitaire / estime). Défaut
             # "forfaitaire" (95% des cas en construction).
             (
