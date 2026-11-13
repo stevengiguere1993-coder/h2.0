@@ -402,6 +402,85 @@ function declarationVisible(k: string, form: Form): boolean {
 }
 
 // Le formulaire du TAL n'a pas de case « débit préautorisé » : ce choix écrit « Autre » + la précision.
+/** Ordre de lecture d'une adresse (Phil 2026-11-13 : « rue est à la fin de la section au
+ * lieu d'après le numéro civique ») — le schéma du TAL la range après la municipalité. */
+const ORDRE_ADRESSE = ["NoCivique", "Rue", "Appartement", "Municipalite", "Province", "CodePostal", "AdresseComplete"];
+
+function ordonnerCles(cles: string[]): string[] {
+  if (!cles.includes("NoCivique") || !cles.includes("Rue")) return cles;
+  const rang = (c: string) => {
+    const i = ORDRE_ADRESSE.indexOf(c);
+    return i === -1 ? ORDRE_ADRESSE.length : i;
+  };
+  return cles
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => rang(a.c) - rang(b.c) || a.i - b.i)
+    .map((x) => x.c);
+}
+
+/** « 12 », « 12 mois », « 1 an », « 26 semaines » ; un nombre seul compte des mois. */
+function lireDuree(texte: string): { n: number; unite: "mois" | "semaines" | "jours" } | null {
+  const m = /^\s*(\d{1,3})\s*([A-Za-zÀ-ÿ.]*)\s*$/.exec(texte || "");
+  if (!m || Number(m[1]) <= 0) return null;
+  const n = Number(m[1]);
+  const u = m[2].toLowerCase().replace(/\.$/, "");
+  if (u === "" || u === "m" || u.startsWith("mois")) return { n, unite: "mois" };
+  if (u.startsWith("an")) return { n: n * 12, unite: "mois" };
+  if (u.startsWith("sem")) return { n, unite: "semaines" };
+  if (u.startsWith("jour") || u === "j") return { n, unite: "jours" };
+  return null;
+}
+
+/** Dernier jour du bail : début + durée − 1 jour (1er déc. + 12 mois = 30 nov.). */
+function finDeBail(debut: string, duree: string): string | null {
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(debut || "");
+  const du = lireDuree(duree);
+  if (!d || !du) return null;
+  const [a, mo, j] = [Number(d[1]), Number(d[2]), Number(d[3])];
+  let fin: Date;
+  if (du.unite === "mois") {
+    const cible = new Date(Date.UTC(a, mo - 1 + du.n, 1));
+    const dernier = new Date(Date.UTC(cible.getUTCFullYear(), cible.getUTCMonth() + 1, 0)).getUTCDate();
+    fin = new Date(Date.UTC(cible.getUTCFullYear(), cible.getUTCMonth(), Math.min(j, dernier)));
+    fin.setUTCDate(fin.getUTCDate() - 1);
+  } else {
+    fin = new Date(Date.UTC(a, mo - 1, j + (du.unite === "semaines" ? du.n * 7 : du.n) - 1));
+  }
+  return Number.isNaN(fin.getTime()) ? null : fin.toISOString().slice(0, 10);
+}
+
+/** Montant tel que tapé (« 1 250,75 $ », « 1250.75 ») ; null si vide ou ambigu (« 1,250 »). */
+function lireMontant(v: unknown): number | null {
+  const brut = String(v ?? "").replace(/[\s$\u00a0]/g, "");
+  if (!brut || /^\d{1,3},\d{3}$/.test(brut) || /^\d{1,3}\.\d{3}$/.test(brut)) return null;
+  let t = brut;
+  if (t.includes(",") && t.includes(".")) {
+    t = t.lastIndexOf(",") > t.lastIndexOf(".") ? t.replace(/\./g, "").replace(",", ".") : t.replace(/,/g, "");
+  } else {
+    t = t.replace(",", ".");
+  }
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Ce que le formulaire calcule seul quand une réponse change (Phil 2026-11-13) :
+ * la date de fin (début + durée) et le loyer total (loyer + services). */
+function deriver(form: Form, cle: string): Form {
+  let f = form;
+  if ((cle === "nbSemainesMoisAnnees" || cle === "dateDebutBail") && texteDe(f.typeBail) !== "dureeIndeterminee") {
+    const fin = finDeBail(texteDe(f.dateDebutBail), texteDe(f.nbSemainesMoisAnnees));
+    if (fin) f = { ...f, dateFinBail: fin };
+  }
+  if (cle === "coutLoyer" || cle === "coutServices" || cle === "bailIncluServices") {
+    const loyer = lireMontant(f.coutLoyer);
+    if (loyer !== null) {
+      const services = texteDe(f.bailIncluServices) === "true" ? (lireMontant(f.coutServices) ?? 0) : 0;
+      f = { ...f, coutTotalLoyer: (Math.round((loyer + services) * 100) / 100).toFixed(2) };
+    }
+  }
+  return f;
+}
+
 const CLE_DPA = "__dpa";
 const LIBELLE_DPA = "Débit préautorisé (DPA)";
 
@@ -562,7 +641,7 @@ export function TalBailModal({
 
   // ── Mutations du formulaire ──
   function poserRacine(k: string, v: unknown) {
-    setForm((f) => ({ ...f, [k]: v }));
+    setForm((f) => deriver({ ...f, [k]: v }, k));
   }
   function poserOccurrence(k: string, i: number, occ: Occurrence) {
     setForm((f) => {
@@ -1421,7 +1500,7 @@ function ChampsListe(p: ListeProps) {
 function GroupeEditeur({ k, ...p }: ListeProps & { k: string }) {
   const gab = p.schema.gabarit[k] as Occurrence[];
   const occurrences = (p.form[k] as Occurrence[]) || [];
-  const sousCles = Object.keys(gab[0] || {});
+  const sousCles = ordonnerCles(Object.keys(gab[0] || {}));
   const premier = sousCles.map((s) => p.champIndex.get(`${k}|${s}`)).find(Boolean);
   const max = premier?.repetable ? premier.max_occurrences || 1 : 1;
   const erreurs = p.erreurs.get(k) || [];
@@ -1487,7 +1566,7 @@ function GroupeEditeur({ k, ...p }: ListeProps & { k: string }) {
                 const sgab = gab[0][s];
                 if (estGroupe(sgab)) {
                   const sousOcc = ((occ[s] as Occurrence[]) || [squeletteVide(sgab[0]) as Occurrence])[0] || {};
-                  const sk = Object.keys(sgab[0] || {});
+                  const sk = ordonnerCles(Object.keys(sgab[0] || {}));
                   return (
                     <div key={s} className="rounded-md border border-brand-800/60 p-2 sm:col-span-2">
                       <p className="mb-1 text-[11px] font-semibold text-white/50">{humaniser(s)}</p>
