@@ -219,9 +219,6 @@ TABLES_COUVERTES: frozenset[str] = frozenset({
     "inv_investissements",
     "inv_jalons",
     "inv_participations",
-    #: Prêts d'un investisseur à la compagnie (2026-11-13) — lecture IA :
-    #: GET /invest/admin/investisseurs/{id}/acces (catalogue API).
-    "inv_prets",
     "inv_projet_profils",
     "kratos_messages",
     "kratos_problems",

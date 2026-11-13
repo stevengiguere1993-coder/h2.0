@@ -449,26 +449,6 @@ export default function PortefeuillePage() {
               </div>
             </div>
 
-            {/* Prêts à la compagnie (saisie manuelle, hors parts). */}
-            {!isGlobal && (data.prets_en_cours ?? 0) > 0 ? (
-              <div className="mt-3 rounded-2xl border border-brand-800 bg-brand-900 p-4">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
-                  Mes prêts aux compagnies
-                </p>
-                <p className="mt-1.5 text-2xl font-bold tabular-nums text-white">
-                  {fmtMoney(data.prets_en_cours ?? 0)}
-                </p>
-                <p className="mt-1 text-xs text-white/50">
-                  intérêts de{" "}
-                  <span className="font-semibold text-white/80 tabular-nums">
-                    {fmtMoney(data.interets_mensuels ?? 0)}
-                  </span>{" "}
-                  par mois · {fmtMoney(data.interets_courus ?? 0)} courus à
-                  ce jour
-                </p>
-              </div>
-            ) : null}
-
             {/* Courbe valeur totale */}
             {data.serie_valeur.length >= 2 ? (
               <div className="mt-5 rounded-2xl border border-brand-800 bg-brand-900 p-4 text-white">
@@ -614,13 +594,6 @@ export default function PortefeuillePage() {
                           <p className="text-[10px] text-white/45">
                             {fmtMoney(p.capital_rembourse)} remboursés ·
                             capital actuel {fmtMoney(p.capital_actuel)}
-                          </p>
-                        ) : null}
-                        {(p.prets_en_cours ?? 0) > 0 ? (
-                          <p className="text-[10px] text-white/45">
-                            + prêt de {fmtMoney(p.prets_en_cours ?? 0)} (
-                            {fmtMoney(p.interets_mensuels ?? 0)} d&apos;intérêts
-                            / mois)
                           </p>
                         ) : null}
                       </div>

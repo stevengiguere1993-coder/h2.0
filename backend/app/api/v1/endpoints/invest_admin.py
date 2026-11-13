@@ -49,7 +49,6 @@ from app.models.invest_portal import (
     InvestFluxType,
     InvestJalon,
     InvestParticipation,
-    InvestPret,
     InvestProjetProfil,
 )
 from app.models.user import User
@@ -96,13 +95,6 @@ from app.services.invest_portfolio import (
     serie_mensuelle,
     serie_valeur_totale,
     timeline_projet,
-)
-from app.services.invest_saisies import (
-    SOURCE_HORS_QBO,
-    flux_payload,
-    net_hors_qbo,
-    prets_de,
-    resume_prets,
 )
 from app.services.invest_tri import xirr
 
@@ -1977,47 +1969,6 @@ class AccesProjetPatch(BaseModel):
     visible: bool
 
 
-async def _saisies_projet(
-    db, user_id: int, part: InvestParticipation
-) -> dict:
-    """Données saisies à la main pour ce projet (bouton « Modifier ») +
-    ce que QuickBooks fournit déjà, pour situer la saisie."""
-    flux = (
-        list(
-            (
-                await db.execute(
-                    select(InvestFlux)
-                    .where(InvestFlux.participation_id == part.id)
-                    .order_by(InvestFlux.date_flux, InvestFlux.id)
-                )
-            ).scalars()
-        )
-        if part.id
-        else []
-    )
-    k = kpis_participation(flux, None)
-    prets = await prets_de(db, user_id, part.entreprise_id)
-    return {
-        "capital_investi_total": k["capital_investi_total"],
-        "capital_actuel": k["capital_actuel"],
-        "apports_qbo": round(
-            sum(
-                float(f.montant or 0)
-                for f in flux
-                if f.source == "qbo"
-                and f.type == InvestFluxType.APPORT.value
-            ),
-            2,
-        ),
-        "apports_hors_qbo": [
-            flux_payload(f) for f in flux if f.source == SOURCE_HORS_QBO
-        ],
-        "net_hors_qbo": net_hors_qbo(flux),
-        "prets": prets,
-        **resume_prets(prets),
-    }
-
-
 async def _acces_investisseur(db, target: User) -> dict:
     graphe = await charger_graphe(db)
     ident = Identite.de_user(target)
@@ -2046,7 +1997,6 @@ async def _acces_investisseur(db, target: User) -> dict:
                 "source": "cascade" if det is not None else "manuel",
                 "participation_id": part.id or None,
                 "visible": not bool(part.masque),
-                **await _saisies_projet(db, target.id, part),
             }
         )
     projets.sort(key=lambda p: (p["holding"], -p["pct_total"], p["name"]))
@@ -2125,233 +2075,3 @@ async def apercu_projet(
     user_id: int, entreprise_id: int, db: DBSession, user: CurrentUser
 ) -> dict:
     return await build_projet(db, user_id, entreprise_id)
-
-
-# ─────────── Saisies manuelles d'un investisseur (« Modifier ») ───────────
-# Steven, 2026-11-13 : apports versés AVANT QuickBooks (Éric Brabant et
-# Vincent Clark, 150 000 $ chacun, affichaient 0 $) et prêts
-# supplémentaires à la compagnie (montant, taux, intérêts mensuels). Les
-# apports sont des flux ``hors_qbo`` que la synchro QB ne touche jamais.
-
-
-class ApportHorsQbo(BaseModel):
-    type: str = InvestFluxType.APPORT.value
-    montant: float = Field(..., gt=0)
-    date_flux: date
-    note: Optional[str] = Field(default=None, max_length=255)
-
-
-class PretIn(BaseModel):
-    montant: float = Field(..., gt=0)
-    taux_annuel_pct: float = Field(default=0, ge=0, le=100)
-    date_pret: date
-    date_remboursement: Optional[date] = None
-    note: Optional[str] = Field(default=None, max_length=255)
-
-
-class PretPatch(BaseModel):
-    montant: Optional[float] = Field(default=None, gt=0)
-    taux_annuel_pct: Optional[float] = Field(default=None, ge=0, le=100)
-    date_pret: Optional[date] = None
-    date_remboursement: Optional[date] = None
-    note: Optional[str] = Field(default=None, max_length=255)
-
-
-async def _investisseur_ou_404(db, user_id: int) -> User:
-    target = await db.get(User, user_id)
-    if target is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Utilisateur introuvable."
-        )
-    return target
-
-
-def _type_flux_ou_422(t: str) -> str:
-    if t not in _FLUX_TYPES:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"Type de flux invalide ({', '.join(sorted(_FLUX_TYPES))}).",
-        )
-    return t
-
-
-async def _flux_hors_qbo_ou_404(db, user_id: int, flux_id: int) -> InvestFlux:
-    f = await db.get(InvestFlux, flux_id)
-    part = (
-        await db.get(InvestParticipation, f.participation_id)
-        if f is not None
-        else None
-    )
-    if (
-        f is None
-        or part is None
-        or part.user_id != user_id
-        or f.source != SOURCE_HORS_QBO
-    ):
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            "Apport hors QuickBooks introuvable pour cet investisseur.",
-        )
-    return f
-
-
-async def _pret_ou_404(db, user_id: int, pret_id: int) -> InvestPret:
-    p = await db.get(InvestPret, pret_id)
-    if p is None or p.user_id != user_id:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Prêt introuvable pour cet investisseur."
-        )
-    return p
-
-
-def _dates_pret_ou_422(p: InvestPret) -> None:
-    if p.date_remboursement is not None and p.date_remboursement < p.date_pret:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "La date de remboursement précède la date du prêt.",
-        )
-
-
-@router.post(
-    "/investisseurs/{user_id}/projets/{entreprise_id}/apports-hors-qbo",
-    summary="Ajoute un apport (ou remboursement) versé hors QuickBooks",
-)
-async def create_apport_hors_qbo(
-    user_id: int,
-    entreprise_id: int,
-    data: ApportHorsQbo,
-    db: DBSession,
-    user: CurrentUser,
-) -> dict:
-    target = await _investisseur_ou_404(db, user_id)
-    await _load_entreprise(db, entreprise_id)
-    graphe = await charger_graphe(db)
-    det = (await detentions_de(db, Identite.de_user(target), graphe)).get(
-        entreprise_id
-    )
-    part, _ = await _ensure_participation(
-        db, target.id, entreprise_id, det.pct_total if det is not None else None
-    )
-    db.add(
-        InvestFlux(
-            participation_id=part.id,
-            type=_type_flux_ou_422(data.type),
-            montant=round(data.montant, 2),
-            date_flux=data.date_flux,
-            note=(data.note or "").strip()[:255] or None,
-            source=SOURCE_HORS_QBO,
-        )
-    )
-    await db.flush()
-    await db.commit()
-    return await _acces_investisseur(db, target)
-
-
-@router.patch(
-    "/investisseurs/{user_id}/apports-hors-qbo/{flux_id}",
-    summary="Modifie un apport saisi hors QuickBooks",
-)
-async def patch_apport_hors_qbo(
-    user_id: int,
-    flux_id: int,
-    data: ApportHorsQbo,
-    db: DBSession,
-    user: CurrentUser,
-) -> dict:
-    target = await _investisseur_ou_404(db, user_id)
-    f = await _flux_hors_qbo_ou_404(db, user_id, flux_id)
-    f.type = _type_flux_ou_422(data.type)
-    f.montant = round(data.montant, 2)
-    f.date_flux = data.date_flux
-    f.note = (data.note or "").strip()[:255] or None
-    await db.flush()
-    await db.commit()
-    return await _acces_investisseur(db, target)
-
-
-@router.delete(
-    "/investisseurs/{user_id}/apports-hors-qbo/{flux_id}",
-    summary="Supprime un apport saisi hors QuickBooks",
-)
-async def delete_apport_hors_qbo(
-    user_id: int, flux_id: int, db: DBSession, user: CurrentUser
-) -> dict:
-    target = await _investisseur_ou_404(db, user_id)
-    f = await _flux_hors_qbo_ou_404(db, user_id, flux_id)
-    await db.delete(f)
-    await db.commit()
-    return await _acces_investisseur(db, target)
-
-
-@router.post(
-    "/investisseurs/{user_id}/projets/{entreprise_id}/prets",
-    summary="Ajoute un prêt de l'investisseur à la compagnie",
-)
-async def create_pret(
-    user_id: int,
-    entreprise_id: int,
-    data: PretIn,
-    db: DBSession,
-    user: CurrentUser,
-) -> dict:
-    target = await _investisseur_ou_404(db, user_id)
-    await _load_entreprise(db, entreprise_id)
-    p = InvestPret(
-        user_id=target.id,
-        entreprise_id=entreprise_id,
-        montant=round(data.montant, 2),
-        taux_annuel_pct=data.taux_annuel_pct,
-        date_pret=data.date_pret,
-        date_remboursement=data.date_remboursement,
-        note=(data.note or "").strip()[:255] or None,
-    )
-    _dates_pret_ou_422(p)
-    db.add(p)
-    await db.flush()
-    await db.commit()
-    return await _acces_investisseur(db, target)
-
-
-@router.patch(
-    "/investisseurs/{user_id}/prets/{pret_id}",
-    summary="Modifie un prêt (montant, taux, dates, remboursement)",
-)
-async def patch_pret(
-    user_id: int,
-    pret_id: int,
-    data: PretPatch,
-    db: DBSession,
-    user: CurrentUser,
-) -> dict:
-    target = await _investisseur_ou_404(db, user_id)
-    p = await _pret_ou_404(db, user_id, pret_id)
-    champs = data.model_dump(exclude_unset=True)
-    if "montant" in champs and champs["montant"] is not None:
-        p.montant = round(champs["montant"], 2)
-    if "taux_annuel_pct" in champs and champs["taux_annuel_pct"] is not None:
-        p.taux_annuel_pct = champs["taux_annuel_pct"]
-    if "date_pret" in champs and champs["date_pret"] is not None:
-        p.date_pret = champs["date_pret"]
-    if "date_remboursement" in champs:
-        # null explicite = prêt de nouveau en cours.
-        p.date_remboursement = champs["date_remboursement"]
-    if "note" in champs:
-        p.note = (champs["note"] or "").strip()[:255] or None
-    _dates_pret_ou_422(p)
-    await db.flush()
-    await db.commit()
-    return await _acces_investisseur(db, target)
-
-
-@router.delete(
-    "/investisseurs/{user_id}/prets/{pret_id}",
-    summary="Supprime un prêt",
-)
-async def delete_pret(
-    user_id: int, pret_id: int, db: DBSession, user: CurrentUser
-) -> dict:
-    target = await _investisseur_ou_404(db, user_id)
-    p = await _pret_ou_404(db, user_id, pret_id)
-    await db.delete(p)
-    await db.commit()
-    return await _acces_investisseur(db, target)

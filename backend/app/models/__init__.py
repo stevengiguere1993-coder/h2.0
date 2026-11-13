@@ -176,7 +176,6 @@ from app.models.invest_portal import (  # noqa: F401
     InvestFluxType,
     InvestJalon,
     InvestParticipation,
-    InvestPret,
     InvestProjetProfil,
 )
 from app.models.immobilier import (  # noqa: F401

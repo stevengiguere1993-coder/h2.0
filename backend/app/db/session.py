@@ -1808,7 +1808,6 @@ async def ensure_invest_portal_tables() -> None:
             InvestFlux,
             InvestJalon,
             InvestParticipation,
-            InvestPret,
             InvestProjetProfil,
         )
 
@@ -1822,7 +1821,6 @@ async def ensure_invest_portal_tables() -> None:
                         InvestProjetProfil.__table__,
                         InvestDocument.__table__,
                         InvestJalon.__table__,
-                        InvestPret.__table__,
                     ],
                 )
             )

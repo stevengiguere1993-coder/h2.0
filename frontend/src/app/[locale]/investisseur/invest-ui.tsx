@@ -17,9 +17,6 @@ import { authedFetch } from "@/lib/auth";
 /* ----------------------------- Types ----------------------------- */
 
 export type ProjetCard = {
-  prets?: PretRow[];
-  prets_en_cours?: number;
-  interets_mensuels?: number;
   entreprise_id: number;
   entreprise_name: string;
   color_accent: string | null;
@@ -87,25 +84,6 @@ export type Portefeuille = {
   serie_valeur: { date: string; label: string; valeur: number }[];
   projets: ProjetCard[];
   compagnies?: CompagnieIntermediaire[];
-  /* Prêts de l'investisseur aux compagnies (saisie manuelle). */
-  prets_en_cours?: number;
-  interets_mensuels?: number;
-  interets_courus?: number;
-};
-
-export type PretRow = {
-  id: number;
-  entreprise_id: number;
-  montant: number;
-  taux_annuel_pct: number;
-  date_pret: string;
-  date_remboursement: string | null;
-  note: string | null;
-  en_cours: boolean;
-  interet_mensuel: number;
-  interet_annuel: number;
-  nb_mois: number;
-  interets_courus: number;
 };
 
 export type HypothequeRow = {
