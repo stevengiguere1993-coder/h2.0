@@ -74,9 +74,12 @@ def bloc_depuis(consignes: list[RencontreConsigne]) -> str:
 
 async def bloc_consignes(db, portee: str) -> str:
     """Bloc de prompt des consignes actives pour ``portee`` ; jamais
-    bloquant (table absente, erreur de lecture → chaîne vide)."""
+    bloquant (table absente, erreur de lecture → chaîne vide). La lecture
+    se fait sous un point de sauvegarde : une erreur SQL ne laisse pas la
+    transaction de l'appelant (un résumé en cours) en échec."""
     try:
-        return bloc_depuis(await consignes_actives(db, portee))
+        async with db.begin_nested():
+            return bloc_depuis(await consignes_actives(db, portee))
     except Exception:  # noqa: BLE001
         return ""
 
