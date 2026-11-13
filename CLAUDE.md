@@ -365,6 +365,25 @@ facture par facture, compteur ramené juste après. Le PDF de facture
 porte l'adresse et le téléphone d'Horizon (`COMPANY_ADDRESS`,
 `COMPANY_TEL` dans `soumission_pdf.py`).
 
+## Rencontres — questions sur toutes les rencontres (2026-11-13)
+
+Steven : « si je pose une question à Kratos sur un élément, il doit être
+capable de regarder dans chacune des rencontres et me dire si nous avons
+discuté de quelque chose ou l'avancement d'un dossier ». Service
+`app/services/rencontre_recherche.py` : la question est réduite à ses
+mots-clés (accents / pluriels près, mots vides et mots « méta » comme
+rencontre / discuté / dossier retirés), chaque rencontre est découpée en
+passages (résumé global, notes, résumé IA de chaque section — décisions,
+actions, questions, risques — et transcript par tranches) notés par
+rareté des mots, puis l'IA répond à partir des meilleurs passages remis
+en ordre CHRONOLOGIQUE (la plus récente fait foi) en citant « Rencontre
+#ID (date) ». Sans IA ou IA en panne : la liste des passages, jamais de
+blocage. Routes `GET /rencontres/recherche?q=` (sans IA, pour le
+connecteur) et `POST /rencontres/demander`, réservées à qui voit la page
+`entreprises.rencontres` (403 sinon) ; bloc « Demander à Kratos » en
+haut de Entreprises → Rencontres ; le Centre d'aide (`/help/ask`) reçoit
+aussi ces passages, avec la même garde. Aucune table ni colonne ajoutée.
+
 ## Espace investisseur — cascade, rôle, documents (2026-11-07)
 
 Steven : « Vincent ne voit aucun projet alors qu'il détient 30 % de
@@ -432,21 +451,28 @@ la transaction, relève la fiche résultante (`etat_fiche`) puis fait un
 rollback : c'est l'étape « Voir le résultat » de la fenêtre, obligatoire
 avant « Confirmer ». Pas d'annulation après coup (la source est supprimée).
 
-## Rencontres — questions sur toutes les rencontres (2026-11-13)
+## Centre d'aide — Questions fiables, historique des bugs (2026-11-13)
 
-Steven : « si je pose une question à Kratos sur un élément, il doit être
-capable de regarder dans chacune des rencontres et me dire si nous avons
-discuté de quelque chose ou l'avancement d'un dossier ». Service
-`app/services/rencontre_recherche.py` : la question est réduite à ses
-mots-clés (accents / pluriels près, mots vides et mots « méta » comme
-rencontre / discuté / dossier retirés), chaque rencontre est découpée en
-passages (résumé global, notes, résumé IA de chaque section — décisions,
-actions, questions, risques — et transcript par tranches) notés par
-rareté des mots, puis l'IA répond à partir des meilleurs passages remis
-en ordre CHRONOLOGIQUE (la plus récente fait foi) en citant « Rencontre
-#ID (date) ». Sans IA ou IA en panne : la liste des passages, jamais de
-blocage. Routes `GET /rencontres/recherche?q=` (sans IA, pour le
-connecteur) et `POST /rencontres/demander`, réservées à qui voit la page
-`entreprises.rencontres` (403 sinon) ; bloc « Demander à Kratos » en
-haut de Entreprises → Rencontres ; le Centre d'aide (`/help/ask`) reçoit
-aussi ces passages, avec la même garde. Aucune table ni colonne ajoutée.
+Steven : « beaucoup de bugs qui reviennent et qui sont déjà réglés […]
+pouvoir poser une question sur un fonctionnement et avoir la réponse » et
+« une section historique : bug accepté ou refusé avec la note, date de la
+gestion, notification au déclarant ». L'onglet « Question » (`POST
+/help/ask`) cherche d'abord, par mots clés sans accents
+(`app/services/aide_connaissances.py`), dans les signalements (statut,
+section, note, dates), le journal des livraisons
+(`backend/app/data/journal_livraisons.tsv`) et les sections `##` de ce
+fichier, puis les passe à l'IA ET les renvoie à l'écran (« Ce que j'ai
+trouvé »). L'onglet « Signaler » montre en direct les signalements et
+livraisons semblables (`GET /help/similaires`) ; « Mes signalements »
+(`GET /help/mes-signalements`) donne au déclarant statut, note et date.
+Chaque décision (accepté / refusé / réglé, `PATCH /help/reports/{id}` ou
+lot) date l'historique (`traite_le`, `traite_par`, `rejected_at`), pose la
+section (déduite de la page) et notifie le déclarant (`bug_traite`, lien
+`?aide=mes-signalements` qui ouvre le panneau), sauf s'il s'agit de
+soi-même. Mode dev → Demandes d'aide → onglet « Historique ».
+**À faire par Claude Code** : quand une tâche règle un bug signalé, le
+marquer réglé (`PATCH /api/v1/help/reports/{id}` avec `status:
+"resolved"`, `resolution_notes` : ce qui a été corrigé et la date,
+`section`) — c'est ce qui permet à l'assistant de répondre « déjà réglé ».
+Régénérer le journal de temps en temps : `git fetch --unshallow origin`
+puis `python backend/scripts/journal_livraisons.py`.
