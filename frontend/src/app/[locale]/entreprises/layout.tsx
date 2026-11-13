@@ -22,7 +22,6 @@ import {
   ExternalLink,
   FileSignature,
   Grid3x3,
-  HardHat,
   LayoutGrid,
   Loader2,
   Menu,
@@ -274,15 +273,6 @@ export default function EntreprisesLayout({
   const NAVIGATION: NavItem[] = [
     { href: "/entreprises", label: "Entreprises", icon: Briefcase },
     { href: "/entreprises/dashboards", label: "Tableaux de bord", icon: LayoutGrid },
-    // Coût à l'heure contre les entrées de fonds (Steven 2026-10-03, bug 14).
-    // En développement (Steven 2026-10-23) → propriétaires seulement, titre
-    // en rouge.
-    {
-      href: "/entreprises/depenses-construction",
-      label: "Dépenses construction",
-      icon: HardHat,
-      enDeveloppement: "entreprises.depenses_construction_dev"
-    },
     {
       href: "/entreprises/taches",
       label: "Tâches",
@@ -314,7 +304,8 @@ export default function EntreprisesLayout({
     { href: "/entreprises/contacts", label: "Contacts", icon: ContactIcon },
     { href: "/entreprises/signature", label: "Signature", icon: FileSignature },
     // Comptabilité (Steven 2026-10-04) : Nouveau reçu (saisie directe dans
-    // QuickBooks), Paiements (à venir), Banque de reçus (Drive). En
+    // QuickBooks), Paiements, Banque de reçus (Drive), Dépenses
+    // construction (déplacée ici le 2026-11-13). En
     // développement → propriétaires seulement, titre en rouge.
     {
       href: "/entreprises/comptabilite",
