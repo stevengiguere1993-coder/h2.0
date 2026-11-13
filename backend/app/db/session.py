@@ -1752,6 +1752,34 @@ async def ensure_esign_tables() -> None:
         log.warning("ensure_esign_tables : marquage des baux non fait : %s", exc)
 
 
+async def ensure_bugs_acceptes_regles() -> None:
+    """Steven, 2026-11-13 : « lorsque je clique sur accepté un signalement
+    de bug, cela veut dire qu'il a été réglé ». Le statut « accepté »
+    n'existe plus : les signalements restés « acceptés » passent à
+    « réglé » (date de réglage = date d'acceptation), SANS notification
+    au déclarant. Idempotent : plus aucun signalement n'est accepté
+    ensuite (l'API transforme « accepter » en « régler »)."""
+    import logging
+
+    from sqlalchemy import text
+
+    log = logging.getLogger("db.ensure_bugs_acceptes_regles")
+    try:
+        async with engine.begin() as conn:
+            res = await conn.execute(
+                text(
+                    "UPDATE help_requests SET status = 'resolved', "
+                    "resolved_at = COALESCE(resolved_at, accepted_at), "
+                    "traite_le = COALESCE(traite_le, accepted_at) "
+                    "WHERE kind = 'bug' AND status = 'accepted'"
+                )
+            )
+            if res.rowcount:
+                log.info("%s signalement(s) accepté(s) passé(s) à réglé", res.rowcount)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_bugs_acceptes_regles failed: %s", exc)
+
+
 async def ensure_invest_portal_tables() -> None:
     """Crée les tables du Portail Investisseur v2 (participation par
     compagnie) dans leur PROPRE transaction : `inv_participations`,

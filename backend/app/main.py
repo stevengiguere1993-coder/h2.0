@@ -23,6 +23,7 @@ from app.db.session import (
     ensure_critical_columns,
     ensure_esign_tables,
     ensure_invest_portal_tables,
+    ensure_bugs_acceptes_regles,
     ensure_immobilier_aux_tables,
     ensure_project_corrections_tables,
     ensure_raci_tables,
@@ -590,6 +591,9 @@ async def _run_startup_tasks() -> None:
             "ensure_invest_portal_tables failed during startup: %s", exc
         )
 
+    # Signalements : « accepté » veut dire « réglé » (Steven, 2026-11-13).
+    await ensure_bugs_acceptes_regles()
+
     # Backfill : crée le projet (+ facture d'acompte DRAFT) pour les
     # soumissions ACCEPTED qui n'en ont pas encore. Rattrape les
     # acceptations antérieures à l'auto-création (PR #45). Best-effort,
@@ -907,8 +911,37 @@ async def health_check(response: Response) -> dict:
         ][-10:]
     except Exception:  # noqa: BLE001
         derniers = []
+    # Bail officiel du TAL en cours de génération (formulaire créé chez le TAL,
+    # PDF pas encore reçu) : on ne redémarre JAMAIS la production à ce
+    # moment-là — une coupure ferait perdre le PDF d'un bail compté. Un simple
+    # nombre, lisible sans connexion, à vérifier avant chaque déploiement.
+    tal_en_cours = None
+    try:
+        from datetime import timedelta
+
+        from sqlalchemy import func, select
+
+        from app.db.session import AsyncSessionLocal
+        from app.models.tal_bail import TalTransmission
+
+        async with AsyncSessionLocal() as session:
+            tal_en_cours = int(
+                (
+                    await session.execute(
+                        select(func.count(TalTransmission.id)).where(
+                            TalTransmission.statut == "forme_creee",
+                            TalTransmission.updated_at
+                            >= maintenant - timedelta(minutes=3),
+                        )
+                    )
+                ).scalar_one()
+                or 0
+            )
+    except Exception:  # noqa: BLE001 — la santé ne dépend pas de ce témoin
+        tal_en_cours = None
     return {
         "status": "healthy" if ok else "degraded",
+        "tal_generations_en_cours": tal_en_cours,
         "environment": settings.env,
         "schema": {
             "ok": ok,

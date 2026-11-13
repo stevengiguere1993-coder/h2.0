@@ -269,6 +269,20 @@ def valider(form: dict[str, Any], schema: SchemaTal, *, requis: Optional[list[st
         r.erreurs.append("Section G : indique le loyer exigé en vertu du bail précédent et sa fréquence.")
     if situation_g == "aucunLoyer" and (_vide(form.get("dateDernierPaiementLoyer")) or _vide(form.get("montantDernierLoyerPaye"))):
         r.avertissements.append("Section G : le dernier loyer payé (date et montant) n'est pas indiqué — à laisser vide seulement si le logement n'a jamais été loué.")
+    # Adresse avec un numéro civique mais sans rue (2e bail réel, 2026-11-13 : le bail est
+    # parti avec « 1707 » et aucune rue) : signalé avant l'envoi.
+    def _sans_rue(occ: Any) -> bool:
+        return isinstance(occ, dict) and not _vide(occ.get("NoCivique")) and _vide(occ.get("Rue"))
+
+    for occ in form.get("adresseLogement") or []:
+        if _sans_rue(occ):
+            r.avertissements.append("Adresse du logement : numéro civique sans nom de rue.")
+    for groupe, qui in (("locateurs", "du locateur"), ("locataires", "du locataire"), ("autresSignataires", "de l'autre signataire")):
+        for i, personne in enumerate(form.get(groupe) or [], 1):
+            if not isinstance(personne, dict) or _vide(personne.get("nom")):
+                continue
+            if any(_sans_rue(a) for a in personne.get("adresse") or []):
+                r.avertissements.append(f"Adresse {qui} {i} : numéro civique sans nom de rue.")
     for chemin in requis or []:
         v = _lire_chemin(form, chemin)
         if _vide(v):

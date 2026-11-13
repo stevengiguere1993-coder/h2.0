@@ -381,6 +381,9 @@ def decouper_adresse(
     if mc:
         civique = re.sub(r"\s", "", mc.group(1))
         rue = mc.group(2).strip(" ,")
+    elif re.fullmatch(r"\d+[A-Za-z]?", rue_part):
+        # Un nombre seul est un numéro civique sans rue, pas un nom de rue.
+        civique, rue = rue_part, ""
     rue = re.sub(r"\s{2,}", " ", rue).strip()
     if not (civique or rue or municipalite or cp or app):
         return {k: "" for k in ("NoCivique", "Appartement", "CodePostal", "Province", "Municipalite", "Rue", "AdresseComplete")}
@@ -1113,6 +1116,7 @@ async def creer_transmission(
     ouvert plutôt que d'en empiler."""
     prep, rapport, ctx, schema, config = await preparer(db, bail_id, user=user, surcharges=surcharges)
     if form is not None:
+        completer_derives(form)
         vider_inapplicables(form, schema.gabarit)
         prep.form = form
         rapport = valider(form, schema, requis=chemins_requis(config))
@@ -1161,6 +1165,7 @@ async def remplacer_formulaire(db: AsyncSession, t: TalTransmission, form: dict[
     config = await charger_config()
     # Un champ que les réponses rendent sans objet ne reste pas rempli « au cas où » :
     # le TAL l'imprimerait.
+    completer_derives(form)
     vider_inapplicables(form, schema.gabarit)
     rapport = valider(form, schema, requis=chemins_requis(config))
     t.payload_json = _json(form)
@@ -1310,7 +1315,7 @@ async def generer(
         type=DOC_TYPE,
         titre=(f"Bail de logement (TAL) — {t.adresse}" if t.adresse else "Bail de logement (TAL)")[:255],
         source="genere",
-        filename=(nom_pdf or "bail.pdf")[:255],
+        filename=nom_fichier_bail(form)[:255],
         params_json=_json({
             "transmission_id": t.id, "short_guid": t.short_guid, "no_confirmation": t.no_confirmation,
             "mode": t.mode, "schema_version": t.schema_version, "simulation": client.simulation,
@@ -1511,6 +1516,92 @@ def contexte_independant(essentiel: Optional[dict[str, Any]]) -> ContexteBail:
     )
 
 
+def nom_fichier_bail(form: Any, *, signe: bool = False) -> str:
+    """Nom du PDF que le locataire reçoit : « Bail_<unité>_<adresse>.pdf » (Phil
+    2026-11-13 : « le titre du pdf est horrible »). Sans accent ni espace, pour passer
+    partout (courriel, téléchargement). Ex. « Bail_100_1073-Rue-de-Bleury.pdf »."""
+    import unicodedata
+
+    def propre(v: Any) -> str:
+        texte = unicodedata.normalize("NFKD", str(v or "")).encode("ascii", "ignore").decode("ascii")
+        texte = re.sub(r"[^A-Za-z0-9]+", "-", texte).strip("-")
+        return texte[:60]
+
+    try:
+        a = (form.get("adresseLogement") or [{}])[0] or {}
+    except (AttributeError, IndexError, TypeError):
+        a = {}
+    if not isinstance(a, dict):
+        a = {}
+    adresse = propre(" ".join(str(a.get(k) or "").strip() for k in ("NoCivique", "Rue")) or a.get("AdresseComplete"))
+    morceaux = ["Bail", propre(a.get("Appartement")), adresse, "signe" if signe else ""]
+    return "_".join(m for m in morceaux if m)[:120] + ".pdf"
+
+
+_DUREE_RE = re.compile(r"^\s*(\d{1,3})\s*([A-Za-zÀ-ÿ.]*)\s*$")
+
+
+def lire_duree(texte: Any) -> Optional[tuple[int, str]]:
+    """« 12 », « 12 mois », « 1 an », « 26 semaines » → (nombre, "mois" | "semaines" | "jours").
+    Un nombre seul compte des mois. None si le texte est libre."""
+    m = _DUREE_RE.match(str(texte or ""))
+    if not m or int(m.group(1)) <= 0:
+        return None
+    n, unite = int(m.group(1)), m.group(2).lower().rstrip(".")
+    if unite in ("", "m") or unite.startswith("mois"):
+        return n, "mois"
+    if unite.startswith("an"):
+        return n * 12, "mois"
+    if unite.startswith("sem"):
+        return n, "semaines"
+    if unite.startswith("jour") or unite == "j":
+        return n, "jours"
+    return None
+
+
+def fin_de_bail(debut: Any, duree: Any) -> Optional[date]:
+    """Dernier jour du bail : début + durée − 1 jour (1er déc. + 12 mois → 30 nov.)."""
+    import calendar
+
+    depart = _date_ou_none(debut)
+    lu = lire_duree(duree)
+    if depart is None or lu is None:
+        return None
+    n, unite = lu
+    if unite == "mois":
+        total = depart.month - 1 + n
+        annee, mois = depart.year + total // 12, total % 12 + 1
+        jour = min(depart.day, calendar.monthrange(annee, mois)[1])
+        return date(annee, mois, jour) - timedelta(days=1)
+    return depart + timedelta(days=(n * 7 if unite == "semaines" else n) - 1)
+
+
+def completer_derives(form: dict[str, Any]) -> None:
+    """Valeurs que le formulaire peut calculer seul (Phil 2026-11-13) — jamais par-dessus
+    une valeur saisie :
+    - durée écrite en nombre seul → « N mois » (le TAL imprime le texte tel quel) ;
+    - date de fin vide → date de début + durée ;
+    - loyer total vide → loyer + coût des services, s'il y en a."""
+    if not isinstance(form, dict):
+        return
+    if str(form.get("typeBail") or "") != "dureeIndeterminee":
+        duree = str(form.get("nbSemainesMoisAnnees") or "").strip()
+        if duree.isdigit() and int(duree) > 0:
+            form["nbSemainesMoisAnnees"] = f"{int(duree)} mois"
+        if _vide(form.get("dateFinBail")):
+            fin = fin_de_bail(form.get("dateDebutBail"), form.get("nbSemainesMoisAnnees"))
+            if fin is not None:
+                form["dateFinBail"] = fin.isoformat()
+    if _vide(form.get("coutTotalLoyer")) and not _vide(form.get("coutLoyer")):
+        try:
+            total = float(nombre_canonique(form.get("coutLoyer")))
+            if str(form.get("bailIncluServices")) == "true" and not _vide(form.get("coutServices")):
+                total += float(nombre_canonique(form.get("coutServices")))
+            form["coutTotalLoyer"] = f"{total:.2f}"
+        except (TypeError, ValueError):
+            pass
+
+
 def adresse_depuis_formulaire(form: Any) -> str:
     """Adresse lisible du logement telle qu'écrite dans le formulaire."""
     try:
@@ -1550,14 +1641,21 @@ async def creer_independant(
     essentiel: Optional[dict[str, Any]] = None,
     libelle: Optional[str] = None,
     source: Optional[TalTransmission] = None,
+    form: Optional[dict[str, Any]] = None,
 ) -> tuple[TalTransmission, Rapport]:
-    """Brouillon d'un bail INDÉPENDANT : le formulaire est construit à partir
-    du petit formulaire (``essentiel``) par le même mapping que les baux
-    Kratos, ou copié d'un bail indépendant existant (``source``). Rien n'est
-    envoyé au TAL."""
+    """Brouillon d'un bail INDÉPENDANT. Trois portes : le formulaire complet
+    rempli à l'écran (``form`` — Phil 2026-11-13 : on arrive directement sur le
+    formulaire), un bail indépendant existant à copier (``source``), ou le
+    petit formulaire d'origine (``essentiel``, même mapping que les baux
+    Kratos). Rien n'est envoyé au TAL."""
     config = await charger_config()
     schema = await charger_schema(db)
-    if source is not None:
+    if form is not None:
+        if not isinstance(form, dict) or not form:
+            raise TalBailError("Le formulaire du bail est vide.", http_status=422)
+        a_verifier: list[dict[str, Any]] = []
+        adresse = adresse_depuis_formulaire(form)
+    elif source is not None:
         form = _charger_json(source.payload_json, None)
         if not isinstance(form, dict) or not form:
             raise TalBailError("Le bail à dupliquer n'a pas de formulaire.", http_status=422)
@@ -1569,6 +1667,7 @@ async def creer_independant(
         form = prep.form
         a_verifier = [{**x, "note": _NOTES_INDEPENDANT.get(x.get("note", ""), x.get("note", ""))} for x in prep.a_verifier]
         adresse = adresse_logement_texte(ctx)
+    completer_derives(form)
     vider_inapplicables(form, schema.gabarit)
     rapport = valider(form, schema, requis=chemins_requis(config))
     now = datetime.now(timezone.utc)
@@ -1588,6 +1687,106 @@ async def creer_independant(
     await db.flush()
     t.identifiant_utilisateur = f"kratos-ind-t{t.id}"
     return t, rapport
+
+
+async def preparation_independante_vierge(db: AsyncSession) -> dict[str, Any]:
+    """Formulaire d'un NOUVEAU bail indépendant, avec les réglages par défaut — rien n'est
+    écrit en base : le brouillon naît à la première vérification."""
+    schema = await charger_schema(db)
+    config = await charger_config()
+    prep = construire_formulaire(schema, contexte_independant({}), config)
+    form = prep.form
+    completer_derives(form)
+    vider_inapplicables(form, schema.gabarit)
+    rapport = valider(form, schema, requis=chemins_requis(config))
+    return {
+        "form": form, "origine": {},
+        "a_verifier": [{**x, "note": _NOTES_INDEPENDANT.get(x.get("note", ""), x.get("note", ""))} for x in prep.a_verifier],
+        "rapport": rapport.as_dict(),
+        "contexte": {"independant": True, "adresse": None, "libelle": None, "parties": parties_du_formulaire(form)},
+        "schema_version": schema.version,
+        "requis": chemins_requis(config),
+        "regles": REGLES,
+    }
+
+
+async def prefill_immeuble(db: AsyncSession, immeuble_id: int, *, logement_id: Optional[int] = None) -> dict[str, Any]:
+    """Locateur et adresse d'un bail INDÉPENDANT pris d'un de NOS immeubles, pour écrire
+    moins (Phil 2026-11-13). « Ça reste complètement indépendant du reste de la gestion
+    locative » : aucun lien n'est gardé, ces valeurs se corrigent ensuite comme les autres."""
+    immeuble = await db.get(Immeuble, immeuble_id)
+    if immeuble is None:
+        raise TalBailError("Immeuble introuvable.", http_status=404)
+    ent_id = (
+        await db.execute(
+            select(ImmeubleOwnership.entreprise_id)
+            .where(ImmeubleOwnership.immeuble_id == immeuble.id)
+            .order_by(ImmeubleOwnership.ownership_pct.desc()).limit(1)
+        )
+    ).scalar_one_or_none() or immeuble.owner_entreprise_id
+    entreprise = await db.get(Entreprise, int(ent_id)) if ent_id else None
+    logements = (
+        await db.execute(select(Logement).where(Logement.immeuble_id == immeuble.id).order_by(Logement.numero))
+    ).scalars().all()
+    logement = next((lg for lg in logements if logement_id is not None and lg.id == logement_id), None)
+    if logement_id is not None and logement is None:
+        raise TalBailError("Ce logement n'appartient pas à cet immeuble.", http_status=404)
+    adresse_immeuble = ", ".join(x for x in (immeuble.address, immeuble.city, immeuble.postal_code) if x)
+    essentiel = {
+        "locateur": {
+            "nom": (entreprise.name if entreprise is not None else "") or "",
+            "telephone": getattr(entreprise, "contact_telephone", None) or "",
+            "courriel": getattr(entreprise, "contact_email", None) or "",
+            "adresse": getattr(entreprise, "siege_social", None) or adresse_immeuble,
+        },
+        "adresse": immeuble.address, "ville": immeuble.city, "code_postal": immeuble.postal_code,
+        "appartement": logement.numero if logement is not None else "",
+        "nb_pieces": logement.nb_pieces_decimal if logement is not None else None,
+    }
+    schema = await charger_schema(db)
+    config = await charger_config()
+    form = construire_formulaire(schema, contexte_independant(essentiel), config).form
+    cles = ["locateurs", "adresseLogement"] + (["nbPieces", "nbPiecesAutre"] if logement is not None else [])
+    return {
+        "valeurs": {k: form[k] for k in cles if k in form},
+        "immeuble": {"id": immeuble.id, "nom": immeuble.name, "adresse": adresse_immeuble},
+        "locateur": essentiel["locateur"]["nom"] or None,
+        "logements": [{"id": lg.id, "numero": lg.numero, "nb_pieces": lg.nb_pieces_decimal} for lg in logements],
+    }
+
+
+def personnes_pour_carnet(form: Any) -> list[dict[str, Any]]:
+    """Les personnes nommées au formulaire, sous la forme du carnet d'Admin locative
+    (nom, téléphone, courriel, adresse en une ligne, rôle)."""
+    f = form if isinstance(form, dict) else {}
+    out: list[dict[str, Any]] = []
+
+    def adresse(occ: dict[str, Any]) -> str:
+        a = (occ.get("adresse") or [{}])[0] if isinstance(occ.get("adresse"), list) and occ.get("adresse") else {}
+        if not isinstance(a, dict):
+            return ""
+        rue = " ".join(str(a.get(k) or "").strip() for k in ("NoCivique", "Rue")).strip()
+        if rue and str(a.get("Appartement") or "").strip():
+            rue += f", app. {str(a.get('Appartement')).strip()}"
+        ville = str(a.get("Municipalite") or "").strip()
+        if ville and str(a.get("Province") or "").strip():
+            ville += f" ({str(a.get('Province')).strip()})"
+        return ", ".join(x for x in (rue, " ".join(y for y in (ville, str(a.get("CodePostal") or "").strip()) if y)) if x)
+
+    for groupe, role, cle_courriel in (("locateurs", "locateur", "courrielLocateur"), ("locataires", "locataire", "courrielLocataire"),
+                                       ("autresSignataires", "caution", "courriel")):
+        if groupe == "autresSignataires" and str(f.get("possedeAutresSignataires")) != "true":
+            continue
+        for occ in f.get(groupe) or []:
+            if not isinstance(occ, dict) or not str(occ.get("nom") or "").strip():
+                continue
+            out.append({
+                "nom": str(occ.get("nom")).strip(), "role": role,
+                "telephone": str(occ.get("noTelephone") or occ.get("autreNoTelephoneCell") or "").strip(),
+                "courriel": str(occ.get(cle_courriel) or occ.get("courrielMandant") or "").strip(),
+                "adresse": adresse(occ),
+            })
+    return out
 
 
 async def preparation_independante(db: AsyncSession, t: TalTransmission) -> dict[str, Any]:
@@ -1961,7 +2160,7 @@ async def lancer_signature(db: AsyncSession, t: TalTransmission, *, user, messag
         entreprise_id=entreprise_id, created_by_user_id=getattr(user, "id", None), title=titre,
         message=(message or "Voici votre bail de logement (formulaire officiel du Tribunal administratif du logement) à signer électroniquement.")[:2000],
         status=EsignDocumentStatus.BROUILLON.value, use_signing_order=False,
-        filename=f"bail-tal-{t.id}.pdf", content_type="application/pdf", pdf_blob=pdf, page_count=max(1, int(pages or 1)),
+        filename=nom_fichier_bail(form), content_type="application/pdf", pdf_blob=pdf, page_count=max(1, int(pages or 1)),
         sha256=hashlib.sha256(pdf).hexdigest(), origine=ORIGINE_ESIGN,
     )
     db.add(doc)
@@ -2027,7 +2226,7 @@ async def apres_signature_complete(
         signe = ImmDocument(
             type=DOC_TYPE_SIGNE,
             titre=(f"Bail signé — {t.adresse}" if t.adresse else "Bail signé (TAL)")[:255],
-            source="genere", filename=f"bail-signe-{t.id}.pdf",
+            source="genere", filename=nom_fichier_bail(_charger_json(t.payload_json, {}) or {}, signe=True),
             params_json=_json({
                 "transmission_id": t.id, "esign_document_id": doc.id, "short_guid": t.short_guid,
                 "mode": t.mode, "document_tal_id": t.document_id, "independant": True,
@@ -2063,7 +2262,7 @@ async def apres_signature_complete(
         bail_id=t.bail_id, locataire_id=t.locataire_id, immeuble_id=t.immeuble_id, logement_id=t.logement_id,
         type="bail",
         titre=(f"Bail signé — {t.adresse}" if t.adresse else "Bail signé (TAL)")[:255],
-        source="genere", filename=f"bail-signe-{t.id}.pdf",
+        source="genere", filename=nom_fichier_bail(_charger_json(t.payload_json, {}) or {}, signe=True),
         params_json=_json({
             "transmission_id": t.id, "esign_document_id": doc.id, "short_guid": t.short_guid,
             "mode": t.mode, "document_tal_id": t.document_id,
@@ -2180,4 +2379,6 @@ __all__ = [
     "parties_du_formulaire", "adresse_depuis_formulaire",
     "registre", "TPS_PCT", "TVQ_PCT", "FORFAIT_LICENCE", "normaliser_montants", "REGLES",
     "rangs_reels", "resume_avec_cout",
+    "nom_fichier_bail", "lire_duree", "fin_de_bail", "completer_derives",
+    "preparation_independante_vierge", "prefill_immeuble", "personnes_pour_carnet",
 ]

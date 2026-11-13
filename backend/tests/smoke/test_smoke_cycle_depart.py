@@ -556,6 +556,50 @@ def test_repute_accepte_saute_les_baux_en_relocation(
     assert ligne["relocation_dossier_id"] is not None
 
 
+def test_dossier_reloue_ne_bloque_pas_le_renouvellement(
+    client, auth_headers, run
+):
+    """Dossier de relocation FERMÉ (« reloue », créé d'office avec le
+    bail du nouveau locataire) ou « annule » sur le logement : la ligne
+    de Renouvellements n'est PAS « en relocation · Actions bloquées »
+    (bug 2026-11-13). Un dossier encore actif, lui, bloque toujours."""
+    today = date.today()
+    ids = _seed(
+        run,
+        numero="RELOUE-1",
+        date_debut=today - timedelta(days=305),
+        date_fin=today + timedelta(days=60),
+    )
+
+    async def _seed_dossiers(statuts):
+        async with TestSessionLocal() as s:
+            s.add_all(
+                [
+                    LocationDossier(logement_id=ids["logement_id"], statut=st)
+                    for st in statuts
+                ]
+            )
+            await s.commit()
+
+    def _ligne():
+        ov = client.get(
+            "/api/v1/immobilier/renouvellements/overview",
+            headers=auth_headers,
+        )
+        assert ov.status_code == 200, ov.text
+        ligne = next(
+            (x for x in ov.json() if x["bail_id"] == ids["bail_id"]), None
+        )
+        assert ligne is not None
+        return ligne
+
+    run(_seed_dossiers(["reloue", "annule"]))
+    assert _ligne()["relocation_dossier_id"] is None
+
+    run(_seed_dossiers(["avis_recu"]))
+    assert _ligne()["relocation_dossier_id"] is not None
+
+
 def test_dette_bail_termine_pas_dans_les_mois_futurs(
     client, auth_headers, run
 ):

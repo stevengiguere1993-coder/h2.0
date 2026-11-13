@@ -38,7 +38,7 @@ type HelpReport = {
   traite_par?: string | null;
 };
 
-type Onglet = "pending" | "accepted" | "historique" | "all";
+type Onglet = "pending" | "historique" | "all";
 
 /** Sections proposées au traitement (saisie libre aussi possible). */
 const SECTIONS = [
@@ -68,14 +68,15 @@ function dateHeure(iso: string | null | undefined): string {
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "En attente",
-  accepted: "Accepté",
+  // Ancien statut : accepté = réglé (Steven, 2026-11-13).
+  accepted: "Réglé",
   rejected: "Refusé",
   resolved: "Réglé"
 };
 
 const STATUS_BG: Record<string, string> = {
   pending: "bg-amber-500/15 text-amber-300 border-amber-500/30",
-  accepted: "bg-blue-500/15 text-blue-300 border-blue-500/30",
+  accepted: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
   rejected: "bg-rose-500/15 text-rose-300 border-rose-500/30",
   resolved: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
 };
@@ -113,7 +114,7 @@ export function HelpRequestsSection() {
       ? items
       : tab === "historique"
         ? items
-            .filter((r) => r.status === "resolved" || r.status === "rejected")
+            .filter((r) => r.status !== "pending")
             .sort((a, b) =>
               (b.traite_le || b.resolved_at || b.created_at).localeCompare(
                 a.traite_le || a.resolved_at || a.created_at
@@ -196,9 +197,7 @@ export function HelpRequestsSection() {
   const counts = {
     pending: items.filter((r) => r.status === "pending").length,
     accepted: items.filter((r) => r.status === "accepted").length,
-    historique: items.filter(
-      (r) => r.status === "resolved" || r.status === "rejected"
-    ).length,
+    historique: items.filter((r) => r.status !== "pending").length,
     all: items.length
   };
 
@@ -211,11 +210,11 @@ export function HelpRequestsSection() {
         <div className="min-w-0 flex-1">
           <h2 className="text-base font-bold text-white">
             Demandes d&apos;aide ({counts.pending} en attente,{" "}
-            {counts.accepted} acceptés)
+            {counts.historique} traités)
           </h2>
           <p className="mt-0.5 text-xs text-white/60">
-            Bugs signalés via le bouton « Aide ». Chaque décision (accepté,
-            refusé, réglé) avise le déclarant avec ta note. Les bugs réglés
+            Bugs signalés via le bouton « Aide ». Chaque décision (réglé ou
+            refusé) avise le déclarant avec ta note. Les bugs réglés
             nourrissent l&apos;onglet « Question » : l&apos;assistant les cite
             quand quelqu&apos;un repose la même question.
           </p>
@@ -238,7 +237,7 @@ export function HelpRequestsSection() {
       ) : null}
 
       <div className="mt-4 flex gap-2 border-b border-brand-800">
-        {(["pending", "accepted", "historique", "all"] as const).map((t) => (
+        {(["pending", "historique", "all"] as const).map((t) => (
           <button
             key={t}
             type="button"
@@ -254,9 +253,7 @@ export function HelpRequestsSection() {
           >
             {t === "pending"
               ? `En attente (${counts.pending})`
-              : t === "accepted"
-                ? `Acceptés (${counts.accepted})`
-                : t === "historique"
+              : t === "historique"
                   ? `Historique (${counts.historique})`
                   : `Tous (${counts.all})`}
           </button>
@@ -268,15 +265,6 @@ export function HelpRequestsSection() {
           <span className="text-white/70">
             {selected.size} sélectionné{selected.size > 1 ? "s" : ""}
           </span>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => bulkAct("accept")}
-            className="inline-flex items-center gap-1 rounded-md bg-blue-500/15 px-2.5 py-1 text-blue-300 hover:bg-blue-500/25 disabled:opacity-50"
-          >
-            <CheckSquare className="h-3.5 w-3.5" />
-            Accepter
-          </button>
           <button
             type="button"
             disabled={busy}
@@ -399,7 +387,7 @@ function ReportCard({
       : r.status === "rejected"
         ? `Refusé le ${dateHeure(r.traite_le || r.rejected_at)}`
         : r.status === "accepted"
-          ? `Accepté le ${dateHeure(r.traite_le || r.accepted_at)}`
+          ? `Réglé le ${dateHeure(r.traite_le || r.accepted_at)}`
           : null;
 
   const listeId = `sections-bug-${r.id}`;
@@ -502,17 +490,6 @@ function ReportCard({
           <div className="mt-2 flex flex-wrap gap-2">
             <CopyReportButton report={r} />
             {r.status === "pending" ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => onAct("accept", notes, section)}
-                className="inline-flex items-center gap-1 rounded-md border border-blue-500/40 bg-blue-500/10 px-2.5 py-1 text-[11px] text-blue-300 hover:bg-blue-500/20 disabled:opacity-50"
-              >
-                <CheckSquare className="h-3 w-3" />
-                Accepter
-              </button>
-            ) : null}
-            {r.status === "pending" || r.status === "accepted" ? (
               <>
                 <button
                   type="button"
@@ -534,7 +511,7 @@ function ReportCard({
                 </button>
               </>
             ) : null}
-            {r.status === "resolved" || r.status === "rejected" ? (
+            {r.status !== "pending" ? (
               <button
                 type="button"
                 disabled={busy}

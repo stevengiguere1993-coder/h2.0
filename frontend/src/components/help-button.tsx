@@ -46,7 +46,7 @@ type MonSignalement = {
  *  (classes déjà remappées dans globals.css). */
 const STATUT_PASTILLE: Record<string, string> = {
   pending: "border-amber-500/30 bg-amber-500/15 text-amber-300",
-  accepted: "border-blue-500/30 bg-blue-500/15 text-blue-300",
+  accepted: "border-emerald-500/30 bg-emerald-500/15 text-emerald-300",
   rejected: "border-rose-500/30 bg-rose-500/15 text-rose-300",
   resolved: "border-emerald-500/30 bg-emerald-500/15 text-emerald-300"
 };
@@ -187,8 +187,7 @@ export function HelpButton({
     }
   }, [answer]);
 
-  // Lien d'une notification « Ton signalement a été accepté / refusé /
-  // réglé » : ?aide=mes-signalements ouvre le panneau sur l'historique.
+  // Lien d'une notification « Ton signalement a été réglé / refusé » : ?aide=mes-signalements ouvre le panneau sur l'historique.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
@@ -512,8 +511,8 @@ export function HelpButton({
               ) : tab === "mes" ? (
                 <div className="space-y-3">
                   <p className="text-xs text-white/70">
-                    Tes signalements et leur suivi : accepté, refusé ou
-                    réglé, avec la note et la date de traitement.
+                    Tes signalements et leur suivi : en attente, réglé ou
+                    refusé, avec la note et la date de traitement.
                   </p>
                   {mesLoading && !mes ? (
                     <div className="flex justify-center py-6">
@@ -565,7 +564,7 @@ export function HelpButton({
                   <p className="text-xs text-white/60">
                     Décris ce qui ne marche pas ou ce qui devrait être
                     amélioré. Steven verra la demande et tu seras avisé
-                    quand elle sera acceptée, refusée ou réglée (onglet
+                    quand elle sera réglée ou refusée (onglet
                     « Mes signalements »).
                   </p>
                   <textarea

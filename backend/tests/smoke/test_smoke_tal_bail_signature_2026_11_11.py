@@ -39,6 +39,8 @@ from tests.smoke.conftest import TestSessionLocal
 
 BASE = "/api/v1/immobilier/tal-bail"
 IDS: dict = {}
+#: Nom du PDF que le locataire reçoit pour le bail ci-dessous : « Bail_<unité>_<adresse>.pdf ».
+NOM_PDF = "Bail_7_4521-rue-Saint-Denis.pdf"
 
 BAIL = {
     "libelle": "Bail à signer en ligne",
@@ -219,6 +221,42 @@ def test_qui_signe_selon_le_bail():
     assert svc.lire_reference_signataire("contact:12") == (None, None, None)
 
 
+def test_nom_du_pdf_et_valeurs_calculees():
+    """Phil 2026-11-13 : « le titre du pdf est horrible », « quand je mets le nombre de mois et la
+    date de début, ça devrait automatiquement mettre la date de fin », « le loyer total devrait
+    se mettre automatique »."""
+    from datetime import date
+
+    bleury = {"adresseLogement": [{"NoCivique": "1073", "Rue": "Rue de Bleury", "Appartement": "100", "Municipalite": "Montréal"}]}
+    assert svc.nom_fichier_bail(bleury) == "Bail_100_1073-Rue-de-Bleury.pdf"
+    assert svc.nom_fichier_bail(bleury, signe=True) == "Bail_100_1073-Rue-de-Bleury_signe.pdf"
+    assert svc.nom_fichier_bail({"adresseLogement": [{"NoCivique": "8900", "Rue": "rue Saint-Hubert"}]}) == "Bail_8900-rue-Saint-Hubert.pdf"
+    assert svc.nom_fichier_bail({"adresseLogement": [{"NoCivique": "12", "Rue": "boul. de l'Église", "Appartement": "3B"}]}) == "Bail_3B_12-boul-de-l-Eglise.pdf"
+    assert svc.nom_fichier_bail({}) == "Bail.pdf" and svc.nom_fichier_bail(None) == "Bail.pdf"
+
+    assert svc.fin_de_bail("2026-12-01", "12 mois") == date(2027, 11, 30)
+    assert svc.fin_de_bail("2026-12-05", "12") == date(2027, 12, 4)          # un nombre seul compte des mois
+    assert svc.fin_de_bail("2026-07-01", "1 an") == date(2027, 6, 30)
+    assert svc.fin_de_bail("2026-07-01", "26 semaines") == date(2026, 12, 29)
+    assert svc.fin_de_bail("2027-01-31", "1 mois") == date(2027, 2, 27)       # février : jour ramené au dernier du mois
+    assert svc.fin_de_bail("2026-07-01", "jusqu'à nouvel ordre") is None and svc.fin_de_bail("", "12 mois") is None
+
+    f = {"typeBail": "dureeFixe", "nbSemainesMoisAnnees": "12", "dateDebutBail": "2026-12-01", "dateFinBail": "",
+         "coutLoyer": "1 850,00 $", "bailIncluServices": "true", "coutServices": "50", "coutTotalLoyer": ""}
+    svc.completer_derives(f)
+    assert f["nbSemainesMoisAnnees"] == "12 mois" and f["dateFinBail"] == "2027-11-30" and f["coutTotalLoyer"] == "1900.00"
+    # Jamais par-dessus une valeur saisie.
+    g = {"typeBail": "dureeFixe", "nbSemainesMoisAnnees": "7 mois", "dateDebutBail": "2026-12-01", "dateFinBail": "2027-06-30",
+         "coutLoyer": "1850", "coutTotalLoyer": "1900"}
+    svc.completer_derives(g)
+    assert g["dateFinBail"] == "2027-06-30" and g["coutTotalLoyer"] == "1900"
+    # Sans services, le loyer total est le loyer ; un bail au mois n'a pas de date de fin.
+    h = {"typeBail": "dureeIndeterminee", "nbSemainesMoisAnnees": "12", "dateDebutBail": "2026-12-01", "dateFinBail": "",
+         "coutLoyer": "1450", "bailIncluServices": "false", "coutServices": "80", "coutTotalLoyer": ""}
+    svc.completer_derives(h)
+    assert h["coutTotalLoyer"] == "1450.00" and h["dateFinBail"] == "" and h["nbSemainesMoisAnnees"] == "12"
+
+
 # ─── Envoi en un geste, depuis Gestion immobilière ────────────────────
 
 
@@ -284,7 +322,7 @@ def test_envoi_en_un_geste_zones_posees(client, auth_headers, run, faux_mailer):
     async def _zones():
         async with TestSessionLocal() as db:
             doc = await db.get(EsignDocument, doc_id)
-            du_bail = (await db.execute(select(EsignDocument.id).where(EsignDocument.filename == f"bail-tal-{tid}.pdf"))).scalars().all()
+            du_bail = (await db.execute(select(EsignDocument.id).where(EsignDocument.filename == NOM_PDF))).scalars().all()
             signataires = (await db.execute(select(EsignSigner).where(EsignSigner.document_id == doc_id))).scalars().all()
             champs = (await db.execute(select(EsignField).where(EsignField.document_id == doc_id))).scalars().all()
             t = await db.get(TalTransmission, tid)
@@ -293,6 +331,7 @@ def test_envoi_en_un_geste_zones_posees(client, auth_headers, run, faux_mailer):
     doc, du_bail, signataires, champs, payload = run(_zones())
     assert du_bail == [doc_id]                                # le brouillon resté en panne a été remplacé, pas empilé
     assert doc.origine == "bail_tal" and doc.page_count == 4 and doc.status == "envoye" and doc.use_signing_order is False
+    assert doc.filename == NOM_PDF
     assert all(sg.signature_token for sg in signataires)
     IDS["jetons1"] = {sg.email: sg.signature_token for sg in signataires}
     par = {sg.contact_ref: [c for c in champs if c.signer_id == sg.id] for sg in signataires}
@@ -322,7 +361,7 @@ def test_independant_de_la_section_signature(client, auth_headers):
         liste = client.get("/api/v1/esign/documents", headers=auth_headers, params={"group": groupe} if groupe else None)
         assert liste.status_code == 200, liste.text
         assert doc_id not in [d["id"] for d in liste.json()]
-        assert not [d for d in liste.json() if d["filename"].startswith("bail-tal-")]
+        assert not [d for d in liste.json() if d["filename"].startswith("Bail_")]
     # Les signataires d'un bail n'entrent pas dans la banque de contacts d'affaires.
     contacts = client.get("/api/v1/contacts/all", headers=auth_headers)
     assert contacts.status_code == 200, contacts.text
@@ -423,7 +462,8 @@ def test_nouvel_envoi_avec_courriel_ajoute_puis_signature_complete(client, auth_
 
     assert type_doc == "bail_tal_signe" and blob.startswith(b"%PDF-") and len(PdfReader(io.BytesIO(blob)).pages) >= 5
     # Les copies finales partent aux signataires.
-    assert any(m["subject"].startswith("Document signé") and m.get("attachments") for m in faux_mailer.sent)
+    finaux = [m for m in faux_mailer.sent if m["subject"].startswith("Document signé") and m.get("attachments")]
+    assert finaux and all(m["attachments"][0].name == "Bail_7_4521-rue-Saint-Denis_signe.pdf" for m in finaux)
     # Un bail signé ne repart pas en signature.
     r = client.post(f"{BASE}/transmissions/{tid}/signature/envoyer", headers=auth_headers, json={})
     assert r.status_code == 409 and "déjà signé" in r.json()["detail"]

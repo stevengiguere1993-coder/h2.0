@@ -5,16 +5,16 @@
  *
  * Un bail officiel du TAL (formulaire 53000BAIL) SANS fiche Kratos : rien n'est
  * rattaché à un immeuble, un locataire, un dossier de location ni à la
- * facturation ; le locateur nommé signe lui-même. Le petit formulaire crée un
- * brouillon (même remplissage que les baux de « Locations & nouveaux baux »),
- * puis l'écran complet du bail prend le relais : tous les champs, la
- * vérification, la génération (simulation ou réel, selon Paramètres), le PDF,
- * la signature. Chaque personne se choisit dans le carnet de la section ; une
- * personne saisie à la main y entre d'elle-même à la création du bail.
+ * facturation ; le locateur nommé signe lui-même. « Nouveau bail » ouvre
+ * directement l'écran complet du bail (Phil 2026-11-13 : le petit formulaire
+ * d'avant redemandait les mêmes choses) : tous les champs, la vérification, la
+ * génération (simulation ou réel, selon Paramètres), le PDF, la signature. Le
+ * brouillon naît à la première vérification. Chaque personne se choisit dans le
+ * carnet de la section ; une personne saisie à la main y entre d'elle-même.
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Copy, FileSignature, FileText, Loader2, Plus, Settings, Trash2, X } from "lucide-react";
+import { AlertTriangle, Copy, FileSignature, FileText, Loader2, Plus, Settings, Trash2 } from "lucide-react";
 
 import { useConfirm } from "@/components/confirm-dialog";
 import {
@@ -25,7 +25,7 @@ import {
   type TalTransmission
 } from "@/components/immobilier/tal-bail-modal";
 import { authedFetch } from "@/lib/auth";
-import { BASE_TAL as BASE, Bloc, Champ, ChoisirContact, type Contact, Etoile, NoteCarnetVide, argent, dateFr, lireErreur, nombre } from "./commun";
+import { BASE_TAL as BASE, type Contact, argent, dateFr, lireErreur, nombre } from "./commun";
 
 type Etat = {
   connexion: { mode: string; pret_pour_reel: boolean; cle_configuree: boolean; url_configuree: boolean };
@@ -36,73 +36,6 @@ type Etat = {
   config?: { requis?: string };
 };
 type Item = TalTransmission & { signature: SignatureEtat | null };
-type Personne = { nom: string; telephone: string; courriel: string; adresse: string };
-type Essentiel = {
-  libelle: string;
-  locateur: Personne;
-  locataires: Personne[];
-  cautions: Personne[];
-  adresse: string;
-  appartement: string;
-  ville: string;
-  code_postal: string;
-  nb_pieces: string;
-  au_mois: boolean;
-  date_debut: string;
-  date_fin: string;
-  loyer_mensuel: string;
-  jour_echeance: string;
-  chauffage_inclus: boolean;
-  electricite_inclus: boolean;
-  eau_chaude_inclus: boolean;
-  internet_inclus: boolean;
-  /** Type de chauffage du logement : aucun défaut, il se choisit à chaque bail. */
-  chauffage_type: string;
-  /** Avis au nouveau locataire (section G du bail) : aucun défaut non plus. */
-  avis_situation: string;
-  avis_montant: string;
-  avis_frequence: string;
-  avis_date_dernier_paiement: string;
-};
-
-const PERSONNE_VIDE: Personne = { nom: "", telephone: "", courriel: "", adresse: "" };
-const ESSENTIEL_VIDE: Essentiel = {
-  libelle: "",
-  locateur: { ...PERSONNE_VIDE },
-  locataires: [{ ...PERSONNE_VIDE }],
-  cautions: [],
-  adresse: "",
-  appartement: "",
-  ville: "",
-  code_postal: "",
-  nb_pieces: "",
-  au_mois: false,
-  date_debut: "",
-  date_fin: "",
-  loyer_mensuel: "",
-  jour_echeance: "1",
-  chauffage_inclus: false,
-  electricite_inclus: false,
-  eau_chaude_inclus: false,
-  internet_inclus: false,
-  chauffage_type: "",
-  avis_situation: "",
-  avis_montant: "",
-  avis_frequence: "mois",
-  avis_date_dernier_paiement: ""
-};
-// Clés du formulaire du TAL pour le type de chauffage.
-const CHAUFFAGES: [string, string][] = [
-  ["electricite", "Électricité"],
-  ["gaz", "Gaz"],
-  ["mazout", "Mazout"]
-];
-const PIECES = ["1", "1.5", "2", "2.5", "3", "3.5", "4", "4.5", "5", "5.5", "6", "6.5", "7", "7.5"];
-
-function personneDe(c: Contact): Personne {
-  return { nom: c.nom, telephone: c.telephone || "", courriel: c.courriel || "", adresse: c.adresse || "" };
-}
-
 function titreDe(t: Item): string {
   return (t.libelle || "").trim() || (t.adresse || "").trim() || `Bail n° ${t.id}`;
 }
@@ -123,11 +56,11 @@ function etatDe(t: Item): { label: string; cls: string } {
 }
 
 export function BauxTab({
-  contacts,
   onCarnetChange,
   onOuvrirConnexion
 }: {
-  contacts: Contact[];
+  /** Le carnet se lit maintenant dans l'écran du bail ; la page le garde pour ses autres onglets. */
+  contacts?: Contact[];
   onCarnetChange: () => void;
   /** Ouvre l'onglet « Connexion au TAL » (mode, adresse, clé). */
   onOuvrirConnexion: () => void;
@@ -206,16 +139,15 @@ export function BauxTab({
   return (
     <>
       {nouveau ? (
-        <NouveauBail
-          contacts={contacts}
-          requis={(etat?.config?.requis || "").split(",").map((x) => x.trim()).filter(Boolean)}
-          onClose={() => setNouveau(false)}
-          onCree={(t) => {
+        <TalBailModal
+          nouveauIndependant
+          titre="Nouveau bail"
+          onClose={() => {
             setNouveau(false);
             void charger();
             onCarnetChange();
-            setOuvert({ ...t, signature: null });
           }}
+          onDone={() => void charger()}
         />
       ) : null}
       {ouvert ? (
@@ -225,6 +157,7 @@ export function BauxTab({
           onClose={() => {
             setOuvert(null);
             void charger();
+            onCarnetChange();
           }}
           onDone={() => void charger()}
         />
@@ -392,343 +325,5 @@ export function BauxTab({
         </p>
       </div>
     </>
-  );
-}
-
-// ─── Petit formulaire ──────────────────────────────────────────────────
-
-function NouveauBail({
-  contacts,
-  requis,
-  onClose,
-  onCree
-}: {
-  contacts: Contact[];
-  /** Chemins des champs exigés avant l'envoi (Paramètres) : étoile rouge sur le champ correspondant. */
-  requis: string[];
-  onClose: () => void;
-  onCree: (t: TalTransmission) => void;
-}) {
-  const R = (...chemins: string[]) => chemins.some((c) => requis.includes(c));
-  const [e, setE] = useState<Essentiel>(ESSENTIEL_VIDE);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const poser = <K extends keyof Essentiel>(k: K, v: Essentiel[K]) => setE((x) => ({ ...x, [k]: v }));
-  const poserLocateur = (k: keyof Personne, v: string) => setE((x) => ({ ...x, locateur: { ...x.locateur, [k]: v } }));
-  const poserListe = (liste: "locataires" | "cautions", i: number, k: keyof Personne, v: string) =>
-    setE((x) => ({ ...x, [liste]: x[liste].map((p, j) => (j === i ? { ...p, [k]: v } : p)) }));
-  const ajouter = (liste: "locataires" | "cautions") => setE((x) => ({ ...x, [liste]: [...x[liste], { ...PERSONNE_VIDE }] }));
-  const retirer = (liste: "locataires" | "cautions", i: number) => setE((x) => ({ ...x, [liste]: x[liste].filter((_, j) => j !== i) }));
-
-  async function creer() {
-    setBusy(true);
-    setErr(null);
-    try {
-      const propre = (p: Personne) => ({
-        nom: p.nom.trim() || null,
-        telephone: p.telephone.trim() || null,
-        courriel: p.courriel.trim() || null,
-        adresse: p.adresse.trim() || null
-      });
-      const r = await authedFetch(`${BASE}/independants`, {
-        method: "POST",
-        body: JSON.stringify({
-          libelle: e.libelle.trim() || null,
-          locateur: propre(e.locateur),
-          locataires: e.locataires.filter((p) => p.nom.trim()).map(propre),
-          cautions: e.cautions.filter((p) => p.nom.trim()).map(propre),
-          adresse: e.adresse.trim() || null,
-          appartement: e.appartement.trim() || null,
-          ville: e.ville.trim() || null,
-          code_postal: e.code_postal.trim() || null,
-          nb_pieces: nombre(e.nb_pieces),
-          au_mois: e.au_mois,
-          date_debut: e.date_debut || null,
-          date_fin: e.au_mois ? null : e.date_fin || null,
-          loyer_mensuel: nombre(e.loyer_mensuel),
-          jour_echeance: Math.min(31, Math.max(1, Math.round(nombre(e.jour_echeance) ?? 1))),
-          chauffage_inclus: e.chauffage_inclus,
-          electricite_inclus: e.electricite_inclus,
-          eau_chaude_inclus: e.eau_chaude_inclus,
-          internet_inclus: e.internet_inclus,
-          chauffage_type: e.chauffage_type || null,
-          avis_situation: e.avis_situation || null,
-          avis_montant: e.avis_situation ? nombre(e.avis_montant) : null,
-          avis_frequence: e.avis_situation ? e.avis_frequence : null,
-          avis_date_dernier_paiement: e.avis_situation === "aucunLoyer" ? e.avis_date_dernier_paiement || null : null
-        })
-      });
-      if (!r.ok) throw new Error(await lireErreur(r));
-      onCree((await r.json()) as TalTransmission);
-    } catch (x) {
-      setErr((x as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-[55] flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm" onClick={onClose}>
-      <div className="my-6 w-full max-w-3xl rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl" onClick={(ev) => ev.stopPropagation()}>
-        <div className="flex items-center justify-between gap-2 border-b border-brand-800 px-5 py-3">
-          <div>
-            <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-accent-500">
-              <FileSignature className="h-4 w-4" /> Nouveau bail indépendant
-            </h2>
-            <p className="text-xs text-white/55">
-              L&apos;essentiel ici ; tout le reste du formulaire officiel se revoit et se complète à l&apos;étape suivante, avant de générer.
-            </p>
-          </div>
-          <button type="button" onClick={onClose} className="btn-ghost btn-xs">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="space-y-3 px-5 py-4">
-          <NoteCarnetVide contacts={contacts} />
-          <Champ label="Nom de ce bail (pour toi, n'apparaît pas au bail)">
-            <input className="input" value={e.libelle} onChange={(ev) => poser("libelle", ev.target.value)} placeholder="Ex. Essai 1, Bail de Marc" maxLength={255} />
-          </Champ>
-
-          <Bloc titre="Locateur" note="La personne ou la compagnie qui loue. C'est elle qui signera le bail.">
-            <ChoisirContact
-              contacts={contacts}
-              role="locateur"
-              className="mb-2 sm:max-w-sm"
-              onChoisir={(c) => setE((x) => ({ ...x, locateur: personneDe(c) }))}
-            />
-            <div className="grid gap-2 sm:grid-cols-3">
-              <Champ label="Nom" requis={R("locateurs[0].nom")}>
-                <input className="input" value={e.locateur.nom} onChange={(ev) => poserLocateur("nom", ev.target.value)} />
-              </Champ>
-              <Champ label="Téléphone" requis={R("locateurs[0].noTelephone")}>
-                <input className="input" value={e.locateur.telephone} onChange={(ev) => poserLocateur("telephone", ev.target.value)} placeholder="514-555-0100" />
-              </Champ>
-              <Champ label="Courriel (pour la signature)" requis={R("locateurs[0].courrielLocateur")}>
-                <input className="input" type="email" value={e.locateur.courriel} onChange={(ev) => poserLocateur("courriel", ev.target.value)} />
-              </Champ>
-              <Champ label="Adresse du locateur" className="sm:col-span-3">
-                <input className="input" value={e.locateur.adresse} onChange={(ev) => poserLocateur("adresse", ev.target.value)} placeholder="12 rue des Érables, Laval (Québec) H7A 1B2" />
-              </Champ>
-            </div>
-          </Bloc>
-
-          <Bloc titre="Locataire(s)" note="Jusqu'à quatre. Chacun reçoit le bail à signer à son courriel.">
-            <div className="space-y-2">
-              {e.locataires.map((p, i) => (
-                <div key={i} className="grid gap-2 sm:grid-cols-[1fr_150px_1fr_auto]">
-                  <ChoisirContact
-                    contacts={contacts}
-                    role="locataire"
-                    className="sm:col-span-4 sm:max-w-sm"
-                    onChoisir={(c) => setE((x) => ({ ...x, locataires: x.locataires.map((q, j) => (j === i ? personneDe(c) : q)) }))}
-                  />
-                  <Champ label={i === 0 ? "Nom" : `Nom (locataire ${i + 1})`} requis={R(`locataires[${i}].nom`)}>
-                    <input className="input" value={p.nom} onChange={(ev) => poserListe("locataires", i, "nom", ev.target.value)} />
-                  </Champ>
-                  <Champ label="Téléphone">
-                    <input className="input" value={p.telephone} onChange={(ev) => poserListe("locataires", i, "telephone", ev.target.value)} />
-                  </Champ>
-                  <Champ label="Courriel" requis={R(`locataires[${i}].courrielLocataire`)}>
-                    <input className="input" type="email" value={p.courriel} onChange={(ev) => poserListe("locataires", i, "courriel", ev.target.value)} />
-                  </Champ>
-                  {e.locataires.length > 1 ? (
-                    <button type="button" className="btn-ghost btn-xs self-end text-rose-300" title="Retirer ce locataire" onClick={() => retirer("locataires", i)}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  ) : (
-                    <span />
-                  )}
-                  {i === 0 ? (
-                    <Champ label="Adresse actuelle du locataire (facultatif)" className="sm:col-span-4">
-                      <input className="input" value={p.adresse} onChange={(ev) => poserListe("locataires", i, "adresse", ev.target.value)} />
-                    </Champ>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {e.locataires.length < 4 ? (
-                <button type="button" className="btn-secondary btn-xs" onClick={() => ajouter("locataires")}>
-                  <Plus className="h-3.5 w-3.5" /> Ajouter un locataire
-                </button>
-              ) : null}
-              {e.cautions.length < 2 ? (
-                <button type="button" className="btn-secondary btn-xs" onClick={() => ajouter("cautions")}>
-                  <Plus className="h-3.5 w-3.5" /> Ajouter une caution
-                </button>
-              ) : null}
-            </div>
-            {e.cautions.map((p, i) => (
-              <div key={i} className="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
-                <ChoisirContact
-                  contacts={contacts}
-                  role="caution"
-                  className="sm:col-span-3 sm:max-w-sm"
-                  onChoisir={(c) => setE((x) => ({ ...x, cautions: x.cautions.map((q, j) => (j === i ? personneDe(c) : q)) }))}
-                />
-                <Champ label={`Caution ${i + 1} — nom`}>
-                  <input className="input" value={p.nom} onChange={(ev) => poserListe("cautions", i, "nom", ev.target.value)} />
-                </Champ>
-                <Champ label="Courriel">
-                  <input className="input" type="email" value={p.courriel} onChange={(ev) => poserListe("cautions", i, "courriel", ev.target.value)} />
-                </Champ>
-                <button type="button" className="btn-ghost btn-xs self-end text-rose-300" title="Retirer cette caution" onClick={() => retirer("cautions", i)}>
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            ))}
-          </Bloc>
-
-          <Bloc titre="Logement loué">
-            <div className="grid gap-2 sm:grid-cols-4">
-              <Champ label="Numéro et rue" className="sm:col-span-2" requis={R("adresseLogement[0].Rue", "adresseLogement[0].NoCivique")}>
-                <input className="input" value={e.adresse} onChange={(ev) => poser("adresse", ev.target.value)} placeholder="4521 rue Saint-Denis" />
-              </Champ>
-              <Champ label="Appartement" requis={R("adresseLogement[0].Appartement")}>
-                <input className="input" value={e.appartement} onChange={(ev) => poser("appartement", ev.target.value)} />
-              </Champ>
-              <Champ label="Nombre de pièces" requis={R("nbPieces")}>
-                <select className="input" value={e.nb_pieces} onChange={(ev) => poser("nb_pieces", ev.target.value)}>
-                  <option value="">—</option>
-                  {PIECES.map((p) => (
-                    <option key={p} value={p}>
-                      {p.replace(".5", " ½")}
-                    </option>
-                  ))}
-                </select>
-              </Champ>
-              <Champ label="Ville" className="sm:col-span-2" requis={R("adresseLogement[0].Municipalite")}>
-                <input className="input" value={e.ville} onChange={(ev) => poser("ville", ev.target.value)} />
-              </Champ>
-              <Champ label="Code postal" requis={R("adresseLogement[0].CodePostal")}>
-                <input className="input" value={e.code_postal} onChange={(ev) => poser("code_postal", ev.target.value)} placeholder="H2J 2L4" />
-              </Champ>
-            </div>
-          </Bloc>
-
-          <Bloc titre="Durée et loyer">
-            <div className="grid gap-2 sm:grid-cols-4">
-              <Champ label="Type de bail" requis={R("typeBail")}>
-                <select className="input" value={e.au_mois ? "indetermine" : "fixe"} onChange={(ev) => poser("au_mois", ev.target.value === "indetermine")}>
-                  <option value="fixe">Durée fixe</option>
-                  <option value="indetermine">Durée indéterminée</option>
-                </select>
-              </Champ>
-              <Champ label="Début" requis={R("dateDebutBail", "dateDebutBailDureeIndeterminee")}>
-                <input className="input" type="date" value={e.date_debut} onChange={(ev) => poser("date_debut", ev.target.value)} />
-              </Champ>
-              {!e.au_mois ? (
-                <Champ label="Fin" requis={R("dateFinBail")}>
-                  <input className="input" type="date" value={e.date_fin} onChange={(ev) => poser("date_fin", ev.target.value)} />
-                </Champ>
-              ) : (
-                <span />
-              )}
-              <span />
-              <Champ label="Loyer par mois ($)" requis={R("coutLoyer")}>
-                <input className="input" inputMode="decimal" value={e.loyer_mensuel} onChange={(ev) => poser("loyer_mensuel", ev.target.value)} placeholder="1450" />
-              </Champ>
-              <Champ label="Payable le (jour du mois)">
-                <input className="input" inputMode="numeric" value={e.jour_echeance} onChange={(ev) => poser("jour_echeance", ev.target.value)} />
-              </Champ>
-              <Champ label="Type de chauffage" className="sm:col-span-2" requis={R("typeChauffageLogement")}>
-                <select className="input" value={e.chauffage_type} onChange={(ev) => poser("chauffage_type", ev.target.value)}>
-                  <option value="">À choisir</option>
-                  {CHAUFFAGES.map(([v, l]) => (
-                    <option key={v} value={v}>
-                      {l}
-                    </option>
-                  ))}
-                </select>
-              </Champ>
-            </div>
-            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-white/70">
-              <span className="text-white/45">Inclus dans le loyer :</span>
-              {(
-                [
-                  ["chauffage_inclus", "Chauffage"],
-                  ["electricite_inclus", "Électricité"],
-                  ["eau_chaude_inclus", "Eau chaude"],
-                  ["internet_inclus", "Internet"]
-                ] as [keyof Essentiel, string][]
-              ).map(([k, label]) => (
-                <label key={k} className="inline-flex items-center gap-1.5">
-                  <input type="checkbox" checked={Boolean(e[k])} onChange={(ev) => poser(k, ev.target.checked as Essentiel[typeof k])} />
-                  {label}
-                </label>
-              ))}
-            </div>
-          </Bloc>
-
-          <Bloc
-            titre="Avis au nouveau locataire (section G)"
-            note="Avis obligatoire : le locateur dit au nouveau locataire le loyer le plus bas payé pour ce logement dans les 12 derniers mois."
-          >
-            <div className="grid gap-2 sm:grid-cols-4">
-              <Champ label="Situation" className="sm:col-span-4" requis={R("situationApplicableAvisNouveauLocataire")}>
-                <select className="input" value={e.avis_situation} onChange={(ev) => poser("avis_situation", ev.target.value)}>
-                  <option value="">À choisir</option>
-                  <option value="loyer">Un loyer a été payé dans les 12 derniers mois</option>
-                  <option value="aucunLoyer">Aucun loyer n&apos;a été payé dans les 12 derniers mois</option>
-                  <option value="residencePriveeAines">Le logement était dans une résidence privée pour aînés</option>
-                </select>
-              </Champ>
-              {e.avis_situation ? (
-                <>
-                  <Champ
-                    label={
-                      e.avis_situation === "loyer"
-                        ? "Loyer le plus bas payé ($)"
-                        : e.avis_situation === "aucunLoyer"
-                          ? "Dernier loyer payé ($)"
-                          : "Loyer du bail précédent ($)"
-                    }
-                    requis={e.avis_situation !== "aucunLoyer"}
-                  >
-                    <input className="input" inputMode="decimal" value={e.avis_montant} onChange={(ev) => poser("avis_montant", ev.target.value)} />
-                  </Champ>
-                  <Champ label="Fréquence">
-                    <select className="input" value={e.avis_frequence} onChange={(ev) => poser("avis_frequence", ev.target.value)}>
-                      <option value="mois">Par mois</option>
-                      <option value="semaine">Par semaine</option>
-                    </select>
-                  </Champ>
-                  {e.avis_situation === "aucunLoyer" ? (
-                    <Champ label="Dernier loyer payé le" className="sm:col-span-2">
-                      <input
-                        className="input"
-                        type="date"
-                        value={e.avis_date_dernier_paiement}
-                        onChange={(ev) => poser("avis_date_dernier_paiement", ev.target.value)}
-                      />
-                    </Champ>
-                  ) : null}
-                </>
-              ) : null}
-            </div>
-            {e.avis_situation === "aucunLoyer" ? (
-              <p className="mt-2 text-[11px] text-white/45">Laisse le dernier loyer vide seulement si le logement n&apos;a jamais été loué.</p>
-            ) : null}
-          </Bloc>
-
-          {err ? <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{err}</p> : null}
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 border-t border-brand-800 px-5 py-3">
-          <p className="text-[11px] text-white/45">
-            <Etoile /> Obligatoire pour générer le bail. Rien n&apos;est envoyé au TAL à cette étape : on crée seulement le brouillon, et
-            ce qui manque se complète à l&apos;étape suivante. Les personnes nommées entrent au carnet.
-          </p>
-          <button type="button" onClick={onClose} className="btn-secondary btn-sm ml-auto" disabled={busy}>
-            Fermer
-          </button>
-          <button type="button" onClick={() => void creer()} className="btn-accent btn-sm disabled:opacity-60" disabled={busy}>
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />} Créer le brouillon et continuer
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }

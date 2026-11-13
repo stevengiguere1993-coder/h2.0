@@ -23,7 +23,7 @@
  * fait foi, aucun frais au propriétaire, le locateur signe lui-même.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -125,6 +125,17 @@ type Preparation = {
   requis?: string[];
   /** Règles d'affichage : les champs qui ne s'appliquent pas aux réponses sont masqués (et vidés par le serveur). */
   regles?: Regle[];
+  /** Carnet d'Admin locative (baux indépendants) : une personne déjà saisie se choisit au lieu de se retaper. */
+  carnet?: ContactCarnet[];
+};
+type ContactCarnet = {
+  id: number;
+  nom: string;
+  role: string | null;
+  telephone: string;
+  courriel: string;
+  /** Adresse déjà découpée en champs du TAL (NoCivique, Rue…), ou null. */
+  adresse: Occurrence | null;
 };
 type Condition = {
   champ?: string;
@@ -402,6 +413,85 @@ function declarationVisible(k: string, form: Form): boolean {
 }
 
 // Le formulaire du TAL n'a pas de case « débit préautorisé » : ce choix écrit « Autre » + la précision.
+/** Ordre de lecture d'une adresse (Phil 2026-11-13 : « rue est à la fin de la section au
+ * lieu d'après le numéro civique ») — le schéma du TAL la range après la municipalité. */
+const ORDRE_ADRESSE = ["NoCivique", "Rue", "Appartement", "Municipalite", "Province", "CodePostal", "AdresseComplete"];
+
+function ordonnerCles(cles: string[]): string[] {
+  if (!cles.includes("NoCivique") || !cles.includes("Rue")) return cles;
+  const rang = (c: string) => {
+    const i = ORDRE_ADRESSE.indexOf(c);
+    return i === -1 ? ORDRE_ADRESSE.length : i;
+  };
+  return cles
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => rang(a.c) - rang(b.c) || a.i - b.i)
+    .map((x) => x.c);
+}
+
+/** « 12 », « 12 mois », « 1 an », « 26 semaines » ; un nombre seul compte des mois. */
+function lireDuree(texte: string): { n: number; unite: "mois" | "semaines" | "jours" } | null {
+  const m = /^\s*(\d{1,3})\s*([A-Za-zÀ-ÿ.]*)\s*$/.exec(texte || "");
+  if (!m || Number(m[1]) <= 0) return null;
+  const n = Number(m[1]);
+  const u = m[2].toLowerCase().replace(/\.$/, "");
+  if (u === "" || u === "m" || u.startsWith("mois")) return { n, unite: "mois" };
+  if (u.startsWith("an")) return { n: n * 12, unite: "mois" };
+  if (u.startsWith("sem")) return { n, unite: "semaines" };
+  if (u.startsWith("jour") || u === "j") return { n, unite: "jours" };
+  return null;
+}
+
+/** Dernier jour du bail : début + durée − 1 jour (1er déc. + 12 mois = 30 nov.). */
+function finDeBail(debut: string, duree: string): string | null {
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(debut || "");
+  const du = lireDuree(duree);
+  if (!d || !du) return null;
+  const [a, mo, j] = [Number(d[1]), Number(d[2]), Number(d[3])];
+  let fin: Date;
+  if (du.unite === "mois") {
+    const cible = new Date(Date.UTC(a, mo - 1 + du.n, 1));
+    const dernier = new Date(Date.UTC(cible.getUTCFullYear(), cible.getUTCMonth() + 1, 0)).getUTCDate();
+    fin = new Date(Date.UTC(cible.getUTCFullYear(), cible.getUTCMonth(), Math.min(j, dernier)));
+    fin.setUTCDate(fin.getUTCDate() - 1);
+  } else {
+    fin = new Date(Date.UTC(a, mo - 1, j + (du.unite === "semaines" ? du.n * 7 : du.n) - 1));
+  }
+  return Number.isNaN(fin.getTime()) ? null : fin.toISOString().slice(0, 10);
+}
+
+/** Montant tel que tapé (« 1 250,75 $ », « 1250.75 ») ; null si vide ou ambigu (« 1,250 »). */
+function lireMontant(v: unknown): number | null {
+  const brut = String(v ?? "").replace(/[\s$\u00a0]/g, "");
+  if (!brut || /^\d{1,3},\d{3}$/.test(brut) || /^\d{1,3}\.\d{3}$/.test(brut)) return null;
+  let t = brut;
+  if (t.includes(",") && t.includes(".")) {
+    t = t.lastIndexOf(",") > t.lastIndexOf(".") ? t.replace(/\./g, "").replace(",", ".") : t.replace(/,/g, "");
+  } else {
+    t = t.replace(",", ".");
+  }
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Ce que le formulaire calcule seul quand une réponse change (Phil 2026-11-13) :
+ * la date de fin (début + durée) et le loyer total (loyer + services). */
+function deriver(form: Form, cle: string): Form {
+  let f = form;
+  if ((cle === "nbSemainesMoisAnnees" || cle === "dateDebutBail") && texteDe(f.typeBail) !== "dureeIndeterminee") {
+    const fin = finDeBail(texteDe(f.dateDebutBail), texteDe(f.nbSemainesMoisAnnees));
+    if (fin) f = { ...f, dateFinBail: fin };
+  }
+  if (cle === "coutLoyer" || cle === "coutServices" || cle === "bailIncluServices") {
+    const loyer = lireMontant(f.coutLoyer);
+    if (loyer !== null) {
+      const services = texteDe(f.bailIncluServices) === "true" ? (lireMontant(f.coutServices) ?? 0) : 0;
+      f = { ...f, coutTotalLoyer: (Math.round((loyer + services) * 100) / 100).toFixed(2) };
+    }
+  }
+  return f;
+}
+
 const CLE_DPA = "__dpa";
 const LIBELLE_DPA = "Débit préautorisé (DPA)";
 
@@ -448,6 +538,7 @@ export function TalBailModal({
   bailId,
   dossierId,
   transmissionId,
+  nouveauIndependant,
   titre,
   onClose,
   onDone
@@ -457,13 +548,18 @@ export function TalBailModal({
   dossierId?: number | null;
   /** Bail INDÉPENDANT (page « Bail indépendant ») : la transmission à ouvrir, sans bail Kratos. */
   transmissionId?: number;
+  /** NOUVEAU bail indépendant (Phil 2026-11-13) : le formulaire s'ouvre tout de suite ; le
+   *  brouillon naît à la première vérification. */
+  nouveauIndependant?: boolean;
   /** Ex. « Logement 3 · 8900 rue Saint-Hubert ». */
   titre: string;
   onClose: () => void;
   /** Quelque chose a changé (transmission, PDF, signature) → recharger. */
   onDone: () => void;
 }) {
-  const independant = transmissionId != null;
+  const independant = transmissionId != null || !!nouveauIndependant;
+  // Brouillon indépendant en cours : celui qu'on a ouvert, ou celui que la première vérification crée.
+  const brouillonId = useRef<number | undefined>(transmissionId);
   const [etape, setEtape] = useState<Etape>("chargement");
   const [schema, setSchema] = useState<SchemaInfo | null>(null);
   const [prep, setPrep] = useState<Preparation | null>(null);
@@ -513,7 +609,9 @@ export function TalBailModal({
         authedFetch(`${BASE}/schema`),
         authedFetch(
           independant
-            ? `${BASE}/preparer?transmission_id=${transmissionId}`
+            ? transmissionId != null
+              ? `${BASE}/preparer?transmission_id=${transmissionId}`
+              : `${BASE}/independants/nouveau`
             : `${BASE}/preparer?bail_id=${bailId}`
         )
       ]);
@@ -562,7 +660,7 @@ export function TalBailModal({
 
   // ── Mutations du formulaire ──
   function poserRacine(k: string, v: unknown) {
-    setForm((f) => ({ ...f, [k]: v }));
+    setForm((f) => deriver({ ...f, [k]: v }, k));
   }
   function poserOccurrence(k: string, i: number, occ: Occurrence) {
     setForm((f) => {
@@ -593,10 +691,15 @@ export function TalBailModal({
     setErr(null);
     try {
       const r = independant
-        ? await authedFetch(`${BASE}/transmissions/${transmissionId}`, {
-            method: "PATCH",
-            body: JSON.stringify({ form })
-          })
+        ? brouillonId.current != null
+          ? await authedFetch(`${BASE}/transmissions/${brouillonId.current}`, {
+              method: "PATCH",
+              body: JSON.stringify({ form })
+            })
+          : await authedFetch(`${BASE}/independants`, {
+              method: "POST",
+              body: JSON.stringify({ form })
+            })
         : await authedFetch(`${BASE}/transmissions`, {
             method: "POST",
             body: JSON.stringify({
@@ -608,6 +711,7 @@ export function TalBailModal({
           });
       if (!r.ok) throw new Error(await lireErreur(r));
       const t = (await r.json()) as TalTransmission;
+      if (independant) brouillonId.current = t.id;
       setTransmission(t);
       setRapport(t.rapport ?? null);
       if (t.rapport?.valide) {
@@ -824,6 +928,7 @@ export function TalBailModal({
             ) : null}
 
             <ContexteBandeau contexte={independant ? contexteDuFormulaire(form) : prep.contexte} />
+            {independant ? <RemplirDepuisImmeuble onAppliquer={(valeurs) => setForm((f) => ({ ...f, ...valeurs }))} /> : null}
 
             {aVerifier.length ? (
               <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2">
@@ -891,6 +996,7 @@ export function TalBailModal({
                   {s.note ? <p className="mb-2 text-[11px] text-white/55">{s.note}</p> : null}
                   <ChampsListe
                     cles={s.cles.filter((k) => k in schema.gabarit)}
+                    carnet={independant ? prep.carnet : undefined}
                     form={form}
                     schema={schema}
                     champIndex={champIndex}
@@ -1369,7 +1475,125 @@ type ListeProps = {
   poserOccurrence: (k: string, i: number, occ: Occurrence) => void;
   ajouterOccurrence: (k: string) => void;
   retirerOccurrence: (k: string, i: number) => void;
+  /** Carnet d'Admin locative : proposé sur chaque personne du bail. */
+  carnet?: ContactCarnet[];
 };
+
+/** Groupes de personnes du bail → champ du courriel de la personne elle-même. */
+const COURRIEL_PAR_GROUPE: Record<string, string> = {
+  locateurs: "courrielLocateur",
+  locataires: "courrielLocataire",
+  autresSignataires: "courriel"
+};
+
+/** Une personne du carnet remplit une personne du bail : nom, téléphone, courriel, adresse. */
+function remplirDepuisCarnet(k: string, occ: Occurrence, c: ContactCarnet): Occurrence {
+  const out: Occurrence = { ...occ };
+  if ("nom" in out) out.nom = c.nom;
+  if (c.telephone && "noTelephone" in out) out.noTelephone = c.telephone;
+  const cle = COURRIEL_PAR_GROUPE[k];
+  if (c.courriel && cle && cle in out) out[cle] = c.courriel;
+  if (c.adresse && Array.isArray(out.adresse)) {
+    out.adresse = [{ ...(((out.adresse as Occurrence[])[0] || {}) as Occurrence), ...c.adresse }];
+  }
+  return out;
+}
+
+/** Bail indépendant : la compagnie détentrice et l'adresse viennent d'un de nos immeubles, pour
+ *  écrire moins (Phil 2026-11-13). Rien n'est lié : le bail reste hors de la gestion locative. */
+function RemplirDepuisImmeuble({ onAppliquer }: { onAppliquer: (valeurs: Form) => void }) {
+  const [immeubles, setImmeubles] = useState<{ id: number; name: string | null; address: string | null }[]>([]);
+  const [logements, setLogements] = useState<{ id: number; numero: string }[]>([]);
+  const [immeubleId, setImmeubleId] = useState("");
+  const [logementId, setLogementId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await authedFetch("/api/v1/immobilier/immeubles");
+        if (res.ok) setImmeubles((await res.json()) as { id: number; name: string | null; address: string | null }[]);
+      } catch {
+        /* la liste restera vide : le bail se remplit à la main */
+      }
+    })();
+  }, []);
+
+  async function appliquer(imm: string, lg: string) {
+    setImmeubleId(imm);
+    setLogementId(lg);
+    setNote(null);
+    if (!imm) {
+      setLogements([]);
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await authedFetch(`${BASE}/prefill/immeuble/${imm}${lg ? `?logement_id=${lg}` : ""}`);
+      if (!res.ok) throw new Error(await lireErreur(res));
+      const d = (await res.json()) as {
+        valeurs: Form;
+        locateur: string | null;
+        immeuble: { adresse: string };
+        logements: { id: number; numero: string }[];
+      };
+      setLogements(d.logements || []);
+      onAppliquer(d.valeurs);
+      setNote(
+        `Rempli : ${d.locateur ? `locateur « ${d.locateur} », ` : ""}adresse ${d.immeuble.adresse}${
+          lg ? ", logement et nombre de pièces" : ""
+        }. Vérifie les sections A et B.`
+      );
+    } catch (e) {
+      setNote((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (immeubles.length === 0) return null;
+  return (
+    <div className="mt-3 rounded-lg border border-brand-800 bg-brand-900/60 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-white/50">Remplir plus vite</span>
+        <select
+          className={`${INPUT_CLS} max-w-[260px]`}
+          value={immeubleId}
+          disabled={busy}
+          onChange={(e) => void appliquer(e.target.value, "")}
+          title="Un de nos immeubles : la compagnie détentrice et l'adresse se remplissent seules"
+        >
+          <option value="">Un de nos immeubles…</option>
+          {immeubles.map((im) => (
+            <option key={im.id} value={im.id}>
+              {im.name || im.address || `Immeuble ${im.id}`}
+            </option>
+          ))}
+        </select>
+        {logements.length > 0 ? (
+          <select
+            className={`${INPUT_CLS} max-w-[160px]`}
+            value={logementId}
+            disabled={busy}
+            onChange={(e) => void appliquer(immeubleId, e.target.value)}
+            title="Le logement : numéro d'appartement et nombre de pièces"
+          >
+            <option value="">Logement…</option>
+            {logements.map((lg) => (
+              <option key={lg.id} value={lg.id}>
+                {lg.numero}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin text-white/50" /> : null}
+        <span className="text-[11px] text-white/45">Le bail reste indépendant de la gestion locative.</span>
+      </div>
+      {note ? <p className="mt-1 text-[11px] text-white/60">{note}</p> : null}
+    </div>
+  );
+}
 
 function ChampsListe(p: ListeProps) {
   const masques = new Set(p.regles.filter((r) => !r.groupe && !sApplique(r, p.form)).map((r) => r.cible));
@@ -1421,7 +1645,7 @@ function ChampsListe(p: ListeProps) {
 function GroupeEditeur({ k, ...p }: ListeProps & { k: string }) {
   const gab = p.schema.gabarit[k] as Occurrence[];
   const occurrences = (p.form[k] as Occurrence[]) || [];
-  const sousCles = Object.keys(gab[0] || {});
+  const sousCles = ordonnerCles(Object.keys(gab[0] || {}));
   const premier = sousCles.map((s) => p.champIndex.get(`${k}|${s}`)).find(Boolean);
   const max = premier?.repetable ? premier.max_occurrences || 1 : 1;
   const erreurs = p.erreurs.get(k) || [];
@@ -1466,6 +1690,27 @@ function GroupeEditeur({ k, ...p }: ListeProps & { k: string }) {
       <div className="mt-2 space-y-2">
         {occurrences.map((occ, i) => (
           <div key={i} className="rounded-md border border-brand-800/70 bg-brand-950/50 p-2">
+            {p.carnet?.length && k in COURRIEL_PAR_GROUPE ? (
+              <div className="mb-1.5">
+                <select
+                  className={`${INPUT_CLS} max-w-[260px]`}
+                  value=""
+                  onChange={(e) => {
+                    const c = p.carnet?.find((x) => String(x.id) === e.target.value);
+                    if (c) p.poserOccurrence(k, i, remplirDepuisCarnet(k, occ, c));
+                  }}
+                  title="Une personne déjà saisie : ses coordonnées se remplissent seules"
+                >
+                  <option value="">Choisir dans le carnet…</option>
+                  {p.carnet.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.nom}
+                      {c.role ? ` · ${c.role}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
             {max > 1 ? (
               <div className="mb-1 flex items-center">
                 <span className="text-[11px] font-semibold text-accent-500">#{i + 1}</span>
@@ -1487,7 +1732,7 @@ function GroupeEditeur({ k, ...p }: ListeProps & { k: string }) {
                 const sgab = gab[0][s];
                 if (estGroupe(sgab)) {
                   const sousOcc = ((occ[s] as Occurrence[]) || [squeletteVide(sgab[0]) as Occurrence])[0] || {};
-                  const sk = Object.keys(sgab[0] || {});
+                  const sk = ordonnerCles(Object.keys(sgab[0] || {}));
                   return (
                     <div key={s} className="rounded-md border border-brand-800/60 p-2 sm:col-span-2">
                       <p className="mb-1 text-[11px] font-semibold text-white/50">{humaniser(s)}</p>
