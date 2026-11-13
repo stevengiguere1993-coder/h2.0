@@ -9,6 +9,21 @@ de travail, affectations d'employés…) est rattaché à la cible, l'adresse
 de la source devient l'adresse secondaire de la cible, puis la source est
 supprimée.
 
+Retour Steven 2026-11-13 (« il compte 2 adresses donc les suffixes
+existants restent les mêmes ; le prix d'achat et l'hypothèque ont été
+divisés par 2, ils devront s'additionner lors de la fusion ») :
+
+- un numéro de logement n'est en conflit qu'à la MÊME adresse civique :
+  le « 1 » du 9085 Millen et le « 1 » du 710 Legendre coexistent, chacun
+  avec son adresse ; aucun préfixe n'est demandé ;
+- le prix d'achat suggéré est la SOMME des deux fiches ;
+- les hypothèques d'un même prêteur (même taux) s'additionnent en un seul
+  prêt (montant, versement, solde, tranches) ;
+- « l'action est irréversible » : ``fusionner(..., simuler=True)`` fait
+  toute la fusion dans la transaction, relève la fiche résultante
+  (adresses, logements, hypothèques, prix) puis ANNULE tout — c'est
+  l'aperçu affiché avant la confirmation.
+
 La liste des tables n'est PAS écrite à la main : toute colonne
 ``immeuble_id`` (ou clé étrangère vers ``imm_immeubles.id``) du modèle est
 re-pointée, ce qui couvre aussi les tables à venir. Les tables où
@@ -106,8 +121,24 @@ def cle_numero(numero: Optional[str]) -> str:
     return re.sub(r"^0+(?=\d)", "", cle)
 
 
-def _norm_adresse(adresse: Optional[str]) -> str:
-    return re.sub(r"\s+", " ", (adresse or "").strip().lower())
+def norm_adresse(adresse: Optional[str]) -> str:
+    """Adresse comparable : casse, ponctuation et espaces ignorés
+    (« 710, Rue Legendre Est » = « 710 rue legendre est »)."""
+    return " ".join(re.sub(r"[^\w]+", " ", (adresse or "").lower()).split())
+
+
+_norm_adresse = norm_adresse
+
+
+def adresse_effective(lg: Logement, imm: Immeuble) -> str:
+    """Adresse civique d'un logement : la sienne, sinon celle de l'immeuble."""
+    return (lg.adresse or "").strip() or (imm.address or "").strip()
+
+
+def cle_logement(numero: Optional[str], adresse: Optional[str]) -> tuple[str, str]:
+    """Deux logements sont le même s'ils ont le même numéro À LA MÊME
+    adresse civique (immeuble à deux adresses : deux « 1 » distincts)."""
+    return (_norm_adresse(adresse), cle_numero(numero))
 
 
 def _vide(valeur: Any) -> bool:
@@ -205,13 +236,21 @@ async def _hypotheques(db, immeuble_id: int) -> list[Hypotheque]:
 
 
 def _conflits_numeros(
-    logs_source: list[Logement], logs_cible: list[Logement], prefixe: str
+    logs_source: list[Logement],
+    source: Immeuble,
+    logs_cible: list[Logement],
+    cible: Immeuble,
+    prefixe: str,
 ) -> list[str]:
-    cles_cible = {cle_numero(l.numero) for l in logs_cible}
+    """Numéros de la source qui existent déjà dans la cible à la même
+    adresse civique (après préfixe éventuel)."""
+    cles_cible = {
+        cle_logement(l.numero, adresse_effective(l, cible)) for l in logs_cible
+    }
     out: list[str] = []
     for l in logs_source:
         nouveau = f"{prefixe}{l.numero}" if prefixe else l.numero
-        if cle_numero(nouveau) in cles_cible:
+        if cle_logement(nouveau, adresse_effective(l, source)) in cles_cible:
             out.append(nouveau)
     return out
 
@@ -230,17 +269,106 @@ def _cle_hypotheque(h: Hypotheque) -> tuple[str, int]:
 
 
 def prix_achat_suggere(cible: Immeuble, source: Immeuble) -> Optional[float]:
-    """Celui de la cible si la source n'en a pas ou a le même (prix du
-    12 logements saisi deux fois) ; la somme si chacune porte sa moitié."""
+    """La SOMME des deux fiches : chacune porte sa part du prix (Steven
+    2026-11-13, 812 500 $ + 812 500 $ pour le 9085 Millen / 710 Legendre).
+    Un prix saisi deux fois en entier se corrige dans le champ."""
     a = cible.purchase_price
     b = source.purchase_price
     if not b:
         return a
     if not a:
         return b
-    if abs(float(a) - float(b)) < 0.005:
-        return a
     return float(a) + float(b)
+
+
+def _meme_taux(a: Hypotheque, b: Hypotheque) -> bool:
+    if a.taux_pct is None or b.taux_pct is None:
+        return True
+    return abs(float(a.taux_pct) - float(b.taux_pct)) < 1e-6
+
+
+async def _ids_conjointes(db, ids: list[int]) -> set[int]:
+    if not ids:
+        return set()
+    return {
+        r[0]
+        for r in (
+            await db.execute(
+                select(HypothequeImmeuble.hypotheque_id).where(
+                    HypothequeImmeuble.hypotheque_id.in_(ids)
+                )
+            )
+        ).all()
+    }
+
+
+async def paires_a_additionner(
+    db, hyps_cible: list[Hypotheque], hyps_source: list[Hypotheque]
+) -> dict[int, Hypotheque]:
+    """{id hypothèque source: hypothèque de la cible avec laquelle elle
+    s'additionne} — même prêteur, même taux, aucune des deux conjointe ;
+    à rang égal d'abord. Une hypothèque de la cible ne reçoit qu'une
+    moitié."""
+    conj = await _ids_conjointes(
+        db, [h.id for h in hyps_cible] + [h.id for h in hyps_source]
+    )
+    libres = [h for h in hyps_cible if h.id not in conj]
+    out: dict[int, Hypotheque] = {}
+    for hs in hyps_source:
+        if hs.id in conj:
+            continue
+        candidates = [
+            hc
+            for hc in libres
+            if _cle_hypotheque(hc)[0] == _cle_hypotheque(hs)[0] and _meme_taux(hc, hs)
+        ]
+        if not candidates:
+            continue
+        candidates.sort(key=lambda hc: (hc.rang != hs.rang, hc.id))
+        choisie = candidates[0]
+        out[hs.id] = choisie
+        libres.remove(choisie)
+    return out
+
+
+def _somme(a: Any, b: Any) -> Optional[float]:
+    """Somme de deux montants ; None si l'un manque (le calcul reprend
+    alors la valeur dérivée de l'échéancier au lieu d'un total faux)."""
+    if a is None or b is None:
+        return None
+    return round(float(a) + float(b), 2)
+
+
+async def _additionner_hypotheque(db, cible_h: Hypotheque, source_h: Hypotheque) -> None:
+    """Ajoute la moitié ``source_h`` au prêt ``cible_h`` puis la supprime."""
+    montant_source = float(source_h.montant_initial or 0)
+    cible_h.montant_initial = round(float(cible_h.montant_initial or 0) + montant_source, 2)
+    cible_h.balance_actuelle = _somme(cible_h.balance_actuelle, source_h.balance_actuelle)
+    if cible_h.paiement_mensuel is not None or source_h.paiement_mensuel is not None:
+        cible_h.paiement_mensuel = _somme(cible_h.paiement_mensuel, source_h.paiement_mensuel)
+    for champ in (
+        "taux_pct", "type_taux", "amortissement_mois", "composition_interets",
+        "type_pret", "mode_remboursement", "date_debut", "date_fin_terme",
+    ):
+        if _vide(getattr(cible_h, champ)) and not _vide(getattr(source_h, champ)):
+            setattr(cible_h, champ, getattr(source_h, champ))
+    note = (
+        f"Fusion de fiches : additionnée avec l'hypothèque #{source_h.id} "
+        f"({source_h.preteur}, {montant_source:,.2f} $)".replace(",", " ")
+    )
+    cible_h.notes = f"{cible_h.notes.rstrip()}\n\n{note}" if cible_h.notes else note
+    await db.execute(
+        update(HypothequeTranche)
+        .where(HypothequeTranche.hypotheque_id == source_h.id)
+        .values(hypotheque_id=cible_h.id)
+    )
+    await db.flush()
+    source_id = source_h.id
+    db.expunge(source_h)
+    await db.execute(delete(Hypotheque).where(Hypotheque.id == source_id))
+
+
+MODES_HYPOTHEQUES = ("additionner", "transferer", "exclure")
 
 
 async def _resume(db, imm: Immeuble) -> dict:
@@ -275,25 +403,19 @@ async def apercu_fusion(db, cible: Immeuble, source: Immeuble) -> dict:
 
     logs_source = await _logements(db, source.id)
     logs_cible = await _logements(db, cible.id)
-    conflits = _conflits_numeros(logs_source, logs_cible, "")
+    conflits = _conflits_numeros(logs_source, source, logs_cible, cible, "")
 
-    hyps_cible = {_cle_hypotheque(h) for h in await _hypotheques(db, cible.id)}
+    liste_cible = await _hypotheques(db, cible.id)
+    hyps_cible = {_cle_hypotheque(h) for h in liste_cible}
     hyps_source = await _hypotheques(db, source.id)
-    conjointes = {
-        r[0]
-        for r in (
-            await db.execute(
-                select(HypothequeImmeuble.hypotheque_id).where(
-                    HypothequeImmeuble.hypotheque_id.in_([h.id for h in hyps_source])
-                )
-            )
-        ).all()
-    } if hyps_source else set()
+    conjointes = await _ids_conjointes(db, [h.id for h in hyps_source])
+    paires = await paires_a_additionner(db, liste_cible, hyps_source)
     apercu_hyps = []
     en_double = 0
     for h in hyps_source:
         double = _cle_hypotheque(h) in hyps_cible
         en_double += int(double)
+        avec = paires.get(h.id)
         apercu_hyps.append(
             {
                 "id": h.id,
@@ -303,6 +425,12 @@ async def apercu_fusion(db, cible: Immeuble, source: Immeuble) -> dict:
                 "status": h.status,
                 "conjointe": h.id in conjointes,
                 "en_double": double,
+                "additionnable_avec": avec.id if avec is not None else None,
+                "montant_additionne": (
+                    float(avec.montant_initial or 0) + float(h.montant_initial or 0)
+                    if avec is not None
+                    else None
+                ),
             }
         )
     return {
@@ -313,6 +441,7 @@ async def apercu_fusion(db, cible: Immeuble, source: Immeuble) -> dict:
         "prefixe_suggere": prefixe_suggere(source) if conflits else "",
         "hypotheques_source": apercu_hyps,
         "hypotheques_en_double": en_double,
+        "hypotheques_additionnables": len(paires),
         "purchase_price_suggere": prix_achat_suggere(cible, source),
     }
 
@@ -324,13 +453,26 @@ async def fusionner(
     *,
     prefixe_numeros: Optional[str] = None,
     exclure_hypotheques: bool = False,
+    hypotheques: Optional[str] = None,
     purchase_price: Optional[float] = None,
+    simuler: bool = False,
 ) -> dict:
     """Absorbe ``source`` dans ``cible`` puis supprime ``source``. Lève
     ``FusionImpossible`` (rien n'est écrit) si des numéros de logement
-    entreraient en conflit. Commit en fin de fusion."""
+    entreraient en conflit. Commit en fin de fusion.
+
+    ``hypotheques`` : « additionner » (les moitiés d'un même prêteur se
+    fondent en un prêt), « transferer » (telles quelles), « exclure »
+    (saisies en double, retirées). Absent = « exclure » si
+    ``exclure_hypotheques``, sinon « transferer ».
+
+    ``simuler`` : tout est fait dans la transaction, la fiche résultante
+    est relevée (clé ``resultat``) puis la transaction est ANNULÉE."""
     if cible.id == source.id:
         raise FusionImpossible("Un immeuble ne se fusionne pas avec lui-même.")
+    mode_hyp = hypotheques or ("exclure" if exclure_hypotheques else "transferer")
+    if mode_hyp not in MODES_HYPOTHEQUES:
+        raise FusionImpossible(f"Choix d'hypothèques inconnu : « {mode_hyp} ».")
     source_id, source_nom = source.id, source.name
     deplaces: dict[str, int] = {}
 
@@ -342,10 +484,10 @@ async def fusionner(
     prefixe = (prefixe_numeros or "").strip()
     logs_source = await _logements(db, source_id)
     logs_cible = await _logements(db, cible.id)
-    conflits = _conflits_numeros(logs_source, logs_cible, prefixe)
+    conflits = _conflits_numeros(logs_source, source, logs_cible, cible, prefixe)
     if conflits:
         raise FusionImpossible(
-            f"Numéros de logement déjà présents dans « {cible.name} » : "
+            f"Numéros de logement déjà présents à la même adresse dans « {cible.name} » : "
             f"{', '.join(conflits)}. Donne un préfixe aux logements déplacés "
             f"(ex. « {prefixe_suggere(source) or '9085-'} »)."
         )
@@ -379,7 +521,20 @@ async def fusionner(
     #    mêmes que celles de la cible (conjointe saisie deux fois).
     hyps_source = await _hypotheques(db, source_id)
     hypotheques_exclues = 0
-    if hyps_source and exclure_hypotheques:
+    hypotheques_additionnees = 0
+    if hyps_source and mode_hyp == "additionner":
+        paires = await paires_a_additionner(
+            db, await _hypotheques(db, cible.id), hyps_source
+        )
+        for h in hyps_source:
+            avec = paires.get(h.id)
+            if avec is not None:
+                await _additionner_hypotheque(db, avec, h)
+                hypotheques_additionnees += 1
+            else:
+                h.immeuble_id = cible.id
+                _ajouter("hypothèques", 1)
+    elif hyps_source and mode_hyp == "exclure":
         ids = [h.id for h in hyps_source]
         await db.execute(
             delete(HypothequeTranche).where(HypothequeTranche.hypotheque_id.in_(ids))
@@ -553,6 +708,18 @@ async def fusionner(
     # 8. Suppression de la source (plus aucune dépendance).
     db.expunge(source)
     await db.execute(delete(Immeuble.__table__).where(Immeuble.__table__.c.id == source_id))
+    if simuler:
+        await db.flush()
+        resultat = await etat_fiche(db, cible)
+        await db.rollback()
+        return {
+            "deplaces": deplaces,
+            "hypotheques_exclues": hypotheques_exclues,
+            "hypotheques_additionnees": hypotheques_additionnees,
+            "immeuble_supprime_id": source_id,
+            "immeuble_supprime_nom": source_nom,
+            "resultat": resultat,
+        }
     await db.commit()
     await db.refresh(cible)
     log.info(
@@ -562,6 +729,76 @@ async def fusionner(
     return {
         "deplaces": deplaces,
         "hypotheques_exclues": hypotheques_exclues,
+        "hypotheques_additionnees": hypotheques_additionnees,
         "immeuble_supprime_id": source_id,
         "immeuble_supprime_nom": source_nom,
+    }
+
+
+async def etat_fiche(db, imm: Immeuble) -> dict:
+    """La fiche telle qu'elle est dans la transaction en cours : adresses,
+    logements (groupés par adresse civique, ordre naturel), hypothèques et
+    totaux. Valeurs simples seulement : sert d'aperçu avant un rollback."""
+    from app.services.locatif_chambres import cle_tri_numero
+
+    adresse_princ = (imm.address or "").strip()
+    logs = await _logements(db, imm.id)
+    lignes = [
+        {
+            "id": l.id,
+            "numero": l.numero,
+            "adresse": adresse_effective(l, imm),
+            "status": l.status,
+        }
+        for l in logs
+    ]
+    lignes.sort(
+        key=lambda x: (
+            _norm_adresse(x["adresse"]) != _norm_adresse(adresse_princ),
+            _norm_adresse(x["adresse"]),
+            cle_tri_numero(x["numero"]),
+        )
+    )
+    hyps = await _hypotheques(db, imm.id)
+    parts = {
+        hid: float(pct)
+        for hid, pct in (
+            await db.execute(
+                select(HypothequeImmeuble.hypotheque_id, HypothequeImmeuble.part_pct).where(
+                    HypothequeImmeuble.immeuble_id == imm.id
+                )
+            )
+        ).all()
+    }
+    lignes_h = [
+        {
+            "id": h.id,
+            "preteur": h.preteur,
+            "rang": h.rang,
+            "montant_initial": float(h.montant_initial or 0),
+            "paiement_mensuel": (
+                float(h.paiement_mensuel) if h.paiement_mensuel is not None else None
+            ),
+            "taux_pct": float(h.taux_pct) if h.taux_pct is not None else None,
+            "part_pct": parts.get(h.id, 100.0),
+        }
+        for h in hyps
+    ]
+    return {
+        "id": imm.id,
+        "name": imm.name,
+        "address": imm.address,
+        "address_secondaire": imm.address_secondaire,
+        "nb_logements": imm.nb_logements,
+        "purchase_price": (
+            float(imm.purchase_price) if imm.purchase_price is not None else None
+        ),
+        "logements": lignes,
+        "hypotheques": lignes_h,
+        "total_hypotheques": round(
+            sum(h["montant_initial"] * h["part_pct"] / 100 for h in lignes_h), 2
+        ),
+        "total_paiements_mensuels": round(
+            sum((h["paiement_mensuel"] or 0) * h["part_pct"] / 100 for h in lignes_h), 2
+        ),
     }

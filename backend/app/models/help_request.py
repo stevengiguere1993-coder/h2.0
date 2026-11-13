@@ -83,3 +83,18 @@ class HelpRequest(Base):
     resolved_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    # Historique du traitement (Steven, 2026-11-13 : « section historique,
+    # bug accepté ou refusé avec la note, date de la gestion du bug »).
+    # ``section`` = volet / page concernée (déduite de la page du
+    # signalement, modifiable au traitement) ; ``traite_le`` = date de la
+    # dernière décision (accepté, refusé, réglé) ; ``traite_par`` =
+    # courriel de la personne qui l'a prise.
+    section: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    rejected_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    traite_le: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    traite_par: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)

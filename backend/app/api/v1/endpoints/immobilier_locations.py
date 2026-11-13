@@ -51,6 +51,7 @@ from app.services.locatif_depart import (
     normaliser_statut_location,
     recaler_statut_logement,
 )
+from app.services.locatif_chambres import cle_tri_numero
 
 log = logging.getLogger(__name__)
 
@@ -1497,7 +1498,7 @@ async def suivi_baux(
         key=lambda r: (
             r.bail_id is not None,
             r.immeuble_name,
-            r.logement_numero,
+            cle_tri_numero(r.logement_numero),
         )
     )
     if logement_id is not None:

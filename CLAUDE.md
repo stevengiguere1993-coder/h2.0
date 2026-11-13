@@ -414,6 +414,50 @@ Défaut sans réglage = ancien cycle (dimanche → samedi, 19 avril 2026, 14 j).
 Les feuilles de temps du pôle Entreprises (`timesheets.py`, 14 jours
 alignés sur le lundi 2026-06-01) ne lisent PAS encore ce réglage.
 
+## Fusion d'immeubles — deux adresses, aperçu avant de confirmer (2026-11-13)
+
+Steven : « il compte 2 adresses donc les suffixes existants restent les
+mêmes ; le prix d'achat et l'hypothèque ont été divisés par 2, ils devront
+s'additionner […] l'action est irréversible, nous devrions avoir un
+visuel ». `app/services/immeuble_fusion.py` : un numéro de logement n'est
+un doublon qu'à la MÊME adresse civique (`cle_logement` = adresse du
+logement, sinon celle de l'immeuble, + numéro ; même règle à la création,
+à la création en lot et dans le diagnostic des doublons) → le « 1 » du
+9085 Millen et le « 1 » du 710 Legendre coexistent, sans préfixe. Prix
+d'achat suggéré = somme des deux fiches. Hypothèques : option
+`hypotheques` = `additionner` (même prêteur, même taux, non conjointes :
+montant, versement, solde et tranches réunis sur le prêt de la cible),
+`transferer` ou `exclure`. `POST …/fusion/simulation` joue la fusion dans
+la transaction, relève la fiche résultante (`etat_fiche`) puis fait un
+rollback : c'est l'étape « Voir le résultat » de la fenêtre, obligatoire
+avant « Confirmer ». Pas d'annulation après coup (la source est supprimée).
+
+## Centre d'aide — Questions fiables, historique des bugs (2026-11-13)
+
+Steven : « beaucoup de bugs qui reviennent et qui sont déjà réglés […]
+pouvoir poser une question sur un fonctionnement et avoir la réponse » et
+« une section historique : bug accepté ou refusé avec la note, date de la
+gestion, notification au déclarant ». L'onglet « Question » (`POST
+/help/ask`) cherche d'abord, par mots clés sans accents
+(`app/services/aide_connaissances.py`), dans les signalements (statut,
+section, note, dates), le journal des livraisons
+(`backend/app/data/journal_livraisons.tsv`) et les sections `##` de ce
+fichier, puis les passe à l'IA ET les renvoie à l'écran (« Ce que j'ai
+trouvé »). L'onglet « Signaler » montre en direct les signalements et
+livraisons semblables (`GET /help/similaires`) ; « Mes signalements »
+(`GET /help/mes-signalements`) donne au déclarant statut, note et date.
+Chaque décision (accepté / refusé / réglé, `PATCH /help/reports/{id}` ou
+lot) date l'historique (`traite_le`, `traite_par`, `rejected_at`), pose la
+section (déduite de la page) et notifie le déclarant (`bug_traite`, lien
+`?aide=mes-signalements` qui ouvre le panneau), sauf s'il s'agit de
+soi-même. Mode dev → Demandes d'aide → onglet « Historique ».
+**À faire par Claude Code** : quand une tâche règle un bug signalé, le
+marquer réglé (`PATCH /api/v1/help/reports/{id}` avec `status:
+"resolved"`, `resolution_notes` : ce qui a été corrigé et la date,
+`section`) — c'est ce qui permet à l'assistant de répondre « déjà réglé ».
+Régénérer le journal de temps en temps : `git fetch --unshallow origin`
+puis `python backend/scripts/journal_livraisons.py`.
+
 ## Codes d'accès — partage contrôlé (2026-11-13)
 
 Steven : « je ne peux pas donner accès au code à tous mes employés […] le
