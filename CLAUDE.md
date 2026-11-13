@@ -686,6 +686,35 @@ un interrupteur, et les écrans actuels RESTENT dans le code.
    `/immobilier/paiements?etat=`, `/immobilier/renouvellements?onglet=`.
 5. **Promotion** : chaque lot va d'abord sur le site d'essai ; il ne passe
    en production qu'après le test de Steven (règle de promotion ci-dessus).
+6. **Lot « loyers »** (livré) : `/immobilier/paiements` garde ses données
+   et ses gestes dans `paiements/page.tsx`, qui rend
+   `components/immobilier/loyers-nouvelle-vue.tsx` ou l'écran actuel.
+   Tout le calcul d'affichage (montant du bouton, mois nommés, tuiles,
+   groupes par immeuble) est dans `lib/loyers-lecture.ts`, testé par
+   vitest. Règles : le libellé du bouton vert EST le montant enregistré
+   (« Marquer payé 925 $ », « Encaisser 1 375 $ » = mois affiché + mois
+   passés) ; le chiffre d'une tuile est le nombre de lignes de son
+   filtre (mêmes lignes : immeuble + recherche) ; tableau ou cartes selon
+   la LARGEUR DE LA LISTE (`useLargeur`, pas celle de la fenêtre : le
+   menu en prend une part) ; « Relancer » à côté du bouton seulement sur
+   une ligne en retard, le reste sous « ⋯ » ; pas de bandeau des avis de
+   renouvellement (il est sur « Aujourd'hui »).
+   **Annulation de 10 secondes** : `POST /immobilier/paiements` renvoie
+   `versements_crees` (un clic peut créer plusieurs versements : mois
+   visé, arriérés, mois à venir) et `POST
+   /immobilier/paiements/annuler-saisie {ids}` les retire en bloc —
+   seulement par leur auteur, dans les 2 minutes
+   (`DELAI_ANNULATION_SAISIE_S`), jamais après une correction ou une
+   confirmation envoyée au locataire (409), jamais sur deux baux (422).
+   Gestion externe : `POST /immobilier/paiements-externes` renvoie
+   `avant` (l'état des mois touchés) et `POST
+   /immobilier/paiements-externes/annuler-saisie {logement_id, avant}` le
+   remet. Fiche locataire : chaque versement de l'historique porte
+   `du_mois` / `recu_mois` → pastille « Partiel : 750 $ sur 1 000 $ ».
+   « Corriger le mois » s'ouvre en plein écran au cellulaire
+   (`Fenetre pleinEcranMobile`, activé par `usePaiementActions({
+   nouvellePresentation })`). La page « Aujourd'hui » compte les loyers
+   à encaisser en interne ET en gestion externe, comme l'écran.
 
 ## Investisseurs — saisies manuelles : apports hors QB, prêts (2026-11-13)
 

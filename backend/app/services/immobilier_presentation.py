@@ -46,7 +46,7 @@ LOTS: tuple[dict[str, Any], ...] = (
             "Une carte par locataire sur cellulaire, un seul bouton "
             "principal par ligne, annulation pendant 10 secondes."
         ),
-        "livre": False,
+        "livre": True,
     },
     {
         "cle": "baux",

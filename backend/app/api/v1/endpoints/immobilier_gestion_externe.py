@@ -28,7 +28,7 @@ from datetime import date, datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, DBSession
@@ -475,6 +475,55 @@ async def _immeuble_visible_ou_403(db, user, immeuble_id: int) -> None:
         )
 
 
+class SaisieExterneAvant(BaseModel):
+    """État d'un mois AVANT une saisie (refonte d'Immobilier, lot 2 :
+    « Annuler » pendant 10 secondes). ``existait`` faux = le mois n'avait
+    aucune ligne : l'annulation la retire."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mois: date
+    existait: bool
+    montant: Optional[float] = None
+    paye_le: Optional[date] = None
+    loyer_attendu: Optional[float] = None
+
+
+class PaiementExterneSaisie(PaiementExterneRow):
+    """Réponse d'une saisie : la ligne du mois (comme avant) et, en plus,
+    l'état d'avant de chaque mois touché — ce que
+    ``POST /paiements-externes/annuler-saisie`` remet en place."""
+
+    avant: List[SaisieExterneAvant] = []
+
+
+class AnnulationSaisieExterneIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    logement_id: int
+    #: ``avant`` de la saisie à défaire.
+    avant: List[SaisieExterneAvant] = Field(..., min_length=1, max_length=60)
+
+
+class AnnulationSaisieExterneOut(BaseModel):
+    logement_id: int
+    mois_remis: int
+
+
+def _photo_avant(pm: Optional[PaiementExterne], mois: date) -> SaisieExterneAvant:
+    if pm is None:
+        return SaisieExterneAvant(mois=mois, existait=False)
+    return SaisieExterneAvant(
+        mois=mois,
+        existait=True,
+        montant=float(pm.montant) if pm.montant is not None else None,
+        paye_le=pm.paye_le,
+        loyer_attendu=(
+            float(pm.loyer_attendu) if pm.loyer_attendu is not None else None
+        ),
+    )
+
+
 class PaiementExterneCreate(BaseModel):
     logement_id: int
     mois: str
@@ -489,12 +538,12 @@ class PaiementExterneCreate(BaseModel):
 
 @router.post(
     "/paiements-externes",
-    response_model=PaiementExterneRow,
+    response_model=PaiementExterneSaisie,
     status_code=status.HTTP_201_CREATED,
 )
 async def marquer_paiement_externe(
     payload: PaiementExterneCreate, db: DBSession, user: CurrentUser
-) -> PaiementExterneRow:
+) -> PaiementExterneSaisie:
     """Enregistre un montant reçu — s'AJOUTE au cumul du mois (paiements
     partiels possibles). Sans montant : le mois est réputé payé au
     complet (loyer attendu)."""
@@ -517,16 +566,18 @@ async def marquer_paiement_externe(
             ),
         )
     today = date.today()
+    #: État d'avant de chaque mois touché par cette saisie (annulation).
+    journal: List[SaisieExterneAvant] = []
     if payload.cumul and payload.montant is not None:
         reste = await _ventiler_sur_mois_anterieurs(
-            db, lg, month_start, float(payload.montant), user
+            db, lg, month_start, float(payload.montant), user, journal=journal
         )
         if reste <= 0.005:
             # Tout est allé aux mois antérieurs : le mois demandé n'est
             # pas touché — la ligne renvoyée reflète son état réel.
             await db.commit()
             rows = await _rows_externes(db, [lg], month_start)
-            return rows[0]
+            return PaiementExterneSaisie(**rows[0].model_dump(), avant=journal)
         payload = payload.model_copy(update={"montant": round(reste, 2)})
     existing = (
         await db.execute(
@@ -536,6 +587,7 @@ async def marquer_paiement_externe(
             )
         )
     ).scalars().first()
+    journal.append(_photo_avant(existing, month_start))
     if existing is None:
         existing = PaiementExterne(
             logement_id=lg.id,
@@ -580,7 +632,8 @@ async def marquer_paiement_externe(
         existing.montant = None  # payé au complet (= loyer attendu figé)
     existing.paye_le = today
     await db.commit()
-    return PaiementExterneRow(
+    return PaiementExterneSaisie(
+        avant=journal,
         logement_id=lg.id,
         logement_numero=lg.numero,
         logement_status=lg.status,
@@ -597,12 +650,18 @@ async def marquer_paiement_externe(
 
 
 async def _ventiler_sur_mois_anterieurs(
-    db, lg: Logement, month_start: date, montant: float, user
+    db,
+    lg: Logement,
+    month_start: date,
+    montant: float,
+    user,
+    journal: Optional[List[SaisieExterneAvant]] = None,
 ) -> float:
     """Applique ``montant`` aux mois IMPAYÉS antérieurs à ``month_start``
     (du plus ancien au plus récent, même borne d'entrée et même date
     d'arrivée du locataire que l'affichage). Retourne ce qui reste pour
-    le mois demandé."""
+    le mois demandé. ``journal`` reçoit l'état d'avant de chaque mois
+    touché (pour l'annulation de la saisie)."""
     from app.services.locatif_demarrage import get_demarrage
 
     demarrage = await get_demarrage()
@@ -671,6 +730,8 @@ async def _ventiler_sur_mois_anterieurs(
             manque = att_m - recu_m
             if manque > 0.005:
                 applique = min(reste, manque)
+                if journal is not None:
+                    journal.append(_photo_avant(pm, m))
                 pm.montant = round(recu_m + applique, 2)
                 if pm.loyer_attendu is None:
                     pm.loyer_attendu = att_m
@@ -682,6 +743,8 @@ async def _ventiler_sur_mois_anterieurs(
             and (depuis_m is None or m >= depuis_m)
         ):
             applique = min(reste, float(attendu_courant))
+            if journal is not None:
+                journal.append(_photo_avant(None, m))
             db.add(
                 PaiementExterne(
                     logement_id=lg.id,
@@ -696,6 +759,70 @@ async def _ventiler_sur_mois_anterieurs(
             reste = round(reste - applique, 2)
         m = _mois_suivant(m)
     return max(0.0, reste)
+
+
+@router.post(
+    "/paiements-externes/annuler-saisie",
+    response_model=AnnulationSaisieExterneOut,
+)
+async def annuler_saisie_externe(
+    payload: AnnulationSaisieExterneIn, db: DBSession, user: CurrentUser
+) -> AnnulationSaisieExterneOut:
+    """Défait une saisie faite À L'INSTANT sur un logement en gestion
+    externe (bouton « Annuler » affiché 10 secondes — refonte
+    d'Immobilier, lot 2) : chaque mois touché retrouve son état d'avant
+    (``avant`` de la réponse de la saisie), ou aucun.
+
+    Garde : chaque mois visé doit porter une saisie du jour (une saisie
+    date toujours le mois d'aujourd'hui) — sinon 409, et la correction
+    passe par « Corriger le mois »."""
+    _require_volet(user)
+    lg = await db.get(Logement, payload.logement_id)
+    if lg is None:
+        raise HTTPException(status_code=404, detail="Logement introuvable.")
+    await _immeuble_visible_ou_403(db, user, lg.immeuble_id)
+    from app.services.gestion_externe import immeuble_est_externe
+
+    if not await immeuble_est_externe(db, lg.immeuble_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cet immeuble n'est pas en gestion externe.",
+        )
+    mois_vises = {a.mois.replace(day=1): a for a in payload.avant}
+    lignes = {
+        p.mois_couvert: p
+        for p in (
+            await db.execute(
+                select(PaiementExterne).where(
+                    PaiementExterne.logement_id == lg.id,
+                    PaiementExterne.mois_couvert.in_(list(mois_vises)),
+                )
+            )
+        ).scalars().all()
+    }
+    today = date.today()
+    for m in mois_vises:
+        pm = lignes.get(m)
+        if pm is None or pm.paye_le != today:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Cette saisie a déjà été modifiée ou retirée : utilise "
+                    "« Corriger le mois »."
+                ),
+            )
+    for m, avant in mois_vises.items():
+        pm = lignes[m]
+        if not avant.existait:
+            await db.delete(pm)
+            continue
+        pm.montant = avant.montant
+        pm.paye_le = avant.paye_le
+        pm.loyer_attendu = avant.loyer_attendu
+    await db.commit()
+    return AnnulationSaisieExterneOut(
+        logement_id=lg.id, mois_remis=len(mois_vises)
+    )
 
 
 @router.delete(

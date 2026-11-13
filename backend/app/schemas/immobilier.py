@@ -1051,6 +1051,12 @@ class DossierPaiement(BaseModel):
     #: quand, et par quel canal (« courriel », « sms », « aucun »).
     confirmation_envoyee_le: Optional[datetime] = None
     confirmation_canal: Optional[str] = None
+    #: Ce que le MOIS de ce versement devait (loyer à son prix de période
+    #: + lignes du mois) et ce qu'il a reçu en tout : la pastille de
+    #: l'historique décrit le mois (« Partiel : 750 $ sur 1 000 $ ») —
+    #: refonte d'Immobilier, lot 2.
+    du_mois: Optional[float] = None
+    recu_mois: Optional[float] = None
 
 
 class LocataireCommunicationCreate(BaseModel):
