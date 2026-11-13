@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { AccessGuard } from "@/components/access-guard";
@@ -11,6 +11,8 @@ import { TelephonieSidebar } from "@/components/telephonie-sidebar";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { VoiceConsole } from "@/components/voice-console";
 import { useCurrentUser } from "@/hooks/use-current-user";
+
+import { navigateTelephonie, useTelephonieUrl } from "./_url-state";
 
 import { createContext, useContext } from "react";
 
@@ -37,6 +39,29 @@ const telephonieLayoutCtx = createContext<TelephonieLayoutCtx>({
   setSection: () => {}
 });
 
+const SECTIONS: readonly TelephonieSection[] = [
+  "dashboard",
+  "appels",
+  "messages",
+  "numeros",
+  "filtres",
+  "heures",
+  "acheminement",
+  "acquisition",
+  "automatisations"
+];
+
+/** Section affichée, lue dans l'URL (voir _url-state.ts). Un lien
+ *  ?call= ouvre les Appels, un lien ?fil= / ?sms= / ?nouveau= les
+ *  Messages. */
+export function sectionFromParams(p: URLSearchParams): TelephonieSection {
+  const s = p.get("section") as TelephonieSection | null;
+  if (s && SECTIONS.includes(s)) return s;
+  if (p.get("call")) return "appels";
+  if (p.get("fil") || p.get("sms") || p.get("nouveau")) return "messages";
+  return "dashboard";
+}
+
 export function useTelephonieLayout() {
   return useContext(telephonieLayoutCtx);
 }
@@ -48,7 +73,13 @@ export function TelephonieClientShell({
 }) {
   const { user, loading, signOut } = useCurrentUser();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [section, setSection] = useState<TelephonieSection>("dashboard");
+  // La section vit dans l'URL : le bouton « retour » du téléphone
+  // revient à la section précédente au lieu de quitter le volet.
+  const params = useTelephonieUrl();
+  const section = sectionFromParams(params);
+  const setSection = useCallback((s: TelephonieSection) => {
+    navigateTelephonie({ section: s }, { reset: true });
+  }, []);
 
   // PWA dédiée — bascule dynamiquement le <link rel="manifest"> vers
   // celui de /telephonie pour que l'install prompt offre « Horizon
