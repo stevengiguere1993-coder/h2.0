@@ -135,6 +135,9 @@ class IndependantIn(BaseModel):
     libelle: Optional[str] = Field(default=None, max_length=255)
     #: Dupliquer le formulaire d'un bail indépendant existant (le reste est ignoré).
     source_id: Optional[int] = None
+    #: Formulaire COMPLET rempli à l'écran (Phil 2026-11-13 : le nouveau bail s'ouvre
+    #: directement sur le formulaire) — le petit formulaire ci-dessous est alors ignoré.
+    form: Optional[Dict[str, Any]] = None
     locateur: Optional[PersonneIn] = None
     locataires: List[PersonneIn] = Field(default_factory=list, max_length=4)
     cautions: List[PersonneIn] = Field(default_factory=list, max_length=2)
@@ -366,7 +369,8 @@ async def preparer(
             raise HTTPException(status_code=422, detail="Cette transmission est liée à un bail Kratos : ouvre-la depuis « Locations & nouveaux baux ».")
         base = await svc.preparation_independante(db, t)
         cx_ind, _infos_ind = await svc.charger_connexion(db)
-        return {**base, "mode": cx_ind.etat()["mode"], "cout_tal": svc.COUT_TAL, "transmissions": [svc.resume_transmission(t)]}
+        return {**base, "mode": cx_ind.etat()["mode"], "cout_tal": svc.COUT_TAL, "transmissions": [svc.resume_transmission(t)],
+                "carnet": await _carnet_pour_formulaire(db)}
     if bail_id is None:
         raise HTTPException(status_code=422, detail="bail_id ou transmission_id requis.")
     try:
@@ -445,6 +449,9 @@ async def modifier_transmission(transmission_id: int, payload: FormIn, db: DBSes
         rapport = await svc.remplacer_formulaire(db, t, payload.form)
     except svc.TalBailError as exc:
         raise _erreur(exc) from exc
+    if t.independant:
+        # Une personne ajoutée ou corrigée dans le formulaire suit au carnet.
+        await _memoriser_au_carnet(db, t, user)
     await db.commit()
     await db.refresh(t)
     out = svc.resume_transmission(t, avec_form=True)
@@ -631,12 +638,17 @@ async def creer_independant(payload: IndependantIn, db: DBSession, user: Require
         source = await _transmission_or_404(db, payload.source_id)
         if not source.independant:
             raise HTTPException(status_code=422, detail="Seul un bail indépendant se duplique ici.")
-    essentiel = payload.model_dump(exclude={"libelle", "source_id"}, mode="json")
+    essentiel = payload.model_dump(exclude={"libelle", "source_id", "form"}, mode="json")
     try:
-        t, rapport = await svc.creer_independant(db, user=user, essentiel=essentiel, libelle=payload.libelle, source=source)
+        t, rapport = await svc.creer_independant(
+            db, user=user, essentiel=essentiel, libelle=payload.libelle, source=source,
+            form=(payload.form if source is None else None),
+        )
     except svc.TalBailError as exc:
         raise _erreur(exc) from exc
-    if source is None:
+    if source is None and payload.form is not None:
+        await _memoriser_au_carnet(db, t, user)
+    elif source is None:
         # « Une fois une personne créée, je peux venir la sélectionner la fois d'après » :
         # locateur, locataires et cautions entrent au carnet d'Admin locative. Dans un point
         # de reprise — le carnet ne fait jamais échouer la création du bail.
@@ -658,6 +670,63 @@ async def creer_independant(payload: IndependantIn, db: DBSession, user: Require
     await db.commit()
     await db.refresh(t)
     return svc.resume_transmission(t, avec_form=True)
+
+
+async def _memoriser_au_carnet(db, t: TalTransmission, user) -> None:
+    """Les personnes nommées au formulaire entrent au carnet d'Admin locative (« une fois une
+    personne créée, je peux venir la sélectionner la fois d'après »). Dans un point de
+    reprise : le carnet ne fait jamais échouer le bail."""
+    from app.services import admin_locatif as adm
+
+    try:
+        personnes = svc.personnes_pour_carnet(json.loads(t.payload_json or "{}"))
+        async with db.begin_nested():
+            await adm.memoriser_personnes(db, personnes, user=user)
+    except Exception:  # noqa: BLE001
+        log.exception("Carnet d'Admin locative : mémorisation échouée (bail indépendant %s)", t.id)
+
+
+async def _carnet_pour_formulaire(db) -> List[Dict[str, Any]]:
+    """Carnet d'Admin locative, prêt à remplir une personne du formulaire : coordonnées et
+    adresse déjà découpée en champs du TAL. Jamais bloquant."""
+    from app.services import admin_locatif as adm
+
+    try:
+        config = await svc.charger_config()
+        province = config.get("province_defaut") or "Québec"
+        return [
+            {
+                "id": c.id, "nom": c.nom, "role": c.role, "telephone": c.telephone or "", "courriel": c.courriel or "",
+                "adresse": svc.decouper_adresse(c.adresse, province=province) if (c.adresse or "").strip() else None,
+            }
+            for c in await adm.lister_contacts(db)
+        ]
+    except Exception:  # noqa: BLE001
+        log.exception("Carnet d'Admin locative illisible pour le formulaire du bail")
+        return []
+
+
+@router.get("/independants/nouveau", summary="Formulaire d'un nouveau bail indépendant (rien n'est écrit)")
+async def nouveau_independant(db: DBSession, user: RequireManager) -> Dict[str, Any]:
+    """Phil 2026-11-13 : « devrions-nous pas arriver direct sur la page 1 formulaire ? » — le
+    formulaire complet, avec les réglages par défaut. Le brouillon naît à la première
+    vérification (POST /independants avec ``form``)."""
+    base = await svc.preparation_independante_vierge(db)
+    cx, _infos = await svc.charger_connexion(db)
+    return {**base, "mode": cx.etat()["mode"], "cout_tal": svc.COUT_TAL, "transmissions": [],
+            "carnet": await _carnet_pour_formulaire(db)}
+
+
+@router.get("/prefill/immeuble/{immeuble_id}", summary="Locateur et adresse d'un de nos immeubles, pour remplir un bail indépendant")
+async def prefill_immeuble(
+    immeuble_id: int, db: DBSession, user: RequireManager, logement_id: Optional[int] = Query(default=None),
+) -> Dict[str, Any]:
+    """Pour écrire moins : la compagnie détentrice et l'adresse viennent de la fiche de
+    l'immeuble. Le bail reste indépendant de la gestion locative (aucun lien gardé)."""
+    try:
+        return await svc.prefill_immeuble(db, immeuble_id, logement_id=logement_id)
+    except svc.TalBailError as exc:
+        raise _erreur(exc) from exc
 
 
 @router.get("/independants", summary="Baux indépendants (essais, baux pour un tiers hors système)")
