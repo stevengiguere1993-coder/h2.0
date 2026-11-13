@@ -90,6 +90,20 @@ CATALOG: tuple[Automation, ...] = (
         "cron", "Quotidien",
         "Rappelle aux closers leurs tâches de vente en attente.",
     ),
+    Automation(
+        "loyer_confirmations", "Confirmation de paiement au locataire",
+        "courriel", "cron",
+        "Chaque nuit · 02h00 (Montréal), depuis l'application",
+        "La nuit qui suit la saisie d'un paiement de loyer, le locataire "
+        "reçoit une confirmation (courriel ; texto s'il n'a pas de courriel). "
+        "Les corrections faites dans la journée sont prises en compte : c'est "
+        "le montant final qui est confirmé, un versement retiré n'est confirmé "
+        "à personne. Un message par bail, jamais deux fois le même versement.",
+        params=(
+            Param("heure", "Heure d'envoi (Montréal, la nuit)", "int", 2,
+                  "Heure locale, entre 1 et 6, à partir de laquelle les confirmations partent."),
+        ),
+    ),
     # ---- Rapports / alertes ----
     Automation(
         "brief_matin", "Brief du matin par courriel", "rapport", "cron",

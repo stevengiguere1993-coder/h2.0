@@ -174,3 +174,51 @@ def test_contexte_ia_mentionne_statut_note_et_livraison():
     assert "Signalement #7 (réglé le 2026-09-28" in txt
     assert "Tri naturel livré." in txt
     assert "2026-09-28 : tri naturel" in txt
+
+
+def test_accepter_veut_dire_regle(client, employee_headers, owner_headers, run):
+    """Steven : « lorsque je clique sur accepté un signalement de bug, cela
+    veut dire qu'il a été réglé »."""
+    a = _signaler(client, employee_headers, "Le bouton exporter ne fait rien sur Safari")
+    r = client.patch(
+        f"/api/v1/help/reports/{a['id']}", headers=owner_headers, json={"status": "accepted"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "resolved" and r.json()["resolved_at"]
+
+    b = _signaler(client, employee_headers, "La page des achats charge sans fin")
+    client.post(
+        "/api/v1/help/reports/bulk",
+        headers=owner_headers,
+        json={"ids": [b["id"]], "action": "accept"},
+    )
+    rows = client.get("/api/v1/help/reports", headers=owner_headers).json()
+    assert next(x for x in rows if x["id"] == b["id"])["status"] == "resolved"
+
+
+def test_migration_acceptes_deviennent_regles(client, employee_headers, owner_headers, run):
+    from datetime import datetime, timezone
+
+    from app.db.session import ensure_bugs_acceptes_regles
+    from app.models.help_request import HelpRequest
+
+    a = _signaler(client, employee_headers, "Ancien bug accepté avant le 13 novembre")
+    quand = datetime(2026, 10, 1, tzinfo=timezone.utc)
+
+    async def _poser():
+        async with TestSessionLocal() as s:
+            rec = await s.get(HelpRequest, a["id"])
+            rec.status = "accepted"
+            rec.accepted_at = quand
+            await s.commit()
+
+    run(_poser())
+    run(ensure_bugs_acceptes_regles())
+
+    async def _lire():
+        async with TestSessionLocal() as s:
+            return await s.get(HelpRequest, a["id"], populate_existing=True)
+
+    rec = run(_lire())
+    assert rec.status == "resolved"
+    assert rec.resolved_at is not None and rec.traite_le is not None

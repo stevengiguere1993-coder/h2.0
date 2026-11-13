@@ -361,6 +361,7 @@ export function FinBailModal({
   locataireNom,
   immeubleName,
   logementNumero,
+  modeInitial = "avis",
   onClose,
   onDone
 }: {
@@ -368,11 +369,14 @@ export function FinBailModal({
   locataireNom?: string | null;
   immeubleName?: string | null;
   logementNumero?: string | null;
+  /** « immediat » quand la fenêtre s'ouvre pour un locataire DÉJÀ parti
+   *  (depuis une ligne de paiement) : rien à faire signer. */
+  modeInitial?: "avis" | "immediat";
   onClose: () => void;
   onDone: (msg: string) => void;
 }) {
   const [dateFin, setDateFin] = useState("");
-  const [mode, setMode] = useState<"avis" | "immediat">("avis");
+  const [mode, setMode] = useState<"avis" | "immediat">(modeInitial);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Dépôt de garantie (Phil 2026-10-08, messages de Kyle : « il perd son
@@ -483,6 +487,13 @@ export function FinBailModal({
               className={`${INPUT_CLS} mt-0.5 block w-full`}
             />
           </label>
+          {modeInitial === "immediat" ? (
+            <p className="text-[11px] text-white/60">
+              Mets la date RÉELLE du départ, même passée (ex. le 31 août) :
+              aucun loyer n&apos;est réclamé après cette date, et les mois
+              suivants affichés « en retard » disparaissent.
+            </p>
+          ) : null}
           <div className="grid gap-1.5">
             <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-brand-800 px-3 py-2 text-xs text-white/75">
               <input

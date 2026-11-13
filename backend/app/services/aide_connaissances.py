@@ -150,7 +150,8 @@ def section_depuis_url(url: Optional[str]) -> Optional[str]:
 
 STATUT_LIBELLE = {
     "pending": "en attente de triage",
-    "accepted": "accepté, correction prévue",
+    # Ancien statut : « accepté » veut dire « réglé » (Steven, 2026-11-13).
+    "accepted": "réglé",
     "rejected": "refusé",
     "resolved": "réglé",
 }

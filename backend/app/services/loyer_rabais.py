@@ -145,7 +145,9 @@ async def fixer_du_mois(
             await db.delete(f)
         else:
             autres += float(f.montant or 0)
-    loyer = float(bail.loyer_mensuel or 0)
+    from app.services.loyer_periodes import loyer_du_mois
+
+    loyer = loyer_du_mois(bail, mois)
     ecart = round(float(montant_du) - loyer - autres, 2)
     await db.flush()
     if abs(ecart) < 0.005:

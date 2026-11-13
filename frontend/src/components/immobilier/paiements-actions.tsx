@@ -38,7 +38,50 @@ export type PaiementMois = {
   cree_par?: string | null;
   modifie_par?: string | null;
   modifie_le?: string | null;
+  /** Confirmation de paiement envoyée au locataire la nuit suivante
+   *  (2026-11-13) : quand, et par « courriel », « sms » ou « aucun ». */
+  confirmation_envoyee_le?: string | null;
+  confirmation_canal?: string | null;
 };
+
+/** Un mois encore dû sur le bail (détail du solde, 2026-11-13) : la
+ *  somme des `restant` d'une ligne = son solde. */
+export type MoisImpaye = {
+  mois: string;
+  du: number;
+  recu: number;
+  restant: number;
+};
+
+const MOIS_COURTS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+
+/** « 2026-10-01 » → « oct. 2026 ». */
+export function moisCourt(iso: string): string {
+  const [y, m] = iso.slice(0, 7).split("-");
+  return `${MOIS_COURTS[Number(m) - 1] ?? m} ${y}`;
+}
+
+/** Mois ANTÉRIEURS au mois affiché encore dus (le mois affiché a déjà
+ *  ses propres chiffres sur la ligne). */
+export function impayesAnterieurs(
+  liste: MoisImpaye[] | null | undefined,
+  moisAffiche: string
+): MoisImpaye[] {
+  return (liste ?? []).filter((x) => x.mois.slice(0, 7) < moisAffiche.slice(0, 7));
+}
+
+/** « Confirmation envoyée par courriel le 14 nov 2026 » — vide si rien. */
+export function confirmationLibelle(p: {
+  confirmation_envoyee_le?: string | null;
+  confirmation_canal?: string | null;
+}): string {
+  if (!p.confirmation_envoyee_le) return "";
+  if (p.confirmation_canal === "aucun")
+    return "Confirmation non envoyée : ni courriel ni cellulaire au dossier";
+  return `Confirmation envoyée au locataire par ${
+    p.confirmation_canal === "sms" ? "texto" : "courriel"
+  } le ${dateCourte(p.confirmation_envoyee_le)}`;
+}
 
 export function dateCourte(iso: string | null | undefined): string {
   if (!iso) return "date ?";
@@ -166,7 +209,9 @@ export function CelluleLoyer({
   echeance,
   frais,
   onSupprimerFrais,
-  paiements
+  paiements,
+  moisImpayes,
+  moisAffiche
 }: {
   loyer: number;
   recu?: number | null;
@@ -180,8 +225,15 @@ export function CelluleLoyer({
   /** Versements du mois : affichés un par un dès qu'il y en a plusieurs
    *  (paiements partiels — même détail dans toutes les vues). */
   paiements?: PaiementMois[];
+  /** Détail du solde : les mois ANTÉRIEURS encore dus s'affichent sous
+   *  le solde (« dont oct. 2026 : 750 $ ») — Steven 2026-11-13 : « avec
+   *  du volume, on va oublier des mois pas payés ». */
+  moisImpayes?: MoisImpaye[];
+  /** Mois affiché (AAAA-MM), pour ne lister que les mois d'avant. */
+  moisAffiche?: string;
 }) {
   const du = solde ?? 0;
+  const anterieurs = moisAffiche ? impayesAnterieurs(moisImpayes, moisAffiche) : [];
   const lignes = frais ?? [];
   // Dû du mois = loyer du bail ± lignes du mois — affiché dès qu'une
   // ligne existe (rabais sur les premiers mois, loyer dû fixé à la
@@ -238,6 +290,15 @@ export function CelluleLoyer({
           {fmt(du)}
         </span>
       </div>
+      {anterieurs.map((x) => (
+        <div
+          key={x.mois}
+          className="text-[10px] font-semibold text-rose-300"
+          title={`Mois antérieur impayé : dû ${fmt(x.du)}, reçu ${fmt(x.recu)}`}
+        >
+          dont {moisCourt(x.mois)} : {fmt(x.restant)}
+        </div>
+      ))}
       {lignes.map((f) => (
         <div
           key={f.id}

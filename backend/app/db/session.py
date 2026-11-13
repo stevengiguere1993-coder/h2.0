@@ -166,6 +166,8 @@ async def ensure_critical_columns() -> None:
         ("tal_transmissions", "libelle", "VARCHAR(255)"),
         ("tal_transmissions", "reponses_json", "TEXT"),
         ("tal_transmissions", "langue", "VARCHAR(2)"),
+        ("tal_transmissions", "remplacee_par_id", "INTEGER"),
+        ("tal_transmissions", "annexes_json", "TEXT"),
         # Signature du bail pilotée depuis Gestion immobilière (2026-11-11) : origine du document.
         ("esign_documents", "origine", "VARCHAR(32)"),
         # Baux PARALLÈLES (Financement, 2026-10-16) : catégorie + locateur du
@@ -190,6 +192,9 @@ async def ensure_critical_columns() -> None:
         ("imm_paiements_loyer", "cree_par", "VARCHAR(256)"),
         ("imm_paiements_loyer", "modifie_par", "VARCHAR(256)"),
         ("imm_paiements_loyer", "modifie_le", "TIMESTAMP WITH TIME ZONE"),
+        ("imm_paiements_loyer", "confirmation_envoyee_le", "TIMESTAMP WITH TIME ZONE"),
+        ("imm_paiements_loyer", "confirmation_canal", "VARCHAR(16)"),
+        ("imm_baux", "loyer_periodes_json", "TEXT"),
         # Refus d'un document signable (consentement notamment).
         ("imm_documents", "refuse_le", "TIMESTAMP WITH TIME ZONE"),
         ("imm_documents", "refuse_par", "VARCHAR(255)"),
@@ -1723,6 +1728,34 @@ async def ensure_esign_tables() -> None:
             )
     except Exception as exc:  # noqa: BLE001
         log.warning("ensure_esign_tables : marquage des baux non fait : %s", exc)
+
+
+async def ensure_bugs_acceptes_regles() -> None:
+    """Steven, 2026-11-13 : « lorsque je clique sur accepté un signalement
+    de bug, cela veut dire qu'il a été réglé ». Le statut « accepté »
+    n'existe plus : les signalements restés « acceptés » passent à
+    « réglé » (date de réglage = date d'acceptation), SANS notification
+    au déclarant. Idempotent : plus aucun signalement n'est accepté
+    ensuite (l'API transforme « accepter » en « régler »)."""
+    import logging
+
+    from sqlalchemy import text
+
+    log = logging.getLogger("db.ensure_bugs_acceptes_regles")
+    try:
+        async with engine.begin() as conn:
+            res = await conn.execute(
+                text(
+                    "UPDATE help_requests SET status = 'resolved', "
+                    "resolved_at = COALESCE(resolved_at, accepted_at), "
+                    "traite_le = COALESCE(traite_le, accepted_at) "
+                    "WHERE kind = 'bug' AND status = 'accepted'"
+                )
+            )
+            if res.rowcount:
+                log.info("%s signalement(s) accepté(s) passé(s) à réglé", res.rowcount)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_bugs_acceptes_regles failed: %s", exc)
 
 
 async def ensure_invest_portal_tables() -> None:

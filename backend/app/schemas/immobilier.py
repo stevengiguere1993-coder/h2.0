@@ -1042,6 +1042,10 @@ class DossierPaiement(BaseModel):
     modifie_par: Optional[str] = None
     modifie_le: Optional[datetime] = None
     created_at: Optional[datetime] = None
+    #: Confirmation de paiement envoyée au locataire (la nuit suivante) :
+    #: quand, et par quel canal (« courriel », « sms », « aucun »).
+    confirmation_envoyee_le: Optional[datetime] = None
+    confirmation_canal: Optional[str] = None
 
 
 class LocataireCommunicationCreate(BaseModel):
@@ -1377,6 +1381,9 @@ class FusionImmeublesOptions(BaseModel):
     #: Préfixe posé devant les numéros des logements déplacés quand les
     #: mêmes numéros existent déjà dans la cible (« 9085- » → « 9085-1 »).
     prefixe_numeros: Optional[str] = Field(default=None, max_length=24)
+    #: Préfixe posé devant les numéros des logements de la fiche GARDÉE
+    #: (« 9085- »), facultatif : vide = ses numéros ne changent pas.
+    prefixe_numeros_cible: Optional[str] = Field(default=None, max_length=24)
     #: Vrai = les hypothèques de la source sont les MÊMES que celles de la
     #: cible (hypothèque conjointe saisie deux fois) : on ne les transfère
     #: pas, elles disparaissent avec la source.
@@ -1419,7 +1426,12 @@ class FusionImmeublesApercu(BaseModel):
     #: Libellé → nombre de lignes qui seront rattachées à la cible.
     a_deplacer: dict[str, int] = {}
     numeros_en_conflit: List[str] = []
+    #: Numéros portés par les deux fiches (quelle que soit l'adresse).
+    numeros_communs: List[str] = []
+    numeros_source: List[str] = []
+    numeros_cible: List[str] = []
     prefixe_suggere: str = ""
+    prefixe_cible_suggere: str = ""
     hypotheques_source: List[FusionHypothequeApercu] = []
     hypotheques_en_double: int = 0
     hypotheques_additionnables: int = 0

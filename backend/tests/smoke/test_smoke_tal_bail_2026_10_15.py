@@ -570,7 +570,8 @@ def test_echec_frw122_garde_le_shortguid_et_relance_sans_second_frw111(client, a
                     "fm_libelle": fm.libelle, "fm_montant": float(fm.montant)}
 
     v = run(_verif())
-    assert v["pdf"] == b"%PDF-" and v["filename"] == "53000BAIL.pdf"
+    # Nom lisible « Bail_<unité>_<adresse>.pdf », plus le nom technique renvoyé par le TAL.
+    assert v["pdf"] == b"%PDF-" and v["filename"].startswith("Bail_") and v["filename"].endswith(".pdf")
     assert v["fm_imm"] == tal_seed["imm_id"] and v["fm_montant"] == 8.99
     assert v["fm_libelle"].startswith("Bail officiel TAL") and "Carl Reel" in v["fm_libelle"]
 

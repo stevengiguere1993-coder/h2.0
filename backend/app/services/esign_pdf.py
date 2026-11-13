@@ -135,6 +135,9 @@ def _draw_field(c, field: EsignField, signer: Optional[EsignSigner],
     kind = field.kind
 
     if kind in (EsignFieldKind.SIGNATURE.value, EsignFieldKind.INITIALES.value):
+        # Endroit facultatif que le signataire a laissé vide (signature guidée).
+        if (field.value_text or "") == "non":
+            return
         img_bytes = None
         if signer is not None:
             img_bytes = (
@@ -459,6 +462,9 @@ def build_final_pdf(
 
 
 def final_pdf_filename(doc: EsignDocument) -> str:
+    # Bail officiel du TAL : le locataire reçoit « Bail_<unité>_<adresse>_signe.pdf ».
+    if getattr(doc, "origine", None) == "bail_tal" and (doc.filename or "").lower().endswith(".pdf"):
+        return f"{doc.filename[:-4]}_signe.pdf"
     base = (doc.title or "document").strip() or "document"
     safe = "".join(
         ch if ch.isalnum() or ch in " -_." else "_" for ch in base
