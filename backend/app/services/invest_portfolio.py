@@ -1356,6 +1356,30 @@ async def budget_ligne_transactions(
     )
 
 
+async def _net_hors_qbo_de(
+    db: AsyncSession, user_id: int, entreprise_id: int
+) -> float:
+    """Net des apports hors QuickBooks de ce compte dans la compagnie."""
+    if not user_id:
+        return 0.0
+    from app.services.invest_saisies import net_hors_qbo
+
+    flux = (
+        await db.execute(
+            select(InvestFlux)
+            .join(
+                InvestParticipation,
+                InvestParticipation.id == InvestFlux.participation_id,
+            )
+            .where(
+                InvestParticipation.user_id == user_id,
+                InvestParticipation.entreprise_id == entreprise_id,
+            )
+        )
+    ).scalars().all()
+    return net_hors_qbo(flux)
+
+
 async def ajuster_capital_avec_soldes_qbo(
     db: AsyncSession,
     portefeuille: dict,
@@ -1382,8 +1406,15 @@ async def ajuster_capital_avec_soldes_qbo(
                         a["name"] == ident
                         and a.get("solde") is not None
                     ):
+                        # + les apports saisis HORS QuickBooks (capital
+                        # versé avant QB, Steven 2026-11-13) : QB ne
+                        # les connaît pas, ils s'AJOUTENT à son solde.
                         p["capital_actuel"] = round(
-                            float(a["solde"]), 2
+                            float(a["solde"])
+                            + await _net_hors_qbo_de(
+                                db, user_id, p["entreprise_id"]
+                            ),
+                            2,
                         )
                         break
         total += float(p.get("capital_actuel") or 0)
