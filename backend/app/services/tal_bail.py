@@ -1113,6 +1113,7 @@ async def creer_transmission(
     ouvert plutôt que d'en empiler."""
     prep, rapport, ctx, schema, config = await preparer(db, bail_id, user=user, surcharges=surcharges)
     if form is not None:
+        completer_derives(form)
         vider_inapplicables(form, schema.gabarit)
         prep.form = form
         rapport = valider(form, schema, requis=chemins_requis(config))
@@ -1161,6 +1162,7 @@ async def remplacer_formulaire(db: AsyncSession, t: TalTransmission, form: dict[
     config = await charger_config()
     # Un champ que les réponses rendent sans objet ne reste pas rempli « au cas où » :
     # le TAL l'imprimerait.
+    completer_derives(form)
     vider_inapplicables(form, schema.gabarit)
     rapport = valider(form, schema, requis=chemins_requis(config))
     t.payload_json = _json(form)
@@ -1310,7 +1312,7 @@ async def generer(
         type=DOC_TYPE,
         titre=(f"Bail de logement (TAL) — {t.adresse}" if t.adresse else "Bail de logement (TAL)")[:255],
         source="genere",
-        filename=(nom_pdf or "bail.pdf")[:255],
+        filename=nom_fichier_bail(form)[:255],
         params_json=_json({
             "transmission_id": t.id, "short_guid": t.short_guid, "no_confirmation": t.no_confirmation,
             "mode": t.mode, "schema_version": t.schema_version, "simulation": client.simulation,
@@ -1511,6 +1513,92 @@ def contexte_independant(essentiel: Optional[dict[str, Any]]) -> ContexteBail:
     )
 
 
+def nom_fichier_bail(form: Any, *, signe: bool = False) -> str:
+    """Nom du PDF que le locataire reçoit : « Bail_<unité>_<adresse>.pdf » (Phil
+    2026-11-13 : « le titre du pdf est horrible »). Sans accent ni espace, pour passer
+    partout (courriel, téléchargement). Ex. « Bail_100_1073-Rue-de-Bleury.pdf »."""
+    import unicodedata
+
+    def propre(v: Any) -> str:
+        texte = unicodedata.normalize("NFKD", str(v or "")).encode("ascii", "ignore").decode("ascii")
+        texte = re.sub(r"[^A-Za-z0-9]+", "-", texte).strip("-")
+        return texte[:60]
+
+    try:
+        a = (form.get("adresseLogement") or [{}])[0] or {}
+    except (AttributeError, IndexError, TypeError):
+        a = {}
+    if not isinstance(a, dict):
+        a = {}
+    adresse = propre(" ".join(str(a.get(k) or "").strip() for k in ("NoCivique", "Rue")) or a.get("AdresseComplete"))
+    morceaux = ["Bail", propre(a.get("Appartement")), adresse, "signe" if signe else ""]
+    return "_".join(m for m in morceaux if m)[:120] + ".pdf"
+
+
+_DUREE_RE = re.compile(r"^\s*(\d{1,3})\s*([A-Za-zÀ-ÿ.]*)\s*$")
+
+
+def lire_duree(texte: Any) -> Optional[tuple[int, str]]:
+    """« 12 », « 12 mois », « 1 an », « 26 semaines » → (nombre, "mois" | "semaines" | "jours").
+    Un nombre seul compte des mois. None si le texte est libre."""
+    m = _DUREE_RE.match(str(texte or ""))
+    if not m or int(m.group(1)) <= 0:
+        return None
+    n, unite = int(m.group(1)), m.group(2).lower().rstrip(".")
+    if unite in ("", "m") or unite.startswith("mois"):
+        return n, "mois"
+    if unite.startswith("an"):
+        return n * 12, "mois"
+    if unite.startswith("sem"):
+        return n, "semaines"
+    if unite.startswith("jour") or unite == "j":
+        return n, "jours"
+    return None
+
+
+def fin_de_bail(debut: Any, duree: Any) -> Optional[date]:
+    """Dernier jour du bail : début + durée − 1 jour (1er déc. + 12 mois → 30 nov.)."""
+    import calendar
+
+    depart = _date_ou_none(debut)
+    lu = lire_duree(duree)
+    if depart is None or lu is None:
+        return None
+    n, unite = lu
+    if unite == "mois":
+        total = depart.month - 1 + n
+        annee, mois = depart.year + total // 12, total % 12 + 1
+        jour = min(depart.day, calendar.monthrange(annee, mois)[1])
+        return date(annee, mois, jour) - timedelta(days=1)
+    return depart + timedelta(days=(n * 7 if unite == "semaines" else n) - 1)
+
+
+def completer_derives(form: dict[str, Any]) -> None:
+    """Valeurs que le formulaire peut calculer seul (Phil 2026-11-13) — jamais par-dessus
+    une valeur saisie :
+    - durée écrite en nombre seul → « N mois » (le TAL imprime le texte tel quel) ;
+    - date de fin vide → date de début + durée ;
+    - loyer total vide → loyer + coût des services, s'il y en a."""
+    if not isinstance(form, dict):
+        return
+    if str(form.get("typeBail") or "") != "dureeIndeterminee":
+        duree = str(form.get("nbSemainesMoisAnnees") or "").strip()
+        if duree.isdigit() and int(duree) > 0:
+            form["nbSemainesMoisAnnees"] = f"{int(duree)} mois"
+        if _vide(form.get("dateFinBail")):
+            fin = fin_de_bail(form.get("dateDebutBail"), form.get("nbSemainesMoisAnnees"))
+            if fin is not None:
+                form["dateFinBail"] = fin.isoformat()
+    if _vide(form.get("coutTotalLoyer")) and not _vide(form.get("coutLoyer")):
+        try:
+            total = float(nombre_canonique(form.get("coutLoyer")))
+            if str(form.get("bailIncluServices")) == "true" and not _vide(form.get("coutServices")):
+                total += float(nombre_canonique(form.get("coutServices")))
+            form["coutTotalLoyer"] = f"{total:.2f}"
+        except (TypeError, ValueError):
+            pass
+
+
 def adresse_depuis_formulaire(form: Any) -> str:
     """Adresse lisible du logement telle qu'écrite dans le formulaire."""
     try:
@@ -1569,6 +1657,7 @@ async def creer_independant(
         form = prep.form
         a_verifier = [{**x, "note": _NOTES_INDEPENDANT.get(x.get("note", ""), x.get("note", ""))} for x in prep.a_verifier]
         adresse = adresse_logement_texte(ctx)
+    completer_derives(form)
     vider_inapplicables(form, schema.gabarit)
     rapport = valider(form, schema, requis=chemins_requis(config))
     now = datetime.now(timezone.utc)
@@ -1961,7 +2050,7 @@ async def lancer_signature(db: AsyncSession, t: TalTransmission, *, user, messag
         entreprise_id=entreprise_id, created_by_user_id=getattr(user, "id", None), title=titre,
         message=(message or "Voici votre bail de logement (formulaire officiel du Tribunal administratif du logement) à signer électroniquement.")[:2000],
         status=EsignDocumentStatus.BROUILLON.value, use_signing_order=False,
-        filename=f"bail-tal-{t.id}.pdf", content_type="application/pdf", pdf_blob=pdf, page_count=max(1, int(pages or 1)),
+        filename=nom_fichier_bail(form), content_type="application/pdf", pdf_blob=pdf, page_count=max(1, int(pages or 1)),
         sha256=hashlib.sha256(pdf).hexdigest(), origine=ORIGINE_ESIGN,
     )
     db.add(doc)
@@ -2027,7 +2116,7 @@ async def apres_signature_complete(
         signe = ImmDocument(
             type=DOC_TYPE_SIGNE,
             titre=(f"Bail signé — {t.adresse}" if t.adresse else "Bail signé (TAL)")[:255],
-            source="genere", filename=f"bail-signe-{t.id}.pdf",
+            source="genere", filename=nom_fichier_bail(_charger_json(t.payload_json, {}) or {}, signe=True),
             params_json=_json({
                 "transmission_id": t.id, "esign_document_id": doc.id, "short_guid": t.short_guid,
                 "mode": t.mode, "document_tal_id": t.document_id, "independant": True,
@@ -2063,7 +2152,7 @@ async def apres_signature_complete(
         bail_id=t.bail_id, locataire_id=t.locataire_id, immeuble_id=t.immeuble_id, logement_id=t.logement_id,
         type="bail",
         titre=(f"Bail signé — {t.adresse}" if t.adresse else "Bail signé (TAL)")[:255],
-        source="genere", filename=f"bail-signe-{t.id}.pdf",
+        source="genere", filename=nom_fichier_bail(_charger_json(t.payload_json, {}) or {}, signe=True),
         params_json=_json({
             "transmission_id": t.id, "esign_document_id": doc.id, "short_guid": t.short_guid,
             "mode": t.mode, "document_tal_id": t.document_id,
@@ -2180,4 +2269,5 @@ __all__ = [
     "parties_du_formulaire", "adresse_depuis_formulaire",
     "registre", "TPS_PCT", "TVQ_PCT", "FORFAIT_LICENCE", "normaliser_montants", "REGLES",
     "rangs_reels", "resume_avec_cout",
+    "nom_fichier_bail", "lire_duree", "fin_de_bail", "completer_derives",
 ]

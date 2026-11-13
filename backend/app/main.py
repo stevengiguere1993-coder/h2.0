@@ -891,8 +891,37 @@ async def health_check(response: Response) -> dict:
         ][-10:]
     except Exception:  # noqa: BLE001
         derniers = []
+    # Bail officiel du TAL en cours de génération (formulaire créé chez le TAL,
+    # PDF pas encore reçu) : on ne redémarre JAMAIS la production à ce
+    # moment-là — une coupure ferait perdre le PDF d'un bail compté. Un simple
+    # nombre, lisible sans connexion, à vérifier avant chaque déploiement.
+    tal_en_cours = None
+    try:
+        from datetime import timedelta
+
+        from sqlalchemy import func, select
+
+        from app.db.session import AsyncSessionLocal
+        from app.models.tal_bail import TalTransmission
+
+        async with AsyncSessionLocal() as session:
+            tal_en_cours = int(
+                (
+                    await session.execute(
+                        select(func.count(TalTransmission.id)).where(
+                            TalTransmission.statut == "forme_creee",
+                            TalTransmission.updated_at
+                            >= maintenant - timedelta(minutes=3),
+                        )
+                    )
+                ).scalar_one()
+                or 0
+            )
+    except Exception:  # noqa: BLE001 — la santé ne dépend pas de ce témoin
+        tal_en_cours = None
     return {
         "status": "healthy" if ok else "degraded",
+        "tal_generations_en_cours": tal_en_cours,
         "environment": settings.env,
         "schema": {
             "ok": ok,
