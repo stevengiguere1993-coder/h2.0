@@ -228,7 +228,7 @@ async def envoyer(
         title=(f"Bail de logement — {t.adresse}" if t.adresse else "Bail de logement (TAL)")[:255],
         message=((message or "").strip() or MESSAGE_DEFAUT)[:2000],
         status=EsignDocumentStatus.BROUILLON.value, use_signing_order=False,
-        filename=f"bail-tal-{t.id}.pdf", content_type="application/pdf", pdf_blob=pdf,
+        filename=svc.nom_fichier_bail(form), content_type="application/pdf", pdf_blob=pdf,
         page_count=max(1, (await _verdict(pdf)).pages), sha256=hashlib.sha256(pdf).hexdigest(),
         origine=svc.ORIGINE_ESIGN,
     )

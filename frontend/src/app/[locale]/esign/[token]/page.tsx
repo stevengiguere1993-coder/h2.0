@@ -95,10 +95,16 @@ const KIND_LABEL: Record<string, string> = {
 
 function InkPad({
   label,
-  onChange
+  onChange,
+  lecteur
 }: {
   label: string;
   onChange: (dataUrl: string | null) => void;
+  /** Reçoit une fonction qui relit le tracé À L'INSTANT (au clic sur
+   *  « Signer ») : la signature ne dépend plus d'un événement de fin de
+   *  trait, qui se perdait sur iPhone (retour Phil 2026-11-13 : « quand
+   *  il pèse, ça fait rien »). */
+  lecteur?: React.MutableRefObject<(() => string | null) | null>;
 }) {
   const [mode, setMode] = useState<"draw" | "type">("draw");
   const [typed, setTyped] = useState("");
@@ -114,6 +120,36 @@ function InkPad({
   // ou ouvrir le clavier déclenche un resize de HAUTEUR seulement —
   // il ne doit JAMAIS effacer la signature en cours.
   const lastWidthRef = useRef(0);
+  // Dernier tracé enregistré (dessiné ou tapé), pour le relire à la demande.
+  const dernierRef = useRef<string | null>(null);
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+
+  function publier(url: string | null) {
+    dernierRef.current = url;
+    onChange(url);
+  }
+
+  useEffect(() => {
+    if (!lecteur) return;
+    lecteur.current = () => {
+      if (modeRef.current === "draw") {
+        const c = canvasRef.current;
+        if (c && !emptyRef.current && c.width > 0) {
+          try {
+            return c.toDataURL("image/png");
+          } catch {
+            return dernierRef.current;
+          }
+        }
+        return null;
+      }
+      return dernierRef.current;
+    };
+    return () => {
+      lecteur.current = null;
+    };
+  }, [lecteur]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -149,7 +185,7 @@ function InkPad({
       } else {
         emptyRef.current = true;
         setEmpty(true);
-        onChange(null);
+        publier(null);
       }
     }
 
@@ -179,7 +215,11 @@ function InkPad({
 
   function down(e: React.PointerEvent<HTMLCanvasElement>) {
     e.preventDefault();
-    canvasRef.current?.setPointerCapture(e.pointerId);
+    try {
+      canvasRef.current?.setPointerCapture(e.pointerId);
+    } catch {
+      /* capture refusée par le navigateur : le tracé continue sans elle */
+    }
     drawing.current = true;
     last.current = pt(e);
   }
@@ -201,11 +241,22 @@ function InkPad({
   function up(e: React.PointerEvent<HTMLCanvasElement>) {
     if (!drawing.current) return;
     drawing.current = false;
-    canvasRef.current?.releasePointerCapture(e.pointerId);
     last.current = null;
+    // Le tracé s'enregistre D'ABORD : sur iPhone, relâcher la capture du
+    // pointeur peut lever une erreur, et tout ce qui suivait était perdu
+    // (le dessin restait à l'écran, mais « signature requise »).
     const canvas = canvasRef.current;
     if (canvas && !emptyRef.current) {
-      onChange(canvas.toDataURL("image/png"));
+      try {
+        publier(canvas.toDataURL("image/png"));
+      } catch {
+        /* relu au moment de signer (lecteur) */
+      }
+    }
+    try {
+      canvasRef.current?.releasePointerCapture(e.pointerId);
+    } catch {
+      /* capture déjà relâchée par le navigateur */
     }
   }
 
@@ -215,14 +266,14 @@ function InkPad({
     if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
     emptyRef.current = true;
     setEmpty(true);
-    onChange(null);
+    publier(null);
   }
 
   function applyTyped(value: string) {
     setTyped(value);
     const text = value.trim();
     if (!text) {
-      onChange(null);
+      publier(null);
       return;
     }
     const c = document.createElement("canvas");
@@ -241,7 +292,7 @@ function InkPad({
       ctx.font = `italic ${size}px 'Brush Script MT', 'Segoe Script', cursive`;
     }
     ctx.fillText(text, 10, 70);
-    onChange(c.toDataURL("image/png"));
+    publier(c.toDataURL("image/png"));
   }
 
   return (
@@ -261,7 +312,7 @@ function InkPad({
               onClick={() => {
                 setMode(key);
                 setTyped("");
-                onChange(null);
+                publier(null);
               }}
               className={`rounded-md px-2.5 py-1 text-xs font-medium ${
                 mode === key
@@ -347,6 +398,9 @@ export default function PublicEsignPage() {
   const [declineReason, setDeclineReason] = useState("");
 
   const padsRef = useRef<HTMLDivElement | null>(null);
+  // Relecture directe des deux tracés au moment de signer.
+  const lireSignature = useRef<(() => string | null) | null>(null);
+  const lireInitiales = useRef<(() => string | null) | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -438,13 +492,16 @@ export default function PublicEsignPage() {
       setError("Cochez la case de consentement pour signer.");
       return;
     }
-    if (needsSignature && !signatureUrl) {
-      setError("Votre signature est requise (encadré plus bas).");
+    // Ce qui est à l'écran fait foi : on relit les tracés maintenant.
+    const signature = lireSignature.current?.() ?? signatureUrl;
+    const initiales = lireInitiales.current?.() ?? initialsUrl;
+    if (needsSignature && !signature) {
+      setError("Tracez votre signature dans le premier encadré, puis appuyez de nouveau sur « Signer le document ».");
       padsRef.current?.scrollIntoView({ behavior: "smooth" });
       return;
     }
-    if (needsInitials && !initialsUrl) {
-      setError("Vos initiales sont requises (encadré plus bas).");
+    if (needsInitials && !initiales) {
+      setError("Tracez vos initiales dans le deuxième encadré, puis appuyez de nouveau sur « Signer le document ».");
       padsRef.current?.scrollIntoView({ behavior: "smooth" });
       return;
     }
@@ -464,8 +521,8 @@ export default function PublicEsignPage() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          signature_data_url: signatureUrl,
-          initials_data_url: initialsUrl,
+          signature_data_url: signature,
+          initials_data_url: initiales,
           text_values: Object.entries(textValues).map(([id, value]) => ({
             field_id: Number(id),
             value
@@ -924,10 +981,10 @@ export default function PublicEsignPage() {
             className="space-y-5 rounded-xl border border-slate-200 bg-white p-5"
           >
             {needsSignature ? (
-              <InkPad label="Votre signature" onChange={setSignatureUrl} />
+              <InkPad label="Votre signature" onChange={setSignatureUrl} lecteur={lireSignature} />
             ) : null}
             {needsInitials ? (
-              <InkPad label="Vos initiales" onChange={setInitialsUrl} />
+              <InkPad label="Vos initiales" onChange={setInitialsUrl} lecteur={lireInitiales} />
             ) : null}
 
             <label className="flex items-start gap-2.5 text-sm text-slate-700">
@@ -945,6 +1002,11 @@ export default function PublicEsignPage() {
               </span>
             </label>
 
+            {error ? (
+              <div className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                {error}
+              </div>
+            ) : null}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <button
                 type="button"
