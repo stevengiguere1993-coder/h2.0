@@ -21,7 +21,7 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Loader2, Lock, Pencil, Trash2 } from "lucide-react";
+import { Loader2, Lock, Pencil, Trash2, X } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
 import { FinBailModal } from "@/components/immobilier/fin-bail";
@@ -106,6 +106,7 @@ export function Fenetre({
   sousTitre,
   teinte = "text-amber-300",
   niveau = 70,
+  pleinEcranMobile = false,
   onClose,
   children
 }: {
@@ -115,6 +116,10 @@ export function Fenetre({
   teinte?: string;
   /** 70 = première fenêtre ; 80 = fenêtre ouverte PAR-DESSUS une autre. */
   niveau?: 70 | 80;
+  /** Refonte d'Immobilier : la fenêtre prend tout l'écran d'un
+   *  cellulaire (bouton « Fermer » dans l'en-tête, puisqu'il n'y a plus
+   *  de fond à toucher) ; inchangée à partir de la tablette. */
+  pleinEcranMobile?: boolean;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -142,21 +147,39 @@ export function Fenetre({
     <div
       className={`fixed inset-0 ${
         niveau === 80 ? "z-[80]" : "z-[70]"
-      } flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm`}
+      } flex items-center justify-center bg-black/70 backdrop-blur-sm ${
+        pleinEcranMobile ? "p-0 sm:p-4" : "p-4"
+      }`}
       onClick={onClose}
     >
       <div
         role="dialog"
         aria-modal="true"
-        className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl"
+        className={`w-full overflow-y-auto border-brand-800 bg-brand-950 shadow-2xl ${
+          pleinEcranMobile
+            ? "h-full sm:h-auto sm:max-h-[90vh] sm:max-w-md sm:rounded-2xl sm:border"
+            : "max-h-[90vh] max-w-md rounded-2xl border"
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sticky top-0 z-10 border-b border-brand-800 bg-brand-950 px-5 py-3">
-          <h2 className={`text-sm font-bold uppercase tracking-wider ${teinte}`}>
-            {titre}
-          </h2>
-          {sousTitre ? (
-            <p className="mt-0.5 text-xs text-white/60">{sousTitre}</p>
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-brand-800 bg-brand-950 px-5 py-3">
+          <div className="min-w-0 flex-1">
+            <h2 className={`text-sm font-bold uppercase tracking-wider ${teinte}`}>
+              {titre}
+            </h2>
+            {sousTitre ? (
+              <p className="mt-0.5 text-xs text-white/60">{sousTitre}</p>
+            ) : null}
+          </div>
+          {pleinEcranMobile ? (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Fermer"
+              className="-mr-2 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-white/80 transition hover:bg-brand-800 hover:text-white sm:hidden"
+            >
+              <X className="h-5 w-5" aria-hidden />
+            </button>
           ) : null}
         </div>
         <div className="grid gap-3 p-5">{children}</div>
@@ -999,12 +1022,16 @@ export function CorrectionModal<R extends PaiementRowBase>({
   onLoyerDu,
   onSupprimerFrais,
   onPeriodes,
-  onLocataireParti
+  onLocataireParti,
+  nouvellePresentation = false
 }: {
   row: R;
   mois: string;
   fmt: (n: number) => string;
   busy: boolean;
+  /** Refonte d'Immobilier (écran des loyers) : titre « Corriger le
+   *  mois » et plein écran au cellulaire. */
+  nouvellePresentation?: boolean;
   onClose: () => void;
   onAjouter: () => void;
   onModifier: (p: PaiementMois) => void;
@@ -1027,9 +1054,18 @@ export function CorrectionModal<R extends PaiementRowBase>({
 
   return (
     <Fenetre
-      titre={`Corriger — ${moisLisible(mois)}`}
-      sousTitre={row.locataire_name}
+      titre={
+        nouvellePresentation
+          ? "Corriger le mois"
+          : `Corriger — ${moisLisible(mois)}`
+      }
+      sousTitre={
+        nouvellePresentation
+          ? [row.locataire_name, moisLisible(mois)].filter(Boolean).join(" · ")
+          : row.locataire_name
+      }
       teinte="text-sky-300"
+      pleinEcranMobile={nouvellePresentation}
       onClose={onClose}
     >
       <div className="grid grid-cols-3 gap-2 text-center">
@@ -1281,8 +1317,12 @@ export function usePaiementActions<R extends PaiementRowBase>({
   fmt,
   onChanged,
   onInfo,
-  onError
+  onError,
+  nouvellePresentation = false
 }: {
+  /** Refonte d'Immobilier : « Corriger le mois » en plein écran au
+   *  cellulaire (écran des loyers en nouvelle présentation seulement). */
+  nouvellePresentation?: boolean;
   /** Mois affiché (AAAA-MM). */
   mois: string;
   /** Lignes À JOUR de la surface : la fenêtre de correction s'y
@@ -1571,6 +1611,7 @@ export function usePaiementActions<R extends PaiementRowBase>({
           onSupprimerFrais={(f) => supprimerFrais(f.id)}
           onPeriodes={() => ouvrirPeriodes(rowCorrection)}
           onLocataireParti={() => ouvrirFinBail(rowCorrection)}
+          nouvellePresentation={nouvellePresentation}
         />
       ) : null}
       {periodes ? (

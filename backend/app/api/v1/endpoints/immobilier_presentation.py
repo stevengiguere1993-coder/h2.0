@@ -150,6 +150,7 @@ async def aujourdhui(
     """
     from app.api.v1.endpoints import immobilier as immo
     from app.api.v1.endpoints import immobilier_assurances as immo_ass
+    from app.api.v1.endpoints import immobilier_gestion_externe as immo_ext
     from app.api.v1.endpoints import immobilier_locations as immo_loc
 
     c = auj.Chiffres()
@@ -194,7 +195,17 @@ async def aujourdhui(
         lo = await immo.loyers_overview(
             db=db, user=user, mois=None, entreprise_id=entreprise_id
         )
-        dus = [r for r in lo.rows if r.etat in ("retard", "partiel")]
+        # La page Loyers réunit le suivi interne ET les immeubles en
+        # gestion externe : la tuile « Impayés » compte les deux, donc
+        # cette ligne aussi.
+        ext = await immo_ext.loyers_externes_overview(
+            db=db, user=user, mois=None, entreprise_id=entreprise_id
+        )
+        dus = [
+            r
+            for r in [*lo.rows, *ext.rows]
+            if r.etat in ("retard", "partiel")
+        ]
         c.loyers_nb = len(dus)
         c.loyers_total = round(sum(float(r.solde_total or 0) for r in dus), 2)
 

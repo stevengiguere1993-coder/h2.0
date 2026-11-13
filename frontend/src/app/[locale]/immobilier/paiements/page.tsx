@@ -53,7 +53,16 @@ import {
   indexValidations
 } from "@/components/immobilier/validation-bancaire";
 import { ImmeubleFiltre } from "@/components/immobilier/immeuble-filtre";
-import { useNomPageImmobilier } from "@/hooks/use-presentation-immobilier";
+import {
+  LoyersNouvelleVue,
+  ToastAnnulable
+} from "@/components/immobilier/loyers-nouvelle-vue";
+import type { LigneLoyer } from "@/components/immobilier/loyers-types";
+import {
+  useNomPageImmobilier,
+  usePresentationImmobilier
+} from "@/hooks/use-presentation-immobilier";
+import { argent } from "@/lib/loyers-lecture";
 
 /**
  * Paiements — vue transversale « collection des loyers »
@@ -72,65 +81,9 @@ import { useNomPageImmobilier } from "@/hooks/use-presentation-immobilier";
  * relance ni de frais sur ces lignes.
  */
 
-type Row = {
-  bail_id: number;
-  immeuble_id: number;
-  immeuble_name: string;
-  logement_id?: number | null;
-  logement_numero: string | null;
-  locataire_id: number | null;
-  locataire_name: string | null;
-  locataire_phone: string | null;
-  locataire_email: string | null;
-  /** Départ ACTÉ : ce locataire part à cette date. */
-  libre_le: string | null;
-  loyer_mensuel: number;
-  /** Jour du mois où le loyer est payable (bail TAL « Ou le ___ »). */
-  jour_echeance?: number | null;
-  paiement_id: number | null;
-  montant_paye: number | null;
-  paye_le: string | null;
-  //: Versements du mois (paiements partiels distincts).
-  paiements?: PaiementMois[];
-  etat: string; // "retard" | "attente" | "paye" | "partiel" | "vacant"
-  /** Ligne de logement VACANT (bail_id vaut 0) : statut exact du
-   *  logement ("vacant" ou "reserve") pour l'étiquette. */
-  logement_statut?: string | null;
-  /** Dossier ouvert au TAL sur ce bail (non-paiement) — badge + coche
-   *  pour que l'équipe voie que le recours est lancé. */
-  tal_dossier_ouvert_le?: string | null;
-  /** Garants / contacts actifs du locataire (cherchables) et celui qui
-   *  PAIE le loyer — « paie : Jacques Roy » sous le nom (point 8). */
-  garants?: string[];
-  payeur_nom?: string | null;
-  //: Mois affiché payé, mais un mois antérieur du bail impayé.
-  solde_anterieur?: boolean;
-  /** Détail du solde : chaque mois encore dû (2026-11-13). */
-  mois_impayes?: MoisImpaye[];
-  /** Bail à plusieurs prix (périodes de loyer). */
-  loyer_a_periodes?: boolean;
-  //: Mois de bascule d'un transfert d'unité : rien n'est dû ici.
-  transfert_bascule?: boolean;
-  /** Bail résilié/terminé en cours de mois : la ligne reste dans le
-   *  mois couvert avec un badge « Bail terminé le X » (M7). */
-  bail_statut?: string;
-  bail_termine_le?: string | null;
-  //: LE bail courant (imm_documents) — clic = l'ouvrir.
-  document_id?: number | null;
-  // Frais ponctuels du mois (retard…) + solde cumulatif dû sur le bail.
-  frais_mois?: { id: number; montant: number; libelle: string }[];
-  solde_total?: number;
-  nb_relances: number;
-  derniere_relance_le: string | null;
-  // Prochain locataire (transition) — bail futur / en préparation.
-  prochain_nom?: string | null;
-  prochain_loyer?: number | null;
-  prochain_debut?: string | null;
-  prochain_statut?: string | null;
-  /** Ligne d'un immeuble en gestion externe : suivi PAR LOGEMENT, sans
-   *  locataire nominatif ni relance (bail_id vaut alors 0). */
-  gestion_externe?: boolean;
-};
+/** Ligne de l'écran : type partagé avec la nouvelle présentation
+ *  (`components/immobilier/loyers-nouvelle-vue.tsx`). */
+type Row = LigneLoyer;
 
 /** Ligne brute de /loyers/externes — repliée dans `Row` pour l'affichage. */
 type RowExterne = {
@@ -221,6 +174,38 @@ const RELOC_LABEL: Record<string, string> = {
   a_venir: "à venir"
 };
 
+/** La ligne répond-elle à la recherche ? `q` est déjà normalisé
+ *  (sans accents, en minuscules). « gestion externe » et « vacant » se
+ *  cherchent comme un nom ; les garants / contacts, le courriel et le
+ *  téléphone aussi (point 8 : « un virement de Jacques alors que le
+ *  locataire est Sébastien »). */
+function correspondALaRecherche(r: Row, q: string): boolean {
+  if (!q) return true;
+  const qChiffres = q.replace(/\D/g, "");
+  const hay = normaliserTexte(
+    `${r.locataire_name || ""} ${r.immeuble_name} ${
+      r.logement_numero || ""
+    } ${(r.garants || []).join(" ")} ${r.locataire_email || ""} ${
+      r.locataire_phone || ""
+    }${r.gestion_externe ? " gestion externe" : ""}${
+      r.etat === "vacant" ? " vacant" : ""
+    }`
+  );
+  const telChiffres = (r.locataire_phone || "").replace(/\D/g, "");
+  return (
+    hay.includes(q) ||
+    (qChiffres.length >= 3 && telChiffres.includes(qChiffres))
+  );
+}
+
+/** Ce qu'il faut pour défaire une saisie en un clic (nouvelle
+ *  présentation) : les versements créés d'un bail, ou l'état d'avant des
+ *  mois touchés d'un logement en gestion externe. */
+type SaisieAnnulable = { cle: number; texte: string } & (
+  | { genre: "bail"; ids: number[] }
+  | { genre: "externe"; logementId: number; avant: unknown[] }
+);
+
 function fmtMoney(n: number): string {
   return `${Math.round(n).toLocaleString("fr-CA")} $`;
 }
@@ -253,6 +238,11 @@ export default function PaiementsPage() {
   const { currentEntrepriseId } = useImmobilierLayout();
   // Refonte : la page s'appelle « Loyers » avec le nouveau menu.
   const titrePage = useNomPageImmobilier("Paiements", "Loyers");
+  // Refonte, lot « loyers » : nouvel écran ou écran actuel, selon
+  // Paramètres → « Présentation d'Immobilier ». Mêmes données, mêmes
+  // gestes ; seul le rendu change.
+  const presentation = usePresentationImmobilier();
+  const nouvelleVue = presentation.loyers;
   const [mois, setMois] = useState(currentMonth());
   const [data, setData] = useState<Overview | null>(null);
   const [externe, setExterne] = useState<OverviewExterne | null>(null);
@@ -266,6 +256,10 @@ export default function PaiementsPage() {
   //: Ligne dont la relance attend confirmation (aperçu ouvert).
   const [relanceApercu, setRelanceApercu] = useState<Row | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  //: Dernière saisie en un clic, annulable pendant 10 secondes
+  //: (nouvelle présentation seulement).
+  const [annulable, setAnnulable] = useState<SaisieAnnulable | null>(null);
+  const [annulationEnCours, setAnnulationEnCours] = useState(false);
   const [search, setSearch] = useState("");
   const [etatFilter, setEtatFilter] = useState<
     "all" | "paye" | "partiel" | "retard" | "attente" | "vacant"
@@ -344,10 +338,15 @@ export default function PaiementsPage() {
     fmt: fmtMoney,
     onChanged: load,
     onInfo: flash,
-    onError: setError
+    onError: setError,
+    nouvellePresentation: nouvelleVue
   });
 
-  async function enregistrerPaiement(row: Row, montant: number) {
+  async function enregistrerPaiement(
+    row: Row,
+    montant: number,
+    avecAnnulation = false
+  ) {
     setPayingId(row.bail_id);
     try {
       const today = new Date();
@@ -369,11 +368,29 @@ export default function PaiementsPage() {
         const t = await r.text();
         throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
       }
-      flash(
-        `Paiement enregistré — ${row.locataire_name || "locataire"} (${fmtMoney(
-          montant
-        )})`
-      );
+      // Nouvelle présentation : « Annuler » reste 10 secondes à l'écran
+      // et retire exactement les versements que ce clic vient de créer.
+      const ids = avecAnnulation
+        ? (((await r.json()) as { versements_crees?: number[] })
+            .versements_crees ?? [])
+        : [];
+      if (ids.length > 0) {
+        setToast(null);
+        setAnnulable({
+          cle: Date.now(),
+          genre: "bail",
+          ids,
+          texte: `Paiement enregistré : ${
+            row.locataire_name || "locataire"
+          }, ${argent(montant)}`
+        });
+      } else {
+        flash(
+          `Paiement enregistré — ${row.locataire_name || "locataire"} (${fmtMoney(
+            montant
+          )})`
+        );
+      }
       await load();
     } catch (e) {
       setError(`Paiement échoué : ${(e as Error).message}`);
@@ -489,7 +506,8 @@ export default function PaiementsPage() {
   async function enregistrerExterne(
     row: Row,
     montant: number,
-    cumul = false
+    cumul = false,
+    avecAnnulation = false
   ) {
     if (row.logement_id == null) return;
     setPayingId(busyKey(row));
@@ -507,9 +525,25 @@ export default function PaiementsPage() {
       });
       if (!r.ok)
         throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
-      flash(
-        `Paiement enregistré — ${row.immeuble_name} · ${row.logement_numero} (${fmtMoney(montant)})`
-      );
+      const avant = avecAnnulation
+        ? (((await r.json()) as { avant?: unknown[] }).avant ?? [])
+        : [];
+      if (avant.length > 0) {
+        setToast(null);
+        setAnnulable({
+          cle: Date.now(),
+          genre: "externe",
+          logementId: row.logement_id,
+          avant,
+          texte: `Paiement enregistré : ${row.immeuble_name}, logement ${
+            row.logement_numero ?? ""
+          }, ${argent(montant)}`
+        });
+      } else {
+        flash(
+          `Paiement enregistré — ${row.immeuble_name} · ${row.logement_numero} (${fmtMoney(montant)})`
+        );
+      }
       await load();
     } catch (e) {
       setError(`Paiement échoué : ${(e as Error).message}`);
@@ -593,6 +627,41 @@ export default function PaiementsPage() {
     });
   }
 
+  // « Annuler » du message de 10 secondes : défait la saisie d'un clic.
+  // Le serveur refuse si elle a été corrigée ou confirmée entre-temps.
+  async function annulerSaisie() {
+    const a = annulable;
+    if (!a || annulationEnCours) return;
+    setAnnulationEnCours(true);
+    try {
+      const r =
+        a.genre === "bail"
+          ? await authedFetch("/api/v1/immobilier/paiements/annuler-saisie", {
+              method: "POST",
+              body: JSON.stringify({ ids: a.ids })
+            })
+          : await authedFetch(
+              "/api/v1/immobilier/paiements-externes/annuler-saisie",
+              {
+                method: "POST",
+                body: JSON.stringify({
+                  logement_id: a.logementId,
+                  avant: a.avant
+                })
+              }
+            );
+      if (!r.ok) throw new Error(await lireErreur(r));
+      setAnnulable(null);
+      flash("Paiement annulé.");
+      await load();
+    } catch (e) {
+      setAnnulable(null);
+      setError(`Annulation impossible : ${(e as Error).message}`);
+    } finally {
+      setAnnulationEnCours(false);
+    }
+  }
+
   // Toutes les lignes du mois : interne + gestion externe.
   const allRows = useMemo(() => {
     const internes = data?.rows ?? [];
@@ -658,7 +727,6 @@ export default function PaiementsPage() {
     if (!data) return [];
     // Accents insensibles : « sebastien » trouve « Sébastien ».
     const q = normaliserTexte(search.trim());
-    const qChiffres = q.replace(/\D/g, "");
     const ordre: Record<string, number> = {
       retard: 0,
       partiel: 1,
@@ -670,29 +738,7 @@ export default function PaiementsPage() {
         if (immeubleFilter !== "all" && r.immeuble_id !== immeubleFilter)
           return false;
         if (etatFilter !== "all" && r.etat !== etatFilter) return false;
-        if (q) {
-          // « gestion externe » est cherchable comme un nom de locataire :
-          // c'est ce que la ligne affiche à sa place. Les garants /
-          // contacts, le courriel et le téléphone aussi (point 8 :
-          // « un virement de Jacques alors que le locataire est
-          // Sébastien »).
-          const hay = normaliserTexte(
-            `${r.locataire_name || ""} ${r.immeuble_name} ${
-              r.logement_numero || ""
-            } ${(r.garants || []).join(" ")} ${r.locataire_email || ""} ${
-              r.locataire_phone || ""
-            }${r.gestion_externe ? " gestion externe" : ""}${
-              r.etat === "vacant" ? " vacant" : ""
-            }`
-          );
-          const telChiffres = (r.locataire_phone || "").replace(/\D/g, "");
-          if (
-            !hay.includes(q) &&
-            !(qChiffres.length >= 3 && telChiffres.includes(qChiffres))
-          )
-            return false;
-        }
-        return true;
+        return correspondALaRecherche(r, q);
       })
       .sort(
         (a, b) =>
@@ -702,8 +748,105 @@ export default function PaiementsPage() {
       );
   }, [data, allRows, search, etatFilter, immeubleFilter]);
 
+  // Nouvelle présentation : les lignes de l'immeuble choisi qui répondent
+  // à la recherche. Le filtre par état (tuiles) et le regroupement par
+  // immeuble se font dans la vue, sur CE même ensemble : le chiffre d'une
+  // tuile est toujours celui de sa liste.
+  const lignesBase = useMemo(() => {
+    const q = normaliserTexte(search.trim());
+    return allRows.filter(
+      (r) =>
+        (immeubleFilter === "all" || r.immeuble_id === immeubleFilter) &&
+        correspondALaRecherche(r, q)
+    );
+  }, [allRows, search, immeubleFilter]);
+
   // Pastilles ✓✓ / ⚠ de la 2e validation, indexées par bail.
   const valMap = useMemo(() => indexValidations(valBanque), [valBanque]);
+
+  // Validation bancaire, sélecteur de mois et export : les mêmes dans
+  // l'en-tête des deux présentations.
+  const controles = (
+    <>
+      <CrochetFilBancaire
+        actif={!!valBanque?.active}
+        onChange={() => void load()}
+      />
+      <div className="inline-flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-900 px-1 py-1">
+        <button
+          type="button"
+          onClick={() => setMois((m) => shiftMonth(m, -1))}
+          className="btn-ghost btn-xs"
+          aria-label="Mois précédent"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <span className="min-w-[140px] text-center text-sm font-semibold capitalize text-white">
+          {monthLabel(mois)}
+        </span>
+        <button
+          type="button"
+          onClick={() => setMois((m) => shiftMonth(m, 1))}
+          className="btn-ghost btn-xs"
+          aria-label="Mois suivant"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      </div>
+      {/* Export CSV/Excel : le mois affiché (mêmes lignes, mêmes
+          états que le tableau, filtre immeuble compris) ou une
+          période du/au. */}
+      <BoutonExport
+        cibles={[
+          {
+            label: `Mois affiché (${monthLabel(mois)})`,
+            base: "/api/v1/immobilier/exports/paiements",
+            sujet: `paiements_${mois}`,
+            params: {
+              mois,
+              immeuble_id:
+                immeubleFilter !== "all" ? immeubleFilter : undefined,
+              entreprise_id: currentEntrepriseId ?? undefined
+            }
+          }
+        ]}
+        periode={{
+          base: "/api/v1/immobilier/exports/paiements",
+          sujet: "paiements_periode",
+          du: shiftMonth(mois, -11),
+          au: mois,
+          params: {
+            immeuble_id:
+              immeubleFilter !== "all" ? immeubleFilter : undefined,
+            entreprise_id: currentEntrepriseId ?? undefined
+          }
+        }}
+      />
+    </>
+  );
+
+  const messageErreur = error ? (
+    <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+      {error}
+    </p>
+  ) : null;
+
+  const apercuRelance = relanceApercu ? (
+    <ApercuEnvoiModal
+      titre="Relance de loyer"
+      description={
+        `Un rappel de loyer pour ${mois}. Le niveau s'incrémente ` +
+        "à chaque relance du même mois — ces envois servent de " +
+        "preuve au TAL, donc vérifie que le loyer est bien impayé."
+      }
+      destinataireNom={relanceApercu.locataire_name || "Locataire"}
+      destinataireEmail={relanceApercu.locataire_email}
+      libelleEnvoi="Envoyer la relance"
+      busy={relancingId === relanceApercu.bail_id}
+      onAnnuler={() => setRelanceApercu(null)}
+      onConfirmer={() => void envoyerRelance(relanceApercu)}
+    />
+  ) : null;
 
   return (
     <>
@@ -713,6 +856,68 @@ export default function PaiementsPage() {
           { label: titrePage }
         ]}
       />
+      {!presentation.pret ? (
+        // Le réglage de présentation n'est pas encore lu : on attend
+        // plutôt que de montrer un écran puis l'autre.
+        <div className="flex items-center justify-center p-16">
+          <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
+        </div>
+      ) : nouvelleVue ? (
+        <LoyersNouvelleVue
+          titre={titrePage}
+          mois={mois}
+          lignes={lignesBase}
+          nbLignesMois={allRows.length}
+          chargement={loading}
+          entrepriseChoisie={currentEntrepriseId != null}
+          recherche={search}
+          onRecherche={setSearch}
+          immeuble={immeubleFilter}
+          onImmeuble={setImmeubleFilter}
+          immeubles={immeubleOptions}
+          occupee={payingId}
+          relanceEnCours={relancingId}
+          controles={controles}
+          alerte={messageErreur}
+          soldeDepuis={data?.solde_depuis}
+          pastilleBanque={(l) =>
+            !l.gestion_externe &&
+            l.etat !== "vacant" &&
+            valMap.get(l.bail_id) ? (
+              <PastilleValidationBancaire
+                v={valMap.get(l.bail_id)}
+                bailId={l.bail_id}
+                mois={`${mois}-01`}
+                onChange={() => void load()}
+              />
+            ) : null
+          }
+          actions={{
+            // Le libellé du bouton EST le montant enregistré.
+            payer: (l, montant, cumul) =>
+              void (l.gestion_externe
+                ? enregistrerExterne(l, montant, cumul, true)
+                : enregistrerPaiement(l, montant, true)),
+            partiel: (l) =>
+              l.gestion_externe ? marquerPartielExterne(l) : marquerPartiel(l),
+            relancer: (l) => void relancer(l),
+            frais: (l) => void ajouterFrais(l),
+            corriger: (l) =>
+              l.gestion_externe ? corrigerExterne(l) : corriger(l),
+            tal: ouvrirTal,
+            renommer: renommerExterne
+          }}
+        >
+          {apercuRelance}
+          {/* Les avis de renouvellement ne s'affichent plus ici : ils
+              sont sur la page « Aujourd'hui » et sur « Renouvellements ». */}
+          <EncartValidationBancaire
+            etat={valBanque}
+            onChange={() => void load()}
+          />
+          <BandeauDepotARembourser entrepriseId={currentEntrepriseId} />
+        </LoyersNouvelleVue>
+      ) : (
       <div className="p-4 pb-28 lg:p-6 lg:pb-28">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-start gap-3">
@@ -729,69 +934,10 @@ export default function PaiementsPage() {
           </div>
 
           {/* Crochet fil bancaire (validation QuickBooks) + sélecteur de mois */}
-          <div className="flex items-center gap-2">
-            <CrochetFilBancaire
-              actif={!!valBanque?.active}
-              onChange={() => void load()}
-            />
-            <div className="inline-flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-900 px-1 py-1">
-              <button
-                type="button"
-                onClick={() => setMois((m) => shiftMonth(m, -1))}
-                className="btn-ghost btn-xs"
-                aria-label="Mois précédent"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-              <span className="min-w-[140px] text-center text-sm font-semibold capitalize text-white">
-                {monthLabel(mois)}
-              </span>
-              <button
-                type="button"
-                onClick={() => setMois((m) => shiftMonth(m, 1))}
-                className="btn-ghost btn-xs"
-                aria-label="Mois suivant"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </button>
-            </div>
-            {/* Export CSV/Excel : le mois affiché (mêmes lignes, mêmes
-                états que le tableau, filtre immeuble compris) ou une
-                période du/au. */}
-            <BoutonExport
-              cibles={[
-                {
-                  label: `Mois affiché (${monthLabel(mois)})`,
-                  base: "/api/v1/immobilier/exports/paiements",
-                  sujet: `paiements_${mois}`,
-                  params: {
-                    mois,
-                    immeuble_id:
-                      immeubleFilter !== "all" ? immeubleFilter : undefined,
-                    entreprise_id: currentEntrepriseId ?? undefined
-                  }
-                }
-              ]}
-              periode={{
-                base: "/api/v1/immobilier/exports/paiements",
-                sujet: "paiements_periode",
-                du: shiftMonth(mois, -11),
-                au: mois,
-                params: {
-                  immeuble_id:
-                    immeubleFilter !== "all" ? immeubleFilter : undefined,
-                  entreprise_id: currentEntrepriseId ?? undefined
-                }
-              }}
-            />
-          </div>
+          <div className="flex items-center gap-2">{controles}</div>
         </header>
 
-        {error ? (
-          <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
-            {error}
-          </p>
-        ) : null}
+        {messageErreur}
 
         {/* Tuiles de synthèse — suivent le filtre immeuble */}
         {kpi ? (
@@ -845,22 +991,7 @@ export default function PaiementsPage() {
           </div>
         ) : null}
 
-        {relanceApercu ? (
-          <ApercuEnvoiModal
-            titre="Relance de loyer"
-            description={
-              `Un rappel de loyer pour ${mois}. Le niveau s'incrémente ` +
-              "à chaque relance du même mois — ces envois servent de " +
-              "preuve au TAL, donc vérifie que le loyer est bien impayé."
-            }
-            destinataireNom={relanceApercu.locataire_name || "Locataire"}
-            destinataireEmail={relanceApercu.locataire_email}
-            libelleEnvoi="Envoyer la relance"
-            busy={relancingId === relanceApercu.bail_id}
-            onAnnuler={() => setRelanceApercu(null)}
-            onConfirmer={() => void envoyerRelance(relanceApercu)}
-          />
-        ) : null}
+        {apercuRelance}
         {/* « Bail manquant au dossier » ne s'affiche plus ici (retour
             Steven 2026-10-29) : c'est du suivi de bail, il reste sur la
             page Baux et la fiche immeuble. */}
@@ -1487,6 +1618,7 @@ export default function PaiementsPage() {
           gestion — pas de locataire nominatif, pas de relance.
         </p>
       </div>
+      )}
 
       <FraisCreditModal
         open={fraisPour != null}
@@ -1496,7 +1628,17 @@ export default function PaiementsPage() {
         onConfirm={confirmerFrais}
       />
       {actions.elements}
-      {toast ? (
+      {annulable ? (
+        <ToastAnnulable
+          key={annulable.cle}
+          texte={annulable.texte}
+          occupe={annulationEnCours}
+          onAnnuler={() => void annulerSaisie()}
+          onFin={() =>
+            setAnnulable((a) => (a?.cle === annulable.cle ? null : a))
+          }
+        />
+      ) : toast ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[1100] flex justify-center px-3">
           <div className="pointer-events-auto flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm text-emerald-100 shadow-lg">
             <CheckCircle2 className="h-4 w-4" />

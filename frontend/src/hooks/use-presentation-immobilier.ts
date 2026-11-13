@@ -30,7 +30,7 @@ const LOTS: LotPresentation[] = ["menu", "loyers", "baux", "fiches", "suivis"];
  *  `backend/app/services/immobilier_presentation.py`. */
 const DEFAUT: PresentationImmobilier = {
   menu: true,
-  loyers: false,
+  loyers: true,
   baux: false,
   fiches: false,
   suivis: false

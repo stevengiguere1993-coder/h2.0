@@ -202,7 +202,9 @@ def test_api_aujourdhui_compte_comme_les_pages(client, auth_headers, run):
     # Mêmes comptes que les vues où les lignes mènent.
     lo = client.get("/api/v1/immobilier/loyers/overview", headers=auth_headers).json()
     assert lo["nb_retards"] >= 1
-    assert par_cle["loyers"]["nb"] == lo["nb_retards"]
+    # La page Loyers réunit l'interne et la gestion externe (lot 2).
+    ext = client.get("/api/v1/immobilier/loyers/externes", headers=auth_headers).json()
+    assert par_cle["loyers"]["nb"] == lo["nb_retards"] + ext["nb_retards"]
     sans = client.get("/api/v1/immobilier/baux/sans-document", headers=auth_headers).json()
     assert sans["nb"] >= 1
     assert par_cle["baux_a_importer"]["nb"] == sans["nb"]

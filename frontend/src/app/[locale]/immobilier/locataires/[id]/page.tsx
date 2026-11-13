@@ -65,6 +65,8 @@ import {
   type PaiementRowBase
 } from "@/components/immobilier/paiement-modals";
 import { ImmobilierTopbar } from "../../layout";
+import { usePresentationImmobilier } from "@/hooks/use-presentation-immobilier";
+import { argent } from "@/lib/loyers-lecture";
 
 type Locataire = {
   id: number;
@@ -125,6 +127,10 @@ type DossierPaiement = {
   /** Confirmation de paiement envoyée au locataire (2026-11-13). */
   confirmation_envoyee_le?: string | null;
   confirmation_canal?: string | null;
+  /** Le MOIS de ce versement : ce qui était dû (loyer et lignes du
+   *  mois) et le total reçu, tous versements confondus. */
+  du_mois?: number | null;
+  recu_mois?: number | null;
 };
 
 /** Ligne d'un mois (frais, crédit, rabais du bail, loyer dû fixé à la
@@ -429,6 +435,9 @@ export default function LocataireDetailPage({
     kind: "ok" | "err";
     text: string;
   } | null>(null);
+  // Refonte, lot « loyers » : dans l'historique, la pastille décrit le
+  // MOIS (« Partiel : 750 $ sur 1 000 $ ») et non le versement.
+  const pastilleDuMois = usePresentationImmobilier().loyers;
   const histoActions = usePaiementActions<PaiementRowBase>({
     mois: new Date().toLocaleDateString("sv-SE").slice(0, 7),
     rows: [],
@@ -1219,7 +1228,19 @@ export default function LocataireDetailPage({
                             ) : null}
                           </td>
                           <td className="py-2.5 pr-3 text-right">
-                            {p.paye_le ? (
+                            {pastilleDuMois &&
+                            p.paye_le &&
+                            p.du_mois != null &&
+                            p.recu_mois != null &&
+                            p.recu_mois + 0.005 < p.du_mois ? (
+                              <span
+                                className="badge badge-amber"
+                                title="Le mois n'est pas couvert : total reçu sur ce qui était dû (loyer et lignes du mois)"
+                              >
+                                Partiel : {argent(p.recu_mois)} sur{" "}
+                                {argent(p.du_mois)}
+                              </span>
+                            ) : p.paye_le ? (
                               <span
                                 className={`badge ${
                                   p.en_retard

@@ -32,7 +32,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import and_, delete, func, or_, select, update
 
 from app.models.immobilier import bail_non_parallele, est_bail_parallele
@@ -4092,6 +4092,28 @@ async def locataire_dossier(
                 )
             )
 
+    # La pastille de l'historique décrit le MOIS (refonte d'Immobilier,
+    # lot 2) : chaque versement porte le dû de son mois (loyer à son prix
+    # de période + lignes du mois) et le total reçu pour ce mois.
+    recu_par_mois: dict[tuple[int, date], float] = {}
+    for pm_ in paiements:
+        cle_ = (pm_.bail_id, pm_.mois_couvert)
+        recu_par_mois[cle_] = recu_par_mois.get(cle_, 0.0) + pm_.montant
+    lignes_par_mois: dict[tuple[int, date], float] = {}
+    for f_ in frais_360:
+        cle_ = (f_.bail_id, f_.mois_couvert)
+        lignes_par_mois[cle_] = lignes_par_mois.get(cle_, 0.0) + f_.montant
+    for pm_ in paiements:
+        b0_ = bail_par_id_360.get(pm_.bail_id)
+        cle_ = (pm_.bail_id, pm_.mois_couvert)
+        if b0_ is not None and pm_.mois_couvert is not None:
+            pm_.du_mois = round(
+                _loyer_du_mois_bail(b0_, pm_.mois_couvert)
+                + lignes_par_mois.get(cle_, 0.0),
+                2,
+            )
+        pm_.recu_mois = round(recu_par_mois.get(cle_, 0.0), 2)
+
     # Avis d'augmentation / renouvellements de tous ses baux — le hub
     # locataire montre tout ce qui lui a été envoyé et où ça en est.
     renouvellements: list[DossierRenouvellement] = []
@@ -5571,14 +5593,42 @@ async def list_paiements(
     return [PaiementLoyerRead.model_validate(r) for r in rows]
 
 
+#: Fenêtre pendant laquelle l'auteur d'une saisie de loyer peut la défaire
+#: d'un clic (refonte d'Immobilier, lot 2 : « Annuler » reste 10 secondes
+#: à l'écran ; la marge couvre un réseau lent).
+DELAI_ANNULATION_SAISIE_S = 120
+
+
+class PaiementLoyerCree(PaiementLoyerRead):
+    """Réponse d'une saisie de loyer : le premier versement créé (comme
+    avant) et, en plus, TOUS ceux que la saisie a créés."""
+
+    #: Un versement par mois touché (mois visé, arriérés, avance) — ce
+    #: que ``POST /paiements/annuler-saisie`` défait d'un bloc.
+    versements_crees: List[int] = []
+
+
+class AnnulationSaisieIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: ``versements_crees`` de la saisie à défaire.
+    ids: List[int] = Field(..., min_length=1, max_length=60)
+
+
+class AnnulationSaisieOut(BaseModel):
+    bail_id: int
+    annules: int
+    montant: float
+
+
 @router.post(
     "/paiements",
-    response_model=PaiementLoyerRead,
+    response_model=PaiementLoyerCree,
     status_code=status.HTTP_201_CREATED,
 )
 async def create_paiement(
     payload: PaiementLoyerCreate, db: DBSession, user: CurrentUser
-) -> PaiementLoyerRead:
+) -> PaiementLoyerCree:
     """Enregistre un paiement de loyer. TROP-PAYÉ (retour Phil
     2026-07-22) : si le montant dépasse le restant dû du mois (loyer +
     frais − déjà reçu), le SURPLUS est réparti automatiquement sur les
@@ -5659,6 +5709,8 @@ async def create_paiement(
     loyer_ref = float(bail.loyer_mensuel or 0)
     obj: Optional[PaiementLoyer] = None
     derniere: Optional[PaiementLoyer] = None
+    #: Toutes les lignes de CETTE saisie (annulation d'un bloc).
+    crees: List[PaiementLoyer] = []
 
     def _poser(m: date, tranche: float) -> None:
         nonlocal obj, derniere, montant_total
@@ -5676,6 +5728,7 @@ async def create_paiement(
         if paiement_en_retard(m, row.paye_le, bail.jour_echeance):
             row.en_retard = True
         db.add(row)
+        crees.append(row)
         if obj is None:
             obj = row
         derniere = row
@@ -5750,6 +5803,7 @@ async def create_paiement(
         if paiement_en_retard(mois, row.paye_le, bail.jour_echeance):
             row.en_retard = True
         db.add(row)
+        crees.append(row)
         if obj is None:
             obj = row
         derniere = row
@@ -5797,6 +5851,7 @@ async def create_paiement(
             if paiement_en_retard(mois, row.paye_le, bail.jour_echeance):
                 row.en_retard = True
             db.add(row)
+            crees.append(row)
             if obj is None:
                 obj = row
             derniere = row
@@ -5840,7 +5895,93 @@ async def create_paiement(
 
     await db.commit()
     await db.refresh(obj)
-    return PaiementLoyerRead.model_validate(obj)
+    return PaiementLoyerCree(
+        **PaiementLoyerRead.model_validate(obj).model_dump(),
+        versements_crees=[r.id for r in crees if r.id is not None],
+    )
+
+
+@router.post("/paiements/annuler-saisie", response_model=AnnulationSaisieOut)
+async def annuler_saisie_paiement(
+    payload: AnnulationSaisieIn, db: DBSession, user: CurrentUser
+) -> AnnulationSaisieOut:
+    """Défait une saisie de loyer faite À L'INSTANT (bouton « Annuler »
+    affiché 10 secondes après « Marquer payé » — refonte d'Immobilier,
+    lot 2 : un clic par erreur se rattrape sans passer par « Corriger »).
+
+    Ce n'est PAS une suppression générale : seul l'auteur de la saisie
+    peut la défaire, dans les ``DELAI_ANNULATION_SAISIE_S`` secondes, et
+    seulement si aucun versement n'a été corrigé ni confirmé au locataire
+    entre-temps. Tous les versements de la saisie partent d'un bloc (mois
+    visé, arriérés, avance), ou aucun. Après le délai : « Corriger le
+    mois » (suppression unitaire, capacité ``paiement_loyer.delete``)."""
+    _require_volet(user)
+    ids = sorted(set(payload.ids))
+    rows = (
+        await db.execute(select(PaiementLoyer).where(PaiementLoyer.id.in_(ids)))
+    ).scalars().all()
+    deja_change = (
+        "Cette saisie a déjà été modifiée ou retirée : utilise "
+        "« Corriger le mois »."
+    )
+    if len(rows) != len(ids):
+        raise HTTPException(status_code=409, detail=deja_change)
+    bail_ids = {r.bail_id for r in rows}
+    if len(bail_ids) != 1:
+        raise HTTPException(
+            status_code=422,
+            detail="Les versements à annuler doivent venir d'une seule saisie.",
+        )
+    moi = (getattr(user, "email", None) or "").strip().lower()
+    limite = _now() - timedelta(seconds=DELAI_ANNULATION_SAISIE_S)
+    for r in rows:
+        if not moi or (r.cree_par or "").strip().lower() != moi:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Seule la personne qui vient de saisir ce paiement peut "
+                    "l'annuler ici : utilise « Corriger le mois »."
+                ),
+            )
+        cree_le = r.created_at
+        if cree_le is not None and cree_le.tzinfo is None:
+            cree_le = cree_le.replace(tzinfo=timezone.utc)
+        if cree_le is None or cree_le < limite:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Le délai d'annulation est passé : utilise "
+                    "« Corriger le mois »."
+                ),
+            )
+        if (
+            r.modifie_le is not None
+            or getattr(r, "confirmation_envoyee_le", None) is not None
+        ):
+            raise HTTPException(status_code=409, detail=deja_change)
+    bail_id = rows[0].bail_id
+    montant = round(sum(float(r.montant or 0) for r in rows), 2)
+    mois_touches = sorted(
+        {r.mois_couvert.isoformat() for r in rows if r.mois_couvert}
+    )
+    for r in rows:
+        await db.delete(r)
+    await db.flush()
+    bail = await db.get(Bail, bail_id)
+    if bail is not None:
+        await _recalc_paiement_score(db, bail)
+    await log_action(
+        db, user=user, action="paiements_loyer.saisie_annulee",
+        entity_type="paiements_loyer", entity_id=ids[0],
+        details={
+            "bail_id": bail_id,
+            "ids": ids,
+            "mois_couverts": mois_touches,
+            "montant": montant,
+        },
+    )
+    await db.commit()
+    return AnnulationSaisieOut(bail_id=bail_id, annules=len(rows), montant=montant)
 
 
 def _bail_couvre_mois(bail: Bail, mois: date) -> bool:
