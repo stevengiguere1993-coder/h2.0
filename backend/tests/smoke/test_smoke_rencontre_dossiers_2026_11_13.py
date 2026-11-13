@@ -122,7 +122,10 @@ class FauxIA:
                         "dossier_id": int(no),
                         "titre": titre.strip(),
                         "statut": "en_attente",
-                        "resume": "Ce dossier n'a pas été discuté dans cette rencontre.",
+                        "resume": (
+                            f"Il n'y a pas eu de discussion sur {titre.strip()} "
+                            "lors de cette rencontre."
+                        ),
                         "etat": f"Le dossier {titre.strip()} n'a pas été abordé.",
                         "prochaine_action": "À relancer",
                     }
@@ -491,6 +494,23 @@ def test_sans_non_aborde_ne_garde_que_ce_qui_a_ete_dit():
     assert f("Aucune mention de ce dossier lors de cette rencontre.") is None
     assert f("Point non abordé cette semaine.") is None
     assert f("Il n'a pas été question du déneigement.") is None
+    # Tournures relevées en prod (dossiers 2, 4 et 7).
+    assert (
+        f(
+            "Il n'y a pas eu de discussion sur l'accès de Zach à l'immeuble "
+            "Adam dans Kratos lors de cette rencontre."
+        )
+        is None
+    )
+    assert (
+        f(
+            "Les portes seront installées mercredi et les gars commenceront "
+            "jeudi, mais il n'y a pas de mention spécifique sur la réception "
+            "des électros."
+        )
+        == "Les portes seront installées mercredi et les gars commenceront jeudi."
+    )
+    assert f("Rien n'a été dit sur le camion.") is None
     assert f(None) is None and f("") is None
     assert (
         f(
@@ -509,6 +529,9 @@ def test_sans_non_aborde_ne_garde_que_ce_qui_a_ete_dit():
         "Le prêt n'a pas encore été discuté avec le banquier.",
         "Aucune nouvelle du couvreur.",
         "Les bugs n'ont pas été traités.",
+        "Phil n'a pas eu de discussion avec la banque.",
+        "Aucune discussion possible avec le voisin.",
+        "Zach n'a pas accès à l'immeuble Adam dans Kratos.",
     ):
         assert f(vrai) == vrai
 
