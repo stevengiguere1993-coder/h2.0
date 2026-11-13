@@ -837,6 +837,19 @@ class Bail(Base, TimestampUpdateMixin):
         String(255), nullable=True
     )
 
+    #: PÉRIODES DE LOYER (Steven / mvilliard 2026-11-13, bug 210 : « le
+    #: loyer était à 470, il est maintenant 500 — ça modifie le calcul
+    #: des mois passés ; il faudrait des périodes de prix »). Liste JSON
+    #: ``[{"depuis": "AAAA-MM-01", "loyer": 470.0}, …]`` triée : le loyer
+    #: d'un mois est celui de la dernière période commencée. NULL = un
+    #: seul prix, ``loyer_mensuel``, pour toute la durée du bail. Quand
+    #: des périodes existent, ``loyer_mensuel`` = le loyer EN VIGUEUR ce
+    #: mois-ci (resynchronisé). Service : ``services/loyer_periodes.py``.
+    #: Colonne additive → ensure_critical_columns / schema_check.
+    loyer_periodes_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+
     # Inclusions (chauffage, eau chaude, électricité, internet…)
     chauffage_inclus: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
@@ -1052,6 +1065,18 @@ class PaiementLoyer(Base):
     )
     modifie_le: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    #: CONFIRMATION DE PAIEMENT envoyée au locataire (Steven 2026-11-13,
+    #: point 14) : la nuit qui suit la saisie — les corrections faites
+    #: dans la journée sont donc déjà prises en compte. NULL = rien
+    #: envoyé. Colonne additive → ensure_critical_columns / schema_check.
+    confirmation_envoyee_le: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: Canal réellement utilisé : « courriel », « sms » ou « aucun »
+    #: (ni courriel ni cellulaire au dossier — rien n'est retenté).
+    confirmation_canal: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True
     )
 
 

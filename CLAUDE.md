@@ -413,3 +413,41 @@ du CSV EmployeurD restent à 0. Journées de Montréal (plus de bornes UTC).
 Défaut sans réglage = ancien cycle (dimanche → samedi, 19 avril 2026, 14 j).
 Les feuilles de temps du pôle Entreprises (`timesheets.py`, 14 jours
 alignés sur le lundi 2026-06-01) ne lisent PAS encore ce réglage.
+
+## Loyers — périodes de prix, arriérés, confirmation de nuit (2026-11-13)
+
+Steven : « il n'est pas possible de changer le prix d'un loyer sans que
+cela affecte le prix passé […] pouvoir mettre des périodes de prix »,
+« les mois non payés doivent être visibles sur le mois où nous sommes
+rendus », « ça dit que novembre, décembre et janvier sont payés, mais il
+est juste à jour », « dans la nuit, envoyer une confirmation de paiement
+au locataire (sans courriel : un message texte) ».
+
+1. **Périodes de loyer** (`app/services/loyer_periodes.py`,
+   `Bail.loyer_periodes_json`) : liste `[{depuis, loyer}]`, le loyer d'un
+   mois = la dernière période commencée ; NULL = prix unique.
+   `loyer_mensuel` reste le loyer EN VIGUEUR (resynchronisé par
+   `/loyers/overview`). Routes `GET/POST/DELETE
+   /immobilier/baux/{id}/loyer-periodes`. Tout calcul de dû passe par
+   `loyer_du_mois` / `loyers_echus` (`loyer_solde`) : ne JAMAIS refaire
+   « nombre de mois × loyer_mensuel ». Un avis de renouvellement appliqué
+   pose une période à sa date (il réécrivait le dû des mois passés).
+2. **Mois impayés** : `/loyers/overview` renvoie `mois_impayes` par ligne
+   (Σ restant = `solde_total`, un trop-perçu éponge les plus anciens) ;
+   affichés sous le solde (`CelluleLoyer`) et dans « Corriger ».
+3. **Arriérés d'abord** (`create_paiement`) : le mois visé prend sa part,
+   le surplus rembourse les mois ANTÉRIEURS impayés (plus ancien d'abord),
+   et seul le reste avance sur les mois à venir.
+4. **Confirmation de paiement** (`app/services/loyer_confirmations.py`,
+   automatisation `loyer_confirmations`, boucle démarrée avec l'app) :
+   vers 2 h (Montréal), un message par bail pour les versements saisis la
+   veille, à leur état final ; courriel (`envoyer_au_locataire`), sinon
+   texto (production seulement), sinon « aucun » ; marqué sur le versement
+   (`confirmation_envoyee_le`, `confirmation_canal`). Exclus : versements
+   sans `cree_par`, reçus plus de 10 jours avant la saisie, antérieurs à
+   `ACTIF_DEPUIS`, baux parallèles, gestion externe. C'est la SEULE
+   exception à « rien ne part vers un locataire sans un clic humain ».
+5. « Locataire parti » depuis « Corriger » ouvre « Mettre fin au bail »
+   en fin immédiate (date réelle, même passée). `GET /immobilier/baux/{id}`
+   existe enfin (dernière route du fichier, après `/baux/sans-document`) :
+   la fenêtre le lisait déjà pour le dépôt et recevait 405.

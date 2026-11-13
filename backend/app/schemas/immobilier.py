@@ -990,6 +990,10 @@ class DossierPaiement(BaseModel):
     modifie_par: Optional[str] = None
     modifie_le: Optional[datetime] = None
     created_at: Optional[datetime] = None
+    #: Confirmation de paiement envoyée au locataire (la nuit suivante) :
+    #: quand, et par quel canal (« courriel », « sms », « aucun »).
+    confirmation_envoyee_le: Optional[datetime] = None
+    confirmation_canal: Optional[str] = None
 
 
 class LocataireCommunicationCreate(BaseModel):

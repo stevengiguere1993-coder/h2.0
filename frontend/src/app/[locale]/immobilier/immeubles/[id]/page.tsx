@@ -77,6 +77,7 @@ import { BoutonExport } from "@/components/immobilier/bouton-export";
 import {
   BadgeGestionExterne,
   CelluleLoyer,
+  type MoisImpaye,
   FraisCreditModal,
   moisCouvertPourPaiement,
   montantMarquerPaye,
@@ -3674,6 +3675,10 @@ type LoyerRow = {
   frais_mois?: { id: number; montant: number; libelle: string }[];
   paiements?: PaiementMois[];
   solde_total?: number;
+  /** Détail du solde : chaque mois encore dû (2026-11-13). */
+  mois_impayes?: MoisImpaye[];
+  /** Bail à plusieurs prix (périodes de loyer). */
+  loyer_a_periodes?: boolean;
   solde_anterieur?: boolean;
   transfert_bascule?: boolean;
 };
@@ -4220,6 +4225,8 @@ function PaiementsMoisSection({
                         loyer={r.loyer_mensuel}
                         recu={r.montant_paye}
                         solde={r.solde_total}
+                        moisImpayes={r.mois_impayes}
+                        moisAffiche={mois}
                         fmt={fmtCurrency}
                         echeance={echeanceLabel(r.jour_echeance)}
                         frais={r.frais_mois}
@@ -4326,7 +4333,7 @@ function PaiementsMoisSection({
                           onClick={() => corriger(r)}
                           disabled={payingId === r.bail_id}
                           title="Corriger : versements du mois (montant, date, retrait) et loyer dû du mois"
-                          className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/70 transition hover:bg-white/10 disabled:opacity-50"
                         >
                           Corriger
                         </button>
@@ -4338,7 +4345,7 @@ function PaiementsMoisSection({
                           onClick={() => corriger(r)}
                           disabled={payingId === r.bail_id}
                           title="Corriger : versements du mois (montant, date, retrait) et loyer dû du mois"
-                          className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/70 transition hover:bg-white/10 disabled:opacity-50"
                         >
                           Corriger
                         </button>

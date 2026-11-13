@@ -725,6 +725,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.services.brief_matin import boucle as brief_matin_loop
 
     brief_matin_task = asyncio.create_task(brief_matin_loop())
+    # Confirmation de paiement de loyer au locataire, la nuit qui suit la
+    # saisie (Steven 2026-11-13) — même principe : boucle autonome.
+    from app.services.loyer_confirmations import boucle as loyer_confirmations_loop
+
+    loyer_confirmations_task = asyncio.create_task(loyer_confirmations_loop())
     try:
         yield
     finally:
@@ -736,6 +741,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             paiements_auto_task.cancel()
         if not brief_matin_task.done():
             brief_matin_task.cancel()
+        if not loyer_confirmations_task.done():
+            loyer_confirmations_task.cancel()
         await close_db()
 
 

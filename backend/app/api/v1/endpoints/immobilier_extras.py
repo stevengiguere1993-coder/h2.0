@@ -2154,7 +2154,18 @@ async def renouvellements_overview(
                 # Application au bail À LA DATE EFFECTIVE — lazy, à la
                 # consultation (pas de cron ; rien ne part au locataire).
                 if last_ren.nouveau_loyer is not None:
-                    b.loyer_mensuel = last_ren.nouveau_loyer
+                    # Nouvelle PÉRIODE de loyer à la date de l'avis : les
+                    # mois d'avant gardent l'ancien prix (2026-11-13 —
+                    # avant, l'augmentation réécrivait le dû des mois
+                    # passés et fabriquait un faux solde).
+                    from app.services.loyer_periodes import ajouter_periode
+
+                    ajouter_periode(
+                        b,
+                        last_ren.nouvelle_date_debut,
+                        float(last_ren.nouveau_loyer),
+                        today,
+                    )
                 # La période de l'AVIS remplace celle du bail, même si
                 # elle la RACCOURCIT (retour Phil 2026-07-31 : avis
                 # jusqu'en 2027 sur un bail qui allait jusqu'en 2028).

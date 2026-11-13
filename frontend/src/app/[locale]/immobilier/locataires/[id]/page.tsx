@@ -52,6 +52,8 @@ import {
 } from "@/components/immobilier/fin-bail";
 import {
   CelluleLoyer,
+  confirmationLibelle,
+  type MoisImpaye,
   FraisCreditModal,
   moisCouvertPourPaiement,
   montantMarquerPaye,
@@ -120,6 +122,9 @@ type DossierPaiement = {
   modifie_par?: string | null;
   modifie_le?: string | null;
   created_at?: string | null;
+  /** Confirmation de paiement envoyée au locataire (2026-11-13). */
+  confirmation_envoyee_le?: string | null;
+  confirmation_canal?: string | null;
 };
 
 /** Ligne d'un mois (frais, crédit, rabais du bail, loyer dû fixé à la
@@ -1207,6 +1212,11 @@ export default function LocataireDetailPage({
                                 Corrigé par {p.modifie_par}
                               </div>
                             ) : null}
+                            {confirmationLibelle(p) ? (
+                              <div className="text-[10px] text-white/60">
+                                {confirmationLibelle(p)}
+                              </div>
+                            ) : null}
                           </td>
                           <td className="py-2.5 pr-3 text-right">
                             {p.paye_le ? (
@@ -1829,6 +1839,8 @@ type LoyerMoisRow = {
   frais_mois?: { id: number; montant: number; libelle: string }[];
   paiements?: PaiementMois[];
   solde_total?: number;
+  /** Détail du solde : chaque mois encore dû (2026-11-13). */
+  mois_impayes?: MoisImpaye[];
   nb_relances: number;
   derniere_relance_le: string | null;
 };
@@ -2146,6 +2158,8 @@ function LoyersMoisSection({
                     loyer={r.loyer_mensuel}
                     recu={r.montant_paye}
                     solde={r.solde_total}
+                    moisImpayes={r.mois_impayes}
+                    moisAffiche={mois}
                     fmt={money}
                     frais={r.frais_mois}
                     paiements={r.paiements}
@@ -2218,7 +2232,7 @@ function LoyersMoisSection({
                   onClick={() => corriger(r)}
                   disabled={busyId === r.bail_id}
                   title="Corriger : versements du mois (montant, date, retrait) et loyer dû du mois"
-                  className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/70 transition hover:bg-white/10 disabled:opacity-50"
                 >
                   Corriger
                 </button>
