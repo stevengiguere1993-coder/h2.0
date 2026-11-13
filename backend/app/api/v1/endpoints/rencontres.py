@@ -16,6 +16,11 @@
   POST   /api/v1/rencontres/importer               import unifié (hub v2)
   POST   /api/v1/rencontres/{id}/actions-vers-taches
   POST   /api/v1/rencontres/{id}/envoyer          rapport par courriel
+  GET    /api/v1/rencontres/recherche?q=          recherche dans TOUTES
+                                                  les rencontres (sans IA)
+  POST   /api/v1/rencontres/demander              question à Kratos sur
+                                                  les rencontres (réponse
+                                                  IA sourcée)
 """
 
 from __future__ import annotations
@@ -258,6 +263,69 @@ async def create_rencontre(
     await db.commit()
     await db.refresh(r)
     return RencontreRead.model_validate(r)
+
+
+# ── Recherche dans toutes les rencontres (2026-11-13) ────────────
+
+
+_PAGE_RENCONTRES = "entreprises.rencontres"
+
+
+async def _garde_page_rencontres(db, user) -> None:
+    """La recherche lit TOUTES les rencontres (conseils d'actionnaires
+    compris) : réservée à qui voit la page Rencontres."""
+    from app.services.assistant_catalogue import utilisateur_a_acces_page
+
+    if not await utilisateur_a_acces_page(db, user, _PAGE_RENCONTRES):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Accès à la page Rencontres requis.",
+        )
+
+
+class DemanderIn(BaseModel):
+    question: str = Field(..., min_length=2, max_length=2000)
+    entreprise_id: Optional[int] = None
+
+
+@router.get(
+    "/recherche",
+    summary="Cherche un sujet dans toutes les rencontres (passages sourcés, sans IA)",
+)
+async def rechercher_rencontres(
+    db: DBSession,
+    user: CurrentUser,
+    q: str = Query(..., min_length=2, max_length=2000),
+    entreprise_id: Optional[int] = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=60),
+) -> dict:
+    from app.services.rencontre_recherche import rechercher
+
+    await _garde_page_rencontres(db, user)
+    res = await rechercher(db, q, entreprise_id=entreprise_id, limite=limit)
+    res.pop("_choisis", None)
+    res.pop("_donnees", None)
+    return res
+
+
+@router.post(
+    "/demander",
+    summary=(
+        "Pose une question à Kratos sur les rencontres : a-t-on discuté "
+        "de X, où en est le dossier Y (réponse IA + sources)"
+    ),
+)
+async def demander_rencontres(
+    data: DemanderIn,
+    db: DBSession,
+    user: CurrentUser,
+) -> dict:
+    from app.services.rencontre_recherche import repondre
+
+    await _garde_page_rencontres(db, user)
+    return await repondre(
+        db, data.question.strip(), entreprise_id=data.entreprise_id
+    )
 
 
 @router.get("/{rencontre_id}", response_model=RencontreRead)

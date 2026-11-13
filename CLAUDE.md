@@ -413,3 +413,22 @@ du CSV EmployeurD restent à 0. Journées de Montréal (plus de bornes UTC).
 Défaut sans réglage = ancien cycle (dimanche → samedi, 19 avril 2026, 14 j).
 Les feuilles de temps du pôle Entreprises (`timesheets.py`, 14 jours
 alignés sur le lundi 2026-06-01) ne lisent PAS encore ce réglage.
+
+## Rencontres — questions sur toutes les rencontres (2026-11-13)
+
+Steven : « si je pose une question à Kratos sur un élément, il doit être
+capable de regarder dans chacune des rencontres et me dire si nous avons
+discuté de quelque chose ou l'avancement d'un dossier ». Service
+`app/services/rencontre_recherche.py` : la question est réduite à ses
+mots-clés (accents / pluriels près, mots vides et mots « méta » comme
+rencontre / discuté / dossier retirés), chaque rencontre est découpée en
+passages (résumé global, notes, résumé IA de chaque section — décisions,
+actions, questions, risques — et transcript par tranches) notés par
+rareté des mots, puis l'IA répond à partir des meilleurs passages remis
+en ordre CHRONOLOGIQUE (la plus récente fait foi) en citant « Rencontre
+#ID (date) ». Sans IA ou IA en panne : la liste des passages, jamais de
+blocage. Routes `GET /rencontres/recherche?q=` (sans IA, pour le
+connecteur) et `POST /rencontres/demander`, réservées à qui voit la page
+`entreprises.rencontres` (403 sinon) ; bloc « Demander à Kratos » en
+haut de Entreprises → Rencontres ; le Centre d'aide (`/help/ask`) reçoit
+aussi ces passages, avec la même garde. Aucune table ni colonne ajoutée.

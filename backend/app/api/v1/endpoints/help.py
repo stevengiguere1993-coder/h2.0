@@ -211,7 +211,12 @@ immobilier, gestion locative, courtage, développement logiciel (devlog).
 CONTEXTE FOURNI
 On peut te transmettre quelques appels récents qui mentionnent les mots-clés \
 de la question (volet téléphonie). Utilise-les seulement s'ils sont \
-pertinents, et cite l'Appel #ID si tu t'appuies sur leur contenu."""
+pertinents, et cite l'Appel #ID si tu t'appuies sur leur contenu.
+On peut aussi te transmettre des passages des RENCONTRES (réunions \
+d'équipe, conseils d'actionnaires) : pour « a-t-on parlé de X » ou « où \
+en est le dossier Y », réponds à partir d'eux en citant la Rencontre #ID \
+et sa date, et précise que la recherche complète est sur la page \
+Entreprises → Rencontres (« Demander à Kratos »)."""
 
 
 @router.post(
@@ -238,17 +243,47 @@ async def ask(
         log.warning("help: call search failed: %s", exc)
         call_matches = []
 
+    # Rencontres (2026-11-13) : « a-t-on discuté de X, où en est le
+    # dossier Y » — passages des rencontres qui couvrent la question,
+    # seulement pour qui voit la page Rencontres (conseils
+    # d'actionnaires).
+    rencontres_ctx = ""
+    try:
+        from app.services.assistant_catalogue import utilisateur_a_acces_page
+        from app.services.rencontre_recherche import contexte_pour_assistant
+
+        if await utilisateur_a_acces_page(db, user, "entreprises.rencontres"):
+            rencontres_ctx = await contexte_pour_assistant(
+                db, body.question, limite=6
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("help: recherche rencontres échouée: %s", exc)
+
+    blocs_ctx: List[str] = []
     if call_matches:
         calls_ctx = "\n\n---\n".join(
             _format_call_for_context(c) for c in call_matches
         )
-        user_content = (
+        blocs_ctx.append(
             "Voici quelques appels récents qui mentionnent les mots-clés "
             "de la question. Utilise-les si pertinents pour répondre, "
             "ignore-les sinon. Cite les Appel #ID si tu t'appuies sur "
             "leur contenu.\n\n"
-            f"{calls_ctx}\n\n---\n\n"
-            f"Question de l'utilisateur : {body.question}"
+            f"{calls_ctx}"
+        )
+    if rencontres_ctx:
+        blocs_ctx.append(
+            "Voici des passages des RENCONTRES (réunions, conseils) qui "
+            "parlent du sujet, en ordre chronologique. Si la question "
+            "porte sur ce qui a été discuté ou sur l'avancement d'un "
+            "dossier, réponds à partir d'eux (la plus récente fait foi) "
+            "et cite « Rencontre #ID (date) » ; ignore-les sinon.\n\n"
+            f"{rencontres_ctx}"
+        )
+    if blocs_ctx:
+        user_content = (
+            "\n\n---\n\n".join(blocs_ctx)
+            + f"\n\n---\n\nQuestion de l'utilisateur : {body.question}"
         )
     else:
         user_content = body.question
