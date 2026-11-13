@@ -384,6 +384,52 @@ connecteur) et `POST /rencontres/demander`, réservées à qui voit la page
 haut de Entreprises → Rencontres ; le Centre d'aide (`/help/ask`) reçoit
 aussi ces passages, avec la même garde. Aucune table ni colonne ajoutée.
 
+## Rencontres — dossiers suivis, doublons, consignes (2026-11-13)
+
+Steven : « un tableau de vue d'ensemble des différents dossiers en cours
+que nous discutons lors des rencontres », choix « tout automatique » avec
+« une IA […] pour lister et éliminer les doublons », puis « que les
+tableaux, les résumés et les bilans s'ajustent à travers le temps selon mes
+différentes demandes de modifications ». Entreprises → Rencontres, onglets
+« Dossiers » et « Consignes » ; routes `/rencontres/dossiers…` et
+`/rencontres/consignes…` (`endpoints/rencontre_dossiers.py`, routeur inclus
+AVANT celui des rencontres), réservées à qui voit `entreprises.rencontres`.
+
+1. **Dossiers** (`app/services/rencontre_dossiers.py`) : à chaque rencontre
+   l'IA reçoit la liste des dossiers déjà suivis et s'y RATTACHE avant d'en
+   créer (`dossier_id`, sinon même clé de titre `cle_titre`, sinon alias).
+   Une mention par rencontre et par dossier (`rencontre_dossier_mentions`)
+   = l'historique ; statut, dernier état, prochaine action et échéance du
+   dossier sont RECALCULÉS depuis la mention la plus récente (`recalculer`).
+   Une correction à la main est retenue : titre / responsable / entreprise
+   pour toujours (`champs_manuels_json`), l'état jusqu'à ce qu'une rencontre
+   plus récente en reparle (`etat_manuel_le`). `Rencontre.dossiers_empreinte`
+   (sha256 du contenu) dit quelles rencontres sont à (re)lire ; « oublié » =
+   ouvert sans discussion depuis `JOURS_OUBLI` (21 jours).
+2. **Doublons** (`_verifier_doublons`) : même clé de titre et entreprise
+   compatible → fusion d'office ; groupes proposés par l'IA → fusion d'office
+   seulement si « certain » ET un mot distinctif commun ET entreprise
+   compatible, sinon paire « à trancher » (`rencontre_dossier_doublons`).
+   Fusion DOUCE (`fusionne_dans_id`, mentions déplacées avec
+   `dossier_origine_id`) : elle se défait d'un clic, et une paire « gardés
+   séparés » n'est plus jamais proposée ni fusionnée.
+3. **Consignes** (`app/services/rencontre_consignes.py`, table
+   `rencontre_consignes`, portée `tout` / `resumes` / `dossiers`) : chaque
+   demande de modification est retenue et redonnée à l'IA (`bloc_consignes`)
+   pour les résumés de section et global (donc le rapport), le tableau des
+   dossiers, les doublons et « Demander à Kratos ». Boîte « Demander une
+   modification » sous le résumé d'une rencontre et sous le tableau : elle
+   enregistre la consigne puis réapplique. Retirer un dossier détecté par
+   l'IA laisse une consigne « ne pas suivre », sinon il reviendrait.
+4. **Lecture en fond** : un appel à l'IA par rencontre dépasse le délai du
+   proxy Next (30 s), donc l'écran appelle `POST
+   /rencontres/dossiers/analyser?en_fond=true` (réponse immédiate) et suit
+   `analyse.en_cours` dans `GET /rencontres/dossiers`. Même course
+   (`_course`) après un résumé global (`planifier_analyse`) et au cron
+   quotidien (`pour_cron`, `all-daily`) ; une seule à la fois par processus,
+   une rencontre illisible est sautée (pas retentée dans la course) et reste
+   « à lire ». Sans IA : rien n'est écrit, rien ne bloque.
+
 ## Espace investisseur — cascade, rôle, documents (2026-11-07)
 
 Steven : « Vincent ne voit aucun projet alors qu'il détient 30 % de

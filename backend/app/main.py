@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.db.session import (
     close_db,
     ensure_assistant_tables,
+    ensure_rencontre_dossier_tables,
     ensure_contrat_gestion_tables,
     ensure_critical_columns,
     ensure_esign_tables,
@@ -325,6 +326,14 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning(
             "ensure_assistant_tables failed during startup: %s", exc
+        )
+
+    # Dossiers suivis en rencontres + consignes à Kratos — idem.
+    try:
+        await ensure_rencontre_dossier_tables()
+    except Exception as exc:
+        logger.warning(
+            "ensure_rencontre_dossier_tables failed during startup: %s", exc
         )
 
     # Backfill borné (M9a, audit 2026-08-13) : chaque logement VACANT

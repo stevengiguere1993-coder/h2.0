@@ -219,8 +219,11 @@ async def sync_teams_meetings(
 
         # 4) Résumés IA (best-effort — la fiche reste utile sans).
         try:
+            from app.services.rencontre_consignes import bloc_consignes
+
+            consignes = await bloc_consignes(db, "resumes")
             summary = await summarize_section(
-                section.title, transcript, None
+                section.title, transcript, None, consignes=consignes
             )
             section.ai_summary_json = json.dumps(
                 summary, ensure_ascii=False
@@ -231,7 +234,8 @@ async def sync_teams_meetings(
                         "title": section.title,
                         **(summary if isinstance(summary, dict) else {}),
                     }
-                ]
+                ],
+                consignes=consignes,
             )
             rencontre.status = "done"
         except Exception as exc:  # noqa: BLE001
