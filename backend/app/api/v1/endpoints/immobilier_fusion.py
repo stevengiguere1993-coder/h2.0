@@ -27,7 +27,6 @@ from app.schemas.immobilier import (
     FusionImmeublesApercu,
     FusionImmeublesOptions,
     FusionImmeublesResultat,
-    FusionImmeublesSimulation,
 )
 from app.services.immeuble_fusion import FusionImpossible, apercu_fusion, fusionner
 from app.services.permissions_service import require_capability
@@ -94,42 +93,6 @@ async def apercu_fusion_immeubles(
 
 
 @router.post(
-    "/immeubles/{immeuble_id}/fusion/simulation",
-    response_model=FusionImmeublesSimulation,
-    summary="Simuler une fusion : la fiche telle qu'elle serait, rien n'est écrit",
-)
-async def simuler_fusion_immeubles(
-    immeuble_id: int,
-    payload: FusionImmeublesOptions,
-    db: DBSession,
-    user: PeutSupprimer,
-) -> FusionImmeublesSimulation:
-    """« L'action est irréversible, nous devrions avoir un visuel de ce que
-    ça ressemble » (Steven 2026-11-13) : la fusion est jouée dans la
-    transaction avec les mêmes options, la fiche résultante est relevée,
-    puis tout est annulé."""
-    cible, source = await _paire(db, user, immeuble_id, payload.source_immeuble_id)
-    try:
-        resume = await fusionner(
-            db,
-            cible,
-            source,
-            prefixe_numeros=payload.prefixe_numeros,
-            exclure_hypotheques=payload.exclure_hypotheques,
-            hypotheques=payload.hypotheques,
-            purchase_price=payload.purchase_price,
-            simuler=True,
-        )
-    except FusionImpossible as exc:
-        await db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
-    except Exception:
-        await db.rollback()
-        raise
-    return FusionImmeublesSimulation(**resume)
-
-
-@router.post(
     "/immeubles/{immeuble_id}/fusion",
     response_model=FusionImmeublesResultat,
     summary="Fusionner un autre immeuble dans celui-ci (la source est supprimée)",
@@ -148,7 +111,6 @@ async def fusionner_immeubles(
             source,
             prefixe_numeros=payload.prefixe_numeros,
             exclure_hypotheques=payload.exclure_hypotheques,
-            hypotheques=payload.hypotheques,
             purchase_price=payload.purchase_price,
         )
     except FusionImpossible as exc:

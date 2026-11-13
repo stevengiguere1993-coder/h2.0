@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import List, Literal, Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -1329,10 +1329,6 @@ class FusionImmeublesOptions(BaseModel):
     #: cible (hypothèque conjointe saisie deux fois) : on ne les transfère
     #: pas, elles disparaissent avec la source.
     exclure_hypotheques: bool = False
-    #: « additionner » (moitiés d'un même prêt fondues en une seule),
-    #: « transferer » (telles quelles) ou « exclure » (saisies en double).
-    #: Absent = selon ``exclure_hypotheques`` (rétrocompatible).
-    hypotheques: Optional[Literal["additionner", "transferer", "exclure"]] = None
     #: Prix d'achat de la fiche fusionnée (vide = celui de la cible).
     purchase_price: Optional[float] = Field(default=None, ge=0)
 
@@ -1346,10 +1342,6 @@ class FusionHypothequeApercu(BaseModel):
     conjointe: bool = False
     #: Même prêteur et même montant qu'une hypothèque de la cible.
     en_double: bool = False
-    #: Hypothèque de la cible avec laquelle elle s'additionnerait (même
-    #: prêteur, même taux, aucune conjointe) et le montant obtenu.
-    additionnable_avec: Optional[int] = None
-    montant_additionne: Optional[float] = None
 
 
 class FusionImmeubleResume(BaseModel):
@@ -1370,57 +1362,12 @@ class FusionImmeublesApercu(BaseModel):
     prefixe_suggere: str = ""
     hypotheques_source: List[FusionHypothequeApercu] = []
     hypotheques_en_double: int = 0
-    hypotheques_additionnables: int = 0
     purchase_price_suggere: Optional[float] = None
-
-
-class FusionLogementEtat(BaseModel):
-    id: int
-    numero: str
-    adresse: str = ""
-    status: Optional[str] = None
-
-
-class FusionHypothequeEtat(BaseModel):
-    id: int
-    preteur: str
-    rang: Optional[int] = None
-    montant_initial: float = 0
-    paiement_mensuel: Optional[float] = None
-    taux_pct: Optional[float] = None
-    part_pct: float = 100.0
-
-
-class FusionFicheEtat(BaseModel):
-    """La fiche cible telle qu'elle serait après la fusion."""
-
-    id: int
-    name: str
-    address: str
-    address_secondaire: Optional[str] = None
-    nb_logements: Optional[int] = None
-    purchase_price: Optional[float] = None
-    logements: List[FusionLogementEtat] = []
-    hypotheques: List[FusionHypothequeEtat] = []
-    total_hypotheques: float = 0
-    total_paiements_mensuels: float = 0
-
-
-class FusionImmeublesSimulation(BaseModel):
-    """Fusion jouée puis annulée : rien n'a été écrit."""
-
-    deplaces: dict[str, int] = {}
-    hypotheques_exclues: int = 0
-    hypotheques_additionnees: int = 0
-    immeuble_supprime_id: int
-    immeuble_supprime_nom: str
-    resultat: FusionFicheEtat
 
 
 class FusionImmeublesResultat(BaseModel):
     immeuble: ImmeubleRead
     deplaces: dict[str, int] = {}
     hypotheques_exclues: int = 0
-    hypotheques_additionnees: int = 0
     immeuble_supprime_id: int
     immeuble_supprime_nom: str

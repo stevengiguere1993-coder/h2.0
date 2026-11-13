@@ -2580,19 +2580,18 @@ async def create_logement(
     force: bool = False,
 ) -> LogementRead:
     _require_volet(user)
-    imm = await _get_immeuble_or_404(db, payload.immeuble_id)
+    await _get_immeuble_or_404(db, payload.immeuble_id)
     # Doublons (retour Phil 2026-09-09 : « 8906-C » trois fois) : même
     # numéro (casse/espaces ignorés) dans le même immeuble → 409, sauf
-    # ?force=true après un avertissement explicite. Immeuble à deux
-    # adresses (Steven 2026-11-13) : seulement à la même adresse civique.
+    # ?force=true après un avertissement explicite.
     if not force:
-        cle = _cle_logement(payload.numero, payload.adresse, imm)
+        cle = _cle_numero(payload.numero)
         for lg_exist in (
             await db.execute(
                 select(Logement).where(Logement.immeuble_id == payload.immeuble_id)
             )
         ).scalars().all():
-            if _cle_logement(lg_exist.numero, lg_exist.adresse, imm) == cle:
+            if _cle_numero(lg_exist.numero) == cle:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=(
@@ -2608,18 +2607,6 @@ async def create_logement(
     await db.commit()
     await db.refresh(obj)
     return LogementRead.model_validate(obj)
-
-
-def _cle_logement(
-    numero: Optional[str], adresse: Optional[str], imm: Optional[Immeuble]
-) -> tuple:
-    """Clé de doublon d'un logement : son adresse civique (la sienne,
-    sinon celle de l'immeuble) + son numéro. Un immeuble à deux adresses
-    (710 Legendre / 9085 Millen) a deux « 1 » distincts."""
-    from app.services.immeuble_fusion import norm_adresse
-
-    adr = (adresse or "").strip() or ((imm.address if imm else "") or "").strip()
-    return (norm_adresse(adr), _cle_numero(numero))
 
 
 def _cle_numero(numero: Optional[str]) -> str:
@@ -2654,10 +2641,7 @@ async def logements_doublons(db: DBSession, user: CurrentUser) -> List[LogementD
     }
     groupes: dict[tuple[int, str], list[Logement]] = {}
     for lg in logements:
-        groupes.setdefault(
-            (lg.immeuble_id, _cle_logement(lg.numero, lg.adresse, imms.get(lg.immeuble_id))),
-            [],
-        ).append(lg)
+        groupes.setdefault((lg.immeuble_id, _cle_numero(lg.numero)), []).append(lg)
     out: List[LogementDoublonGroupe] = []
     for (imm_id, _cle), lgs in groupes.items():
         if len(lgs) < 2:
@@ -2936,10 +2920,7 @@ async def create_logements_lot(
     renvoyés dans ``ignores``. Les valeurs du ``modele`` s'appliquent à
     tous ; chaque fiche se corrige ensuite individuellement."""
     _require_volet(user)
-    imm_lot = await _get_immeuble_or_404(db, immeuble_id)
-    # Les nouveaux logements prennent l'adresse de l'immeuble : seuls les
-    # numéros existants À CETTE adresse comptent (immeuble à deux adresses).
-    adr_lot = _cle_logement("", None, imm_lot)[0]
+    await _get_immeuble_or_404(db, immeuble_id)
     existants = {
         _cle_numero(lg.numero)
         for lg in (
@@ -2947,7 +2928,6 @@ async def create_logements_lot(
                 select(Logement).where(Logement.immeuble_id == immeuble_id)
             )
         ).scalars().all()
-        if _cle_logement(lg.numero, lg.adresse, imm_lot)[0] == adr_lot
     }
     modele = (payload.modele or LogementLotModele()).model_dump()
     crees: List[Logement] = []
