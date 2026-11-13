@@ -599,3 +599,23 @@ de l'ancien (`reassigne`). Le texto de partage ne contient JAMAIS le
 code, seulement le lien `/m/codes`. Écrans : fiche immeuble / logement
 (`CodesAccesSection`), bloc « Accès » du BT (`CodesDuBon`), page
 cellulaire `/m/codes` (`MesCodes`).
+
+## Investisseurs — saisies manuelles : apports hors QB, prêts (2026-11-13)
+
+Steven : « Éric Brabant et Vincent Clark […] ont investi chacun 150 000 $
+longtemps avant QB » et « un investisseur peut faire un prêt
+supplémentaire à la cie : montant, % remis, intérêts mensuels ». Console
+admin → fiche investisseur (`/investisseur/admin/investisseur/{id}`),
+bouton « Modifier » sur chaque projet (`app/services/invest_saisies.py`).
+1. **Apports hors QuickBooks** : `InvestFlux.source = "hors_qbo"` (apport,
+   remboursement ou distribution, daté). La synchro QB ne remplace QUE
+   les flux `qbo` ; le relevé, qui prend le solde des avances QB comme
+   capital actuel, y AJOUTE le net hors QB (`_net_hors_qbo_de`). Ils
+   comptent dans le TRI. La saisie crée la participation au besoin.
+2. **Prêts** (`inv_prets`, `InvestPret`) : intérêt SIMPLE, mensuel =
+   montant × taux annuel / 12, couru = mensuel × mois complets depuis le
+   prêt (jusqu'au remboursement daté). Hors parts, hors équité, hors TRI ;
+   montrés dans le portail (`prets_en_cours`, `interets_mensuels`).
+Routes `/invest/admin/investisseurs/{user_id}/projets/{eid}/apports-hors-qbo`
+et `/prets` (POST), `…/apports-hors-qbo/{id}` et `…/prets/{id}`
+(PATCH / DELETE) ; chacune renvoie la fiche d'accès.
