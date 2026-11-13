@@ -228,6 +228,17 @@ def _mots(d: RencontreDossier) -> set[str]:
     return m
 
 
+def _mots_sujet(d: RencontreDossier, lieu: set[str]) -> set[str]:
+    """Mots du titre et des alias qui disent le SUJET du dossier : sans
+    ceux du lieu (immeuble, projet, entreprise), que partagent tous les
+    dossiers d'un même immeuble (« Demande de déboursé 1660 Saint-Clément »
+    et « Rencontre inspectrice 1660 Saint-Clément » ne sont pas un doublon)."""
+    m: set[str] = set()
+    for c in _cles(d):
+        m |= c
+    return m - lieu
+
+
 def _entreprises_compatibles(a: RencontreDossier, b: RencontreDossier) -> bool:
     return (
         a.entreprise_id is None
@@ -1128,6 +1139,10 @@ immeuble ou entreprise, mêmes personnes, états qui se suivent).
 - Deux dossiers sur le même immeuble ou la même personne mais sur des \
 objets différents ne sont PAS des doublons (« Électros Adam » et \
 « Locataires Adam » sont deux dossiers).
+- Deux démarches ou deux étapes d'un même chantier ne sont PAS des \
+doublons non plus (« Demande de déboursé 1660 Saint-Clément » et \
+« Rencontre inspectrice 1660 Saint-Clément » sont deux dossiers) : un \
+doublon est le MÊME objet nommé autrement.
 - Dans le doute, mets "probable" ou ne mets rien. Respecte les consignes \
 du dirigeant quand il y en a.
 
@@ -1262,11 +1277,17 @@ async def _verifier_doublons(db, *, avec_ia: bool = True) -> dict:
                     if d.id == gagnant.id or separes(d.id, gagnant.id):
                         continue
                     # Fusion d'office seulement si les deux dossiers
-                    # partagent au moins un mot distinctif ; sinon c'est
-                    # un humain qui tranche.
+                    # partagent au moins un mot de SUJET (le lieu ne
+                    # compte pas) ; sinon c'est un humain qui tranche.
+                    lieu = set(
+                        cle_titre(d.contexte or "")
+                        | cle_titre(gagnant.contexte or "")
+                        | cle_titre(noms_ent.get(d.entreprise_id) or "")
+                        | cle_titre(noms_ent.get(gagnant.entreprise_id) or "")
+                    )
                     if (
                         certain
-                        and (_mots(d) & _mots(gagnant))
+                        and (_mots_sujet(d, lieu) & _mots_sujet(gagnant, lieu))
                         and _entreprises_compatibles(d, gagnant)
                     ):
                         await fusionner(db, d, gagnant, auto=True, raison=raison)

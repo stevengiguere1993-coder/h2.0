@@ -342,6 +342,42 @@ def test_doublons_fusion_d_office_proposition_et_annulation(client, auth_headers
     assert r.status_code == 409
 
 
+def test_meme_immeuble_n_est_pas_un_mot_commun(client, auth_headers, ia):
+    """En prod, « Demande déboursé 1660 Saint-Clément » a été fusionné
+    d'office dans « Rencontre inspectrice ville 1660 Saint-Clément » : le
+    seul mot commun était l'immeuble. Le lieu n'est pas le sujet."""
+    a = _creer(
+        client, auth_headers, "Demande déboursé 4410 Wqrtz", contexte="4410 Wqrtz"
+    )
+    b = _creer(
+        client, auth_headers, "Inspectrice ville 4410 Wqrtz", contexte="4410 Wqrtz"
+    )
+    c = _creer(client, auth_headers, "Fenêtres 4410 Wqrtz", contexte="4410 Wqrtz")
+    d = _creer(
+        client, auth_headers, "Remplacement fenêtres 4410 Wqrtz", contexte="4410 Wqrtz"
+    )
+    ia.doublons = [
+        {"ids": [a, b], "certitude": "certain", "raison": "Même chantier"},
+        {"ids": [c, d], "certitude": "certain", "raison": "Mêmes fenêtres"},
+    ]
+    r = client.post("/api/v1/rencontres/dossiers/doublons/verifier", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    fusionnes = {x["dossier_id"] for x in r.json()["fusionnes"]}
+    # Même immeuble, sujets différents : à trancher, pas fusionné.
+    assert not (fusionnes & {a, b})
+    # Même immeuble ET même sujet : fusionné d'office.
+    assert len(fusionnes & {c, d}) == 1
+
+    vivants = {x["id"] for x in client.get(
+        "/api/v1/rencontres/dossiers", headers=auth_headers
+    ).json()["dossiers"]}
+    assert {a, b} <= vivants
+    proposes = client.get(
+        "/api/v1/rencontres/dossiers/doublons", headers=auth_headers
+    ).json()["proposes"]
+    assert any({p["a"]["id"], p["b"]["id"]} == {a, b} for p in proposes)
+
+
 def test_fusion_additionne_l_historique_et_se_defait(client, auth_headers, ia):
     _analyser_tout(client, auth_headers)
     g = _dossier(client, auth_headers, "Embauche grutier")
