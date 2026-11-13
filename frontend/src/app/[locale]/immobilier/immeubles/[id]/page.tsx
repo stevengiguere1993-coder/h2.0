@@ -456,6 +456,9 @@ export default function ImmeubleDetailPage({
     nb_logements_en_chambres: "",
     nb_chambres: "",
     purchase_price: "",
+    //: Valeur actuelle (Steven 2026-11-13) : pas une colonne de la fiche,
+    //: le serveur l'enregistre comme une évaluation datée du jour.
+    valeur_actuelle: "",
     urgence_phone: "",
     //: Entreprise propriétaire (INC). Vit dans imm_immeuble_ownerships,
     //: pas sur l'immeuble → enregistrée par un appel séparé.
@@ -579,13 +582,14 @@ export default function ImmeubleDetailPage({
   // prime ; sinon la plus récente (aligné backend /financials).
   const lastEval = useMemo(() => {
     if (!evaluations || evaluations.length === 0) return null;
-    const ref = evaluations.find((e) => e.is_reference);
-    if (ref) return ref;
-    return [...evaluations].sort(
+    const tri = [...evaluations].sort(
       (a, b) =>
         b.date_evaluation.localeCompare(a.date_evaluation) || b.id - a.id
-    )[0];
+    );
+    return tri.find((e) => e.is_reference) || tri[0];
   }, [evaluations]);
+  // Valeur proposée dans « Modifier l'immeuble » : celle qui est affichée.
+  const valeurActuelleInitiale = lastEval ? String(lastEval.valeur) : "";
 
   // Balance = saisie > calculée (amortissement au jour J, backend) >
   // montant initial — même priorité que le backend (balance_effective).
@@ -708,6 +712,7 @@ export default function ImmeubleDetailPage({
       purchase_price: immeuble.purchase_price
         ? String(immeuble.purchase_price)
         : "",
+      valeur_actuelle: valeurActuelleInitiale,
       urgence_phone: immeuble.urgence_phone || "",
       owner_entreprise_id: ownerId != null ? String(ownerId) : "",
       gestion_externe: !!immeuble.gestion_externe,
@@ -762,6 +767,17 @@ export default function ImmeubleDetailPage({
           ? `${editForm.collecte_depuis.slice(0, 7)}-01`
           : null
       };
+      // Valeur actuelle : envoyée seulement si elle a été changée (le
+      // serveur en fait une évaluation datée d'aujourd'hui, de référence).
+      const valeurSaisie = editForm.valeur_actuelle.trim();
+      const valeurChangee =
+        valeurSaisie !== "" && valeurSaisie !== valeurActuelleInitiale;
+      if (valeurChangee) {
+        const v = parseNombre(valeurSaisie);
+        if (Number.isNaN(v) || v < 0)
+          throw new Error("la valeur actuelle n'est pas un montant valide");
+        body.valeur_actuelle = v;
+      }
       // Externe → interne (Phil 2026-10-02 / bug 2026-10-04) : ce n'est
       // PAS un simple PATCH — les unités occupées ont besoin d'un bail.
       // On enregistre les autres champs SANS toucher au mode, puis on
@@ -824,6 +840,8 @@ export default function ImmeubleDetailPage({
           );
         setOwnerships((await resOwner.json()) as Ownership[]);
       }
+      // La valorisation, l'équité et l'onglet Évaluations suivent.
+      if (valeurChangee) setReloadKey((k) => k + 1);
       setShowEdit(false);
     } catch (e) {
       setActionErr(`Modification échouée : ${(e as Error).message}`);
@@ -1587,6 +1605,30 @@ export default function ImmeubleDetailPage({
                   />
                 </EditField>
               </div>
+              <EditField label="Valeur actuelle ($)">
+                <input
+                  inputMode="decimal"
+                  value={editForm.valeur_actuelle}
+                  onChange={(e) =>
+                    setEditForm((f) => ({
+                      ...f,
+                      valeur_actuelle: e.target.value
+                    }))
+                  }
+                  placeholder="ex. 3160000"
+                  className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500"
+                />
+                <p className="mt-1 text-[11px] text-white/60">
+                  {lastEval
+                    ? `Valeur retenue aujourd'hui : ${fmtCurrency(lastEval.valeur)} (${EVAL_KIND_LABEL[lastEval.kind] || lastEval.kind} du ${lastEval.date_evaluation}). `
+                    : "Aucune évaluation pour l'instant. "}
+                  Changer ce montant ajoute une évaluation datée
+                  d&apos;aujourd&apos;hui, retenue comme référence : la
+                  valorisation et l&apos;équité la suivent, et les
+                  évaluations précédentes restent dans l&apos;onglet
+                  Évaluations.
+                </p>
+              </EditField>
               <div className="grid grid-cols-2 gap-3">
                 <EditField label="dont loués en chambres">
                   <input type="number" min={0} value={editForm.nb_logements_en_chambres} onChange={(e) => setEditForm((f) => ({ ...f, nb_logements_en_chambres: e.target.value }))} className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500" />
