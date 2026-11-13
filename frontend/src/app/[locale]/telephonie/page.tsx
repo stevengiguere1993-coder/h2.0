@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ArrowLeft,
   Bot,
   Building2,
   CheckCircle2,
@@ -34,6 +35,11 @@ import { PushNotificationsToggle } from "@/components/push-notifications-toggle"
 import { RecordingPlayer } from "@/components/recording-player";
 import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { useTelephonieLayout } from "./_client-shell";
+import {
+  closeTelephonie,
+  navigateTelephonie,
+  useTelephonieUrl
+} from "./_url-state";
 import { AcquisitionPanel } from "@/components/communications/acquisition-panel";
 import { AutomationsPanel } from "@/components/communications/automations-panel";
 import { RoutingPanel } from "@/components/telephonie/routing-panel";
@@ -194,7 +200,11 @@ export default function TelephonieHome() {
   const [smsThreads, setSmsThreads] = useState<SmsThread[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [drawerCallId, setDrawerCallId] = useState<number | null>(null);
+  // Détail d'appel et conversation ouverte vivent dans l'URL
+  // (?call= / ?fil=) : « retour » sur le téléphone les referme.
+  const urlParams = useTelephonieUrl();
+  const drawerCallId = Number(urlParams.get("call")) || null;
+  const smsParam = urlParams.get("sms");
   const [turnsByCallId, setTurnsByCallId] = useState<
     Record<number, CallTurnRow[]>
   >({});
@@ -336,40 +346,75 @@ export default function TelephonieHome() {
   );
 
   const openDrawer = useCallback(
-    async (callId: number) => {
-      setDrawerCallId(callId);
-      if (turnsByCallId[callId]) return;
+    (callId: number) => {
+      navigateTelephonie({ section, call: String(callId) });
+    },
+    [section]
+  );
+
+  // Transcription de l'appel ouvert (à l'ouverture comme à l'arrivée
+  // par un lien de notification /telephonie?call={id}).
+  useEffect(() => {
+    if (!drawerCallId || turnsByCallId[drawerCallId]) return;
+    let cancelled = false;
+    void (async () => {
       try {
-        const res = await authedFetch(`/api/v1/voice/calls/${callId}/turns`);
+        const res = await authedFetch(
+          `/api/v1/voice/calls/${drawerCallId}/turns`
+        );
         if (!res.ok) return;
         const data = (await res.json()) as CallTurnRow[];
-        setTurnsByCallId((prev) => ({ ...prev, [callId]: data }));
+        if (!cancelled) {
+          setTurnsByCallId((prev) => ({ ...prev, [drawerCallId]: data }));
+        }
       } catch {
         /* ignore */
       }
-    },
-    [turnsByCallId]
-  );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [drawerCallId, turnsByCallId]);
 
-  // Deep-link : une notification cloche pointe vers /telephonie?call={id}.
-  // Dès que la liste d'appels est chargée, on ouvre directement le drawer
-  // du bon appel et on bascule sur l'onglet Appels — pour atterrir
-  // exactement sur l'info concernée (ex. le message vocal).
-  const deepLinkDone = useRef(false);
+  // Lien de notification d'un texto (/telephonie?sms={id}) : on ouvre
+  // la conversation de cet expéditeur.
   useEffect(() => {
-    if (deepLinkDone.current || calls.length === 0) return;
-    const raw = new URLSearchParams(window.location.search).get("call");
-    if (!raw) {
-      deepLinkDone.current = true;
+    if (!smsParam) return;
+    const smsId = Number(smsParam);
+    const known = smsThreads.find((t) => t.last_message.id === smsId);
+    if (known) {
+      navigateTelephonie(
+        { section: "messages", fil: known.peer_e164, sms: null },
+        { replace: true }
+      );
       return;
     }
-    const callId = Number(raw);
-    if (Number.isFinite(callId) && calls.some((c) => c.id === callId)) {
-      deepLinkDone.current = true;
-      setSection("appels");
-      void openDrawer(callId);
-    }
-  }, [calls, openDrawer, setSection]);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await authedFetch(
+          `/api/v1/voice/sms?sms_id=${encodeURIComponent(smsParam)}&limit=1`
+        );
+        const rows = res.ok ? ((await res.json()) as SmsRow[]) : [];
+        const m = rows[0];
+        if (cancelled) return;
+        const peer = m
+          ? m.direction === "outbound"
+            ? m.to_e164
+            : m.from_e164
+          : null;
+        navigateTelephonie(
+          { section: "messages", fil: peer, sms: null },
+          { replace: true }
+        );
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [smsParam, smsThreads]);
 
   useEffect(() => {
     let cancelled = false;
@@ -491,12 +536,24 @@ export default function TelephonieHome() {
           <CallsSection
             calls={calls}
             search={search}
+            onlyMissed={urlParams.get("filtre") === "manques"}
+            onToggleMissed={(on) =>
+              navigateTelephonie(
+                { filtre: on ? "manques" : null },
+                { replace: true }
+              )
+            }
             onOpenCall={openDrawer}
           />
         ) : null}
 
         {section === "messages" ? (
-          <MessagesSection threads={smsThreads} onReload={() => void reload()} />
+          <MessagesSection
+            threads={smsThreads}
+            selected={urlParams.get("fil")}
+            composing={urlParams.get("nouveau") === "1"}
+            onReload={() => void reload()}
+          />
         ) : null}
 
         {section === "numeros" ? (
@@ -536,9 +593,10 @@ export default function TelephonieHome() {
 
       {drawerCall ? (
         <CallDrawer
+          key={drawerCall.id}
           call={drawerCall}
           turns={turnsByCallId[drawerCall.id]}
-          onClose={() => setDrawerCallId(null)}
+          onClose={() => closeTelephonie({ call: null })}
         />
       ) : null}
 
@@ -775,6 +833,12 @@ function DashboardSection({
           value={String(missedToday + voicemailToday)}
           subtitle={`${missedToday} non-rep · ${voicemailToday} voicemail`}
           tone="amber"
+          onClick={() =>
+            navigateTelephonie(
+              { section: "appels", filtre: "manques" },
+              { reset: true }
+            )
+          }
         />
         <KpiCard
           icon={<ShieldCheck className="h-4 w-4" />}
@@ -881,12 +945,9 @@ function DashboardSection({
                   {/* Bouton « Rappeler » direct si l'appel a généré
                       une demande de callback (intent=callback ou
                       manqué). Sinon, juste le badge intent. */}
-                  {c.intent === "callback" ||
-                  c.status === "no-answer" ||
-                  c.status === "busy" ||
-                  c.status === "failed" ? (
+                  {needsCallback(c) ? (
                     <CallbackInlineButton
-                      targetE164={c.peer_e164 || c.from_e164}
+                      targetE164={callbackTarget(c)}
                       entityType={c.entity_type || undefined}
                       entityId={c.entity_id || undefined}
                     />
@@ -1295,29 +1356,35 @@ function BootstrapButton({ onDone }: { onDone: () => void }) {
 function CallsSection({
   calls,
   search,
+  onlyMissed,
+  onToggleMissed,
   onOpenCall
 }: {
   calls: CallRow[];
   search: string;
+  onlyMissed: boolean;
+  onToggleMissed: (on: boolean) => void;
   onOpenCall: (id: number) => void;
 }) {
   const q = search.trim().toLowerCase();
-  const filtered = q
-    ? calls.filter(
-        (c) =>
-          c.from_e164.toLowerCase().includes(q) ||
-          (c.peer_e164 || "").toLowerCase().includes(q) ||
-          (c.contact_name || "").toLowerCase().includes(q) ||
-          (c.intent || "").toLowerCase().includes(q) ||
-          (c.lead_name || "").toLowerCase().includes(q) ||
-          (c.caller_kind || "").toLowerCase().includes(q) ||
-          (c.status || "").toLowerCase().includes(q)
-      )
-    : calls;
+  const missedCount = calls.filter(isMissed).length;
+  const filtered = calls.filter((c) => {
+    if (onlyMissed && !isMissed(c)) return false;
+    if (!q) return true;
+    return (
+      c.from_e164.toLowerCase().includes(q) ||
+      (c.peer_e164 || "").toLowerCase().includes(q) ||
+      (c.contact_name || "").toLowerCase().includes(q) ||
+      (c.intent || "").toLowerCase().includes(q) ||
+      (c.lead_name || "").toLowerCase().includes(q) ||
+      (c.caller_kind || "").toLowerCase().includes(q) ||
+      (c.status || "").toLowerCase().includes(q)
+    );
+  });
 
   return (
-    <section className="mt-5 rounded-2xl border border-brand-800 bg-brand-900 p-5">
-      <div className="flex items-center justify-between">
+    <section className="mt-5 rounded-2xl border border-brand-800 bg-brand-900 p-3 sm:p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="flex items-center gap-2 text-sm font-bold text-white">
           <PhoneCall className="h-4 w-4 text-teal-300" />
           Journal d&apos;appels
@@ -1325,78 +1392,229 @@ function CallsSection({
             {filtered.length}
           </span>
         </h2>
+        {/* Filtre rapide : les appels manqués à rappeler. */}
+        <div className="inline-flex rounded-lg border border-brand-800 bg-brand-950 p-0.5 text-[12px]">
+          <button
+            type="button"
+            onClick={() => onToggleMissed(false)}
+            className={`rounded-md px-3 py-1.5 font-semibold transition ${
+              !onlyMissed
+                ? "bg-brand-800 text-white"
+                : "text-white/60 hover:text-white"
+            }`}
+          >
+            Tous
+          </button>
+          <button
+            type="button"
+            onClick={() => onToggleMissed(true)}
+            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 font-semibold transition ${
+              onlyMissed
+                ? "bg-rose-500/15 text-rose-300"
+                : "text-white/60 hover:text-white"
+            }`}
+          >
+            <PhoneOff className="h-3.5 w-3.5" />
+            Manqués
+            {missedCount > 0 ? (
+              <span className="rounded-full bg-rose-500/15 px-1.5 text-[10px] text-rose-300">
+                {missedCount}
+              </span>
+            ) : null}
+          </button>
+        </div>
       </div>
 
       {filtered.length === 0 ? (
-        <EmptyHint>Aucun appel ne correspond à ta recherche.</EmptyHint>
+        <EmptyHint>
+          {onlyMissed
+            ? "Aucun appel manqué parmi les derniers appels."
+            : "Aucun appel ne correspond à ta recherche."}
+        </EmptyHint>
       ) : (
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead className="text-left text-white/40">
-              <tr>
-                <th className="py-1.5 font-normal">Date</th>
-                <th className="py-1.5 font-normal">De</th>
-                <th className="py-1.5 font-normal">Identifié</th>
-                <th className="py-1.5 font-normal">Intent</th>
-                <th className="py-1.5 font-normal">Statut</th>
-                <th className="py-1.5 text-right font-normal">Durée</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-brand-800">
-              {filtered.map((c) => (
-                <tr
-                  key={c.id}
-                  className="cursor-pointer hover:bg-brand-800/30"
+        <>
+          {/* Téléphone : une carte par appel, bouton « Rappeler » à
+              portée de pouce sur chaque appel manqué. */}
+          <ul className="mt-3 divide-y divide-brand-800 md:hidden">
+            {filtered.map((c) => (
+              <li key={c.id} className="flex items-center gap-2 py-2.5">
+                <button
+                  type="button"
                   onClick={() => onOpenCall(c.id)}
+                  className="flex min-w-0 flex-1 items-center gap-3 text-left"
                 >
-                  <td className="py-2 text-white/60">
-                    {formatDateTime(c.started_at)}
-                  </td>
-                  <td className="py-2">
-                    <div className="flex items-center gap-2">
-                      <DirectionIcon dir={c.direction} status={c.status} />
-                      <span className="font-mono text-white">
-                        {c.peer_e164 || c.from_e164}
-                      </span>
-                      {c.was_blocked ? <Tag tone="rose">blocked</Tag> : null}
-                      {c.was_vip ? <Tag tone="emerald">vip</Tag> : null}
-                      {c.was_voicemail ? <Tag tone="amber">vm</Tag> : null}
+                  <DirectionIcon dir={c.direction} status={c.status} />
+                  <div className="min-w-0 flex-1">
+                    <div
+                      className={`truncate text-sm font-semibold ${
+                        isMissed(c) ? "text-rose-300" : "text-white"
+                      }`}
+                    >
+                      {c.contact_name || c.peer_e164 || c.from_e164}
                     </div>
-                  </td>
-                  <td className="py-2">
-                    {c.contact_name ? (
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-white/90">{c.contact_name}</span>
-                        {c.caller_kind && c.caller_kind !== "unknown" ? (
-                          <CallerKindBadge kind={c.caller_kind} />
-                        ) : null}
-                      </div>
-                    ) : c.caller_kind && c.caller_kind !== "unknown" ? (
-                      <CallerKindBadge kind={c.caller_kind} />
-                    ) : (
-                      <span className="text-white/30">—</span>
-                    )}
-                  </td>
-                  <td className="py-2">
-                    {c.intent ? (
-                      <IntentBadge intent={c.intent} />
-                    ) : (
-                      <span className="text-white/30">—</span>
-                    )}
-                  </td>
-                  <td className="py-2">
-                    <StatusBadge status={c.status} />
-                  </td>
-                  <td className="py-2 text-right text-white/80">
-                    {c.duration_sec != null ? `${c.duration_sec}s` : "—"}
-                  </td>
+                    <div className="truncate text-[12px] text-white/60">
+                      {c.contact_name
+                        ? `${c.peer_e164 || c.from_e164} · `
+                        : ""}
+                      {formatDateTime(c.started_at)}
+                      {c.was_voicemail ? " · message vocal" : ""}
+                      {c.duration_sec != null && !isMissed(c)
+                        ? ` · ${c.duration_sec}s`
+                        : ""}
+                    </div>
+                  </div>
+                </button>
+                <CallActions call={c} />
+              </li>
+            ))}
+          </ul>
+
+          <div className="mt-3 hidden overflow-x-auto md:block">
+            <table className="w-full text-xs">
+              <thead className="text-left text-white/40">
+                <tr>
+                  <th className="py-1.5 font-normal">Date</th>
+                  <th className="py-1.5 font-normal">De</th>
+                  <th className="py-1.5 font-normal">Identifié</th>
+                  <th className="py-1.5 font-normal">Intent</th>
+                  <th className="py-1.5 font-normal">Statut</th>
+                  <th className="py-1.5 text-right font-normal">Durée</th>
+                  <th className="py-1.5 text-right font-normal">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-brand-800">
+                {filtered.map((c) => (
+                  <tr
+                    key={c.id}
+                    className="cursor-pointer hover:bg-brand-800/30"
+                    onClick={() => onOpenCall(c.id)}
+                  >
+                    <td className="py-2 text-white/60">
+                      {formatDateTime(c.started_at)}
+                    </td>
+                    <td className="py-2">
+                      <div className="flex items-center gap-2">
+                        <DirectionIcon dir={c.direction} status={c.status} />
+                        <span className="font-mono text-white">
+                          {c.peer_e164 || c.from_e164}
+                        </span>
+                        {c.was_blocked ? <Tag tone="rose">blocked</Tag> : null}
+                        {c.was_vip ? <Tag tone="emerald">vip</Tag> : null}
+                        {c.was_voicemail ? <Tag tone="amber">vm</Tag> : null}
+                      </div>
+                    </td>
+                    <td className="py-2">
+                      {c.contact_name ? (
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-white/90">{c.contact_name}</span>
+                          {c.caller_kind && c.caller_kind !== "unknown" ? (
+                            <CallerKindBadge kind={c.caller_kind} />
+                          ) : null}
+                        </div>
+                      ) : c.caller_kind && c.caller_kind !== "unknown" ? (
+                        <CallerKindBadge kind={c.caller_kind} />
+                      ) : (
+                        <span className="text-white/30">—</span>
+                      )}
+                    </td>
+                    <td className="py-2">
+                      {c.intent ? (
+                        <IntentBadge intent={c.intent} />
+                      ) : (
+                        <span className="text-white/30">—</span>
+                      )}
+                    </td>
+                    <td className="py-2">
+                      <StatusBadge status={c.status} />
+                    </td>
+                    <td className="py-2 text-right text-white/80">
+                      {c.duration_sec != null ? `${c.duration_sec}s` : "—"}
+                    </td>
+                    <td className="py-2 text-right">
+                      <CallActions call={c} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </section>
+  );
+}
+
+/** Appel manqué = appel ENTRANT sans réponse (non répondu, occupé,
+ *  échec, raccroché) ou laissé en message vocal. */
+function isMissed(c: CallRow): boolean {
+  if (c.direction === "outbound") return false;
+  return (
+    c.was_voicemail ||
+    c.status === "no-answer" ||
+    c.status === "busy" ||
+    c.status === "failed" ||
+    c.status === "canceled"
+  );
+}
+
+/** Appel à rappeler : manqué, ou l'appelant a demandé un rappel. */
+function needsCallback(c: CallRow): boolean {
+  return isMissed(c) || c.intent === "callback";
+}
+
+/** Numéro à rappeler : celui laissé à Léa s'il y en a un, sinon le
+ *  numéro de l'appelant (ou du destinataire pour un appel sortant). */
+function callbackTarget(c: CallRow): string {
+  return (
+    c.lead_callback_phone ||
+    c.peer_e164 ||
+    (c.direction === "outbound" ? c.to_e164 : c.from_e164)
+  );
+}
+
+/** Ouvre la conversation texto avec ce numéro (section Messages). */
+function openSmsWith(peer: string) {
+  navigateTelephonie({ section: "messages", fil: peer }, { reset: true });
+}
+
+/** Actions d'une ligne d'appel : rappel en un clic (mis en avant si
+ *  l'appel est manqué) et texto. Les clics ne déclenchent pas
+ *  l'ouverture du détail de la ligne. */
+function CallActions({ call }: { call: CallRow }) {
+  const target = callbackTarget(call);
+  const peer = call.peer_e164 || target;
+  return (
+    <span
+      className="inline-flex shrink-0 items-start justify-end gap-1.5"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {needsCallback(call) ? (
+        <CallbackInlineButton
+          targetE164={target}
+          entityType={call.entity_type || undefined}
+          entityId={call.entity_id || undefined}
+        />
+      ) : (
+        <CallButton
+          targetE164={target}
+          entityType={call.entity_type || undefined}
+          entityId={call.entity_id || undefined}
+          label="Appeler"
+          variant="icon"
+        />
+      )}
+      {peer && peer.startsWith("+") ? (
+        <button
+          type="button"
+          onClick={() => openSmsWith(peer)}
+          title={`Texter ${peer}`}
+          aria-label={`Texter ${peer}`}
+          className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-brand-700 bg-brand-950 text-white/70 transition hover:text-white"
+        >
+          <MessageSquare className="h-3.5 w-3.5" />
+        </button>
+      ) : null}
+    </span>
   );
 }
 
@@ -1406,14 +1624,27 @@ function CallsSection({
 
 function MessagesSection({
   threads,
+  selected,
+  composing,
   onReload
 }: {
   threads: SmsThread[];
+  /** Conversation ouverte (?fil= dans l'URL). */
+  selected: string | null;
+  /** Composition d'un nouveau texto (?nouveau=1). */
+  composing: boolean;
   onReload: () => void;
 }) {
-  const [selected, setSelected] = useState<string | null>(
-    threads[0]?.peer_e164 || null
-  );
+  // Grand écran : liste + conversation côte à côte, la première
+  // conversation s'affiche d'office. Téléphone : la liste, puis la
+  // conversation en plein écran (comme une app de messagerie) — le
+  // bouton « retour » ramène à la liste.
+  const isDesktop = useMediaQuery("(min-width: 1024px)");
+  const shown =
+    selected ||
+    (isDesktop && !composing ? threads[0]?.peer_e164 || null : null);
+  const chatOpen = !!shown || composing;
+
   const [messages, setMessages] = useState<SmsRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [threadError, setThreadError] = useState(false);
@@ -1421,49 +1652,79 @@ function MessagesSection({
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [composerTo, setComposerTo] = useState("");
-  const [showComposer, setShowComposer] = useState(threads.length === 0);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const loadedPeer = useRef<string | null>(null);
 
-  const loadThread = useCallback(async (peer: string) => {
-    setLoading(true);
-    setMessages([]);
-    setThreadError(false);
-    try {
-      const res = await authedFetch(
-        `/api/v1/voice/sms?peer_e164=${encodeURIComponent(peer)}&limit=100`
-      );
-      if (res.ok) {
-        const data = (await res.json()) as SmsRow[];
-        // Chrono ascendant pour l'affichage type chat.
-        setMessages([...data].reverse());
-        // Mark all unread as read (best-effort).
-        for (const m of data) {
-          if (m.direction === "inbound" && m.read_at === null) {
-            void authedFetch(`/api/v1/voice/sms/${m.id}/read`, {
-              method: "POST"
-            });
-          }
-        }
-      } else {
-        // Échec de chargement (ex. 500). Un 401 déclenche déjà la
-        // redirection vers la connexion via authedFetch. On distingue
-        // « échec » de « vraiment aucun message » pour ne pas induire
-        // en erreur.
-        setThreadError(true);
+  const loadThread = useCallback(
+    async (peer: string, opts: { silent?: boolean } = {}) => {
+      if (!opts.silent) {
+        setLoading(true);
+        setMessages([]);
+        setThreadError(false);
       }
-    } catch {
-      setThreadError(true);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+      try {
+        const res = await authedFetch(
+          `/api/v1/voice/sms?peer_e164=${encodeURIComponent(peer)}&limit=100`
+        );
+        if (res.ok) {
+          const data = (await res.json()) as SmsRow[];
+          if (loadedPeer.current !== peer) return;
+          // Chrono ascendant pour l'affichage type chat.
+          setMessages([...data].reverse());
+          setThreadError(false);
+          // Marque les entrants non lus comme lus (best-effort).
+          for (const m of data) {
+            if (m.direction === "inbound" && m.read_at === null) {
+              void authedFetch(`/api/v1/voice/sms/${m.id}/read`, {
+                method: "POST"
+              });
+            }
+          }
+        } else if (!opts.silent) {
+          // Échec de chargement (ex. 500). Un 401 déclenche déjà la
+          // redirection vers la connexion via authedFetch.
+          setThreadError(true);
+        }
+      } catch {
+        if (!opts.silent) setThreadError(true);
+      } finally {
+        if (!opts.silent) setLoading(false);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
-    if (selected) void loadThread(selected);
-  }, [selected, loadThread]);
+    loadedPeer.current = shown;
+    setReply("");
+    setSendError(null);
+    if (!shown) return;
+    void loadThread(shown);
+    // Conversation ouverte : les nouveaux textos arrivent sans recharger.
+    const t = setInterval(() => void loadThread(shown, { silent: true }), 15_000);
+    return () => clearInterval(t);
+  }, [shown, loadThread]);
+
+  // Toujours afficher le dernier message (bas de la conversation).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, shown]);
+
+  // Téléphone : la conversation couvre l'écran — on bloque le défilement
+  // de la page derrière.
+  useEffect(() => {
+    if (isDesktop || !chatOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [isDesktop, chatOpen]);
 
   const sendReply = useCallback(
-    async (to: string, body: string) => {
-      if (!to || !body.trim()) return;
+    async (to: string, body: string): Promise<SmsRow | null> => {
+      if (!to || !body.trim()) return null;
       setSending(true);
       setSendError(null);
       try {
@@ -1475,93 +1736,104 @@ function MessagesSection({
           const t = await res.text().catch(() => "");
           throw new Error(t || `http_${res.status}`);
         }
+        const sent = (await res.json()) as SmsRow;
         setReply("");
-        // Recharge la thread + la liste pour voir le nouvel envoi.
-        await loadThread(to);
+        if (loadedPeer.current === sent.to_e164) {
+          setMessages((prev) => [...prev, sent]);
+        }
         onReload();
+        return sent;
       } catch (err) {
         setSendError(err instanceof Error ? err.message : String(err));
+        return null;
       } finally {
         setSending(false);
       }
     },
-    [loadThread, onReload]
+    [onReload]
   );
 
+  const closeChat = () => closeTelephonie({ fil: null, nouveau: null });
+  const thread = shown ? threads.find((t) => t.peer_e164 === shown) : null;
+
   return (
-    <section className="mt-5 grid gap-4 pb-24 lg:grid-cols-[320px_1fr] lg:pb-0">
-      {/* Inbox */}
-      <div className="rounded-2xl border border-brand-800 bg-brand-900 p-3">
+    <section className="mt-5 grid gap-4 pb-24 lg:grid-cols-[320px_minmax(0,1fr)] lg:pb-0">
+      {/* Liste des conversations */}
+      <div className="min-w-0 rounded-2xl border border-brand-800 bg-brand-900 p-2 sm:p-3">
         <div className="flex items-center justify-between gap-2 px-1 pb-2">
           <h2 className="flex items-center gap-2 text-sm font-bold text-white">
             <MessageSquare className="h-4 w-4 text-teal-300" />
-            Inbox
+            Textos
           </h2>
           <button
             type="button"
             onClick={() => {
-              // Désélectionne la conversation en cours, sinon le composer
-              // (rendu seulement si !selected) ne s'affiche pas.
-              setSelected(null);
               setComposerTo("");
               setReply("");
-              setShowComposer(true);
+              navigateTelephonie({ section: "messages", nouveau: "1", fil: null });
             }}
-            className="rounded-md border border-teal-500/40 bg-teal-500/10 px-2 py-1 text-[10px] font-semibold text-teal-200 hover:bg-teal-500/20"
+            className="rounded-md border border-teal-500/40 bg-teal-500/10 px-3 py-1.5 text-[12px] font-semibold text-teal-200 hover:bg-teal-500/20"
           >
             + Nouveau
           </button>
         </div>
         {threads.length === 0 ? (
           <EmptyHint compact>
-            Aucun SMS reçu pour l&apos;instant. Texte le numéro principal
-            depuis ton mobile pour tester l&apos;inbox.
+            Aucun texto reçu pour l&apos;instant. Texte le numéro principal
+            depuis ton mobile pour tester.
           </EmptyHint>
         ) : (
-          <ul className="space-y-1">
+          <ul className="space-y-0.5">
             {threads.map((t) => {
-              const isActive = selected === t.peer_e164;
+              const isActive = shown === t.peer_e164;
+              const unread = t.unread > 0;
+              const label = t.name || formatPhone(t.peer_e164);
               return (
                 <li key={t.peer_e164}>
                   <button
                     type="button"
-                    onClick={() => setSelected(t.peer_e164)}
-                    className={`flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left transition ${
-                      isActive
-                        ? "bg-teal-500/10"
-                        : "hover:bg-brand-800/40"
+                    onClick={() =>
+                      navigateTelephonie({
+                        section: "messages",
+                        fil: t.peer_e164,
+                        nouveau: null
+                      })
+                    }
+                    className={`flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition ${
+                      isActive ? "bg-teal-500/10" : "hover:bg-brand-800/40"
                     }`}
                   >
+                    <Avatar label={label} />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="truncate text-xs font-semibold text-white">
-                          {t.name || t.peer_e164}
+                        <span
+                          className={`min-w-0 flex-1 truncate text-sm ${
+                            unread ? "font-bold text-white" : "font-semibold text-white/90"
+                          }`}
+                        >
+                          {label}
                         </span>
-                        {t.caller_kind && t.caller_kind !== "unknown" ? (
-                          <CallerKindBadge kind={t.caller_kind} />
+                        <span className="shrink-0 text-[11px] text-white/50">
+                          {formatShort(t.last_message.received_at)}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 flex items-center gap-2">
+                        <span
+                          className={`line-clamp-2 min-w-0 flex-1 break-words text-[12px] ${
+                            unread ? "text-white/90" : "text-white/60"
+                          }`}
+                        >
+                          {t.last_message.direction === "outbound" ? "Vous : " : ""}
+                          {t.last_message.body ||
+                            (t.last_message.num_media > 0 ? "📷 Photo" : "(MMS)")}
+                        </span>
+                        {unread ? (
+                          <span className="inline-flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-teal-500 px-1.5 text-[10px] font-bold text-brand-950">
+                            {t.unread}
+                          </span>
                         ) : null}
                       </div>
-                      {t.name ? (
-                        <div className="truncate font-mono text-[10px] text-white/40">
-                          {t.peer_e164}
-                        </div>
-                      ) : null}
-                      <div className="truncate text-[11px] text-white/50">
-                        {t.last_message.direction === "outbound" ? "→ " : ""}
-                        {t.last_message.body ||
-                          (t.last_message.num_media > 0
-                            ? "📷 Photo"
-                            : "(MMS)")}
-                      </div>
-                      <div className="text-[10px] text-white/30">
-                        {formatDateTime(t.last_message.received_at)}
-                      </div>
                     </div>
-                    {t.unread > 0 ? (
-                      <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-teal-500 px-1 text-[9px] font-bold text-brand-950">
-                        {t.unread}
-                      </span>
-                    ) : null}
                   </button>
                 </li>
               );
@@ -1570,128 +1842,359 @@ function MessagesSection({
         )}
       </div>
 
-      {/* Conversation panel */}
-      <div className="min-w-0 rounded-2xl border border-brand-800 bg-brand-900 p-4 flex flex-col min-h-[400px] lg:max-h-[78vh] lg:overflow-hidden">
-        {showComposer && !selected ? (
-          <div className="space-y-3">
-            <h3 className="text-sm font-bold text-white">Nouveau SMS</h3>
-            <input
-              type="tel"
-              placeholder="+15146191111"
-              value={composerTo}
-              onChange={(e) => setComposerTo(e.target.value)}
-              className="w-full rounded-md border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white placeholder-white/30"
-            />
-            <textarea
-              placeholder="Message…"
-              value={reply}
-              onChange={(e) => setReply(e.target.value)}
-              rows={4}
-              className="w-full rounded-md border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white placeholder-white/30"
-            />
-            <button
-              type="button"
-              disabled={sending || !composerTo || !reply.trim()}
-              onClick={() => {
-                void sendReply(composerTo.trim(), reply);
-                setSelected(composerTo.trim());
-                setShowComposer(false);
-              }}
-              className="inline-flex items-center gap-1.5 rounded-md border border-teal-500/40 bg-teal-500/10 px-3 py-2 text-xs font-semibold text-teal-200 hover:bg-teal-500/20 disabled:opacity-50"
-            >
-              <Send className="h-3.5 w-3.5" />
-              {sending ? "Envoi…" : "Envoyer"}
-            </button>
-            {sendError ? (
-              <p className="text-[11px] text-rose-300">Erreur : {sendError}</p>
-            ) : null}
-          </div>
-        ) : selected ? (
+      {/* Conversation — plein écran sur téléphone, colonne sur ordinateur. */}
+      <div
+        className={`${
+          chatOpen ? "fixed inset-0 z-[55] flex" : "hidden"
+        } min-w-0 flex-col bg-brand-950 lg:static lg:z-auto lg:flex lg:h-[78vh] lg:overflow-hidden lg:rounded-2xl lg:border lg:border-brand-800 lg:bg-brand-900`}
+      >
+        {composing && !selected ? (
           <>
-            <div className="flex items-center justify-between border-b border-brand-800 pb-2">
-              <div className="min-w-0">
-                {(() => {
-                  const st = threads.find((t) => t.peer_e164 === selected);
-                  return (
-                    <>
-                      <div className="flex items-center gap-2">
-                        <span className="truncate text-sm font-bold text-white">
-                          {st?.name || selected}
-                        </span>
-                        {st?.caller_kind && st.caller_kind !== "unknown" ? (
-                          <CallerKindBadge kind={st.caller_kind} />
-                        ) : null}
-                      </div>
-                      {st?.name ? (
-                        <div className="font-mono text-[11px] text-white/40">
-                          {selected}
-                        </div>
-                      ) : null}
-                    </>
-                  );
-                })()}
-              </div>
-              <CallButton targetE164={selected} label="Appeler" />
+            <ChatHeader
+              title="Nouveau texto"
+              onBack={closeChat}
+            />
+            <div className="flex-1 space-y-3 overflow-y-auto p-4">
+              <label className="block text-[12px] font-semibold text-white/70">
+                À
+                <input
+                  type="tel"
+                  inputMode="tel"
+                  autoFocus
+                  placeholder="514 555-1234"
+                  value={composerTo}
+                  onChange={(e) => setComposerTo(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2.5 text-base text-white placeholder-white/30 lg:bg-brand-950 lg:text-sm"
+                />
+              </label>
+              {composerTo && !toE164(composerTo) ? (
+                <p className="text-[12px] text-amber-300">
+                  Numéro incomplet : 10 chiffres (ex. 514 555-1234).
+                </p>
+              ) : null}
             </div>
-            <div className="py-3 space-y-2 lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
+            <ChatComposer
+              value={reply}
+              onChange={setReply}
+              sending={sending}
+              error={sendError}
+              disabled={!toE164(composerTo)}
+              onSend={async () => {
+                const to = toE164(composerTo);
+                if (!to) return;
+                const sent = await sendReply(to, reply);
+                if (sent) {
+                  navigateTelephonie(
+                    { section: "messages", fil: sent.to_e164, nouveau: null },
+                    { replace: true }
+                  );
+                }
+              }}
+            />
+          </>
+        ) : shown ? (
+          <>
+            <ChatHeader
+              title={thread?.name || formatPhone(shown)}
+              subtitle={thread?.name ? formatPhone(shown) : undefined}
+              badge={
+                thread?.caller_kind && thread.caller_kind !== "unknown" ? (
+                  <CallerKindBadge kind={thread.caller_kind} />
+                ) : null
+              }
+              onBack={closeChat}
+              action={
+                <CallButton
+                  targetE164={shown}
+                  entityType={thread?.entity_type || undefined}
+                  entityId={thread?.entity_id || undefined}
+                  label="Appeler"
+                  variant="icon"
+                  className="h-9 w-9"
+                />
+              }
+            />
+            <div
+              ref={scrollRef}
+              className="flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-4"
+            >
               {loading ? (
-                <p className="text-[11px] text-white/40">Chargement…</p>
+                <p className="text-center text-[12px] text-white/50">Chargement…</p>
               ) : threadError ? (
-                <p className="text-[11px] text-rose-300">
+                <p className="text-center text-[12px] text-rose-300">
                   Échec du chargement des messages. Rafraîchis, ou
                   reconnecte-toi si ta session a expiré.
                 </p>
               ) : messages.length === 0 ? (
-                <p className="text-[11px] text-white/40">Aucun message.</p>
+                <p className="text-center text-[12px] text-white/50">
+                  Aucun message. Écris le premier ci-dessous.
+                </p>
               ) : (
-                messages.map((m) => (
-                  <div
-                    key={m.id}
-                    className={`max-w-[80%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-sm ${
-                      m.direction === "outbound"
-                        ? "ml-auto bg-teal-500/15 text-white/90"
-                        : "mr-auto bg-brand-800 text-white/90"
-                    }`}
-                  >
-                    {m.body}
-                    {m.num_media > 0 ? (
-                      <MmsImages smsId={m.id} count={m.num_media} />
-                    ) : null}
-                    <div className="mt-1 text-[9px] text-white/40">
-                      {formatDateTime(m.received_at)}
-                    </div>
-                  </div>
-                ))
+                <ChatBubbles messages={messages} />
               )}
             </div>
-            <div className="sticky bottom-28 z-10 mt-2 flex items-end gap-2 border-t border-brand-800 bg-brand-900 pb-3 pt-3 lg:static lg:bottom-auto lg:mt-0 lg:bg-transparent lg:pb-0">
-              <textarea
-                placeholder="Réponse…"
-                value={reply}
-                onChange={(e) => setReply(e.target.value)}
-                rows={2}
-                className="min-w-0 flex-1 rounded-md border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white placeholder-white/30"
-              />
-              <button
-                type="button"
-                disabled={sending || !reply.trim()}
-                onClick={() => void sendReply(selected, reply)}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-teal-500/40 bg-teal-500/10 px-3 py-2 text-xs font-semibold text-teal-200 hover:bg-teal-500/20 disabled:opacity-50"
-              >
-                <Send className="h-3.5 w-3.5" />
-                {sending ? "…" : "Envoyer"}
-              </button>
-            </div>
-            {sendError ? (
-              <p className="mt-2 text-[11px] text-rose-300">{sendError}</p>
-            ) : null}
+            <ChatComposer
+              value={reply}
+              onChange={setReply}
+              sending={sending}
+              error={sendError}
+              onSend={() => void sendReply(shown, reply)}
+            />
           </>
         ) : (
-          <EmptyHint>Sélectionne une conversation à gauche.</EmptyHint>
+          <div className="flex flex-1 items-center justify-center p-6">
+            <EmptyHint>Sélectionne une conversation à gauche.</EmptyHint>
+          </div>
         )}
       </div>
     </section>
   );
+}
+
+function ChatHeader({
+  title,
+  subtitle,
+  badge,
+  action,
+  onBack
+}: {
+  title: string;
+  subtitle?: string;
+  badge?: React.ReactNode;
+  action?: React.ReactNode;
+  onBack: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 border-b border-brand-800 bg-brand-900 px-2 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] lg:px-4 lg:pt-2">
+      <button
+        type="button"
+        onClick={onBack}
+        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white/80 hover:bg-brand-800 hover:text-white lg:hidden"
+        aria-label="Retour aux conversations"
+      >
+        <ArrowLeft className="h-5 w-5" />
+      </button>
+      <Avatar label={title} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-sm font-bold text-white">{title}</span>
+          {badge}
+        </div>
+        {subtitle ? (
+          <div className="truncate text-[12px] text-white/60">{subtitle}</div>
+        ) : null}
+      </div>
+      {action}
+    </div>
+  );
+}
+
+/** Bulles de conversation : les nôtres à droite, les siennes à gauche,
+ *  séparateur par jour, heure sous chaque bulle. */
+function ChatBubbles({ messages }: { messages: SmsRow[] }) {
+  let lastDay = "";
+  return (
+    <div className="space-y-1.5">
+      {messages.map((m, i) => {
+        const at = m.received_at || m.sent_at || "";
+        const day = dayLabel(at);
+        const showDay = day !== lastDay;
+        lastDay = day;
+        const mine = m.direction === "outbound";
+        const next = messages[i + 1];
+        const lastOfGroup =
+          !next ||
+          next.direction !== m.direction ||
+          dayLabel(next.received_at || next.sent_at || "") !== day;
+        const failed = m.status === "failed" || m.status === "undelivered";
+        return (
+          <div key={m.id}>
+            {showDay ? (
+              <div className="my-3 text-center text-[11px] font-semibold text-white/50">
+                {day}
+              </div>
+            ) : null}
+            <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+              <div
+                className={`max-w-[82%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-[15px] leading-snug sm:max-w-[70%] ${
+                  mine
+                    ? `bg-teal-500/20 text-white ring-1 ring-teal-500/30 ${
+                        lastOfGroup ? "rounded-br-md" : ""
+                      }`
+                    : `bg-brand-800 text-white ${lastOfGroup ? "rounded-bl-md" : ""}`
+                }`}
+              >
+                {m.body}
+                {m.num_media > 0 ? (
+                  <MmsImages smsId={m.id} count={m.num_media} />
+                ) : null}
+              </div>
+            </div>
+            {lastOfGroup || failed ? (
+              <div
+                className={`mt-0.5 px-1 text-[11px] ${
+                  mine ? "text-right" : "text-left"
+                } ${failed ? "text-rose-300" : "text-white/50"}`}
+              >
+                {failed ? "Non distribué · " : ""}
+                {formatTime(at)}
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Zone de saisie collée en bas de la conversation. Entrée envoie sur
+ *  ordinateur (Maj+Entrée = nouvelle ligne) ; sur téléphone Entrée
+ *  fait une nouvelle ligne et on envoie avec le bouton. */
+function ChatComposer({
+  value,
+  onChange,
+  onSend,
+  sending,
+  error,
+  disabled = false
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onSend: () => void;
+  sending: boolean;
+  error: string | null;
+  disabled?: boolean;
+}) {
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+  const canSend = !sending && !disabled && !!value.trim();
+  // Hauteur qui suit le texte (jusqu'à ~6 lignes).
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [value]);
+  return (
+    <div className="border-t border-brand-800 bg-brand-900 px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:px-3 lg:pb-3">
+      {error ? (
+        <p className="mb-1.5 px-1 text-[12px] text-rose-300">Erreur : {error}</p>
+      ) : null}
+      <div className="flex items-end gap-2">
+        <textarea
+          ref={ref}
+          rows={1}
+          placeholder="Texto…"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (
+              e.key === "Enter" &&
+              !e.shiftKey &&
+              !e.nativeEvent.isComposing &&
+              window.matchMedia("(pointer: fine)").matches
+            ) {
+              e.preventDefault();
+              if (canSend) onSend();
+            }
+          }}
+          className="min-h-[42px] min-w-0 flex-1 resize-none rounded-2xl border border-brand-800 bg-brand-950 px-4 py-2.5 text-base text-white placeholder-white/40 lg:text-sm"
+        />
+        <button
+          type="button"
+          disabled={!canSend}
+          onClick={onSend}
+          aria-label="Envoyer"
+          className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-full border border-teal-500/40 bg-teal-500/15 text-teal-300 transition hover:bg-teal-500/25 disabled:opacity-40"
+        >
+          {sending ? (
+            <RefreshCw className="h-4 w-4 animate-spin" />
+          ) : (
+            <Send className="h-4 w-4" />
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Avatar({ label }: { label: string }) {
+  const letters = /[a-zA-ZÀ-ÿ]/.test(label)
+    ? label
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((w) => w[0]?.toUpperCase() || "")
+        .join("")
+    : "#";
+  return (
+    <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-teal-500/15 text-[13px] font-bold text-teal-300">
+      {letters}
+    </span>
+  );
+}
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const sync = () => setMatches(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, [query]);
+  return matches;
+}
+
+/** +15145551234 → (514) 555-1234 ; autre format laissé tel quel. */
+function formatPhone(e164: string): string {
+  const m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164);
+  return m ? `(${m[1]}) ${m[2]}-${m[3]}` : e164;
+}
+
+/** Saisie libre → E.164 (+1 ajouté pour 10 chiffres), sinon null. */
+function toE164(raw: string): string | null {
+  const t = raw.trim();
+  if (t.startsWith("+")) {
+    const d = t.replace(/[^\d]/g, "");
+    return d.length >= 8 ? `+${d}` : null;
+  }
+  const d = t.replace(/\D/g, "");
+  if (d.length === 10) return `+1${d}`;
+  if (d.length === 11 && d.startsWith("1")) return `+${d}`;
+  return null;
+}
+
+function dayLabel(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return "Aujourd’hui";
+  if (d.toDateString() === yesterday.toDateString()) return "Hier";
+  return d.toLocaleDateString("fr-CA", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    ...(d.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {})
+  });
+}
+
+function formatTime(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString("fr-CA", { hour: "2-digit", minute: "2-digit" });
+}
+
+/** Heure si aujourd'hui, sinon date courte (liste des conversations). */
+function formatShort(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  if (d.toDateString() === new Date().toDateString()) return formatTime(iso);
+  return d.toLocaleDateString("fr-CA", { day: "numeric", month: "short" });
 }
 
 // ----------------------------------------------------------------------
@@ -2279,15 +2782,24 @@ function CallDrawer({
 
   return (
     <div
-      className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm"
+      className="fixed inset-0 z-[55] bg-black/40 backdrop-blur-sm"
       onClick={onClose}
     >
       <aside
         onClick={(e) => e.stopPropagation()}
         className="absolute right-0 top-0 flex h-full w-full max-w-xl flex-col overflow-y-auto border-l border-brand-800 bg-brand-900 shadow-2xl"
       >
-        <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-brand-800 bg-brand-900 p-4">
-          <div className="flex items-center gap-3">
+        <header className="sticky top-0 z-10 border-b border-brand-800 bg-brand-900 p-4 pt-[max(1rem,env(safe-area-inset-top))]">
+          <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="-ml-1 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white/70 hover:bg-brand-800 hover:text-white sm:hidden"
+              aria-label="Retour"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </button>
             <DirectionIcon dir={call.direction} status={call.status} />
             <div>
               <div className="text-base font-bold text-white">
@@ -2305,11 +2817,35 @@ function CallDrawer({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-2 text-white/60 hover:bg-brand-800 hover:text-white"
+            className="hidden rounded-md p-2 text-white/60 hover:bg-brand-800 hover:text-white sm:inline-flex"
             aria-label="Fermer"
           >
             <X className="h-4 w-4" />
           </button>
+          </div>
+          {/* Rappel en un clic + texto, sans recomposer le numéro. */}
+          <div className="mt-3 flex flex-wrap items-start gap-2">
+            <CallButton
+              targetE164={callbackTarget(call)}
+              entityType={call.entity_type || undefined}
+              entityId={call.entity_id || undefined}
+              label={needsCallback(call) ? "Rappeler" : "Appeler"}
+              tone={needsCallback(call) ? "amber" : "teal"}
+              className="px-3 py-1.5 text-[12px]"
+            />
+            {(call.peer_e164 || callbackTarget(call)).startsWith("+") ? (
+              <button
+                type="button"
+                onClick={() =>
+                  openSmsWith(call.peer_e164 || callbackTarget(call))
+                }
+                className="inline-flex items-center gap-1.5 rounded-md border border-brand-700 bg-brand-950 px-3 py-1.5 text-[12px] font-semibold text-white/80 transition hover:text-white"
+              >
+                <MessageSquare className="h-3.5 w-3.5" />
+                Texto
+              </button>
+            ) : null}
+          </div>
         </header>
 
         <div className="space-y-4 p-4">
@@ -2651,7 +3187,8 @@ function CallbackInlineButton({
       entityType={entityType}
       entityId={entityId}
       label="Rappeler"
-      className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-300 hover:bg-amber-500/25"
+      tone="amber"
+      className="px-3 py-1.5 text-[12px]"
       variant="full"
     />
   );

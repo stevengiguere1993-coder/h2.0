@@ -2104,7 +2104,12 @@ async def maintenance_rollup(
                         count=lv["count"],
                         bons=_tri_bons(lv["bons"]),
                     )
-                    for lid, lv in sorted(e["logs"].items())
+                    for lid, lv in sorted(
+                        e["logs"].items(),
+                        key=lambda kv: cle_tri_numero(
+                            logements[kv[0]].numero if kv[0] in logements else None
+                        ),
+                    )
                 ],
             )
         )
@@ -6605,7 +6610,7 @@ async def loyers_overview(
         key=lambda r: (
             order.get(r.etat, 3),
             r.immeuble_name,
-            r.logement_numero or "",
+            cle_tri_numero(r.logement_numero),
         )
     )
 
