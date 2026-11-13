@@ -381,6 +381,9 @@ def decouper_adresse(
     if mc:
         civique = re.sub(r"\s", "", mc.group(1))
         rue = mc.group(2).strip(" ,")
+    elif re.fullmatch(r"\d+[A-Za-z]?", rue_part):
+        # Un nombre seul est un numéro civique sans rue, pas un nom de rue.
+        civique, rue = rue_part, ""
     rue = re.sub(r"\s{2,}", " ", rue).strip()
     if not (civique or rue or municipalite or cp or app):
         return {k: "" for k in ("NoCivique", "Appartement", "CodePostal", "Province", "Municipalite", "Rue", "AdresseComplete")}
@@ -1638,14 +1641,21 @@ async def creer_independant(
     essentiel: Optional[dict[str, Any]] = None,
     libelle: Optional[str] = None,
     source: Optional[TalTransmission] = None,
+    form: Optional[dict[str, Any]] = None,
 ) -> tuple[TalTransmission, Rapport]:
-    """Brouillon d'un bail INDÉPENDANT : le formulaire est construit à partir
-    du petit formulaire (``essentiel``) par le même mapping que les baux
-    Kratos, ou copié d'un bail indépendant existant (``source``). Rien n'est
-    envoyé au TAL."""
+    """Brouillon d'un bail INDÉPENDANT. Trois portes : le formulaire complet
+    rempli à l'écran (``form`` — Phil 2026-11-13 : on arrive directement sur le
+    formulaire), un bail indépendant existant à copier (``source``), ou le
+    petit formulaire d'origine (``essentiel``, même mapping que les baux
+    Kratos). Rien n'est envoyé au TAL."""
     config = await charger_config()
     schema = await charger_schema(db)
-    if source is not None:
+    if form is not None:
+        if not isinstance(form, dict) or not form:
+            raise TalBailError("Le formulaire du bail est vide.", http_status=422)
+        a_verifier: list[dict[str, Any]] = []
+        adresse = adresse_depuis_formulaire(form)
+    elif source is not None:
         form = _charger_json(source.payload_json, None)
         if not isinstance(form, dict) or not form:
             raise TalBailError("Le bail à dupliquer n'a pas de formulaire.", http_status=422)
@@ -1677,6 +1687,106 @@ async def creer_independant(
     await db.flush()
     t.identifiant_utilisateur = f"kratos-ind-t{t.id}"
     return t, rapport
+
+
+async def preparation_independante_vierge(db: AsyncSession) -> dict[str, Any]:
+    """Formulaire d'un NOUVEAU bail indépendant, avec les réglages par défaut — rien n'est
+    écrit en base : le brouillon naît à la première vérification."""
+    schema = await charger_schema(db)
+    config = await charger_config()
+    prep = construire_formulaire(schema, contexte_independant({}), config)
+    form = prep.form
+    completer_derives(form)
+    vider_inapplicables(form, schema.gabarit)
+    rapport = valider(form, schema, requis=chemins_requis(config))
+    return {
+        "form": form, "origine": {},
+        "a_verifier": [{**x, "note": _NOTES_INDEPENDANT.get(x.get("note", ""), x.get("note", ""))} for x in prep.a_verifier],
+        "rapport": rapport.as_dict(),
+        "contexte": {"independant": True, "adresse": None, "libelle": None, "parties": parties_du_formulaire(form)},
+        "schema_version": schema.version,
+        "requis": chemins_requis(config),
+        "regles": REGLES,
+    }
+
+
+async def prefill_immeuble(db: AsyncSession, immeuble_id: int, *, logement_id: Optional[int] = None) -> dict[str, Any]:
+    """Locateur et adresse d'un bail INDÉPENDANT pris d'un de NOS immeubles, pour écrire
+    moins (Phil 2026-11-13). « Ça reste complètement indépendant du reste de la gestion
+    locative » : aucun lien n'est gardé, ces valeurs se corrigent ensuite comme les autres."""
+    immeuble = await db.get(Immeuble, immeuble_id)
+    if immeuble is None:
+        raise TalBailError("Immeuble introuvable.", http_status=404)
+    ent_id = (
+        await db.execute(
+            select(ImmeubleOwnership.entreprise_id)
+            .where(ImmeubleOwnership.immeuble_id == immeuble.id)
+            .order_by(ImmeubleOwnership.ownership_pct.desc()).limit(1)
+        )
+    ).scalar_one_or_none() or immeuble.owner_entreprise_id
+    entreprise = await db.get(Entreprise, int(ent_id)) if ent_id else None
+    logements = (
+        await db.execute(select(Logement).where(Logement.immeuble_id == immeuble.id).order_by(Logement.numero))
+    ).scalars().all()
+    logement = next((lg for lg in logements if logement_id is not None and lg.id == logement_id), None)
+    if logement_id is not None and logement is None:
+        raise TalBailError("Ce logement n'appartient pas à cet immeuble.", http_status=404)
+    adresse_immeuble = ", ".join(x for x in (immeuble.address, immeuble.city, immeuble.postal_code) if x)
+    essentiel = {
+        "locateur": {
+            "nom": (entreprise.name if entreprise is not None else "") or "",
+            "telephone": getattr(entreprise, "contact_telephone", None) or "",
+            "courriel": getattr(entreprise, "contact_email", None) or "",
+            "adresse": getattr(entreprise, "siege_social", None) or adresse_immeuble,
+        },
+        "adresse": immeuble.address, "ville": immeuble.city, "code_postal": immeuble.postal_code,
+        "appartement": logement.numero if logement is not None else "",
+        "nb_pieces": logement.nb_pieces_decimal if logement is not None else None,
+    }
+    schema = await charger_schema(db)
+    config = await charger_config()
+    form = construire_formulaire(schema, contexte_independant(essentiel), config).form
+    cles = ["locateurs", "adresseLogement"] + (["nbPieces", "nbPiecesAutre"] if logement is not None else [])
+    return {
+        "valeurs": {k: form[k] for k in cles if k in form},
+        "immeuble": {"id": immeuble.id, "nom": immeuble.name, "adresse": adresse_immeuble},
+        "locateur": essentiel["locateur"]["nom"] or None,
+        "logements": [{"id": lg.id, "numero": lg.numero, "nb_pieces": lg.nb_pieces_decimal} for lg in logements],
+    }
+
+
+def personnes_pour_carnet(form: Any) -> list[dict[str, Any]]:
+    """Les personnes nommées au formulaire, sous la forme du carnet d'Admin locative
+    (nom, téléphone, courriel, adresse en une ligne, rôle)."""
+    f = form if isinstance(form, dict) else {}
+    out: list[dict[str, Any]] = []
+
+    def adresse(occ: dict[str, Any]) -> str:
+        a = (occ.get("adresse") or [{}])[0] if isinstance(occ.get("adresse"), list) and occ.get("adresse") else {}
+        if not isinstance(a, dict):
+            return ""
+        rue = " ".join(str(a.get(k) or "").strip() for k in ("NoCivique", "Rue")).strip()
+        if rue and str(a.get("Appartement") or "").strip():
+            rue += f", app. {str(a.get('Appartement')).strip()}"
+        ville = str(a.get("Municipalite") or "").strip()
+        if ville and str(a.get("Province") or "").strip():
+            ville += f" ({str(a.get('Province')).strip()})"
+        return ", ".join(x for x in (rue, " ".join(y for y in (ville, str(a.get("CodePostal") or "").strip()) if y)) if x)
+
+    for groupe, role, cle_courriel in (("locateurs", "locateur", "courrielLocateur"), ("locataires", "locataire", "courrielLocataire"),
+                                       ("autresSignataires", "caution", "courriel")):
+        if groupe == "autresSignataires" and str(f.get("possedeAutresSignataires")) != "true":
+            continue
+        for occ in f.get(groupe) or []:
+            if not isinstance(occ, dict) or not str(occ.get("nom") or "").strip():
+                continue
+            out.append({
+                "nom": str(occ.get("nom")).strip(), "role": role,
+                "telephone": str(occ.get("noTelephone") or occ.get("autreNoTelephoneCell") or "").strip(),
+                "courriel": str(occ.get(cle_courriel) or occ.get("courrielMandant") or "").strip(),
+                "adresse": adresse(occ),
+            })
+    return out
 
 
 async def preparation_independante(db: AsyncSession, t: TalTransmission) -> dict[str, Any]:
@@ -2270,4 +2380,5 @@ __all__ = [
     "registre", "TPS_PCT", "TVQ_PCT", "FORFAIT_LICENCE", "normaliser_montants", "REGLES",
     "rangs_reels", "resume_avec_cout",
     "nom_fichier_bail", "lire_duree", "fin_de_bail", "completer_derives",
+    "preparation_independante_vierge", "prefill_immeuble", "personnes_pour_carnet",
 ]
