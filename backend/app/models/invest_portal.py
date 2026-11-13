@@ -278,3 +278,44 @@ class InvestJalon(Base, TimestampMixin):
     kind: Mapped[str] = mapped_column(
         String(16), nullable=False, default="autre", server_default="autre"
     )
+
+
+class InvestPret(Base, TimestampUpdateMixin):
+    """Prêt d'un investisseur À LA COMPAGNIE, en plus de ses parts
+    (Steven, 2026-11-13 : « un investisseur peut faire un prêt
+    supplémentaire à la cie. Donc montant du prêt, % remis sur le prêt,
+    calcul des intérêts mensuels »).
+
+    Saisie manuelle par l'admin (bouton « Modifier » de la fiche
+    investisseur) — la synchro QuickBooks n'y touche jamais. Intérêt
+    SIMPLE : mensuel = montant × taux annuel / 12 ; couru = mensuel ×
+    mois complets écoulés depuis ``date_pret`` (jusqu'au remboursement
+    s'il est daté). Voir ``app/services/invest_saisies.py``.
+    """
+
+    __tablename__ = "inv_prets"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    entreprise_id: Mapped[int] = mapped_column(
+        ForeignKey("entreprises.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    montant: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    #: Taux ANNUEL en % (ex. 8 = 8 %/an).
+    taux_annuel_pct: Mapped[float] = mapped_column(
+        Numeric(6, 3), nullable=False, default=0, server_default="0"
+    )
+    date_pret: Mapped[date] = mapped_column(Date, nullable=False)
+    #: Date du remboursement complet — NULL = prêt en cours.
+    date_remboursement: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
+    )
+    note: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
