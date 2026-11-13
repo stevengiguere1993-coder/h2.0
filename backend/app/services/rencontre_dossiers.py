@@ -135,16 +135,20 @@ def _liste_txt(v: Any, maxi: int = 12) -> list[str]:
 
 
 #: Ce que l'IA écrit pour un dossier dont la rencontre n'a PAS parlé
-#: (« n'a pas été abordé », « non discuté », « aucune mention »…), sur un
-#: texte passé par ``normaliser``. « Pas discuté AVEC le banquier » est un
-#: vrai état de dossier, pas une remarque sur la rencontre.
+#: (« n'a pas été abordé », « il n'y a pas eu de discussion sur… »,
+#: « aucune mention »…), sur un texte passé par ``normaliser``. « Pas
+#: discuté AVEC le banquier » est un vrai état de dossier, pas une
+#: remarque sur la rencontre.
 _RE_NON_ABORDE = re.compile(
     r"\bpas (?:encore |vraiment |du tout )?ete "
-    r"(?:re)?(?:abordee?s?|discutee?s?|mentionnee?s?|evoquee?s?)\b(?! avec\b)"
+    r"(?:re)?(?:abordee?s?|discutee?s?|mentionnee?s?|evoquee?s?|soulevee?s?)\b"
+    r"(?! avec\b)"
     r"|\bpas (?:encore )?ete question\b"
     r"|\bnon (?:abordee?s?|discutee?s?|mentionnee?s?|evoquee?s?)\b"
-    r"|\baucune (?:mention|discussion)\b"
-    r"|\bpas (?:fait l objet|de mention)\b"
+    r"|\b(?:aucune?|pas (?:eu )?(?:de|d)) (?:mentions?|discussions?)\b"
+    r"(?! (?:\w+ )?avec\b)"
+    r"|\bpas fait l objet\b"
+    r"|\brien n a ete (?:dit|mentionne|discute|aborde)\b"
 )
 _RE_PHRASES = re.compile(r"(?<=[.!?…])\s+")
 _RE_OPPOSITION = re.compile(
