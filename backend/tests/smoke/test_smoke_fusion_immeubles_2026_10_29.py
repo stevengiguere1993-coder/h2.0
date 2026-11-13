@@ -22,6 +22,14 @@ Millen, jamais celui de l'autre fiche) avec un préfixe facultatif pour la
 fiche gardée, prix d'achat et hypothèque saisis en deux moitiés
 s'additionnent, et une simulation montre la fiche résultante sans rien
 écrire.
+
+Même jour, après la fusion du 9085 Millen / 710 Legendre : « la valeur
+actuelle n'est pas bonne » — les évaluations de même type et de même date
+(chaque fiche en portait la moitié) s'additionnent, une seule reste « de
+référence » ; « l'adresse dans le haut devrait être présentée 9085 Millen
+/ 710 Legendre, Montréal » — le nom automatique porte les deux adresses ;
+« dans la modification je devrais être en mesure de modifier la valeur »
+— ``valeur_actuelle`` sur la modification de l'immeuble.
 """
 from __future__ import annotations
 
@@ -35,6 +43,7 @@ from app.models.entreprise import Entreprise
 from app.models.immobilier import (
     Bail,
     BailStatus,
+    Evaluation,
     Hypotheque,
     HypothequeImmeuble,
     HypothequeTranche,
@@ -47,6 +56,11 @@ from app.models.immobilier import (
 )
 from app.models.user import User
 from app.models.user_immeuble import UserImmeuble
+from app.services.immeuble_nom import (
+    adresse_courte,
+    nom_automatique,
+    nom_est_automatique,
+)
 from tests.smoke.conftest import TestSessionLocal
 
 IMM = "/api/v1/immobilier/immeubles"
@@ -83,7 +97,31 @@ def fusion_seed(run, seeded_users) -> dict:
                 is_active=True, is_admin=False, role="employee",
                 volets_json='["immobilier"]',
             )
-            s.add_all([a, b, c, d, e, f, emp])
+            # Paire au nom AUTOMATIQUE (« adresse, ville ») : le titre de la
+            # fiche fusionnée porte les deux adresses.
+            g = Immeuble(
+                name="9085, Avenue Millen, Montréal", address="9085, Avenue Millen",
+                city="Montréal", is_active=True,
+            )
+            h = Immeuble(
+                name="710, Rue Legendre Est, Montréal", address="710, Rue Legendre Est",
+                city="Montréal", is_active=True,
+            )
+            s.add_all([a, b, c, d, e, f, g, h, emp])
+            await s.flush()
+            # La même évaluation portée en deux moitiés (une par fiche), les
+            # deux « de référence » ; plus une évaluation propre au Millen.
+            from datetime import datetime, timezone
+
+            maintenant = datetime.now(timezone.utc)
+            evals = [
+                Evaluation(immeuble_id=a.id, kind="appraisal", valeur=500_000, taux_cap=5.25, date_evaluation=date(2025, 1, 27), is_reference=True, notes="Moitié Legendre", created_at=maintenant),
+                Evaluation(immeuble_id=b.id, kind="appraisal", valeur=500_000, taux_cap=5.25, date_evaluation=date(2025, 1, 27), is_reference=True, created_at=maintenant),
+                Evaluation(immeuble_id=a.id, kind="municipale", valeur=300_000, date_evaluation=date(2026, 1, 1), created_at=maintenant),
+                Evaluation(immeuble_id=b.id, kind="municipale", valeur=300_000, date_evaluation=date(2026, 1, 1), created_at=maintenant),
+                Evaluation(immeuble_id=b.id, kind="marchande", valeur=400_000, date_evaluation=date(2024, 5, 1), created_at=maintenant),
+            ]
+            s.add_all(evals)
             await s.flush()
             logs = []
             for num in ("1", "2", "3"):
@@ -121,6 +159,8 @@ def fusion_seed(run, seeded_users) -> dict:
             await s.commit()
             return {
                 "a": a.id, "b": b.id, "c": c.id, "d": d.id, "e": e.id, "f": f.id,
+                "g": g.id, "h": h.id,
+                "eval_a": evals[0].id, "eval_b": evals[1].id,
                 "emp": emp.id, "hyp_a": hyp_a.id, "hyp_b": hyp_b.id,
                 "bail": bail.id, "lg_b1": lg_b1.id, "ent_a": ent_a.id,
             }
@@ -178,6 +218,16 @@ def test_apercu_fusion(client, auth_headers, fusion_seed):
     assert h["montant_additionne"] == 2_000_000.0
     # Prix saisi en deux parts : la somme.
     assert ap["purchase_price_suggere"] == 1_350_000.0
+    # Évaluations : même type et même date des deux côtés = deux parts.
+    assert ap["a_deplacer"]["évaluations"] == 3
+    assert ap["evaluations_additionnables"] == 2
+    paires = {e["kind"]: e for e in ap["evaluations_source"]}
+    assert paires["appraisal"]["additionnable_avec"] == fusion_seed["eval_a"]
+    assert paires["appraisal"]["valeur_additionnee"] == 1_000_000.0
+    assert paires["municipale"]["valeur_additionnee"] == 600_000.0
+    assert paires["marchande"]["additionnable_avec"] is None
+    # Nom personnalisé : gardé.
+    assert ap["nom_suggere"] == "710 Legendre (fusion)"
 
 
 def test_garde_fous(client, auth_headers, emp_headers, fusion_seed):
@@ -246,24 +296,56 @@ def test_simulation_ne_change_rien(client, auth_headers, fusion_seed, run):
     assert fiche["hypotheques"][0]["montant_initial"] == 2_000_000
     assert fiche["total_hypotheques"] == 2_000_000
     assert fiche["total_paiements_mensuels"] == 11_600
+    # Évaluations transférées telles quelles (défaut) : les deux moitiés
+    # restent, mais UNE seule référence — celle de la fiche gardée.
+    assert sim["evaluations_additionnees"] == 0
+    assert fiche["valeur_actuelle"] == 500_000 and fiche["valeur_municipale"] == 300_000
+    assert [e["id"] for e in fiche["evaluations"] if e["is_reference"]] == [fusion_seed["eval_a"]]
+    assert len(fiche["evaluations"]) == 5
+    # Additionnées : la valeur du bâtiment est la somme des deux parts.
+    r = client.post(f"{IMM}/{a}/fusion/simulation", headers=auth_headers, json={**options, "evaluations": "additionner"})
+    assert r.status_code == 200, r.text
+    sim = r.json()
+    assert sim["evaluations_additionnees"] == 2 and sim["evaluations_exclues"] == 0
+    assert sim["resultat"]["valeur_actuelle"] == 1_000_000
+    assert sim["resultat"]["valeur_municipale"] == 600_000
+    assert sorted((e["kind"], e["valeur"], e["is_reference"]) for e in sim["resultat"]["evaluations"]) == [
+        ("appraisal", 1_000_000.0, True), ("marchande", 400_000.0, False), ("municipale", 600_000.0, False),
+    ]
+    # Saisies en double : celle de la fiche gardée reste seule.
+    r = client.post(f"{IMM}/{a}/fusion/simulation", headers=auth_headers, json={**options, "evaluations": "exclure"})
+    assert r.status_code == 200, r.text
+    sim = r.json()
+    assert sim["evaluations_exclues"] == 2 and sim["evaluations_additionnees"] == 0
+    assert sim["resultat"]["valeur_actuelle"] == 500_000
+    assert len(sim["resultat"]["evaluations"]) == 3
+    # Nom choisi dans la fenêtre.
+    r = client.post(f"{IMM}/{a}/fusion/simulation", headers=auth_headers, json={**options, "name": "  Le Legendre-Millen "})
+    assert r.json()["resultat"]["name"] == "Le Legendre-Millen"
 
     # Rien n'a été écrit.
     assert client.get(f"{IMM}/{b}", headers=auth_headers).status_code == 200
     assert len(client.get(f"{IMM}/{b}/logements", headers=auth_headers).json()) == 3
     hyps_a = client.get(f"{IMM}/{a}/hypotheques", headers=auth_headers).json()
     assert [h["montant_initial"] for h in hyps_a] == [1_000_000]
-    assert client.get(f"{IMM}/{a}", headers=auth_headers).json()["purchase_price"] == 900_000
+    fiche_a = client.get(f"{IMM}/{a}", headers=auth_headers).json()
+    assert fiche_a["purchase_price"] == 900_000 and fiche_a["name"] == "710 Legendre (fusion)"
     assert [l["numero"] for l in client.get(f"{IMM}/{a}/logements", headers=auth_headers).json()] == ["1", "2", "3"]
+    evals_a = client.get(f"{IMM}/{a}/evaluations", headers=auth_headers).json()
+    assert sorted((e["kind"], e["valeur"]) for e in evals_a) == [("appraisal", 500_000.0), ("municipale", 300_000.0)]
+    assert len(client.get(f"{IMM}/{b}/evaluations", headers=auth_headers).json()) == 3
 
 
 def test_fusion_millen_dans_legendre(client, auth_headers, fusion_seed, run):
     a, b = fusion_seed["a"], fusion_seed["b"]
     r = client.post(f"{IMM}/{a}/fusion", headers=auth_headers, json={
         "source_immeuble_id": b, "prefixe_numeros": "9085-",
-        "hypotheques": "additionner", "purchase_price": 1_350_000,
+        "hypotheques": "additionner", "evaluations": "additionner",
+        "purchase_price": 1_350_000,
     })
     assert r.status_code == 200, r.text
     res = r.json()
+    assert res["evaluations_additionnees"] == 2
     assert res["immeuble_supprime_id"] == b
     assert res["hypotheques_exclues"] == 0
     assert res["hypotheques_additionnees"] == 1
@@ -293,6 +375,19 @@ def test_fusion_millen_dans_legendre(client, auth_headers, fusion_seed, run):
     assert hyps[0]["montant_initial"] == 2_000_000
     assert hyps[0]["paiement_mensuel"] == 11_600
     assert "Moitié Legendre" in hyps[0]["notes"] and f"#{fusion_seed['hyp_b']}" in hyps[0]["notes"]
+    assert "(desjardins, 1 000 000,00 $)" in hyps[0]["notes"]
+    # Les deux moitiés d'évaluation n'en font plus qu'une, une seule
+    # référence, et la fiche affiche la valeur du bâtiment complet.
+    evals = client.get(f"{IMM}/{a}/evaluations", headers=auth_headers).json()
+    assert sorted((e["kind"], e["valeur"], e["is_reference"]) for e in evals) == [
+        ("appraisal", 1_000_000.0, True), ("marchande", 400_000.0, False), ("municipale", 600_000.0, False),
+    ]
+    agreee = next(e for e in evals if e["kind"] == "appraisal")
+    assert agreee["id"] == fusion_seed["eval_a"] and agreee["taux_cap"] == 5.25
+    assert "Moitié Legendre" in agreee["notes"] and f"#{fusion_seed['eval_b']}" in agreee["notes"]
+    assert "500 000,00 $ + 500 000,00 $" in agreee["notes"]
+    fin = client.get(f"{IMM}/{a}/financials", headers=auth_headers).json()
+    assert fin["valeur_actuelle"] == 1_000_000 and fin["valeur_municipale"] == 600_000
     # Plus de faux doublons de logements dans le diagnostic.
     doublons = client.get("/api/v1/immobilier/logements/doublons", headers=auth_headers).json()
     assert not [g for g in doublons if g["immeuble_id"] == a]
@@ -346,3 +441,102 @@ def test_fusion_hypotheque_conjointe_redevient_simple(client, auth_headers, fusi
             assert await s.get(Immeuble, d) is None
 
     run(_verif())
+
+
+def test_nom_deux_adresses():
+    # Forme courte : numéro civique + nom de la voie.
+    assert adresse_courte("9085, Avenue Millen") == "9085 Millen"
+    assert adresse_courte("710, Rue Legendre Est") == "710 Legendre"
+    assert adresse_courte("93, Avenue de l'Hôtel-Dieu") == "93 Hôtel-Dieu"
+    assert adresse_courte("6646 Av. Des Érables") == "6646 Érables"
+    assert adresse_courte("957-978, Place Sapinière") == "957-978 Sapinière"
+    assert adresse_courte("1 - 5 Elgin") == "1-5 Elgin"
+    assert adresse_courte("1660 Saint-Clément") == "1660 Saint-Clément"
+    assert adresse_courte("125, 12e Avenue") == "125 12e Avenue"
+    assert adresse_courte("Chemin du Lac") == "Chemin du Lac"
+    # Une adresse : « adresse, ville » comme avant ; plusieurs : toutes.
+    assert nom_automatique("9085, Avenue Millen", "Montréal") == "9085, Avenue Millen, Montréal"
+    assert (
+        nom_automatique("9085, Avenue Millen", "Montréal", "710, Rue Legendre Est")
+        == "9085 Millen / 710 Legendre, Montréal"
+    )
+    assert (
+        nom_automatique("1 rue A", None, "2 rue B · 3 rue C") == "1 A / 2 B / 3 C"
+    )
+    # Un nom qui n'est que l'adresse peut suivre ; un nom choisi, jamais.
+    assert nom_est_automatique("9085, avenue Millen, Montréal", "9085, Avenue Millen", "Montréal")
+    assert nom_est_automatique("9085 Millen / 710 Legendre, Montréal", "9085, Avenue Millen", "Montréal", "710, Rue Legendre Est")
+    assert nom_est_automatique("", "9085, Avenue Millen", "Montréal")
+    assert not nom_est_automatique("Le Millen", "9085, Avenue Millen", "Montréal")
+
+
+def test_fusion_nom_deux_adresses(client, auth_headers, fusion_seed):
+    g, h = fusion_seed["g"], fusion_seed["h"]
+    ap = client.get(f"{IMM}/{g}/fusion/apercu", headers=auth_headers, params={"source_immeuble_id": h}).json()
+    assert ap["nom_suggere"] == "9085 Millen / 710 Legendre, Montréal"
+    assert ap["evaluations_source"] == [] and ap["evaluations_additionnables"] == 0
+    r = client.post(f"{IMM}/{g}/fusion/simulation", headers=auth_headers, json={"source_immeuble_id": h})
+    assert r.status_code == 200, r.text
+    assert r.json()["resultat"]["name"] == "9085 Millen / 710 Legendre, Montréal"
+    assert r.json()["resultat"]["valeur_actuelle"] is None
+    assert client.get(f"{IMM}/{g}", headers=auth_headers).json()["name"] == "9085, Avenue Millen, Montréal"
+    r = client.post(f"{IMM}/{g}/fusion", headers=auth_headers, json={"source_immeuble_id": h})
+    assert r.status_code == 200, r.text
+    imm = r.json()["immeuble"]
+    assert imm["name"] == "9085 Millen / 710 Legendre, Montréal"
+    assert imm["address"] == "9085, Avenue Millen"
+    assert imm["address_secondaire"] == "710, Rue Legendre Est"
+
+
+def test_modifier_immeuble_nom_et_valeur(client, auth_headers, fusion_seed):
+    """« Modifier l'immeuble » : le nom automatique suit les adresses, et
+    la valeur actuelle se saisit directement."""
+    g = fusion_seed["g"]
+    # Adresse secondaire retirée : le nom automatique revient à l'adresse.
+    r = client.patch(f"{IMM}/{g}", headers=auth_headers, json={"address_secondaire": None})
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "9085, Avenue Millen, Montréal"
+    # Remise (écran : tous les champs envoyés, nom inchangé) : il la suit.
+    r = client.patch(f"{IMM}/{g}", headers=auth_headers, json={
+        "name": "9085, Avenue Millen, Montréal", "address": "9085, Avenue Millen",
+        "city": "Montréal", "address_secondaire": "710, Rue Legendre Est",
+    })
+    assert r.json()["name"] == "9085 Millen / 710 Legendre, Montréal"
+    # Nom personnalisé : gardé, même si l'adresse secondaire change.
+    r = client.patch(f"{IMM}/{g}", headers=auth_headers, json={"name": "Le Millen"})
+    assert r.json()["name"] == "Le Millen"
+    r = client.patch(f"{IMM}/{g}", headers=auth_headers, json={"name": "Le Millen", "address_secondaire": "712, Rue Legendre Est"})
+    assert r.json()["name"] == "Le Millen" and r.json()["address_secondaire"] == "712, Rue Legendre Est"
+    # Nom vidé (« Laisser vide = adresse ») : le nom automatique.
+    r = client.patch(f"{IMM}/{g}", headers=auth_headers, json={"name": None, "address_secondaire": "710, Rue Legendre Est"})
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "9085 Millen / 710 Legendre, Montréal"
+
+    # Valeur actuelle : aucune évaluation → une évaluation du jour, de référence.
+    assert client.get(f"{IMM}/{g}/financials", headers=auth_headers).json()["valeur_actuelle"] is None
+    r = client.patch(f"{IMM}/{g}", headers=auth_headers, json={"valeur_actuelle": 3_000_000})
+    assert r.status_code == 200, r.text
+    evals = client.get(f"{IMM}/{g}/evaluations", headers=auth_headers).json()
+    assert [(e["kind"], e["valeur"], e["is_reference"]) for e in evals] == [("marchande", 3_000_000.0, True)]
+    assert client.get(f"{IMM}/{g}/financials", headers=auth_headers).json()["valeur_actuelle"] == 3_000_000
+    # Même valeur renvoyée (l'écran envoie tous les champs) : rien de plus.
+    client.patch(f"{IMM}/{g}", headers=auth_headers, json={"valeur_actuelle": 3_000_000})
+    # Correction le même jour : l'évaluation du jour est corrigée.
+    client.patch(f"{IMM}/{g}", headers=auth_headers, json={"valeur_actuelle": 3_160_000})
+    evals = client.get(f"{IMM}/{g}/evaluations", headers=auth_headers).json()
+    assert [(e["valeur"], e["is_reference"]) for e in evals] == [(3_160_000.0, True)]
+    # Un rapport d'évaluateur plus ancien, de référence, n'est PAS réécrit :
+    # la saisie ajoute une évaluation et reprend la référence.
+    r = client.post("/api/v1/immobilier/evaluations", headers=auth_headers, json={
+        "immeuble_id": g, "kind": "appraisal", "valeur": 2_900_000,
+        "date_evaluation": "2025-01-27", "is_reference": True,
+    })
+    assert r.status_code == 201, r.text
+    rapport = r.json()["id"]
+    assert client.get(f"{IMM}/{g}/financials", headers=auth_headers).json()["valeur_actuelle"] == 2_900_000
+    client.patch(f"{IMM}/{g}", headers=auth_headers, json={"valeur_actuelle": 3_200_000})
+    evals = {e["id"]: e for e in client.get(f"{IMM}/{g}/evaluations", headers=auth_headers).json()}
+    assert evals[rapport]["valeur"] == 2_900_000 and evals[rapport]["is_reference"] is False
+    assert sorted((e["valeur"], e["is_reference"]) for e in evals.values()) == [(2_900_000.0, False), (3_200_000.0, True)]
+    assert client.get(f"{IMM}/{g}/financials", headers=auth_headers).json()["valeur_actuelle"] == 3_200_000
+    assert client.patch(f"{IMM}/{g}", headers=auth_headers, json={"valeur_actuelle": -1}).status_code == 422

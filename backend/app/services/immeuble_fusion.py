@@ -29,7 +29,18 @@ divisés par 2, ils devront s'additionner lors de la fusion ») :
 - « l'action est irréversible » : ``fusionner(..., simuler=True)`` fait
   toute la fusion dans la transaction, relève la fiche résultante
   (adresses, logements, hypothèques, prix) puis ANNULE tout — c'est
-  l'aperçu affiché avant la confirmation.
+  l'aperçu affiché avant la confirmation ;
+- « au niveau de la valeur actuelle le montant n'est pas bon » (après la
+  fusion du 9085 Millen / 710 Legendre) : chaque fiche portait la MOITIÉ
+  de l'évaluation agréée et de la valeur municipale ; déplacées telles
+  quelles, la fiche gardait deux évaluations « de référence » et n'en
+  affichait qu'une moitié. Les évaluations de même type et de même date
+  s'additionnent (``evaluations="additionner"``), et il ne reste jamais
+  qu'UNE référence après une fusion ;
+- « l'adresse dans le haut devrait être présentée 9085 Millen / 710
+  Legendre, Montréal » : le nom de la fiche fusionnée porte les deux
+  adresses (``app.services.immeuble_nom``) tant qu'il était automatique,
+  ou le nom choisi dans la fenêtre (``name``).
 
 La liste des tables n'est PAS écrite à la main : toute colonne
 ``immeuble_id`` (ou clé étrangère vers ``imm_immeubles.id``) du modèle est
@@ -61,6 +72,7 @@ from sqlalchemy import (
 from app.db.base import Base
 from app.models.immobilier import (
     Bail,
+    Evaluation,
     Hypotheque,
     HypothequeImmeuble,
     HypothequeTranche,
@@ -69,6 +81,9 @@ from app.models.immobilier import (
     ImmeubleOwnership,
     Logement,
 )
+
+from app.services.immeuble_nom import nom_automatique, nom_est_automatique
+from app.services.immeuble_valeur import evaluation_municipale, evaluation_retenue
 
 log = logging.getLogger(__name__)
 
@@ -386,7 +401,7 @@ async def _additionner_hypotheque(db, cible_h: Hypotheque, source_h: Hypotheque)
             setattr(cible_h, champ, getattr(source_h, champ))
     note = (
         f"Fusion de fiches : additionnée avec l'hypothèque #{source_h.id} "
-        f"({source_h.preteur}, {montant_source:,.2f} $)".replace(",", " ")
+        f"({(source_h.preteur or '').strip()}, {_montant(montant_source)})"
     )
     cible_h.notes = f"{cible_h.notes.rstrip()}\n\n{note}" if cible_h.notes else note
     await db.execute(
@@ -401,6 +416,131 @@ async def _additionner_hypotheque(db, cible_h: Hypotheque, source_h: Hypotheque)
 
 
 MODES_HYPOTHEQUES = ("additionner", "transferer", "exclure")
+#: Évaluations de même type et de même date dans les deux fiches :
+#: « additionner » (chaque fiche portait sa part), « exclure » (la même
+#: évaluation saisie en entier des deux côtés : celle de la cible reste
+#: seule) ou « transferer » (telles quelles).
+MODES_EVALUATIONS = ("additionner", "transferer", "exclure")
+
+
+def _montant(v: Any) -> str:
+    """« 1 580 000,00 $ »."""
+    return f"{float(v or 0):,.2f}".replace(",", " ").replace(".", ",") + " $"
+
+
+async def _evaluations(db, immeuble_id: int) -> list[Evaluation]:
+    return list(
+        (
+            await db.execute(
+                select(Evaluation)
+                .where(Evaluation.immeuble_id == immeuble_id)
+                .order_by(Evaluation.date_evaluation.desc(), Evaluation.id)
+                .execution_options(populate_existing=True)
+            )
+        ).scalars().all()
+    )
+
+
+def paires_evaluations(
+    evals_cible: list[Evaluation], evals_source: list[Evaluation]
+) -> dict[int, Evaluation]:
+    """{id évaluation source: évaluation de la cible de même TYPE et de
+    même DATE} — la même évaluation, dont chaque fiche portait sa part.
+    Une évaluation de la cible ne reçoit qu'une moitié ; à choix égal,
+    celle du même montant d'abord."""
+    libres = list(evals_cible)
+    out: dict[int, Evaluation] = {}
+    for es in evals_source:
+        candidates = [
+            ec
+            for ec in libres
+            if ec.kind == es.kind and ec.date_evaluation == es.date_evaluation
+        ]
+        if not candidates:
+            continue
+        candidates.sort(
+            key=lambda ec: (abs(float(ec.valeur or 0) - float(es.valeur or 0)), ec.id)
+        )
+        choisie = candidates[0]
+        out[es.id] = choisie
+        libres.remove(choisie)
+    return out
+
+
+async def _retirer_evaluation(db, e: Evaluation) -> None:
+    eid = e.id
+    db.expunge(e)
+    await db.execute(delete(Evaluation).where(Evaluation.id == eid))
+
+
+async def _additionner_evaluation(db, cible_e: Evaluation, source_e: Evaluation) -> None:
+    """Ajoute la part ``source_e`` à l'évaluation ``cible_e`` puis la supprime."""
+    part_cible = float(cible_e.valeur or 0)
+    part_source = float(source_e.valeur or 0)
+    cible_e.valeur = round(part_cible + part_source, 2)
+    if cible_e.taux_cap is None and source_e.taux_cap is not None:
+        cible_e.taux_cap = source_e.taux_cap
+    if _vide(cible_e.source) and not _vide(source_e.source):
+        cible_e.source = source_e.source
+    if source_e.is_reference:
+        cible_e.is_reference = True
+    note = (
+        f"Fusion de fiches : {_montant(part_cible)} + {_montant(part_source)} "
+        f"(évaluation #{source_e.id} de la fiche absorbée)."
+    )
+    cible_e.notes = f"{cible_e.notes.rstrip()}\n\n{note}" if cible_e.notes else note
+    await db.flush()
+    await _retirer_evaluation(db, source_e)
+
+
+async def _garder_une_reference(db, immeuble_id: int, ids_cible_avant: set[int]) -> int:
+    """Une seule évaluation « de référence » par immeuble : celle que la
+    cible avait déjà, sinon la plus récente. Renvoie le nombre retiré."""
+    refs = [e for e in await _evaluations(db, immeuble_id) if e.is_reference]
+    if len(refs) < 2:
+        return 0
+    gardee = max(
+        refs, key=lambda e: (e.id in ids_cible_avant, e.date_evaluation, e.id)
+    )
+    autres = [e.id for e in refs if e.id != gardee.id]
+    await db.execute(
+        update(Evaluation).where(Evaluation.id.in_(autres)).values(is_reference=False)
+    )
+    await db.flush()
+    return len(autres)
+
+
+def adresse_secondaire_fusionnee(cible: Immeuble, source: Immeuble) -> Optional[str]:
+    """Les adresses secondaires de la cible après absorption de la source
+    (séparées par « · »), sans répéter son adresse principale."""
+    if _norm_adresse(source.address) == _norm_adresse(cible.address):
+        return cible.address_secondaire
+    morceaux = [
+        m.strip() for m in (cible.address_secondaire or "").split("·") if m.strip()
+    ]
+    for adr in [source.address, source.address_secondaire]:
+        for m in (adr or "").split("·"):
+            m = m.strip()
+            if m and _norm_adresse(m) != _norm_adresse(cible.address) and m not in morceaux:
+                morceaux.append(m)
+    return " · ".join(morceaux)[:500] or None
+
+
+def nom_fusionne(cible: Immeuble, source: Immeuble) -> str:
+    """Le nom de la fiche après la fusion : les deux adresses (« 9085
+    Millen / 710 Legendre, Montréal ») si la fusion lui ajoute une adresse
+    et que son nom n'était que son adresse ; un nom personnalisé est gardé."""
+    nouvelle = adresse_secondaire_fusionnee(cible, source)
+    if (nouvelle or "") == (cible.address_secondaire or ""):
+        return cible.name
+    if not nom_est_automatique(
+        cible.name, cible.address, cible.city, cible.address_secondaire
+    ):
+        return cible.name
+    return (
+        nom_automatique(cible.address, cible.city or source.city, nouvelle)
+        or cible.name
+    )
 
 
 async def _resume(db, imm: Immeuble) -> dict:
@@ -466,10 +606,38 @@ async def apercu_fusion(db, cible: Immeuble, source: Immeuble) -> dict:
                 ),
             }
         )
+    evals_cible = await _evaluations(db, cible.id)
+    evals_source = await _evaluations(db, source.id)
+    paires_eval = paires_evaluations(evals_cible, evals_source)
+    apercu_evals = []
+    for e in evals_source:
+        avec_e = paires_eval.get(e.id)
+        apercu_evals.append(
+            {
+                "id": e.id,
+                "kind": e.kind,
+                "valeur": float(e.valeur or 0),
+                "date_evaluation": e.date_evaluation,
+                "is_reference": bool(e.is_reference),
+                "additionnable_avec": avec_e.id if avec_e is not None else None,
+                "valeur_cible": (
+                    float(avec_e.valeur or 0) if avec_e is not None else None
+                ),
+                "valeur_additionnee": (
+                    round(float(avec_e.valeur or 0) + float(e.valeur or 0), 2)
+                    if avec_e is not None
+                    else None
+                ),
+            }
+        )
     return {
         "cible": await _resume(db, cible),
         "source": await _resume(db, source),
         "a_deplacer": a_deplacer,
+        "evaluations_source": apercu_evals,
+        "evaluations_additionnables": len(paires_eval),
+        # Nom de la fiche fusionnée : les deux adresses dans le titre.
+        "nom_suggere": nom_fusionne(cible, source),
         "numeros_en_conflit": conflits,
         "numeros_communs": communs,
         "numeros_source": [l.numero for l in logs_source],
@@ -494,7 +662,9 @@ async def fusionner(
     prefixe_numeros_cible: Optional[str] = None,
     exclure_hypotheques: bool = False,
     hypotheques: Optional[str] = None,
+    evaluations: Optional[str] = None,
     purchase_price: Optional[float] = None,
+    name: Optional[str] = None,
     simuler: bool = False,
 ) -> dict:
     """Absorbe ``source`` dans ``cible`` puis supprime ``source``. Lève
@@ -511,6 +681,16 @@ async def fusionner(
     (saisies en double, retirées). Absent = « exclure » si
     ``exclure_hypotheques``, sinon « transferer ».
 
+    ``evaluations`` : « additionner » (les évaluations de même type et de
+    même date se fondent en une seule, chaque fiche en portait sa part),
+    « exclure » (la même évaluation saisie en entier des deux côtés : celle
+    de la source est retirée) ou « transferer » (telles quelles, défaut).
+    Dans tous les cas il ne reste qu'UNE évaluation de référence.
+
+    ``name`` : nom de la fiche fusionnée. Absent, un nom encore automatique
+    (l'adresse) devient « 9085 Millen / 710 Legendre, Montréal » ; un nom
+    personnalisé ne bouge pas.
+
     ``simuler`` : tout est fait dans la transaction, la fiche résultante
     est relevée (clé ``resultat``) puis la transaction est ANNULÉE."""
     if cible.id == source.id:
@@ -518,6 +698,11 @@ async def fusionner(
     mode_hyp = hypotheques or ("exclure" if exclure_hypotheques else "transferer")
     if mode_hyp not in MODES_HYPOTHEQUES:
         raise FusionImpossible(f"Choix d'hypothèques inconnu : « {mode_hyp} ».")
+    mode_eval = evaluations or "transferer"
+    if mode_eval not in MODES_EVALUATIONS:
+        raise FusionImpossible(f"Choix d'évaluations inconnu : « {mode_eval} ».")
+    # Relevé AVANT tout changement d'adresse : le nom suit-il les adresses ?
+    nom_apres = (name or "").strip()[:255] or nom_fusionne(cible, source)
     source_id, source_nom = source.id, source.name
     deplaces: dict[str, int] = {}
 
@@ -654,6 +839,34 @@ async def fusionner(
     _ajouter("parts d'hypothèque conjointe", len(parts))
     await db.flush()
 
+    # 2c. Évaluations : la même évaluation (type + date) portée en deux
+    #     parts s'additionne ; le reste suit par la passe générique.
+    evals_cible = await _evaluations(db, cible.id)
+    evals_source = await _evaluations(db, source_id)
+    ids_eval_cible = {e.id for e in evals_cible}
+    cible_a_reference = any(e.is_reference for e in evals_cible)
+    evaluations_additionnees = 0
+    evaluations_exclues = 0
+    if evals_source and mode_eval != "transferer":
+        paires_eval = paires_evaluations(evals_cible, evals_source)
+        for e in evals_source:
+            avec_e = paires_eval.get(e.id)
+            if avec_e is None:
+                continue
+            if mode_eval == "additionner":
+                await _additionner_evaluation(db, avec_e, e)
+                evaluations_additionnees += 1
+            else:
+                # Saisie en double : celle de la cible reste, et reprend le
+                # rôle de référence si la cible n'en avait aucune.
+                if e.is_reference and not cible_a_reference:
+                    avec_e.is_reference = True
+                    cible_a_reference = True
+                await db.flush()
+                await _retirer_evaluation(db, e)
+                evaluations_exclues += 1
+        await db.flush()
+
     # 3. Codes d'accès : à la suite de ceux de la cible.
     max_pos = (
         await db.execute(
@@ -692,19 +905,15 @@ async def fusionner(
         _ajouter(libelle(table), n)
         _ajouter(f"{libelle(table)} (doublons retirés)", doublons)
 
+    # 5b. Une seule évaluation de référence (celle de la cible d'abord).
+    await db.flush()
+    await _garder_une_reference(db, cible.id, ids_eval_cible)
+
     # 6. Champs de la cible.
     if adresse_differente:
-        morceaux = [
-            m.strip() for m in (cible.address_secondaire or "").split("·") if m.strip()
-        ]
-        for adr in [source.address, source.address_secondaire]:
-            for m in (adr or "").split("·"):
-                m = m.strip()
-                if m and _norm_adresse(m) != _norm_adresse(cible.address) and m not in morceaux:
-                    morceaux.append(m)
-        cible.address_secondaire = (" · ".join(morceaux) or None)
-        if cible.address_secondaire:
-            cible.address_secondaire = cible.address_secondaire[:500]
+        cible.address_secondaire = adresse_secondaire_fusionnee(cible, source)
+    if nom_apres:
+        cible.name = nom_apres
     if cible.nb_logements is not None or source.nb_logements is not None:
         cible.nb_logements = (cible.nb_logements or 0) + (source.nb_logements or 0)
     for champ in ("superficie_terrain", "superficie_batiment"):
@@ -776,6 +985,8 @@ async def fusionner(
             "deplaces": deplaces,
             "hypotheques_exclues": hypotheques_exclues,
             "hypotheques_additionnees": hypotheques_additionnees,
+            "evaluations_additionnees": evaluations_additionnees,
+            "evaluations_exclues": evaluations_exclues,
             "immeuble_supprime_id": source_id,
             "immeuble_supprime_nom": source_nom,
             "resultat": resultat,
@@ -790,6 +1001,8 @@ async def fusionner(
         "deplaces": deplaces,
         "hypotheques_exclues": hypotheques_exclues,
         "hypotheques_additionnees": hypotheques_additionnees,
+        "evaluations_additionnees": evaluations_additionnees,
+        "evaluations_exclues": evaluations_exclues,
         "immeuble_supprime_id": source_id,
         "immeuble_supprime_nom": source_nom,
     }
@@ -844,6 +1057,19 @@ async def etat_fiche(db, imm: Immeuble) -> dict:
         }
         for h in hyps
     ]
+    evals = await _evaluations(db, imm.id)
+    retenue = evaluation_retenue(evals)
+    municipale = evaluation_municipale(evals)
+    lignes_e = [
+        {
+            "id": e.id,
+            "kind": e.kind,
+            "valeur": float(e.valeur or 0),
+            "date_evaluation": e.date_evaluation,
+            "is_reference": bool(e.is_reference),
+        }
+        for e in evals
+    ]
     return {
         "id": imm.id,
         "name": imm.name,
@@ -852,6 +1078,11 @@ async def etat_fiche(db, imm: Immeuble) -> dict:
         "nb_logements": imm.nb_logements,
         "purchase_price": (
             float(imm.purchase_price) if imm.purchase_price is not None else None
+        ),
+        "evaluations": lignes_e,
+        "valeur_actuelle": float(retenue.valeur) if retenue is not None else None,
+        "valeur_municipale": (
+            float(municipale.valeur) if municipale is not None else None
         ),
         "logements": lignes,
         "hypotheques": lignes_h,
