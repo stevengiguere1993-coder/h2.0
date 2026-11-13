@@ -431,3 +431,29 @@ montant, versement, solde et tranches réunis sur le prêt de la cible),
 la transaction, relève la fiche résultante (`etat_fiche`) puis fait un
 rollback : c'est l'étape « Voir le résultat » de la fenêtre, obligatoire
 avant « Confirmer ». Pas d'annulation après coup (la source est supprimée).
+
+## Centre d'aide — Questions fiables, historique des bugs (2026-11-13)
+
+Steven : « beaucoup de bugs qui reviennent et qui sont déjà réglés […]
+pouvoir poser une question sur un fonctionnement et avoir la réponse » et
+« une section historique : bug accepté ou refusé avec la note, date de la
+gestion, notification au déclarant ». L'onglet « Question » (`POST
+/help/ask`) cherche d'abord, par mots clés sans accents
+(`app/services/aide_connaissances.py`), dans les signalements (statut,
+section, note, dates), le journal des livraisons
+(`backend/app/data/journal_livraisons.tsv`) et les sections `##` de ce
+fichier, puis les passe à l'IA ET les renvoie à l'écran (« Ce que j'ai
+trouvé »). L'onglet « Signaler » montre en direct les signalements et
+livraisons semblables (`GET /help/similaires`) ; « Mes signalements »
+(`GET /help/mes-signalements`) donne au déclarant statut, note et date.
+Chaque décision (accepté / refusé / réglé, `PATCH /help/reports/{id}` ou
+lot) date l'historique (`traite_le`, `traite_par`, `rejected_at`), pose la
+section (déduite de la page) et notifie le déclarant (`bug_traite`, lien
+`?aide=mes-signalements` qui ouvre le panneau), sauf s'il s'agit de
+soi-même. Mode dev → Demandes d'aide → onglet « Historique ».
+**À faire par Claude Code** : quand une tâche règle un bug signalé, le
+marquer réglé (`PATCH /api/v1/help/reports/{id}` avec `status:
+"resolved"`, `resolution_notes` : ce qui a été corrigé et la date,
+`section`) — c'est ce qui permet à l'assistant de répondre « déjà réglé ».
+Régénérer le journal de temps en temps : `git fetch --unshallow origin`
+puis `python backend/scripts/journal_livraisons.py`.
