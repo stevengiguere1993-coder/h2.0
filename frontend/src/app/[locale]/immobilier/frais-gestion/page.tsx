@@ -19,6 +19,7 @@ import {
 
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar } from "../layout";
+import { useNomPageImmobilier } from "@/hooks/use-presentation-immobilier";
 import { ImmeubleFiltre } from "@/components/immobilier/immeuble-filtre";
 
 /**
@@ -160,6 +161,8 @@ function le1erDe(iso: string | null | undefined): string {
 }
 
 export default function FacturationImmoPage() {
+  // Refonte : la page s'appelle « Frais de gestion » avec le nouveau menu.
+  const titrePage = useNomPageImmobilier("Facturation", "Frais de gestion");
   const [data, setData] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
   const [qboOpts, setQboOpts] = useState<QboOptions | null>(null);
@@ -560,7 +563,7 @@ export default function FacturationImmoPage() {
       <ImmobilierTopbar
         breadcrumbs={[
           { label: "Immobilier", href: "/immobilier" },
-          { label: "Facturation" }
+          { label: titrePage }
         ]}
       />
 
@@ -569,7 +572,7 @@ export default function FacturationImmoPage() {
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-white">
-              Facturation
+              {titrePage}
             </h1>
             <p className="mt-1 max-w-2xl text-sm text-white/60">
               Frais de gestion, relocations et frais ponctuels — chaque

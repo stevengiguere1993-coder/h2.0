@@ -11,13 +11,17 @@ import {
 import { usePathname } from "next/navigation";
 import {
   AlertTriangle,
+  Banknote,
   Building2,
+  CalendarCheck,
+  CalendarClock,
   Check,
   ChevronDown,
   CircleDollarSign,
   ClipboardList,
   DoorOpen,
   FileSignature,
+  FileText,
   Hammer,
   KeyRound,
   Loader2,
@@ -43,6 +47,8 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { useNavAccess } from "@/hooks/use-nav-access";
+import { useAujourdhuiImmobilier } from "@/hooks/use-aujourdhui-immobilier";
+import { usePresentationImmobilier } from "@/hooks/use-presentation-immobilier";
 import { canEnterVolet } from "@/lib/access";
 import { authedFetch } from "@/lib/auth";
 
@@ -73,6 +79,84 @@ const NAV: NavItem[] = [
   // Paramètres → via le footer unifié (SidebarFooter).
 ];
 
+// ─── Menu de la refonte (Steven, 2026-11-13) ─────────────────────────
+// 10 entrées en 4 blocs au lieu de 14 à plat. AUCUNE page n'est
+// supprimée ni déplacée : mêmes adresses, mêmes permissions. Les pages
+// qui font la même chose deviennent les onglets d'une même entrée
+// (`aussi`), affichés en haut de ces pages par `ImmobilierTopbar`.
+// Le menu ci-dessus (`NAV`) reste celui de la « présentation actuelle »
+// (Paramètres → Immobilier → Présentation d'Immobilier).
+
+type NavEntree = NavItem & {
+  /** Pages réunies sous cette entrée : même entrée active, onglets. */
+  aussi?: { href: string; label: string }[];
+  /** Libellé de l'onglet de la page principale (défaut : `label`). */
+  onglet?: string;
+};
+
+const NAV_BLOCS: { titre: string; entrees: NavEntree[] }[] = [
+  {
+    titre: "Au quotidien",
+    entrees: [
+      { href: "/immobilier", label: "Aujourd'hui", icon: CalendarCheck },
+      {
+        href: "/immobilier/paiements",
+        label: "Loyers",
+        icon: Banknote,
+        aussi: [{ href: "/immobilier/depots", label: "Dépôts" }]
+      },
+      { href: "/immobilier/bons-travail", label: "Bons de travail", icon: Hammer },
+      { href: "/immobilier/communications", label: "Communications", icon: Mail }
+    ]
+  },
+  {
+    titre: "Portefeuille",
+    entrees: [
+      {
+        href: "/immobilier/immeubles",
+        label: "Immeubles",
+        icon: Building2,
+        aussi: [{ href: "/immobilier/logements", label: "Logements" }]
+      },
+      { href: "/immobilier/locataires", label: "Locataires", icon: Users }
+    ]
+  },
+  {
+    titre: "Baux",
+    entrees: [
+      {
+        href: "/immobilier/baux",
+        label: "Baux",
+        icon: FileText,
+        aussi: [{ href: "/immobilier/locations", label: "À louer" }]
+      },
+      {
+        href: "/immobilier/renouvellements",
+        label: "Suivis annuels",
+        icon: CalendarClock
+      },
+      {
+        href: "/immobilier/admin-locative",
+        label: "Baux hors Kratos",
+        icon: FileSignature
+      }
+    ]
+  },
+  {
+    titre: "Argent",
+    entrees: [
+      {
+        href: "/immobilier/finances",
+        label: "Finances",
+        icon: CircleDollarSign,
+        aussi: [{ href: "/immobilier/frais-gestion", label: "Frais de gestion" }]
+      }
+    ]
+  }
+];
+
+type OngletPage = { href: string; label: string; actif: boolean };
+
 // ─── Context : entreprise active dans le volet immobilier ────────────
 
 type EntrepriseLite = { id: number; name: string; color_accent: string };
@@ -85,6 +169,9 @@ type Ctx = {
   setCurrentEntrepriseId: (id: number | null) => void;
   entreprises: EntrepriseLite[];
   refreshEntreprises: () => Promise<void>;
+  // Nouvelle présentation : onglets des pages réunies sous la même
+  // entrée de menu (vide ailleurs et en présentation actuelle).
+  ongletsPage: OngletPage[];
 };
 
 const ctx = createContext<Ctx>({
@@ -92,7 +179,8 @@ const ctx = createContext<Ctx>({
   currentEntrepriseId: null,
   setCurrentEntrepriseId: () => {},
   entreprises: [],
-  refreshEntreprises: async () => {}
+  refreshEntreprises: async () => {},
+  ongletsPage: []
 });
 
 export function useImmobilierLayout() {
@@ -169,6 +257,15 @@ export default function ImmobilierLayout({
     void refreshEntreprises();
   }, [user, refreshEntreprises]);
 
+  // Refonte : quel menu montrer (réglage commun, Paramètres), et la
+  // pastille « ce qui presse » de l'entrée Aujourd'hui (relue au plus
+  // toutes les 5 minutes hors de la page Aujourd'hui).
+  const { menu: nouveauMenu } = usePresentationImmobilier();
+  const { data: aujourdhui } = useAujourdhuiImmobilier(currentEntrepriseId, {
+    actif: nouveauMenu && !!user,
+    fraicheurMs: 5 * 60_000
+  });
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-brand-950">
@@ -187,6 +284,33 @@ export default function ImmobilierLayout({
     if (href === "/immobilier")
       return pathname.endsWith("/immobilier");
     return pathname.includes(href);
+  }
+
+  // Nouvelle présentation : pages d'une entrée que ce compte peut ouvrir.
+  function pagesDe(e: NavEntree): { href: string; label: string }[] {
+    return [
+      { href: e.href, label: e.onglet ?? e.label },
+      ...(e.aussi ?? [])
+    ].filter((p) => canSeeHref(p.href));
+  }
+  // Onglets de la page courante : seulement sur les pages de liste
+  // réunies sous une même entrée (pas sur une fiche), et s'il y a au
+  // moins deux pages ouvertes à ce compte.
+  let ongletsPage: OngletPage[] = [];
+  if (nouveauMenu) {
+    const chemin = pathname.replace(/\/+$/, "");
+    for (const bloc of NAV_BLOCS) {
+      for (const e of bloc.entrees) {
+        if (!e.aussi) continue;
+        const pages = pagesDe(e);
+        if (pages.length > 1 && pages.some((p) => chemin.endsWith(p.href))) {
+          ongletsPage = pages.map((p) => ({
+            ...p,
+            actif: chemin.endsWith(p.href)
+          }));
+        }
+      }
+    }
   }
 
   return (
@@ -225,6 +349,78 @@ export default function ImmobilierLayout({
               Immeubles (à côté de la recherche) — le contexte, lui,
               reste ici dans le layout. */}
           <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5">
+            {nouveauMenu ? (
+              NAV_BLOCS.map((bloc) => {
+                const entrees = bloc.entrees
+                  .map((e) => ({ e, pages: pagesDe(e) }))
+                  .filter((x) => x.pages.length > 0);
+                if (entrees.length === 0) return null;
+                return (
+                  <div key={bloc.titre}>
+                    <p className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-accent-500">
+                      {bloc.titre}
+                    </p>
+                    <ul className="space-y-0.5">
+                      {entrees.map(({ e, pages }) => {
+                        const active = pages.some((p) => isActive(p.href));
+                        // Page principale refusée à ce compte : l'entrée
+                        // mène à la première page qu'il peut ouvrir.
+                        const cible = pages[0];
+                        const principale = cible.href === e.href;
+                        const autres = pages.slice(1);
+                        const urgent =
+                          e.href === "/immobilier"
+                            ? (aujourdhui?.nb_urgent ?? 0)
+                            : 0;
+                        return (
+                          <li key={e.href}>
+                            <Link
+                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                              href={cible.href as any}
+                              onClick={() => setSidebarOpen(false)}
+                              aria-current={active ? "page" : undefined}
+                              className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition ${
+                                active
+                                  ? "bg-brand-900 text-white"
+                                  : "text-white/70 hover:bg-brand-900 hover:text-white"
+                              }`}
+                            >
+                              <e.icon
+                                className={`h-4 w-4 flex-shrink-0 ${
+                                  active ? "text-accent-500" : ""
+                                }`}
+                              />
+                              <span className="flex-shrink-0">
+                                {principale ? e.label : cible.label}
+                              </span>
+                              {urgent > 0 ? (
+                                <span
+                                  className="ml-auto rounded-full bg-rose-600 px-2 py-0.5 text-[11px] font-bold text-neutral-50"
+                                  title="Ce qui presse : loyers à encaisser, avis en retard, bons de travail urgents"
+                                >
+                                  {urgent}
+                                  <span className="sr-only"> à traiter en priorité</span>
+                                </span>
+                              ) : null}
+                              {autres.length > 0 ? (
+                                <span
+                                  className="ml-auto min-w-0 truncate text-[11px] font-normal text-white/70"
+                                  title={`Aussi sous cette entrée : ${autres
+                                    .map((p) => p.label)
+                                    .join(", ")}`}
+                                >
+                                  {autres.map((p) => p.label).join(", ")}
+                                </span>
+                              ) : null}
+                            </Link>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                );
+              })
+            ) : (
             <div>
               <p className="mb-2 flex items-center gap-1.5 px-3 text-xs font-semibold uppercase tracking-wider text-accent-500">
                 <Sparkles className="h-3 w-3" />
@@ -257,6 +453,7 @@ export default function ImmobilierLayout({
                 })}
               </ul>
             </div>
+            )}
 
           </nav>
 
@@ -270,7 +467,8 @@ export default function ImmobilierLayout({
               currentEntrepriseId,
               setCurrentEntrepriseId,
               entreprises,
-              refreshEntreprises
+              refreshEntreprises,
+              ongletsPage
             }}
           >
             <ConfirmProvider>
@@ -305,8 +503,9 @@ export function ImmobilierTopbar({
   breadcrumbs: { label: string; href?: string }[];
   rightSlot?: React.ReactNode;
 }) {
-  const { onOpenSidebar } = useImmobilierLayout();
+  const { onOpenSidebar, ongletsPage } = useImmobilierLayout();
   return (
+    <>
     <header
       className="sticky top-0 z-30 border-b border-brand-800 bg-brand-950/95 px-4 backdrop-blur lg:px-6"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
@@ -361,6 +560,32 @@ export function ImmobilierTopbar({
         </div>
       ) : null}
     </header>
+    {/* Nouvelle présentation : onglets des pages réunies sous la même
+        entrée de menu (Loyers | Dépôts, Immeubles | Logements, Baux |
+        À louer, Finances | Frais de gestion). */}
+    {ongletsPage.length > 1 ? (
+      <nav
+        aria-label="Pages de cette section"
+        className="flex items-end gap-1 overflow-x-auto border-b border-brand-800 px-4 pt-3 lg:px-6"
+      >
+        {ongletsPage.map((o) => (
+          <Link
+            key={o.href}
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={o.href as any}
+            aria-current={o.actif ? "page" : undefined}
+            className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-semibold transition ${
+              o.actif
+                ? "border-accent-500 text-white"
+                : "border-transparent text-white/70 hover:text-white"
+            }`}
+          >
+            {o.label}
+          </Link>
+        ))}
+      </nav>
+    ) : null}
+    </>
   );
 }
 

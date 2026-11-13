@@ -75,6 +75,7 @@ from app.api.v1.endpoints import (
     immobilier_extras,
     immobilier_import_excel,
     immobilier_locations,
+    immobilier_presentation,
     immobilier_assurances,
     immobilier_docs_perso,
     immobilier_gestion_externe,
@@ -576,6 +577,11 @@ api_router.include_router(immobilier_extras.router, dependencies=DEP_IMMOBILIER)
 api_router.include_router(
     immobilier_locations.router, dependencies=DEP_IMMOBILIER
 )
+# Refonte d'Immobilier (2026-11-13) : interrupteur de présentation (lu par
+# tout compte connecté, changé par un admin) et page « Aujourd'hui »
+# (volet Immobilier, posé sur son propre routeur).
+api_router.include_router(immobilier_presentation.router)
+api_router.include_router(immobilier_presentation.router_aujourdhui)
 # Import Excel d'un immeuble complet (modèle + upload tout-ou-rien).
 api_router.include_router(
     immobilier_import_excel.router, dependencies=DEP_IMMOBILIER

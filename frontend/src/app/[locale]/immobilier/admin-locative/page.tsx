@@ -25,6 +25,7 @@ import { TalBailSection } from "@/components/immobilier/tal-bail-parametres";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { authedFetch, hasMinRole } from "@/lib/auth";
 import { ImmobilierTopbar } from "../layout";
+import { useNomPageImmobilier } from "@/hooks/use-presentation-immobilier";
 import { AvisTab } from "./avis-tab";
 import { BauxTab } from "./baux-tab";
 import { BASE_ADMIN, type Contact, lireErreur } from "./commun";
@@ -48,6 +49,8 @@ function ongletDeLUrl(): Onglet {
 }
 
 export default function AdminLocativePage() {
+  // Refonte : la page s'appelle « Baux hors Kratos » avec le nouveau menu.
+  const titrePage = useNomPageImmobilier("Admin locative", "Baux hors Kratos");
   const { user: moi } = useCurrentUser();
   const [onglet, setOnglet] = useState<Onglet>("baux");
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -89,14 +92,14 @@ export default function AdminLocativePage() {
 
   return (
     <>
-      <ImmobilierTopbar breadcrumbs={[{ label: "Immobilier", href: "/immobilier" }, { label: "Admin locative" }]} />
+      <ImmobilierTopbar breadcrumbs={[{ label: "Immobilier", href: "/immobilier" }, { label: titrePage }]} />
       <div className="p-4 pb-28 lg:p-6 lg:pb-28">
         <header className="flex flex-wrap items-start gap-3">
           <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
             <ScrollText className="h-5 w-5" />
           </span>
           <div className="min-w-0 flex-1">
-            <h1 className="text-2xl font-bold text-white">Admin locative</h1>
+            <h1 className="text-2xl font-bold text-white">{titrePage}</h1>
             <p className="mt-1 max-w-3xl text-sm text-white/60">
               L&apos;administration des baux officiels : les baux et les avis de renouvellement pour des gens qui ne sont pas dans
               Kratos, le carnet de contacts de cette section, et le registre de tous les baux générés avec ce que le TAL devrait
