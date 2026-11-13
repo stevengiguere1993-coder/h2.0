@@ -167,6 +167,11 @@ class TalTransmission(Base, TimestampUpdateMixin):
     #: ensure_critical_columns (la table existe en prod depuis #1860).
     signe_le: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     document_signe_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    #: Bail CORRIGÉ après sa génération (Phil 2026-11-13) : id de la transmission qui le
+    #: remplace. Le bail remplacé reste « transmise » — le TAL l'a produit, il compte au
+    #: registre — mais il ne se signe plus et sort des listes. Colonne additive →
+    #: ensure_critical_columns.
+    remplacee_par_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     #: Coût TAL (2,99 $ en mode réel, 0 en simulation) et frais refacturé
     #: au propriétaire (tarif Paramètres, 8,99 $ par défaut).
