@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bell, Check, Loader2, X } from "lucide-react";
+import { Bell, Loader2, X } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
 
@@ -37,7 +37,8 @@ function currentScope(): string {
  * Top-bar notification center.
  * - Polls /api/v1/notifications/unread-count every 60 s to update the
  *   badge (cheap lightweight endpoint).
- * - Fetches the list on demand when the dropdown opens.
+ * - Fetches the list on demand when the dropdown opens, then marks
+ *   what it shows as read: the red badge disappears on open.
  * - Clicking a notification marks it read and navigates to its href.
  */
 export function NotificationBell() {
@@ -87,7 +88,26 @@ export function NotificationBell() {
       const res = await authedFetch(
         `/api/v1/notifications?limit=30${scope ? `&scope=${scope}` : ""}`
       );
-      if (res.ok) setItems((await res.json()) as Notif[]);
+      if (!res.ok) return;
+      const list = (await res.json()) as Notif[];
+      // La liste garde la mise en évidence des non lues (fond accent)
+      // pour cette ouverture, mais la pastille rouge disparaît : tout
+      // ce qui est affiché est considéré vu. `jusqua_id` évite de
+      // marquer lue une notification arrivée depuis le chargement.
+      setItems(list);
+      setUnread(0);
+      const maxId = list.reduce((m, n) => Math.max(m, n.id), 0);
+      if (list.some((n) => !n.is_read) && maxId > 0) {
+        const params = new URLSearchParams({ jusqua_id: String(maxId) });
+        if (scope) params.set("scope", scope);
+        void authedFetch(`/api/v1/notifications/read-all?${params}`, {
+          method: "POST"
+        }).catch(() => undefined);
+      } else {
+        // Rien de non lu dans la liste : on resynchronise le compteur
+        // (des non lues plus anciennes que les 30 dernières restent).
+        void loadCount();
+      }
     } finally {
       setLoading(false);
     }
@@ -118,17 +138,9 @@ export function NotificationBell() {
     }
   }
 
-  async function markAll() {
-    await authedFetch("/api/v1/notifications/read-all", { method: "POST" });
-    setItems((xs) => xs.map((x) => ({ ...x, is_read: true })));
-    setUnread(0);
-  }
-
   async function dismiss(id: number) {
     await authedFetch(`/api/v1/notifications/${id}`, { method: "DELETE" });
-    const n = items.find((x) => x.id === id);
     setItems((xs) => xs.filter((x) => x.id !== id));
-    if (n && !n.is_read) setUnread((u) => Math.max(0, u - 1));
   }
 
   return (
@@ -153,15 +165,6 @@ export function NotificationBell() {
             <p className="text-xs font-semibold uppercase tracking-wider text-accent-500">
               Notifications
             </p>
-            {unread > 0 ? (
-              <button
-                type="button"
-                onClick={markAll}
-                className="flex items-center gap-1 text-[11px] text-white/50 hover:text-white"
-              >
-                <Check className="h-3 w-3" /> Tout marquer lu
-              </button>
-            ) : null}
           </div>
 
           {loading ? (
