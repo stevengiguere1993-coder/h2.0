@@ -118,9 +118,7 @@ async def simuler_fusion_immeubles(
             prefixe_numeros_cible=payload.prefixe_numeros_cible,
             exclure_hypotheques=payload.exclure_hypotheques,
             hypotheques=payload.hypotheques,
-            evaluations=payload.evaluations,
             purchase_price=payload.purchase_price,
-            name=payload.name,
             simuler=True,
         )
     except FusionImpossible as exc:
@@ -153,9 +151,7 @@ async def fusionner_immeubles(
             prefixe_numeros_cible=payload.prefixe_numeros_cible,
             exclure_hypotheques=payload.exclure_hypotheques,
             hypotheques=payload.hypotheques,
-            evaluations=payload.evaluations,
             purchase_price=payload.purchase_price,
-            name=payload.name,
         )
     except FusionImpossible as exc:
         await db.rollback()

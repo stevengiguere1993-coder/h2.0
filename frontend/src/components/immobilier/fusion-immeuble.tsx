@@ -22,14 +22,6 @@
  * s'additionnent ; et comme l'action est irréversible, le serveur joue
  * la fusion sans rien écrire (« simulation ») pour montrer la fiche
  * telle qu'elle sera AVANT le bouton de confirmation.
- *
- * Même jour, après la fusion du 9085 Millen / 710 Legendre : « la valeur
- * actuelle n'est pas bonne » — chaque fiche portait la moitié de
- * l'évaluation ; les évaluations de même type et de même date
- * s'additionnent donc aussi, et l'aperçu montre la valeur actuelle et la
- * valeur municipale obtenues. Et « l'adresse dans le haut devrait être
- * présentée 9085 Millen / 710 Legendre, Montréal » : le nom proposé pour
- * la fiche fusionnée porte les deux adresses (modifiable ici).
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -58,40 +50,17 @@ type HypothequeApercu = {
 };
 
 type ModeHypotheques = "additionner" | "transferer" | "exclure";
-type ModeEvaluations = "additionner" | "transferer" | "exclure";
-
-type EvaluationApercu = {
-  id: number;
-  kind: string;
-  valeur: number;
-  date_evaluation: string;
-  is_reference: boolean;
-  additionnable_avec?: number | null;
-  valeur_cible?: number | null;
-  valeur_additionnee?: number | null;
-};
-
-const LIBELLE_EVALUATION: Record<string, string> = {
-  municipale: "Municipale",
-  marchande: "Marchande",
-  appraisal: "Rapport d'évaluateur",
-  auto: "Auto"
-};
 
 type Simulation = {
   deplaces: Record<string, number>;
   hypotheques_exclues: number;
   hypotheques_additionnees: number;
-  evaluations_additionnees?: number;
-  evaluations_exclues?: number;
   resultat: {
     name: string;
     address: string;
     address_secondaire?: string | null;
     nb_logements?: number | null;
     purchase_price?: number | null;
-    valeur_actuelle?: number | null;
-    valeur_municipale?: number | null;
     logements: { id: number; numero: string; adresse: string }[];
     hypotheques: {
       id: number;
@@ -119,9 +88,6 @@ type Apercu = {
   hypotheques_en_double: number;
   hypotheques_additionnables?: number;
   purchase_price_suggere?: number | null;
-  evaluations_source?: EvaluationApercu[];
-  evaluations_additionnables?: number;
-  nom_suggere?: string;
 };
 
 export type FusionResultat = {
@@ -129,8 +95,6 @@ export type FusionResultat = {
   deplaces: Record<string, number>;
   hypotheques_exclues: number;
   hypotheques_additionnees?: number;
-  evaluations_additionnees?: number;
-  evaluations_exclues?: number;
   immeuble_supprime_id: number;
   immeuble_supprime_nom: string;
 };
@@ -174,14 +138,6 @@ export function resumeDeplaces(res: FusionResultat): string {
     parts.push(
       `${res.hypotheques_exclues} hypothèque(s) en double retirée(s)`
     );
-  if (res.evaluations_additionnees)
-    parts.push(
-      `${res.evaluations_additionnees} évaluation(s) additionnée(s)`
-    );
-  if (res.evaluations_exclues)
-    parts.push(
-      `${res.evaluations_exclues} évaluation(s) en double retirée(s)`
-    );
   return parts.length ? parts.join(", ") : "rien à déplacer";
 }
 
@@ -202,8 +158,6 @@ export function FusionImmeubleModal({
   const [prefixe, setPrefixe] = useState("");
   const [prefixeCible, setPrefixeCible] = useState("");
   const [modeHyp, setModeHyp] = useState<ModeHypotheques>("transferer");
-  const [modeEval, setModeEval] = useState<ModeEvaluations>("transferer");
-  const [nom, setNom] = useState("");
   const [simulation, setSimulation] = useState<Simulation | null>(null);
   const [prix, setPrix] = useState("");
   const [busy, setBusy] = useState(false);
@@ -266,11 +220,6 @@ export function FusionImmeubleModal({
             ? String(ap.purchase_price_suggere)
             : ""
         );
-        // Même chose pour une évaluation portée en deux parts.
-        setModeEval(
-          (ap.evaluations_additionnables ?? 0) > 0 ? "additionner" : "transferer"
-        );
-        setNom(ap.nom_suggere || ap.cible.name);
       } catch (e) {
         if (!cancelled) setErr((e as Error).message);
       } finally {
@@ -308,15 +257,6 @@ export function FusionImmeubleModal({
       Object.entries(apercu?.a_deplacer ?? {}).filter(([, n]) => n > 0),
     [apercu]
   );
-  // Évaluations de la fiche absorbée qui existent aussi (même type, même
-  // date) sur la fiche gardée : la même évaluation, portée en deux parts.
-  const evaluationsPaires = useMemo(
-    () =>
-      (apercu?.evaluations_source ?? []).filter(
-        (e) => e.additionnable_avec != null
-      ),
-    [apercu]
-  );
 
   /** Étape 1 → 2 (simuler = true) : la fusion est jouée sans rien écrire
    *  et la fiche résultante s'affiche. Étape 2 : la vraie fusion. */
@@ -337,8 +277,6 @@ export function FusionImmeubleModal({
             prefixe_numeros_cible: prefixeCible.trim() || null,
             hypotheques: modeHyp,
             exclure_hypotheques: modeHyp === "exclure",
-            evaluations: modeEval,
-            name: nom.trim() || null,
             purchase_price:
               prixNum != null && Number.isFinite(prixNum) ? prixNum : null
           })
@@ -413,14 +351,6 @@ export function FusionImmeubleModal({
                   <dd className="text-right font-semibold text-white">
                     {fmtMontant(fiche.purchase_price)}
                   </dd>
-                  <dt className="text-white/60">Valeur actuelle</dt>
-                  <dd className="text-right font-semibold text-white">
-                    {fmtMontant(fiche.valeur_actuelle)}
-                  </dd>
-                  <dt className="text-white/60">Valeur municipale</dt>
-                  <dd className="text-right font-semibold text-white">
-                    {fmtMontant(fiche.valeur_municipale)}
-                  </dd>
                   <dt className="text-white/60">Hypothèques (montant initial)</dt>
                   <dd className="text-right font-semibold text-white">
                     {fmtMontant(fiche.total_hypotheques)}
@@ -434,19 +364,6 @@ export function FusionImmeubleModal({
                     {fiche.logements.length}
                   </dd>
                 </dl>
-                {simulation.evaluations_additionnees ? (
-                  <p className="mt-2 text-[11px] text-white/60">
-                    {simulation.evaluations_additionnees} évaluation(s)
-                    portée(s) en deux parts réunie(s) en une seule.
-                  </p>
-                ) : null}
-                {simulation.evaluations_exclues ? (
-                  <p className="mt-2 text-[11px] text-white/60">
-                    {simulation.evaluations_exclues} évaluation(s) de «{" "}
-                    {source.name} » déjà présente(s) sur la fiche, non
-                    transférée(s).
-                  </p>
-                ) : null}
               </div>
 
               <div className="rounded-lg border border-brand-800 bg-brand-900 p-3">
@@ -774,82 +691,11 @@ export function FusionImmeubleModal({
                 </p>
               </div>
 
-              {evaluationsPaires.length ? (
-                <div className="rounded-lg border border-brand-800 bg-brand-900 p-3">
-                  <p className="text-xs font-semibold text-white">
-                    Évaluations présentes sur les deux fiches
-                  </p>
-                  <ul className="mt-1 space-y-0.5 text-xs text-white/70">
-                    {evaluationsPaires.map((e) => (
-                      <li key={e.id} className="flex flex-wrap items-center gap-2">
-                        <span className="text-white">
-                          {LIBELLE_EVALUATION[e.kind] || e.kind} du{" "}
-                          {e.date_evaluation}
-                        </span>
-                        <span>
-                          {fmtMontant(e.valeur_cible)} + {fmtMontant(e.valeur)}
-                        </span>
-                        <span className="badge badge-amber">
-                          Ensemble {fmtMontant(e.valeur_additionnee)}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="mt-2 space-y-1.5">
-                    {(
-                      [
-                        [
-                          "additionner",
-                          "Additionner : chaque fiche porte sa part de la même évaluation, la valeur du bâtiment est leur somme."
-                        ],
-                        [
-                          "exclure",
-                          `Garder celle de ${cible.name} seulement : la même évaluation saisie en entier sur les deux fiches.`
-                        ],
-                        [
-                          "transferer",
-                          "Transférer telles quelles : les deux restent, sans total."
-                        ]
-                      ] as [ModeEvaluations, string][]
-                    ).map(([mode, texte]) => (
-                      <label
-                        key={mode}
-                        className="flex items-start gap-2 text-xs text-white/80"
-                      >
-                        <input
-                          type="radio"
-                          name="fusion-evaluations"
-                          checked={modeEval === mode}
-                          onChange={() => setModeEval(mode)}
-                          className="mt-0.5 h-3.5 w-3.5 accent-accent-500"
-                        />
-                        <span>{texte}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-
-              <div>
-                <label className="mb-1 block text-[11px] font-semibold text-white/60">
-                  Nom de la fiche fusionnée
-                </label>
-                <input
-                  value={nom}
-                  onChange={(e) => setNom(e.target.value)}
-                  maxLength={255}
-                  className={inputCls}
-                  placeholder={apercu.cible.name}
-                />
-                <p className="mt-1 text-[11px] text-white/60">
-                  C&apos;est le titre en haut de la fiche et dans les listes.
-                  Vide = « {apercu.nom_suggere || apercu.cible.name} ».
-                </p>
-              </div>
-
               <p className="rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-xs text-white/70">
-                Prochaine étape : un aperçu de la fiche fusionnée (nom,
-                valeur actuelle, hypothèques, logements), avant de confirmer.
+                Prochaine étape : un aperçu de la fiche fusionnée, avant de
+                confirmer. Les évaluations des deux fiches sont conservées ;
+                refais une évaluation du bâtiment complet si chacune ne
+                valait que sa moitié.
               </p>
             </>
           ) : null}

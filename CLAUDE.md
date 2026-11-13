@@ -504,38 +504,6 @@ montant, versement, solde et tranches réunis sur le prêt de la cible),
 la transaction, relève la fiche résultante (`etat_fiche`) puis fait un
 rollback : c'est l'étape « Voir le résultat » de la fenêtre, obligatoire
 avant « Confirmer ». Pas d'annulation après coup (la source est supprimée).
-Après la fusion du 9085 Millen / 710 Legendre (Steven, même jour : « la
-valeur actuelle n'est pas bonne », « l'adresse dans le haut devrait être
-présentée 9085 Millen / 710 Legendre, Montréal », « dans la modification
-je devrais être en mesure de modifier la valeur d'un immeuble ») :
-
-- **Évaluations** : chaque fiche portait la MOITIÉ de l'évaluation agréée
-  et de la valeur municipale ; déplacées telles quelles, la fiche avait
-  deux « références » et n'en affichait qu'une moitié. Option
-  `evaluations` = `additionner` (même type ET même date : une seule
-  évaluation, valeurs sommées, note datée), `exclure` (la même saisie en
-  entier des deux côtés : celle de la cible reste) ou `transferer`
-  (défaut de l'API ; l'écran choisit `additionner` dès qu'une paire
-  existe). Dans tous les cas il ne reste qu'UNE référence après une
-  fusion (celle de la cible d'abord). L'aperçu montre la valeur actuelle
-  et la valeur municipale obtenues.
-- **Valeur actuelle : une seule règle** (`app/services/immeuble_valeur.py`,
-  lue par `/financials`, l'aperçu de fusion et la fiche) : la référence la
-  plus récente, sinon l'évaluation la plus récente ; à date égale le plus
-  grand id. `PATCH /immobilier/immeubles/{id}` accepte `valeur_actuelle`
-  (champ « Valeur actuelle » de « Modifier l'immeuble ») : ce n'est pas
-  une colonne, `fixer_valeur_actuelle` AJOUTE une évaluation « marchande »
-  datée du jour, de référence (source « Saisie dans « Modifier
-  l'immeuble » ») ; une 2e saisie le même jour corrige celle du jour. Un
-  rapport d'évaluateur n'est jamais réécrit.
-- **Nom à plusieurs adresses** (`app/services/immeuble_nom.py`) : forme
-  courte de chaque adresse (numéro civique + nom de la voie, sans « Rue /
-  Avenue… » ni point cardinal) séparées par « / », puis la ville. Seul un
-  nom encore AUTOMATIQUE (l'adresse, avec ou sans la ville) suit les
-  adresses : à la fusion (`nom_suggere`, champ « Nom de la fiche
-  fusionnée », option `name`), à la création, et à la modification quand
-  l'adresse, la ville ou l'adresse secondaire change ; un nom vidé
-  redevient automatique ; un nom choisi par l'utilisateur ne bouge jamais.
 
 ## Centre d'aide — Questions fiables, historique des bugs (2026-11-13)
 

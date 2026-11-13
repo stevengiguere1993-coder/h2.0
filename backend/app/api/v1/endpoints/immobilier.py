@@ -807,11 +807,9 @@ async def create_immeuble(
     # Nom optionnel : si l'utilisateur n'en fournit pas, on prend l'adresse
     # complète comme nom affichable (cas usuel : un immeuble = une adresse).
     if not data.get("name") or not str(data["name"]).strip():
-        from app.services.immeuble_nom import nom_automatique
-
-        data["name"] = nom_automatique(
-            data.get("address"), data.get("city"), data.get("address_secondaire")
-        )
+        addr = data.get("address") or ""
+        city = data.get("city")
+        data["name"] = f"{addr}, {city}" if city else addr
     obj = Immeuble(**data)
     obj.created_at = _now()
     obj.updated_at = _now()
@@ -1183,35 +1181,8 @@ async def update_immeuble(
                 lg_o.locataire_externe_depuis = None
                 lg_o.status = LogementStatus.VACANT.value
                 lg_o.updated_at = _now()
-    # Valeur actuelle : pas une colonne — une évaluation datée du jour,
-    # retenue comme référence (Steven 2026-11-13).
-    valeur_actuelle = data_imm.pop("valeur_actuelle", None)
-    # Nom : vide = automatique (l'adresse) ; un nom encore automatique
-    # SUIT les adresses — une adresse secondaire ajoutée le fait passer à
-    # « 9085 Millen / 710 Legendre, Montréal » (Steven 2026-11-13). Un nom
-    # personnalisé n'est jamais touché.
-    from app.services.immeuble_nom import nom_automatique, nom_est_automatique
-
-    nom_envoye = data_imm.get("name") if "name" in data_imm else obj.name
-    nom_vide = "name" in data_imm and not str(data_imm["name"] or "").strip()
-    nom_suit = nom_vide or (
-        (nom_envoye or "").strip() == (obj.name or "").strip()
-        and nom_est_automatique(
-            obj.name, obj.address, obj.city, obj.address_secondaire
-        )
-        and any(
-            cle in data_imm and (data_imm[cle] or None) != (getattr(obj, cle) or None)
-            for cle in ("address", "city", "address_secondaire")
-        )
-    )
     for k, v in data_imm.items():
         setattr(obj, k, v)
-    if nom_suit:
-        obj.name = nom_automatique(obj.address, obj.city, obj.address_secondaire)
-    if valeur_actuelle is not None:
-        from app.services.immeuble_valeur import fixer_valeur_actuelle
-
-        await fixer_valeur_actuelle(db, obj.id, valeur_actuelle)
     obj.updated_at = _now()
     # Interne → externe : les dossiers de relocation actifs n'ont plus
     # de sens (« Occupé · libre le 30 juin » sur une unité externe).
@@ -9169,13 +9140,47 @@ async def get_financials(
         sum(balance_effective(h) * part_de(h) for h in hyps_actives), 2
     )
 
-    # Valeur actuelle : l'évaluation marquée « référence » prime ; sinon
-    # la plus récente (toutes catégories). Valeur municipale : la plus
-    # récente de ce type. Une seule règle, partagée avec l'aperçu de
-    # fusion et « Modifier l'immeuble » (``immeuble_valeur``).
-    from app.services.immeuble_valeur import valeurs_de
+    # Valeur actuelle : l'évaluation marquée « référence » prime ;
+    # sinon fallback sur la plus récente (toutes catégories).
+    val_row = (
+        await db.execute(
+            select(Evaluation.valeur)
+            .where(
+                and_(
+                    Evaluation.immeuble_id == immeuble_id,
+                    Evaluation.is_reference.is_(True),
+                )
+            )
+            .order_by(Evaluation.date_evaluation.desc())
+            .limit(1)
+        )
+    ).scalar()
+    if val_row is None:
+        val_row = (
+            await db.execute(
+                select(Evaluation.valeur)
+                .where(Evaluation.immeuble_id == immeuble_id)
+                .order_by(Evaluation.date_evaluation.desc())
+                .limit(1)
+            )
+        ).scalar()
+    valeur_actuelle = float(val_row) if val_row is not None else None
 
-    valeur_actuelle, valeur_municipale = await valeurs_de(db, immeuble_id)
+    # Valeur municipale (la plus récente du kind=municipale)
+    val_muni = (
+        await db.execute(
+            select(Evaluation.valeur)
+            .where(
+                and_(
+                    Evaluation.immeuble_id == immeuble_id,
+                    Evaluation.kind == EvaluationKind.MUNICIPALE.value,
+                )
+            )
+            .order_by(Evaluation.date_evaluation.desc())
+            .limit(1)
+        )
+    ).scalar()
+    valeur_municipale = float(val_muni) if val_muni is not None else None
 
     # Si pas d'évaluation, fallback sur prix d'achat ou valeur municipale
     valeur_pour_ratios = (

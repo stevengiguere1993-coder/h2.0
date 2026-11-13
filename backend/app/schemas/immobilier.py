@@ -90,11 +90,6 @@ class ImmeubleUpdate(BaseModel):
     )
     maintenance_interne: Optional[bool] = None
     collecte_depuis: Optional[date] = None
-    #: Valeur actuelle de l'immeuble (Steven 2026-11-13 : « dans la
-    #: modification je devrais être en mesure de modifier la valeur ») :
-    #: enregistrée comme une nouvelle évaluation datée du jour, retenue
-    #: comme référence (``app.services.immeuble_valeur``). Pas une colonne.
-    valeur_actuelle: Optional[float] = Field(default=None, ge=0)
 
 
 class ImmeubleRead(ImmeubleBase):
@@ -1397,17 +1392,8 @@ class FusionImmeublesOptions(BaseModel):
     #: « transferer » (telles quelles) ou « exclure » (saisies en double).
     #: Absent = selon ``exclure_hypotheques`` (rétrocompatible).
     hypotheques: Optional[Literal["additionner", "transferer", "exclure"]] = None
-    #: Évaluations de même type et de même date dans les deux fiches :
-    #: « additionner » (chaque fiche en portait sa part), « exclure » (la
-    #: même saisie en entier des deux côtés : celle de la cible reste) ou
-    #: « transferer » (telles quelles — défaut).
-    evaluations: Optional[Literal["additionner", "transferer", "exclure"]] = None
     #: Prix d'achat de la fiche fusionnée (vide = celui de la cible).
     purchase_price: Optional[float] = Field(default=None, ge=0)
-    #: Nom de la fiche fusionnée. Vide = un nom encore automatique prend
-    #: les deux adresses (« 9085 Millen / 710 Legendre, Montréal »), un nom
-    #: personnalisé est gardé.
-    name: Optional[str] = Field(default=None, max_length=255)
 
 
 class FusionHypothequeApercu(BaseModel):
@@ -1423,19 +1409,6 @@ class FusionHypothequeApercu(BaseModel):
     #: prêteur, même taux, aucune conjointe) et le montant obtenu.
     additionnable_avec: Optional[int] = None
     montant_additionne: Optional[float] = None
-
-
-class FusionEvaluationApercu(BaseModel):
-    id: int
-    kind: str
-    valeur: float
-    date_evaluation: date
-    is_reference: bool = False
-    #: Évaluation de la cible de même type et de même date, sa valeur, et
-    #: le total si les deux parts s'additionnent.
-    additionnable_avec: Optional[int] = None
-    valeur_cible: Optional[float] = None
-    valeur_additionnee: Optional[float] = None
 
 
 class FusionImmeubleResume(BaseModel):
@@ -1463,10 +1436,6 @@ class FusionImmeublesApercu(BaseModel):
     hypotheques_en_double: int = 0
     hypotheques_additionnables: int = 0
     purchase_price_suggere: Optional[float] = None
-    evaluations_source: List[FusionEvaluationApercu] = []
-    evaluations_additionnables: int = 0
-    #: Nom proposé pour la fiche fusionnée.
-    nom_suggere: str = ""
 
 
 class FusionLogementEtat(BaseModel):
@@ -1486,14 +1455,6 @@ class FusionHypothequeEtat(BaseModel):
     part_pct: float = 100.0
 
 
-class FusionEvaluationEtat(BaseModel):
-    id: int
-    kind: str
-    valeur: float
-    date_evaluation: date
-    is_reference: bool = False
-
-
 class FusionFicheEtat(BaseModel):
     """La fiche cible telle qu'elle serait après la fusion."""
 
@@ -1503,10 +1464,6 @@ class FusionFicheEtat(BaseModel):
     address_secondaire: Optional[str] = None
     nb_logements: Optional[int] = None
     purchase_price: Optional[float] = None
-    evaluations: List[FusionEvaluationEtat] = []
-    #: Même règle que la fiche : la référence, sinon la plus récente.
-    valeur_actuelle: Optional[float] = None
-    valeur_municipale: Optional[float] = None
     logements: List[FusionLogementEtat] = []
     hypotheques: List[FusionHypothequeEtat] = []
     total_hypotheques: float = 0
@@ -1519,8 +1476,6 @@ class FusionImmeublesSimulation(BaseModel):
     deplaces: dict[str, int] = {}
     hypotheques_exclues: int = 0
     hypotheques_additionnees: int = 0
-    evaluations_additionnees: int = 0
-    evaluations_exclues: int = 0
     immeuble_supprime_id: int
     immeuble_supprime_nom: str
     resultat: FusionFicheEtat
@@ -1531,7 +1486,5 @@ class FusionImmeublesResultat(BaseModel):
     deplaces: dict[str, int] = {}
     hypotheques_exclues: int = 0
     hypotheques_additionnees: int = 0
-    evaluations_additionnees: int = 0
-    evaluations_exclues: int = 0
     immeuble_supprime_id: int
     immeuble_supprime_nom: str
