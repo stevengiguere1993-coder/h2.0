@@ -53,6 +53,9 @@ export default function NewBonPage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [assigneeId, setAssigneeId] = useState("");
+  // Accès aux codes du lieu pour l'assigné jusqu'à la fin du BT (coché
+  // d'office, Steven 2026-11-13).
+  const [accesCodes, setAccesCodes] = useState(true);
   const [margePct, setMargePct] = useState("10");
   const [photos, setPhotos] = useState<File[]>([]);
 
@@ -271,7 +274,10 @@ export default function NewBonPage() {
       if (executantType === "sous_traitant")
         payload.sous_traitant_id = Number(sousTraitantId);
       if (description.trim()) payload.description = description.trim();
-      if (assigneeId) payload.assignee_user_id = Number(assigneeId);
+      if (assigneeId) {
+        payload.assignee_user_id = Number(assigneeId);
+        payload.donner_acces_codes = accesCodes;
+      }
 
       const res = await authedFetch("/api/v1/bons-travail", {
         method: "POST",
@@ -706,6 +712,18 @@ export default function NewBonPage() {
                   </option>
                 ))}
               </select>
+              {assigneeId && immeubleId ? (
+                <label className="mt-2 flex items-start gap-2 text-xs text-white/80">
+                  <input
+                    type="checkbox"
+                    checked={accesCodes}
+                    onChange={(e) => setAccesCodes(e.target.checked)}
+                    className="mt-0.5 h-4 w-4"
+                  />
+                  Donner à l&apos;assigné l&apos;accès aux codes du logement
+                  jusqu&apos;à la fin du BT
+                </label>
+              ) : null}
             </div>
             <div>
               <label htmlFor="marge" className="label">
