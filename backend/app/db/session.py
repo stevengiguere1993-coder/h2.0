@@ -475,6 +475,8 @@ async def ensure_critical_columns() -> None:
         ("rencontres", "drive_links_json", "TEXT"),
         # Envoi du rapport de rencontre par courriel (historique).
         ("rencontres", "envois_json", "TEXT"),
+        # Empreinte de la dernière analyse des dossiers (2026-11-13).
+        ("rencontres", "dossiers_empreinte", "VARCHAR(64)"),
         # Optimisation v2 : type d'entente de la négo locataire.
         ("optimisation_negos", "type_entente", "VARCHAR(24)"),
         # Optimisation v5 : objectifs annuels, financement/comptant par
@@ -1147,6 +1149,38 @@ async def ensure_assistant_tables() -> None:
             )
     except Exception as exc:  # noqa: BLE001
         log.warning("ensure_assistant_tables failed: %s", exc)
+
+
+async def ensure_rencontre_dossier_tables() -> None:
+    """Crée les tables des dossiers suivis en rencontres et des consignes
+    à Kratos (2026-11-13) dans leur propre transaction — même filet que
+    ``ensure_assistant_tables``. Idempotent."""
+    import logging
+
+    log = logging.getLogger("db.ensure_rencontre_dossier_tables")
+    try:
+        from app.db.base import Base
+        from app.models.rencontre_dossier import (
+            RencontreConsigne,
+            RencontreDossier,
+            RencontreDossierDoublon,
+            RencontreDossierMention,
+        )
+
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda c: Base.metadata.create_all(
+                    c,
+                    tables=[
+                        RencontreDossier.__table__,
+                        RencontreDossierMention.__table__,
+                        RencontreDossierDoublon.__table__,
+                        RencontreConsigne.__table__,
+                    ],
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_rencontre_dossier_tables failed: %s", exc)
 
 
 async def ensure_volets_whitelist_migration() -> None:

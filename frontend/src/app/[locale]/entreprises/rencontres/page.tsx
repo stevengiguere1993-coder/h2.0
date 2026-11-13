@@ -18,6 +18,8 @@ import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { Link } from "@/i18n/navigation";
 import { RencontresDemander } from "@/components/entreprises/rencontres-demander";
+import { RencontresConsignes } from "@/components/entreprises/rencontres-consignes";
+import { RencontresDossiers } from "@/components/entreprises/rencontres-dossiers";
 import { QGTopbar, useEntreprisesLayout } from "../layout";
 
 /**
@@ -57,9 +59,34 @@ function parseIds(json: string | null): number[] {
   }
 }
 
+type Vue = "rencontres" | "dossiers" | "consignes";
+
+const VUES: { cle: Vue; libelle: string }[] = [
+  { cle: "rencontres", libelle: "Rencontres" },
+  { cle: "dossiers", libelle: "Dossiers" },
+  { cle: "consignes", libelle: "Consignes" }
+];
+
+function vueInitiale(): Vue {
+  if (typeof window === "undefined") return "rencontres";
+  const v = new URLSearchParams(window.location.search).get("vue");
+  return v === "dossiers" || v === "consignes" ? v : "rencontres";
+}
+
 export default function RencontresListPage() {
   const { entreprises } = useEntreprisesLayout();
   const confirm = useConfirm();
+  // Onglet courant, gardé dans l'URL (?vue=dossiers) pour le retour arrière
+  // et les liens directs.
+  const [vue, setVue] = useState<Vue>(vueInitiale);
+  function changerVue(v: Vue) {
+    setVue(v);
+    if (typeof window === "undefined") return;
+    const u = new URL(window.location.href);
+    if (v === "rencontres") u.searchParams.delete("vue");
+    else u.searchParams.set("vue", v);
+    window.history.replaceState(null, "", u.toString());
+  }
   const [rows, setRows] = useState<Rencontre[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -359,6 +386,42 @@ export default function RencontresListPage() {
       />
 
       <div className="p-4 lg:p-6">
+        <div
+          className="mb-4 flex gap-1 overflow-x-auto border-b"
+          style={{ borderColor: "var(--qg-border)" }}
+          role="tablist"
+          aria-label="Vues des rencontres"
+        >
+          {VUES.map((v) => {
+            const actif = vue === v.cle;
+            return (
+              <button
+                key={v.cle}
+                type="button"
+                role="tab"
+                aria-selected={actif}
+                onClick={() => changerVue(v.cle)}
+                className="-mb-px whitespace-nowrap border-b-2 px-4 py-2 text-base font-semibold transition"
+                style={{
+                  borderColor: actif ? "var(--qg-accent)" : "transparent",
+                  color: actif ? "var(--qg-text)" : "var(--qg-text-muted)"
+                }}
+              >
+                {v.libelle}
+              </button>
+            );
+          })}
+        </div>
+
+        {vue === "dossiers" ? (
+          <RencontresDossiers
+            entreprises={entreprises}
+            entrepriseId={filterEntId}
+          />
+        ) : null}
+        {vue === "consignes" ? <RencontresConsignes /> : null}
+
+        <div className={vue === "rencontres" ? "" : "hidden"}>
         {syncMsg ? (
           <p
             className="mb-3 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-300"
@@ -545,6 +608,7 @@ export default function RencontresListPage() {
             })}
           </ul>
         )}
+        </div>
       </div>
 
       {createOpen ? (
