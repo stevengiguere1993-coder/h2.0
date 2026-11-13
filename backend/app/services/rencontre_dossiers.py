@@ -37,6 +37,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -131,6 +132,56 @@ def _liste_txt(v: Any, maxi: int = 12) -> list[str]:
         return []
     out = [t for t in (_txt(x, 500) for x in v) if t]
     return out[:maxi]
+
+
+#: Ce que l'IA écrit pour un dossier dont la rencontre n'a PAS parlé
+#: (« n'a pas été abordé », « non discuté », « aucune mention »…), sur un
+#: texte passé par ``normaliser``. « Pas discuté AVEC le banquier » est un
+#: vrai état de dossier, pas une remarque sur la rencontre.
+_RE_NON_ABORDE = re.compile(
+    r"\bpas (?:encore |vraiment |du tout )?ete "
+    r"(?:re)?(?:abordee?s?|discutee?s?|mentionnee?s?|evoquee?s?)\b(?! avec\b)"
+    r"|\bpas (?:encore )?ete question\b"
+    r"|\bnon (?:abordee?s?|discutee?s?|mentionnee?s?|evoquee?s?)\b"
+    r"|\baucune (?:mention|discussion)\b"
+    r"|\bpas (?:fait l objet|de mention)\b"
+)
+_RE_PHRASES = re.compile(r"(?<=[.!?…])\s+")
+_RE_OPPOSITION = re.compile(
+    r"\s*[,;]?\s+(?:mais|cependant|toutefois|par contre|en revanche)\s+",
+    re.IGNORECASE,
+)
+
+
+def _non_aborde(texte: str) -> bool:
+    return bool(_RE_NON_ABORDE.search(normaliser(texte)))
+
+
+def sans_non_aborde(texte: Optional[str]) -> Optional[str]:
+    """Retire d'un texte de l'IA ce qui dit seulement qu'un point « n'a
+    pas été abordé » : une rencontre qui ne parle pas d'un dossier ne
+    change pas son état. D'une phrase mixte (« Les portes arrivent
+    mercredi, mais les électros n'ont pas été abordés. ») reste la partie
+    qui dit quelque chose. ``None`` s'il ne reste rien."""
+    if not texte:
+        return None
+    gardees: list[str] = []
+    for phrase in _RE_PHRASES.split(texte.strip()):
+        if not phrase:
+            continue
+        if not _non_aborde(phrase):
+            gardees.append(phrase)
+            continue
+        bouts = [
+            b.strip(" ,;.") for b in _RE_OPPOSITION.split(phrase) if b.strip(" ,;.")
+        ]
+        if len(bouts) < 2:
+            continue
+        reste = [b for b in bouts if not _non_aborde(b)]
+        if reste:
+            morceau = ", ".join(reste)
+            gardees.append(morceau[0].upper() + morceau[1:] + ".")
+    return " ".join(gardees) or None
 
 
 # ── Titres : clé de comparaison ─────────────────────────────────────
@@ -372,9 +423,14 @@ l'autre jusqu'à ce qu'il soit réglé : un achat (« Camion »), un problème \
 Saint-Clément »), une embauche, un financement.
 
 On te donne UNE rencontre et la liste des dossiers DÉJÀ suivis. Rends \
-les dossiers dont cette rencontre a parlé.
+SEULEMENT les dossiers dont cette rencontre a réellement parlé.
 
 ## Règles
+- La liste des dossiers déjà suivis sert UNIQUEMENT à rattacher. Un \
+dossier existant dont cette rencontre ne dit rien n'est PAS rendu : ne \
+le rends jamais pour écrire « non abordé », « pas discuté » ou « rien de \
+nouveau ». Dans `resume` et `etat`, écris ce qui a été DIT, jamais ce \
+qui n'a pas été abordé.
 - RATTACHE D'ABORD : si le sujet correspond à un dossier existant (même \
 chose dite autrement, autre orthographe, nom approximatif), mets son \
 `dossier_id`. Ne crée un nouveau dossier (`dossier_id`: null) que si \
@@ -580,6 +636,7 @@ async def appliquer_analyse(
     ents_r = _ids_entreprises(r)
     ent_defaut = ents_r[0] if len(ents_r) == 1 else None
     crees = 0
+    non_abordes = 0
     mentions: dict[int, RencontreDossierMention] = {}
 
     for item in items:
@@ -587,6 +644,15 @@ async def appliquer_analyse(
             continue
         titre = _txt(item.get("titre"), 255)
         if not titre:
+            continue
+        resume_brut = _txt(item.get("resume"), 4000)
+        etat_brut = _txt(item.get("etat"), 2000)
+        resume = sans_non_aborde(resume_brut)
+        etat = sans_non_aborde(etat_brut)
+        if (resume_brut or etat_brut) and not (resume or etat):
+            # L'IA a rendu un dossier pour dire que la rencontre n'en a
+            # pas parlé : pas de mention, son état ne bouge pas.
+            non_abordes += 1
             continue
         ent_id = _entreprise_id(_txt(item.get("entreprise")), entreprises)
         d: Optional[RencontreDossier] = None
@@ -642,8 +708,8 @@ async def appliquer_analyse(
             m = RencontreDossierMention(
                 dossier_id=d.id,
                 rencontre_id=r.id,
-                resume=_txt(item.get("resume"), 4000),
-                etat=_txt(item.get("etat"), 2000),
+                resume=resume,
+                etat=etat,
                 statut=_statut(item.get("statut")),
                 responsable=_txt(item.get("responsable"), 255),
                 prochaine_action=_txt(item.get("prochaine_action"), 2000),
@@ -657,10 +723,8 @@ async def appliquer_analyse(
             mentions[d.id] = m
         else:
             # L'IA a rendu deux entrées pour le même dossier : on les joint.
-            m.resume = " ".join(
-                x for x in (m.resume, _txt(item.get("resume"), 4000)) if x
-            )[:4000] or None
-            m.etat = _txt(item.get("etat"), 2000) or m.etat
+            m.resume = " ".join(x for x in (m.resume, resume) if x)[:4000] or None
+            m.etat = etat or m.etat
             m.statut = _statut(item.get("statut"))
             m.responsable = m.responsable or _txt(item.get("responsable"), 255)
             m.prochaine_action = (
@@ -690,6 +754,7 @@ async def appliquer_analyse(
         "dossiers_touches": len(mentions),
         "dossiers_crees": crees,
         "dossiers_retires": retires,
+        "non_abordes": non_abordes,
     }
 
 
