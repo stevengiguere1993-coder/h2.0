@@ -23,7 +23,7 @@
  * fait foi, aucun frais au propriétaire, le locateur signe lui-même.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -125,6 +125,17 @@ type Preparation = {
   requis?: string[];
   /** Règles d'affichage : les champs qui ne s'appliquent pas aux réponses sont masqués (et vidés par le serveur). */
   regles?: Regle[];
+  /** Carnet d'Admin locative (baux indépendants) : une personne déjà saisie se choisit au lieu de se retaper. */
+  carnet?: ContactCarnet[];
+};
+type ContactCarnet = {
+  id: number;
+  nom: string;
+  role: string | null;
+  telephone: string;
+  courriel: string;
+  /** Adresse déjà découpée en champs du TAL (NoCivique, Rue…), ou null. */
+  adresse: Occurrence | null;
 };
 type Condition = {
   champ?: string;
@@ -527,6 +538,7 @@ export function TalBailModal({
   bailId,
   dossierId,
   transmissionId,
+  nouveauIndependant,
   titre,
   onClose,
   onDone
@@ -536,13 +548,18 @@ export function TalBailModal({
   dossierId?: number | null;
   /** Bail INDÉPENDANT (page « Bail indépendant ») : la transmission à ouvrir, sans bail Kratos. */
   transmissionId?: number;
+  /** NOUVEAU bail indépendant (Phil 2026-11-13) : le formulaire s'ouvre tout de suite ; le
+   *  brouillon naît à la première vérification. */
+  nouveauIndependant?: boolean;
   /** Ex. « Logement 3 · 8900 rue Saint-Hubert ». */
   titre: string;
   onClose: () => void;
   /** Quelque chose a changé (transmission, PDF, signature) → recharger. */
   onDone: () => void;
 }) {
-  const independant = transmissionId != null;
+  const independant = transmissionId != null || !!nouveauIndependant;
+  // Brouillon indépendant en cours : celui qu'on a ouvert, ou celui que la première vérification crée.
+  const brouillonId = useRef<number | undefined>(transmissionId);
   const [etape, setEtape] = useState<Etape>("chargement");
   const [schema, setSchema] = useState<SchemaInfo | null>(null);
   const [prep, setPrep] = useState<Preparation | null>(null);
@@ -592,7 +609,9 @@ export function TalBailModal({
         authedFetch(`${BASE}/schema`),
         authedFetch(
           independant
-            ? `${BASE}/preparer?transmission_id=${transmissionId}`
+            ? transmissionId != null
+              ? `${BASE}/preparer?transmission_id=${transmissionId}`
+              : `${BASE}/independants/nouveau`
             : `${BASE}/preparer?bail_id=${bailId}`
         )
       ]);
@@ -672,10 +691,15 @@ export function TalBailModal({
     setErr(null);
     try {
       const r = independant
-        ? await authedFetch(`${BASE}/transmissions/${transmissionId}`, {
-            method: "PATCH",
-            body: JSON.stringify({ form })
-          })
+        ? brouillonId.current != null
+          ? await authedFetch(`${BASE}/transmissions/${brouillonId.current}`, {
+              method: "PATCH",
+              body: JSON.stringify({ form })
+            })
+          : await authedFetch(`${BASE}/independants`, {
+              method: "POST",
+              body: JSON.stringify({ form })
+            })
         : await authedFetch(`${BASE}/transmissions`, {
             method: "POST",
             body: JSON.stringify({
@@ -687,6 +711,7 @@ export function TalBailModal({
           });
       if (!r.ok) throw new Error(await lireErreur(r));
       const t = (await r.json()) as TalTransmission;
+      if (independant) brouillonId.current = t.id;
       setTransmission(t);
       setRapport(t.rapport ?? null);
       if (t.rapport?.valide) {
@@ -903,6 +928,7 @@ export function TalBailModal({
             ) : null}
 
             <ContexteBandeau contexte={independant ? contexteDuFormulaire(form) : prep.contexte} />
+            {independant ? <RemplirDepuisImmeuble onAppliquer={(valeurs) => setForm((f) => ({ ...f, ...valeurs }))} /> : null}
 
             {aVerifier.length ? (
               <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2">
@@ -970,6 +996,7 @@ export function TalBailModal({
                   {s.note ? <p className="mb-2 text-[11px] text-white/55">{s.note}</p> : null}
                   <ChampsListe
                     cles={s.cles.filter((k) => k in schema.gabarit)}
+                    carnet={independant ? prep.carnet : undefined}
                     form={form}
                     schema={schema}
                     champIndex={champIndex}
@@ -1448,7 +1475,125 @@ type ListeProps = {
   poserOccurrence: (k: string, i: number, occ: Occurrence) => void;
   ajouterOccurrence: (k: string) => void;
   retirerOccurrence: (k: string, i: number) => void;
+  /** Carnet d'Admin locative : proposé sur chaque personne du bail. */
+  carnet?: ContactCarnet[];
 };
+
+/** Groupes de personnes du bail → champ du courriel de la personne elle-même. */
+const COURRIEL_PAR_GROUPE: Record<string, string> = {
+  locateurs: "courrielLocateur",
+  locataires: "courrielLocataire",
+  autresSignataires: "courriel"
+};
+
+/** Une personne du carnet remplit une personne du bail : nom, téléphone, courriel, adresse. */
+function remplirDepuisCarnet(k: string, occ: Occurrence, c: ContactCarnet): Occurrence {
+  const out: Occurrence = { ...occ };
+  if ("nom" in out) out.nom = c.nom;
+  if (c.telephone && "noTelephone" in out) out.noTelephone = c.telephone;
+  const cle = COURRIEL_PAR_GROUPE[k];
+  if (c.courriel && cle && cle in out) out[cle] = c.courriel;
+  if (c.adresse && Array.isArray(out.adresse)) {
+    out.adresse = [{ ...(((out.adresse as Occurrence[])[0] || {}) as Occurrence), ...c.adresse }];
+  }
+  return out;
+}
+
+/** Bail indépendant : la compagnie détentrice et l'adresse viennent d'un de nos immeubles, pour
+ *  écrire moins (Phil 2026-11-13). Rien n'est lié : le bail reste hors de la gestion locative. */
+function RemplirDepuisImmeuble({ onAppliquer }: { onAppliquer: (valeurs: Form) => void }) {
+  const [immeubles, setImmeubles] = useState<{ id: number; name: string | null; address: string | null }[]>([]);
+  const [logements, setLogements] = useState<{ id: number; numero: string }[]>([]);
+  const [immeubleId, setImmeubleId] = useState("");
+  const [logementId, setLogementId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await authedFetch("/api/v1/immobilier/immeubles");
+        if (res.ok) setImmeubles((await res.json()) as { id: number; name: string | null; address: string | null }[]);
+      } catch {
+        /* la liste restera vide : le bail se remplit à la main */
+      }
+    })();
+  }, []);
+
+  async function appliquer(imm: string, lg: string) {
+    setImmeubleId(imm);
+    setLogementId(lg);
+    setNote(null);
+    if (!imm) {
+      setLogements([]);
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await authedFetch(`${BASE}/prefill/immeuble/${imm}${lg ? `?logement_id=${lg}` : ""}`);
+      if (!res.ok) throw new Error(await lireErreur(res));
+      const d = (await res.json()) as {
+        valeurs: Form;
+        locateur: string | null;
+        immeuble: { adresse: string };
+        logements: { id: number; numero: string }[];
+      };
+      setLogements(d.logements || []);
+      onAppliquer(d.valeurs);
+      setNote(
+        `Rempli : ${d.locateur ? `locateur « ${d.locateur} », ` : ""}adresse ${d.immeuble.adresse}${
+          lg ? ", logement et nombre de pièces" : ""
+        }. Vérifie les sections A et B.`
+      );
+    } catch (e) {
+      setNote((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (immeubles.length === 0) return null;
+  return (
+    <div className="mt-3 rounded-lg border border-brand-800 bg-brand-900/60 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-white/50">Remplir plus vite</span>
+        <select
+          className={`${INPUT_CLS} max-w-[260px]`}
+          value={immeubleId}
+          disabled={busy}
+          onChange={(e) => void appliquer(e.target.value, "")}
+          title="Un de nos immeubles : la compagnie détentrice et l'adresse se remplissent seules"
+        >
+          <option value="">Un de nos immeubles…</option>
+          {immeubles.map((im) => (
+            <option key={im.id} value={im.id}>
+              {im.name || im.address || `Immeuble ${im.id}`}
+            </option>
+          ))}
+        </select>
+        {logements.length > 0 ? (
+          <select
+            className={`${INPUT_CLS} max-w-[160px]`}
+            value={logementId}
+            disabled={busy}
+            onChange={(e) => void appliquer(immeubleId, e.target.value)}
+            title="Le logement : numéro d'appartement et nombre de pièces"
+          >
+            <option value="">Logement…</option>
+            {logements.map((lg) => (
+              <option key={lg.id} value={lg.id}>
+                {lg.numero}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin text-white/50" /> : null}
+        <span className="text-[11px] text-white/45">Le bail reste indépendant de la gestion locative.</span>
+      </div>
+      {note ? <p className="mt-1 text-[11px] text-white/60">{note}</p> : null}
+    </div>
+  );
+}
 
 function ChampsListe(p: ListeProps) {
   const masques = new Set(p.regles.filter((r) => !r.groupe && !sApplique(r, p.form)).map((r) => r.cible));
@@ -1545,6 +1690,27 @@ function GroupeEditeur({ k, ...p }: ListeProps & { k: string }) {
       <div className="mt-2 space-y-2">
         {occurrences.map((occ, i) => (
           <div key={i} className="rounded-md border border-brand-800/70 bg-brand-950/50 p-2">
+            {p.carnet?.length && k in COURRIEL_PAR_GROUPE ? (
+              <div className="mb-1.5">
+                <select
+                  className={`${INPUT_CLS} max-w-[260px]`}
+                  value=""
+                  onChange={(e) => {
+                    const c = p.carnet?.find((x) => String(x.id) === e.target.value);
+                    if (c) p.poserOccurrence(k, i, remplirDepuisCarnet(k, occ, c));
+                  }}
+                  title="Une personne déjà saisie : ses coordonnées se remplissent seules"
+                >
+                  <option value="">Choisir dans le carnet…</option>
+                  {p.carnet.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.nom}
+                      {c.role ? ` · ${c.role}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
             {max > 1 ? (
               <div className="mb-1 flex items-center">
                 <span className="text-[11px] font-semibold text-accent-500">#{i + 1}</span>
