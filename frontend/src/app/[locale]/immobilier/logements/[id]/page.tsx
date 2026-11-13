@@ -50,6 +50,7 @@ import {
 } from "@/components/immobilier/logement-fiche";
 import {
   CelluleLoyer,
+  type MoisImpaye,
   type FraisMois
 } from "@/components/immobilier/paiements-actions";
 import {
@@ -181,6 +182,8 @@ type LoyerMoisLigne = {
   loyer_mensuel: number;
   montant_paye: number | null;
   solde_total?: number;
+  /** Détail du solde : chaque mois encore dû (2026-11-13). */
+  mois_impayes?: MoisImpaye[];
   //: Lignes du mois (rabais, frais, crédit, ajustement) — lecture seule.
   frais_mois?: FraisMois[];
   //: Versements du mois (paiements partiels distincts).
@@ -1109,6 +1112,8 @@ export default function LogementDetailPage({
                           loyer={loyerMois.loyer_mensuel}
                           recu={loyerMois.montant_paye}
                           solde={loyerMois.solde_total}
+                          moisImpayes={loyerMois.mois_impayes}
+                          moisAffiche={moisCourant()}
                           fmt={money}
                           frais={loyerMois.frais_mois}
                           paiements={loyerMois.paiements}

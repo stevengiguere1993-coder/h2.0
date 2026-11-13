@@ -365,6 +365,25 @@ facture par facture, compteur ramené juste après. Le PDF de facture
 porte l'adresse et le téléphone d'Horizon (`COMPANY_ADDRESS`,
 `COMPANY_TEL` dans `soumission_pdf.py`).
 
+## Rencontres — questions sur toutes les rencontres (2026-11-13)
+
+Steven : « si je pose une question à Kratos sur un élément, il doit être
+capable de regarder dans chacune des rencontres et me dire si nous avons
+discuté de quelque chose ou l'avancement d'un dossier ». Service
+`app/services/rencontre_recherche.py` : la question est réduite à ses
+mots-clés (accents / pluriels près, mots vides et mots « méta » comme
+rencontre / discuté / dossier retirés), chaque rencontre est découpée en
+passages (résumé global, notes, résumé IA de chaque section — décisions,
+actions, questions, risques — et transcript par tranches) notés par
+rareté des mots, puis l'IA répond à partir des meilleurs passages remis
+en ordre CHRONOLOGIQUE (la plus récente fait foi) en citant « Rencontre
+#ID (date) ». Sans IA ou IA en panne : la liste des passages, jamais de
+blocage. Routes `GET /rencontres/recherche?q=` (sans IA, pour le
+connecteur) et `POST /rencontres/demander`, réservées à qui voit la page
+`entreprises.rencontres` (403 sinon) ; bloc « Demander à Kratos » en
+haut de Entreprises → Rencontres ; le Centre d'aide (`/help/ask`) reçoit
+aussi ces passages, avec la même garde. Aucune table ni colonne ajoutée.
+
 ## Espace investisseur — cascade, rôle, documents (2026-11-07)
 
 Steven : « Vincent ne voit aucun projet alors qu'il détient 30 % de
@@ -423,7 +442,15 @@ visuel ». `app/services/immeuble_fusion.py` : un numéro de logement n'est
 un doublon qu'à la MÊME adresse civique (`cle_logement` = adresse du
 logement, sinon celle de l'immeuble, + numéro ; même règle à la création,
 à la création en lot et dans le diagnostic des doublons) → le « 1 » du
-9085 Millen et le « 1 » du 710 Legendre coexistent, sans préfixe. Prix
+9085 Millen et le « 1 » du 710 Legendre peuvent coexister. Précision de
+Steven le même jour (« il peut y avoir par exemple 710-1 à 710-2 […] je
+voulais seulement dire de ne pas remplacer 710 Legendre par 9085
+Millen ») : le préfixe PROPOSÉ d'office est le numéro civique de la fiche
+ABSORBÉE (`prefixe_numeros`, « 710- » → « 710-1 ») dès que les deux
+fiches portent les mêmes numéros (`numeros_communs`), obligatoire
+seulement en cas de conflit à la même adresse ; `prefixe_numeros_cible`,
+facultatif, préfixe les logements de la fiche gardée (« 9085- »). Chaque
+logement garde son adresse civique dans tous les cas. Prix
 d'achat suggéré = somme des deux fiches. Hypothèques : option
 `hypotheques` = `additionner` (même prêteur, même taux, non conjointes :
 montant, versement, solde et tranches réunis sur le prêt de la cible),
@@ -451,9 +478,52 @@ lot) date l'historique (`traite_le`, `traite_par`, `rejected_at`), pose la
 section (déduite de la page) et notifie le déclarant (`bug_traite`, lien
 `?aide=mes-signalements` qui ouvre le panneau), sauf s'il s'agit de
 soi-même. Mode dev → Demandes d'aide → onglet « Historique ».
+« Accepter » = « régler » (Steven, même jour : « lorsque je clique sur
+accepté, cela veut dire qu'il a été réglé ») : l'API transforme
+`accepted` / `accept` en `resolved`, le mode dev n'offre plus que Réglé et
+Refuser, et `ensure_bugs_acceptes_regles` (démarrage) a passé les anciens
+« acceptés » à « réglé » sans notifier personne.
 **À faire par Claude Code** : quand une tâche règle un bug signalé, le
 marquer réglé (`PATCH /api/v1/help/reports/{id}` avec `status:
 "resolved"`, `resolution_notes` : ce qui a été corrigé et la date,
 `section`) — c'est ce qui permet à l'assistant de répondre « déjà réglé ».
 Régénérer le journal de temps en temps : `git fetch --unshallow origin`
 puis `python backend/scripts/journal_livraisons.py`.
+
+## Loyers — périodes de prix, arriérés, confirmation de nuit (2026-11-13)
+
+Steven : « il n'est pas possible de changer le prix d'un loyer sans que
+cela affecte le prix passé […] pouvoir mettre des périodes de prix »,
+« les mois non payés doivent être visibles sur le mois où nous sommes
+rendus », « ça dit que novembre, décembre et janvier sont payés, mais il
+est juste à jour », « dans la nuit, envoyer une confirmation de paiement
+au locataire (sans courriel : un message texte) ».
+
+1. **Périodes de loyer** (`app/services/loyer_periodes.py`,
+   `Bail.loyer_periodes_json`) : liste `[{depuis, loyer}]`, le loyer d'un
+   mois = la dernière période commencée ; NULL = prix unique.
+   `loyer_mensuel` reste le loyer EN VIGUEUR (resynchronisé par
+   `/loyers/overview`). Routes `GET/POST/DELETE
+   /immobilier/baux/{id}/loyer-periodes`. Tout calcul de dû passe par
+   `loyer_du_mois` / `loyers_echus` (`loyer_solde`) : ne JAMAIS refaire
+   « nombre de mois × loyer_mensuel ». Un avis de renouvellement appliqué
+   pose une période à sa date (il réécrivait le dû des mois passés).
+2. **Mois impayés** : `/loyers/overview` renvoie `mois_impayes` par ligne
+   (Σ restant = `solde_total`, un trop-perçu éponge les plus anciens) ;
+   affichés sous le solde (`CelluleLoyer`) et dans « Corriger ».
+3. **Arriérés d'abord** (`create_paiement`) : le mois visé prend sa part,
+   le surplus rembourse les mois ANTÉRIEURS impayés (plus ancien d'abord),
+   et seul le reste avance sur les mois à venir.
+4. **Confirmation de paiement** (`app/services/loyer_confirmations.py`,
+   automatisation `loyer_confirmations`, boucle démarrée avec l'app) :
+   vers 2 h (Montréal), un message par bail pour les versements saisis la
+   veille, à leur état final ; courriel (`envoyer_au_locataire`), sinon
+   texto (production seulement), sinon « aucun » ; marqué sur le versement
+   (`confirmation_envoyee_le`, `confirmation_canal`). Exclus : versements
+   sans `cree_par`, reçus plus de 10 jours avant la saisie, antérieurs à
+   `ACTIF_DEPUIS`, baux parallèles, gestion externe. C'est la SEULE
+   exception à « rien ne part vers un locataire sans un clic humain ».
+5. « Locataire parti » depuis « Corriger » ouvre « Mettre fin au bail »
+   en fin immédiate (date réelle, même passée). `GET /immobilier/baux/{id}`
+   existe enfin (dernière route du fichier, après `/baux/sans-document`) :
+   la fenêtre le lisait déjà pour le dépôt et recevait 405.

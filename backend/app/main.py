@@ -22,6 +22,7 @@ from app.db.session import (
     ensure_critical_columns,
     ensure_esign_tables,
     ensure_invest_portal_tables,
+    ensure_bugs_acceptes_regles,
     ensure_immobilier_aux_tables,
     ensure_project_corrections_tables,
     ensure_raci_tables,
@@ -581,6 +582,9 @@ async def _run_startup_tasks() -> None:
             "ensure_invest_portal_tables failed during startup: %s", exc
         )
 
+    # Signalements : « accepté » veut dire « réglé » (Steven, 2026-11-13).
+    await ensure_bugs_acceptes_regles()
+
     # Backfill : crée le projet (+ facture d'acompte DRAFT) pour les
     # soumissions ACCEPTED qui n'en ont pas encore. Rattrape les
     # acceptations antérieures à l'auto-création (PR #45). Best-effort,
@@ -725,6 +729,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.services.brief_matin import boucle as brief_matin_loop
 
     brief_matin_task = asyncio.create_task(brief_matin_loop())
+    # Confirmation de paiement de loyer au locataire, la nuit qui suit la
+    # saisie (Steven 2026-11-13) — même principe : boucle autonome.
+    from app.services.loyer_confirmations import boucle as loyer_confirmations_loop
+
+    loyer_confirmations_task = asyncio.create_task(loyer_confirmations_loop())
     try:
         yield
     finally:
@@ -736,6 +745,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             paiements_auto_task.cancel()
         if not brief_matin_task.done():
             brief_matin_task.cancel()
+        if not loyer_confirmations_task.done():
+            loyer_confirmations_task.cancel()
         await close_db()
 
 

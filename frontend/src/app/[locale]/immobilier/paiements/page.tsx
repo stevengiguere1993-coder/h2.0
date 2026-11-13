@@ -33,6 +33,7 @@ import { BoutonExport } from "@/components/immobilier/bouton-export";
 import {
   BadgeGestionExterne,
   CelluleLoyer,
+  type MoisImpaye,
   FraisCreditModal,
   moisCouvertPourPaiement,
   montantMarquerPaye,
@@ -103,6 +104,10 @@ type Row = {
   payeur_nom?: string | null;
   //: Mois affiché payé, mais un mois antérieur du bail impayé.
   solde_anterieur?: boolean;
+  /** Détail du solde : chaque mois encore dû (2026-11-13). */
+  mois_impayes?: MoisImpaye[];
+  /** Bail à plusieurs prix (périodes de loyer). */
+  loyer_a_periodes?: boolean;
   //: Mois de bascule d'un transfert d'unité : rien n'est dû ici.
   transfert_bascule?: boolean;
   /** Bail résilié/terminé en cours de mois : la ligne reste dans le
@@ -1235,6 +1240,8 @@ export default function PaiementsPage() {
                             loyer={r.loyer_mensuel}
                             recu={r.montant_paye}
                             solde={r.solde_total}
+                            moisImpayes={r.mois_impayes}
+                            moisAffiche={mois}
                             fmt={fmtMoney}
                             echeance={echeanceLabel(r.jour_echeance)}
                             frais={r.frais_mois}
@@ -1365,7 +1372,7 @@ export default function PaiementsPage() {
                                     onClick={() => corriger(r)}
                                     disabled={payingId === r.bail_id}
                                     title="Corriger : versements du mois (montant, date, retrait) et loyer dû du mois"
-                                    className="px-1 text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/70 transition hover:bg-white/10 disabled:opacity-50"
                                   >
                                     Corriger
                                   </button>

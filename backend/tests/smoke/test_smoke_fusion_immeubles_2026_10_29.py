@@ -15,10 +15,13 @@ immeuble. »
 - garde-fous : conflit de numéros sans préfixe (409), même immeuble
   (400), source inconnue (404), employé qui ne voit pas la source (403).
 
-Retour Steven 2026-11-13 : deux adresses → les numéros restent tels
-quels (conflit seulement à la même adresse), prix d'achat et hypothèque
-saisis en deux moitiés s'additionnent, et une simulation montre la fiche
-résultante sans rien écrire.
+Retour Steven 2026-11-13 : deux adresses → chaque logement garde son
+adresse (conflit seulement à la même adresse), le préfixe PROPOSÉ est le
+numéro civique de la fiche absorbée (« 9085- » pour les logements du 9085
+Millen, jamais celui de l'autre fiche) avec un préfixe facultatif pour la
+fiche gardée, prix d'achat et hypothèque saisis en deux moitiés
+s'additionnent, et une simulation montre la fiche résultante sans rien
+écrire.
 """
 from __future__ import annotations
 
@@ -160,9 +163,13 @@ def test_apercu_fusion(client, auth_headers, fusion_seed):
     assert ap["a_deplacer"]["hypothèques"] == 1
     assert ap["a_deplacer"]["codes d'accès"] == 2
     assert ap["a_deplacer"]["affectations d'employés"] == 1
-    # Deux adresses : les « 1, 2, 3 » de chaque fiche coexistent.
+    # Deux adresses : aucun conflit bloquant, mais les deux fiches portent
+    # « 1, 2, 3 » → préfixe proposé = numéro civique de la fiche ABSORBÉE.
     assert ap["numeros_en_conflit"] == []
-    assert ap["prefixe_suggere"] == ""
+    assert ap["numeros_communs"] == ["1", "2", "3"]
+    assert ap["numeros_source"] == ["1", "2", "3"]
+    assert ap["prefixe_suggere"] == "9085-"
+    assert ap["prefixe_cible_suggere"] == "710-"
     assert ap["hypotheques_en_double"] == 1
     assert ap["hypotheques_additionnables"] == 1
     h = ap["hypotheques_source"][0]
@@ -199,7 +206,28 @@ def test_garde_fous(client, auth_headers, emp_headers, fusion_seed):
 
 def test_simulation_ne_change_rien(client, auth_headers, fusion_seed, run):
     a, b = fusion_seed["a"], fusion_seed["b"]
-    options = {"source_immeuble_id": b, "hypotheques": "additionner", "purchase_price": 1_350_000}
+    # Sans préfixe : permis (adresses différentes), numéros tels quels.
+    r = client.post(f"{IMM}/{a}/fusion/simulation", headers=auth_headers, json={"source_immeuble_id": b})
+    assert r.status_code == 200, r.text
+    assert [(l["adresse"], l["numero"]) for l in r.json()["resultat"]["logements"]] == [
+        ("710 rue Legendre", "1"), ("710 rue Legendre", "2"), ("710 rue Legendre", "3"),
+        ("9085 rue Millen", "1"), ("9085 rue Millen", "2"), ("9085 rue Millen", "3"),
+    ]
+    # Préfixe sur les deux fiches : chacune le sien.
+    r = client.post(f"{IMM}/{a}/fusion/simulation", headers=auth_headers, json={
+        "source_immeuble_id": b, "prefixe_numeros": "9085-", "prefixe_numeros_cible": "710-",
+    })
+    assert r.status_code == 200, r.text
+    assert [(l["adresse"], l["numero"]) for l in r.json()["resultat"]["logements"]] == [
+        ("710 rue Legendre", "710-1"), ("710 rue Legendre", "710-2"), ("710 rue Legendre", "710-3"),
+        ("9085 rue Millen", "9085-1"), ("9085 rue Millen", "9085-2"), ("9085 rue Millen", "9085-3"),
+    ]
+    assert r.json()["deplaces"]["logements de la fiche gardée renumérotés"] == 3
+
+    options = {
+        "source_immeuble_id": b, "prefixe_numeros": "9085-",
+        "hypotheques": "additionner", "purchase_price": 1_350_000,
+    }
     r = client.post(f"{IMM}/{a}/fusion/simulation", headers=auth_headers, json=options)
     assert r.status_code == 200, r.text
     sim = r.json()
@@ -208,10 +236,11 @@ def test_simulation_ne_change_rien(client, auth_headers, fusion_seed, run):
     assert fiche["address"] == "710 rue Legendre"
     assert fiche["address_secondaire"] == "9085 rue Millen"
     assert fiche["purchase_price"] == 1_350_000
-    # Adresse principale d'abord, puis l'autre, ordre naturel.
+    # Adresse principale d'abord, puis l'autre, ordre naturel ; les
+    # logements absorbés portent LEUR numéro civique et gardent leur adresse.
     assert [(l["adresse"], l["numero"]) for l in fiche["logements"]] == [
         ("710 rue Legendre", "1"), ("710 rue Legendre", "2"), ("710 rue Legendre", "3"),
-        ("9085 rue Millen", "1"), ("9085 rue Millen", "2"), ("9085 rue Millen", "3"),
+        ("9085 rue Millen", "9085-1"), ("9085 rue Millen", "9085-2"), ("9085 rue Millen", "9085-3"),
     ]
     assert len(fiche["hypotheques"]) == 1
     assert fiche["hypotheques"][0]["montant_initial"] == 2_000_000
@@ -224,13 +253,14 @@ def test_simulation_ne_change_rien(client, auth_headers, fusion_seed, run):
     hyps_a = client.get(f"{IMM}/{a}/hypotheques", headers=auth_headers).json()
     assert [h["montant_initial"] for h in hyps_a] == [1_000_000]
     assert client.get(f"{IMM}/{a}", headers=auth_headers).json()["purchase_price"] == 900_000
+    assert [l["numero"] for l in client.get(f"{IMM}/{a}/logements", headers=auth_headers).json()] == ["1", "2", "3"]
 
 
 def test_fusion_millen_dans_legendre(client, auth_headers, fusion_seed, run):
     a, b = fusion_seed["a"], fusion_seed["b"]
     r = client.post(f"{IMM}/{a}/fusion", headers=auth_headers, json={
-        "source_immeuble_id": b, "hypotheques": "additionner",
-        "purchase_price": 1_350_000,
+        "source_immeuble_id": b, "prefixe_numeros": "9085-",
+        "hypotheques": "additionner", "purchase_price": 1_350_000,
     })
     assert r.status_code == 200, r.text
     res = r.json()
@@ -251,10 +281,11 @@ def test_fusion_millen_dans_legendre(client, auth_headers, fusion_seed, run):
     # La source n'existe plus ; la cible porte tout.
     assert client.get(f"{IMM}/{b}", headers=auth_headers).status_code == 404
     logs = client.get(f"{IMM}/{a}/logements", headers=auth_headers).json()
-    # Les numéros restent tels quels ; chaque logement garde son adresse.
+    # Les logements du 9085 Millen portent « 9085- » et gardent leur
+    # adresse ; ceux de la fiche gardée ne changent pas.
     assert sorted((l["adresse"] or "", l["numero"]) for l in logs) == [
         ("", "1"), ("", "2"), ("", "3"),
-        ("9085 rue Millen", "1"), ("9085 rue Millen", "2"), ("9085 rue Millen", "3"),
+        ("9085 rue Millen", "9085-1"), ("9085 rue Millen", "9085-2"), ("9085 rue Millen", "9085-3"),
     ]
     # Les deux moitiés du prêt n'en font plus qu'un.
     hyps = client.get(f"{IMM}/{a}/hypotheques", headers=auth_headers).json()
@@ -265,8 +296,9 @@ def test_fusion_millen_dans_legendre(client, auth_headers, fusion_seed, run):
     # Plus de faux doublons de logements dans le diagnostic.
     doublons = client.get("/api/v1/immobilier/logements/doublons", headers=auth_headers).json()
     assert not [g for g in doublons if g["immeuble_id"] == a]
-    # Créer un « 4 » au 9085 Millen reste possible ; un 2e « 1 » au Millen non.
-    r = client.post("/api/v1/immobilier/logements", headers=auth_headers, json={"immeuble_id": a, "numero": "1", "adresse": "9085 rue Millen"})
+    # Un 2e « 9085-1 » au Millen est refusé ; un « 1 » au Millen reste possible
+    # (même numéro que le « 1 » du Legendre, mais autre adresse).
+    r = client.post("/api/v1/immobilier/logements", headers=auth_headers, json={"immeuble_id": a, "numero": "9085-1", "adresse": "9085 rue Millen"})
     assert r.status_code == 409, r.text
     codes = client.get(f"{IMM}/{a}/codes", headers=auth_headers).json()
     assert [(c["libelle"], c["position"]) for c in codes] == [

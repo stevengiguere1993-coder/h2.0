@@ -20,8 +20,11 @@ Tout envoi vers un locataire passe désormais par ``envoyer_au_locataire``
 qui garantit les trois invariants d'un coup : profil d'expéditeur,
 journal d'audit ``imm_communications``, fil de la fiche locataire.
 
-⚠️ Règle absolue INCHANGÉE : cette fonction n'est jamais appelée par un
-cron. Rien ne part vers un locataire sans un clic humain.
+⚠️ Règle : rien ne part vers un locataire sans un clic humain. UNE
+exception, demandée par Steven le 2026-11-13 : la confirmation de
+paiement de loyer, envoyée la nuit qui suit la saisie du versement
+(``services/loyer_confirmations.py``) — elle découle d'un geste humain
+(le versement saisi) et se coupe dans Paramètres → Automatisations.
 """
 
 from __future__ import annotations

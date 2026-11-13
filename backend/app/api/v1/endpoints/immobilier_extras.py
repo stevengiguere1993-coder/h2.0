@@ -2066,17 +2066,24 @@ async def renouvellements_overview(
             ):
                 last_ren_by_bail[r.bail_id] = r
 
-    # Dossier de RELOCATION actif (non annulé) par logement : la ligne
-    # est bloquée tant que le dossier vit (retour Phil 2026-07-31).
+    # Dossier de RELOCATION actif par logement : la ligne est bloquée
+    # tant que le dossier vit (retour Phil 2026-07-31). Un dossier RÉGLÉ
+    # (« annule » OU « reloue ») ne bloque plus rien : depuis le
+    # 2026-10-08, créer le bail d'un nouveau locataire ferme d'office un
+    # dossier « reloue » sur le logement, et le bail suivant restait
+    # « Non renouvelé — en relocation · Actions bloquées » (2026-11-13).
     reloc_by_logement: dict = {}
     if log_by_id:
         from app.models.immobilier import LocationDossier
+        from app.services.locatif_depart import DOSSIER_STATUTS_REGLES
 
         for dossier in (
             await db.execute(
                 select(LocationDossier).where(
                     LocationDossier.logement_id.in_(list(log_by_id.keys())),
-                    LocationDossier.statut != "annule",
+                    LocationDossier.statut.notin_(
+                        list(DOSSIER_STATUTS_REGLES)
+                    ),
                 )
             )
         ).scalars().all():
@@ -2124,13 +2131,7 @@ async def renouvellements_overview(
         reponse = None
         deadline_reponse = None
         deadline_fixation = None
-        from app.services.locatif_depart import DOSSIER_STATUTS_REGLES
-
-        reloc_active = (
-            b.logement_id in reloc_by_logement
-            and reloc_by_logement[b.logement_id].statut
-            not in DOSSIER_STATUTS_REGLES
-        )
+        reloc_active = b.logement_id in reloc_by_logement
         if courant:
             deadline_reponse = _plus_un_mois(last_ren.avis_envoye_le)
             if (
@@ -2154,7 +2155,18 @@ async def renouvellements_overview(
                 # Application au bail À LA DATE EFFECTIVE — lazy, à la
                 # consultation (pas de cron ; rien ne part au locataire).
                 if last_ren.nouveau_loyer is not None:
-                    b.loyer_mensuel = last_ren.nouveau_loyer
+                    # Nouvelle PÉRIODE de loyer à la date de l'avis : les
+                    # mois d'avant gardent l'ancien prix (2026-11-13 —
+                    # avant, l'augmentation réécrivait le dû des mois
+                    # passés et fabriquait un faux solde).
+                    from app.services.loyer_periodes import ajouter_periode
+
+                    ajouter_periode(
+                        b,
+                        last_ren.nouvelle_date_debut,
+                        float(last_ren.nouveau_loyer),
+                        today,
+                    )
                 # La période de l'AVIS remplace celle du bail, même si
                 # elle la RACCOURCIT (retour Phil 2026-07-31 : avis
                 # jusqu'en 2027 sur un bail qui allait jusqu'en 2028).

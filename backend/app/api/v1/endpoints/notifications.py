@@ -152,14 +152,32 @@ async def mark_read(
 
 
 @router.post("/read-all")
-async def mark_all_read(db: DBSession, user: CurrentUser) -> dict:
+async def mark_all_read(
+    db: DBSession,
+    user: CurrentUser,
+    scope: Optional[str] = Query(default=None),
+    jusqua_id: Optional[int] = Query(default=None, ge=1),
+) -> dict:
+    """Marque lues les notifications non lues de l'utilisateur.
+
+    La cloche l'appelle à son ouverture (la pastille rouge disparaît) :
+    ``scope`` limite au volet affiché (les cloches des autres volets
+    gardent leur compteur) et ``jusqua_id`` au plus haut id reçu dans la
+    liste, pour ne pas marquer lue une notification arrivée entre
+    l'ouverture et l'appel, que l'utilisateur n'a pas vue.
+    """
+    stmt = update(Notification).where(
+        Notification.user_id == user.id,
+        Notification.is_read.is_(False),
+    )
+    clause = _volet_filter(scope)
+    if clause is not None:
+        stmt = stmt.where(clause)
+    if jusqua_id is not None:
+        stmt = stmt.where(Notification.id <= jusqua_id)
+    stmt = stmt.values(is_read=True, read_at=datetime.now(timezone.utc))
     res = await db.execute(
-        update(Notification)
-        .where(
-            Notification.user_id == user.id,
-            Notification.is_read.is_(False),
-        )
-        .values(is_read=True, read_at=datetime.now(timezone.utc))
+        stmt.execution_options(synchronize_session=False)
     )
     await db.flush()
     return {"updated": res.rowcount or 0}
