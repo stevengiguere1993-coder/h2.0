@@ -167,6 +167,7 @@ async def ensure_critical_columns() -> None:
         ("tal_transmissions", "reponses_json", "TEXT"),
         ("tal_transmissions", "langue", "VARCHAR(2)"),
         ("tal_transmissions", "remplacee_par_id", "INTEGER"),
+        ("tal_transmissions", "annexes_json", "TEXT"),
         # Signature du bail pilotée depuis Gestion immobilière (2026-11-11) : origine du document.
         ("esign_documents", "origine", "VARCHAR(32)"),
         # Baux PARALLÈLES (Financement, 2026-10-16) : catégorie + locateur du

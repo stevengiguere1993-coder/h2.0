@@ -2339,10 +2339,40 @@ async def apres_signature_complete(
     t.signe_le = now
     t.document_signe_id = imm_doc.id
     t.updated_at = now
+    # Consentement aux communications électroniques signé AVEC le bail (Phil 2026-11-13) : il
+    # entre au dossier comme un consentement signé — Kratos ne le redemandera pas.
+    consentement_id: Optional[int] = None
+    try:
+        from app.services import tal_bail_annexes as annexes_bail
+
+        joint = next((a for a in _charger_json(getattr(t, "annexes_json", None), []) if a.get("cle") == annexes_bail.CLE_CONSENTEMENT), None)
+        if joint:
+            pages = joint.get("pages") or [0, 0]
+            consentement = ImmDocument(
+                bail_id=t.bail_id, locataire_id=t.locataire_id, immeuble_id=t.immeuble_id, logement_id=t.logement_id,
+                type="consentement_communications",
+                titre="Consentement aux communications électroniques (signé avec le bail)"[:255],
+                source="genere", filename="Consentement_communications_signe.pdf",
+                params_json=_json({"transmission_id": t.id, "esign_document_id": doc.id, "signe_avec_le_bail": True}),
+                pdf_blob=annexes_bail.extraire_pages(octets, int(pages[0]), int(pages[1])),
+                created_by_email=t.created_by_email, signed_at=now,
+                # Seuls les locataires signent le consentement (le locateur ne le signe pas).
+                signed_by_name=(", ".join(
+                    f"{s.first_name} {s.last_name}".strip() for s in signers
+                    if str(s.contact_ref or "").startswith("tal:locataire:")
+                )[:255] or None),
+            )
+            # Point de reprise : un échec du classement n'emporte pas le bail signé.
+            async with db.begin_nested():
+                db.add(consentement)
+                await db.flush()
+            consentement_id = consentement.id
+    except Exception:  # noqa: BLE001 — le bail signé prime sur le classement du consentement
+        log.exception("bail TAL #%s : consentement signé non versé au dossier", t.id)
     await log_action(
         db, user=None, action="tal_bail.bail_signe", entity_type="tal_transmission", entity_id=t.id,
         details={"bail_id": t.bail_id, "esign_document_id": doc.id, "document_signe_id": imm_doc.id,
-                 "signataires": noms, "activation": activation},
+                 "signataires": noms, "activation": activation, "consentement_document_id": consentement_id},
     )
     await db.commit()
     return {"transmission_id": t.id, "bail_id": t.bail_id, "document_signe_id": imm_doc.id, "activation": activation}
