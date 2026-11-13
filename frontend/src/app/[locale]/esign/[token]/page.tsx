@@ -973,8 +973,8 @@ export default function PublicEsignPage() {
         ) : null}
 
         {canSign && obligatoires.length > 0 ? (
-          <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-            <p className="font-semibold">
+          <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm">
+            <p className="font-semibold text-slate-900">
               {obligatoires.length} endroit{obligatoires.length > 1 ? "s" : ""} à remplir dans ce document.
             </p>
             <p className="mt-0.5 text-xs text-blue-800">
