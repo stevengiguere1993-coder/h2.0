@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { usePathname } from "next/navigation";
 import {
   AlertCircle,
@@ -130,15 +131,32 @@ function Connaissances({
 
 export function HelpButton({
   triggerClassName,
-  triggerStyle
+  triggerStyle,
+  dansEnTete = false,
+  conteneurEnTete = null
 }: {
   /** Override pour la position du bouton flottant. Par défaut, en bas-droite
    *  sur le desktop (`bottom-5 right-5`). La PWA mobile a une nav fixe en bas
    *  donc on monte le bouton au-dessus. */
   triggerClassName?: string;
   triggerStyle?: React.CSSProperties;
+  /** Le bouton se range dans l'en-tête de la page au lieu de flotter
+   *  par-dessus le contenu (refonte d'Immobilier, lot « fiches »). */
+  dansEnTete?: boolean;
+  /** L'emplacement de l'en-tête où poser le bouton. Tant qu'aucune page
+   *  n'en offre, le bouton flottant revient après un court délai. */
+  conteneurEnTete?: HTMLElement | null;
 } = {}) {
   const [open, setOpen] = useState(false);
+  const [sansEnTete, setSansEnTete] = useState(false);
+  useEffect(() => {
+    if (!dansEnTete || conteneurEnTete) {
+      setSansEnTete(false);
+      return;
+    }
+    const t = window.setTimeout(() => setSansEnTete(true), 1500);
+    return () => window.clearTimeout(t);
+  }, [dansEnTete, conteneurEnTete]);
   const [tab, setTab] = useState<Tab>("question");
 
   // Question state
@@ -359,19 +377,35 @@ export function HelpButton({
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        title="Aide"
-        className={
-          triggerClassName ??
-          "fixed bottom-5 right-5 z-40 inline-flex items-center gap-2 rounded-full bg-accent-500 px-4 py-3 text-sm font-semibold text-brand-950 shadow-lg ring-1 ring-accent-500/40 hover:bg-accent-400"
-        }
-        style={triggerStyle}
-      >
-        <HelpCircle className="h-5 w-5" />
-        Aide
-      </button>
+      {dansEnTete && conteneurEnTete ? (
+        createPortal(
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            title="Aide : poser une question ou signaler un problème"
+            aria-label="Aide"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-brand-700 bg-brand-900 px-2 text-sm font-semibold text-white/80 transition hover:bg-brand-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+          >
+            <HelpCircle className="h-4 w-4" aria-hidden />
+            <span className="hidden sm:inline">Aide</span>
+          </button>,
+          conteneurEnTete
+        )
+      ) : dansEnTete && !sansEnTete ? null : (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          title="Aide"
+          className={
+            triggerClassName ??
+            "fixed bottom-5 right-5 z-40 inline-flex items-center gap-2 rounded-full bg-accent-500 px-4 py-3 text-sm font-semibold text-brand-950 shadow-lg ring-1 ring-accent-500/40 hover:bg-accent-400"
+          }
+          style={triggerStyle}
+        >
+          <HelpCircle className="h-5 w-5" />
+          Aide
+        </button>
+      )}
 
       {open ? (
         <>

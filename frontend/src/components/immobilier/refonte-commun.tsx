@@ -15,7 +15,7 @@ import {
   useState
 } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, CheckCircle2, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2, Undo2, X } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 
@@ -342,6 +342,79 @@ export function MessageBas({
         >
           <X className="h-4 w-4" aria-hidden />
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Annulation pendant 10 secondes ────────────────────────────────────
+
+/** Message du bas avec « Annuler », visible `dureeMs` puis retiré. La
+ *  barre du bas montre le temps qui reste. */
+export function ToastAnnulable({
+  texte,
+  dureeMs = 10_000,
+  occupe = false,
+  onAnnuler,
+  onFin
+}: {
+  texte: string;
+  dureeMs?: number;
+  occupe?: boolean;
+  onAnnuler: () => void;
+  onFin: () => void;
+}) {
+  const fin = useRef(onFin);
+  useEffect(() => {
+    fin.current = onFin;
+  });
+  const [parti, setParti] = useState(false);
+  useEffect(() => {
+    // Laisse le premier rendu se peindre à 100 % avant de vider la barre.
+    const depart = window.setTimeout(() => setParti(true), 30);
+    const t = window.setTimeout(() => fin.current(), dureeMs);
+    return () => {
+      window.clearTimeout(depart);
+      window.clearTimeout(t);
+    };
+  }, [dureeMs]);
+
+  return (
+    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[1100] flex justify-center px-3">
+      <div
+        role="status"
+        aria-live="polite"
+        className="pointer-events-auto w-full max-w-md overflow-hidden rounded-xl border border-emerald-500/50 bg-brand-950 shadow-2xl"
+      >
+        <div className="flex items-center gap-3 px-3 py-2.5">
+          <CheckCircle2
+            className="h-5 w-5 flex-shrink-0 text-emerald-300"
+            aria-hidden
+          />
+          <p className="min-w-0 flex-1 text-sm font-medium text-white">{texte}</p>
+          <button
+            type="button"
+            disabled={occupe}
+            onClick={onAnnuler}
+            className="btn-secondary btn-sm flex-shrink-0 gap-1.5 disabled:opacity-60"
+          >
+            {occupe ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+            ) : (
+              <Undo2 className="h-3.5 w-3.5" aria-hidden />
+            )}
+            Annuler
+          </button>
+        </div>
+        <div className="h-1 bg-brand-800">
+          <div
+            className="h-full bg-emerald-500"
+            style={{
+              width: parti ? "0%" : "100%",
+              transition: `width ${dureeMs}ms linear`
+            }}
+          />
+        </div>
       </div>
     </div>
   );

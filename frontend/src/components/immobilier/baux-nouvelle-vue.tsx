@@ -48,13 +48,12 @@ import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { fichierEnMemoire } from "@/lib/fichier-mobile";
 import { BoutonExport } from "@/components/immobilier/bouton-export";
+import { JourPaiementFenetre } from "@/components/immobilier/conditions-bail";
 import {
   AnnulerDepartModal,
   CreerBailModal,
   echeanceLabel,
   FinBailModal,
-  JOUR_ECHEANCE_DEFAUT,
-  JourEcheanceField,
   KANBAN_STATUTS,
   type SuiviBailRow
 } from "@/components/immobilier/fin-bail";
@@ -792,88 +791,6 @@ function SupprimerBailFenetre({
   );
 }
 
-/** Jour du mois où le loyer est payable (même appel que la mention
- *  cliquable de l'écran actuel). */
-function JourPaiementFenetre({
-  r,
-  onClose,
-  onFait
-}: {
-  r: Row;
-  onClose: () => void;
-  onFait: (message: string) => void;
-}) {
-  const courant = Number(r.jour_echeance ?? JOUR_ECHEANCE_DEFAUT) || JOUR_ECHEANCE_DEFAUT;
-  const [jour, setJour] = useState(courant);
-  const [occupe, setOccupe] = useState(false);
-  const [erreur, setErreur] = useState<string | null>(null);
-
-  async function enregistrer() {
-    if (r.bail_id == null) return;
-    if (jour === courant) {
-      onClose();
-      return;
-    }
-    setOccupe(true);
-    setErreur(null);
-    try {
-      const res = await authedFetch(`/api/v1/immobilier/baux/${r.bail_id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ jour_echeance: jour })
-      });
-      if (!res.ok) throw new Error(await detailErreur(res));
-      onFait(
-        `Loyer de ${r.locataire_nom || "ce locataire"} payable le ${
-          jour === 1 ? "1er" : jour
-        } du mois.`
-      );
-    } catch (e) {
-      setErreur((e as Error).message);
-      setOccupe(false);
-    }
-  }
-
-  return (
-    <Fenetre
-      titre="Jour de paiement du loyer"
-      sousTitre={`${r.locataire_nom || "Locataire sans nom"} · ${r.immeuble_name}, logement ${r.logement_numero}`}
-      teinte="text-accent-500"
-      onClose={onClose}
-    >
-      <JourEcheanceField
-        value={jour}
-        onChange={setJour}
-        disabled={occupe}
-        labelClassName="grid gap-1.5 text-sm font-semibold text-white"
-        selectClassName="input w-full font-normal"
-        hint={false}
-      />
-      <p className="text-sm text-white/70">
-        Le loyer devient « en retard » quatre jours après ce jour-là.
-      </p>
-      {erreur ? (
-        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
-          Enregistrement impossible : {erreur}
-        </p>
-      ) : null}
-      <div className="flex justify-end gap-2 border-t border-brand-800 pt-3">
-        <button type="button" onClick={onClose} className="btn-secondary btn-sm">
-          Annuler
-        </button>
-        <button
-          type="button"
-          disabled={occupe}
-          onClick={() => void enregistrer()}
-          className="btn-accent btn-sm disabled:opacity-60"
-        >
-          {occupe ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
-          Enregistrer
-        </button>
-      </div>
-    </Fenetre>
-  );
-}
-
 /** Remplace l'encadré « Comment ça marche » de l'écran actuel. */
 function AideBaux({ onClose }: { onClose: () => void }) {
   const points: [string, string][] = [
@@ -971,14 +888,51 @@ type GesteDoc = {
   fichier?: File;
 };
 
+/** Les baux d'UNE fiche (locataire ou logement), nouvelle présentation :
+ *  les mêmes lignes, les mêmes boutons et les mêmes fenêtres que l'écran
+ *  des baux, sans son titre, sa recherche ni ses tuiles. Un filtre, pas
+ *  une deuxième implémentation. */
+export function BauxDeLaFiche({
+  locataireId,
+  logementId,
+  surChangement
+}: {
+  locataireId?: number;
+  logementId?: number;
+  /** Un geste a changé un bail : la fiche se relit. */
+  surChangement?: () => void;
+}) {
+  return (
+    <BauxNouvelleVue
+      titre=""
+      immeubleInitial={null}
+      integre={{ locataireId, logementId, surChangement }}
+    />
+  );
+}
+
 export function BauxNouvelleVue({
   titre,
-  immeubleInitial
+  immeubleInitial,
+  integre
 }: {
   titre: string;
   /** `?immeuble_id=` : la page s'ouvre sur cet immeuble (fiche immeuble). */
   immeubleInitial: number | null;
+  /** Dans une fiche : seulement ses lignes (voir `BauxDeLaFiche`). */
+  integre?: {
+    locataireId?: number;
+    logementId?: number;
+    surChangement?: () => void;
+  };
 }) {
+  const estIntegre = integre != null;
+  const filtreLocataire = integre?.locataireId ?? null;
+  const filtreLogement = integre?.logementId ?? null;
+  const prevenirFiche = useRef(integre?.surChangement);
+  useEffect(() => {
+    prevenirFiche.current = integre?.surChangement;
+  });
   const [zone, largeur] = useLargeur<HTMLDivElement>();
   const grand = largeur >= LARGEUR_TABLEAU;
   const deuxColonnes = !grand && largeur >= LARGEUR_DEUX_COLONNES;
@@ -1010,11 +964,12 @@ export function BauxNouvelleVue({
 
   // Lien déjà filtré (page « Aujourd'hui ») : ?filtre=…, lu à l'ouverture.
   useEffect(() => {
+    if (estIntegre) return;
     const voulu = filtreBauxDepuisUrl(
       new URLSearchParams(window.location.search).get("filtre")
     );
     if (voulu) setFiltre(voulu);
-  }, []);
+  }, [estIntegre]);
 
   // Les lignes et leurs repères (avis à envoyer, baux à importer selon le
   // serveur) sont lus ENSEMBLE : les tuiles et la liste ne se contredisent
@@ -1022,8 +977,14 @@ export function BauxNouvelleVue({
   const charger = useCallback(async () => {
     setErreur(null);
     try {
+      const qs =
+        filtreLocataire != null
+          ? `?locataire_id=${filtreLocataire}`
+          : filtreLogement != null
+            ? `?logement_id=${filtreLogement}`
+            : "";
       const [rLignes, rAvis, rSansDoc] = await Promise.all([
-        authedFetch("/api/v1/immobilier/suivi-baux"),
+        authedFetch(`/api/v1/immobilier/suivi-baux${qs}`),
         authedFetch("/api/v1/immobilier/baux/echeances").catch(() => null),
         authedFetch("/api/v1/immobilier/baux/sans-document").catch(() => null)
       ]);
@@ -1052,10 +1013,16 @@ export function BauxNouvelleVue({
     } catch (e) {
       setErreur((e as Error).message);
     }
-  }, []);
+  }, [filtreLocataire, filtreLogement]);
 
   useEffect(() => {
     void charger();
+  }, [charger]);
+
+  /** Après un geste : la liste se relit, et la fiche qui la porte aussi. */
+  const relire = useCallback(() => {
+    void charger();
+    prevenirFiche.current?.();
   }, [charger]);
 
   // ── Document d'un bail : un seul jeu de fenêtres pour tout l'écran ──
@@ -1068,7 +1035,7 @@ export function BauxNouvelleVue({
     bailId: geste?.cible.bailId ?? 0,
     hasDoc: geste?.cible.hasDoc ?? false,
     signedAt: geste?.cible.signedAt ?? null,
-    onChanged: () => void charger()
+    onChanged: relire
   });
   const docCourant = useRef(doc);
   useEffect(() => {
@@ -1154,7 +1121,7 @@ export function BauxNouvelleVue({
   function fait(texte: string, suite?: { aLouer: boolean }) {
     setFenetre(null);
     dire(texte, suite?.aLouer);
-    void charger();
+    relire();
   }
 
   // ── Ce qu'on affiche ────────────────────────────────────────────────
@@ -1265,7 +1232,9 @@ export function BauxNouvelleVue({
   const f = fenetre;
 
   return (
-    <div className="p-4 pb-28 lg:p-6 lg:pb-28">
+    <div className={estIntegre ? "" : "p-4 pb-28 lg:p-6 lg:pb-28"}>
+      {estIntegre ? null : (
+        <>
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
           <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
@@ -1402,7 +1371,10 @@ export function BauxNouvelleVue({
         />
       </div>
 
-      <div className="mt-4" ref={zone}>
+        </>
+      )}
+
+      <div className={estIntegre ? "" : "mt-4"} ref={zone}>
         {donnees == null ? (
           erreur ? (
             <div className="rounded-xl border border-brand-800 bg-brand-900 p-8 text-center text-sm text-white/70">
@@ -1422,7 +1394,11 @@ export function BauxNouvelleVue({
           )
         ) : groupes.length === 0 && !montrerAilleurs ? (
           <div className="rounded-xl border border-brand-800 bg-brand-900 p-8 text-center text-sm text-white/70">
-            {donnees.lignes.length === 0
+            {estIntegre
+              ? filtreLocataire != null
+                ? "Aucun bail en cours pour ce locataire."
+                : "Aucun bail à ce logement."
+              : donnees.lignes.length === 0
               ? "Aucun logement au portefeuille. Les logements se créent depuis les fiches d'immeuble."
               : reduit && base.length === 0
                 ? "Aucune ligne ne correspond à la recherche."
@@ -1473,7 +1449,12 @@ export function BauxNouvelleVue({
                 </thead>
                 {groupes.map((g) => (
                   <tbody key={g.immeuble_id} className="divide-y divide-brand-800">
-                    <tr className="border-t border-brand-800 bg-brand-950/60">
+                    {/* Dans la fiche d'un logement, l'immeuble est déjà
+                        dit dans l'en-tête de la fiche. */}
+                    <tr
+                      hidden={filtreLogement != null}
+                      className="border-t border-brand-800 bg-brand-950/60"
+                    >
                       <th
                         scope="colgroup"
                         colSpan={6}
@@ -1547,7 +1528,10 @@ export function BauxNouvelleVue({
           <div className="grid gap-5">
             {groupes.map((g) => (
               <section key={g.immeuble_id} aria-label={g.immeuble_name}>
-                <h2 className="px-1 text-sm font-semibold text-white">
+                <h2
+                  hidden={filtreLogement != null}
+                  className="px-1 text-sm font-semibold text-white"
+                >
                   <Link
                     href={vers(`/immobilier/immeubles/${g.immeuble_id}`)}
                     className="underline-offset-2 hover:underline"
@@ -1559,7 +1543,11 @@ export function BauxNouvelleVue({
                     · {resumeGroupeBaux(g, filtre)}
                   </span>
                 </h2>
-                <ul className={`mt-2 grid gap-3 ${deuxColonnes ? "grid-cols-2" : ""}`}>
+                <ul
+                  className={`grid gap-3 ${filtreLogement != null ? "" : "mt-2"} ${
+                    deuxColonnes ? "grid-cols-2" : ""
+                  }`}
+                >
                   {g.lignes.map((r) => {
                     const notes = notesLoyer(r);
                     const periode =
@@ -1764,13 +1752,16 @@ export function BauxNouvelleVue({
           onChanged={(msg) => {
             // La fenêtre reste ouverte (plusieurs périodes de suite).
             dire(msg);
-            void charger();
+            relire();
           }}
         />
       ) : null}
-      {f?.genre === "jour" ? (
+      {f?.genre === "jour" && f.r.bail_id != null ? (
         <JourPaiementFenetre
-          r={f.r}
+          bailId={f.r.bail_id}
+          jourActuel={f.r.jour_echeance}
+          locataireNom={f.r.locataire_nom}
+          lieu={`${f.r.immeuble_name}, logement ${f.r.logement_numero}`}
           onClose={() => setFenetre(null)}
           onFait={(msg) => fait(msg)}
         />

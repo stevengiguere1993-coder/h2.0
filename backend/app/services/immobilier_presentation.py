@@ -63,9 +63,10 @@ LOTS: tuple[dict[str, Any], ...] = (
         "titre": "Fiches immeuble, logement et locataire",
         "description": (
             "Sept onglets sur la fiche immeuble, quatre sur la fiche "
-            "locataire, même forme pour la fiche logement."
+            "locataire, même forme pour la fiche logement, et le bouton "
+            "Aide rangé dans la barre du haut."
         ),
-        "livre": False,
+        "livre": True,
     },
     {
         "cle": "suivis",

@@ -42,6 +42,8 @@ export type LogementFicheData = {
   id: number;
   immeuble_id: number;
   numero: string;
+  /** Adresse civique du logement quand l'immeuble en compte deux. */
+  adresse?: string | null;
   nb_pieces_decimal?: number | null;
   nb_chambres?: number | null;
   nb_sdb?: number | null;

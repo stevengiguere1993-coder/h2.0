@@ -40,7 +40,7 @@ export type CibleExport = {
   sujet: string;
 };
 
-function construireUrl(base: string, params?: ParamsExport): string {
+export function construireUrl(base: string, params?: ParamsExport): string {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(params || {})) {
     if (v === undefined || v === null || v === "") continue;
@@ -57,7 +57,7 @@ function nomDepuisEntetes(r: Response, repli: string): string {
   return m?.[1] || repli;
 }
 
-function dateDuJour(): string {
+export function dateDuJour(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
