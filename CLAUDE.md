@@ -758,8 +758,71 @@ un interrupteur, et les écrans actuels RESTENT dans le code.
    cinq derniers, le reste sur demande ; les tuiles du haut deviennent
    une phrase. `useLargeur` rend une référence-fonction : la zone est
    mesurée même si elle n'apparaît qu'après la roue d'attente.
-   Reste pour le lot « fiches » : le libellé unique « Mettre fin au bail »
-   sur les fiches logement et locataire.
+8. **Lot « fiches »** (livré) : fiches immeuble, logement et locataire,
+   mêmes adresses. Chaque page garde ses données et ses gestes et choisit
+   son rendu avec `nouvelle = presentation.pret && presentation.fiches` ;
+   l'écran actuel reste dans le même fichier, enveloppé
+   (`{nouvelle ? null : (…)}`), sans être réindenté. Pièces communes dans
+   `components/immobilier/fiche-commun.tsx` (`EnTeteFiche`, `MenuFiche`,
+   `ChiffresFiche`, `OngletsFiche`, `SousOnglets`, `LigneRepliee`,
+   `BlocRepliable`, `FenetreExport`) ; lecture pure testée par vitest dans
+   `lib/fiches-lecture.ts` et `lib/documents-lecture.ts`.
+   **Forme commune** : en-tête court (nom, une ligne de lieu, pastilles),
+   UN seul menu « ⋯ » en mots, quatre chiffres, puis des onglets. Au
+   cellulaire les onglets sont des pastilles (`court` = libellé abrégé,
+   flèche « › » quand il en reste hors de l'écran).
+   **Fiche immeuble** : sept onglets ; les identifiants `?tab=` d'avant
+   restent valides et sont regroupés par `GROUPES_FICHE` ; `documents` et
+   `codes` n'existent que dans la nouvelle présentation.
+   **Fiches locataire et logement** : onglet dans `?onglet=`
+   (`replaceState`). Les blocs restent MONTÉS et sont cachés par
+   `<div hidden={cache("onglet")}>` (un texte en cours de saisie n'est pas
+   perdu) : ne jamais mettre une classe d'affichage (`grid`, `flex`) sur
+   l'élément qui porte `hidden`, elle l'emporterait.
+   **« Reste à payer »** remplace la tuile « Retards » (qui comptait les
+   paiements faits en retard et disait 0 pendant qu'un mois restait dû) :
+   `resteAPayer` lit `solde_total` et `mois_impayes` de la vue des loyers
+   du mois courant, par `lireOverview` (une seule requête partagée avec le
+   bloc « Loyer du mois »).
+   **« Loyer du mois »** (`components/immobilier/loyer-du-mois-fiche.tsx`,
+   sorti tel quel de la fiche locataire) sert aux deux fiches
+   (`locataireId` ou `logementId`) : bouton vert au montant enregistré et
+   annulation de 10 secondes comme sur la page des loyers. La vue des
+   loyers porte une ligne `bail_id: 0` par logement vacant : la fiche
+   logement l'écarte.
+   **Baux d'une fiche** : `BauxDeLaFiche` (`baux-nouvelle-vue.tsx`) est
+   l'écran des baux filtré (`/suivi-baux?locataire_id=` ou
+   `?logement_id=`), avec la même ligne et le même menu ; utilisé quand le
+   lot « baux » est allumé, sinon `TableauSuiviBaux`.
+   **Conditions du bail en lignes**
+   (`components/immobilier/conditions-bail.tsx`, fiche logement) : Durée,
+   Loyer, Payable, Rabais, Dépôt, Bail signé, chacune avec « Modifier » ;
+   elles remplacent les pastilles « Au mois ? », « payable le 1er » et
+   « Rabais ? ». Chaque « Modifier » ouvre la fenêtre existante
+   (`LoyerPeriodesModal`, `RabaisBailModal`, `JourPaiementFenetre`,
+   `useBailDocActions`) ou appelle `PATCH /immobilier/baux/{id}` avec
+   `au_mois`. Un seul libellé pour finir un bail, « Mettre fin au bail »
+   (`FinBailModal`) : plus de « Résilier » ni de « Départ ». L'ancien
+   « Départ » (ouvrir le dossier de relocation d'un logement loué) est
+   dans le menu « ⋯ » : « Mettre le logement dans « À louer » ». Logement
+   libre : « Nouveau bail » (`NouveauBailPorte`) et « Mettre à louer » ;
+   déjà dans « À louer » : son étape et le lien vers son dossier.
+   Gestion externe : nom du locataire et « Marquer vacant » (confirmé dans
+   la page, pas par une boîte du navigateur), onglet « Documents ».
+   **Blocs vides et brouillons** : un bloc sans contenu tient sur une
+   ligne (`repliSiVide`, `LigneRepliee`) ; les brouillons créés d'office
+   (le consentement préparé à la création d'un bail) sont cachés derrière
+   un lien (`cacherBrouillons`, `estBrouillonAuto`) ; les documents d'un
+   immeuble sont classés par `grouperDocuments`.
+   **Suppressions** : un locataire ou un logement se supprime dans une
+   fenêtre qui dit ce qui partira, plus par `window.confirm` (muet dans
+   Kratos installé sur un cellulaire) ; les blocs internes de la fiche
+   immeuble (logements, hypothèques, dépenses) gardent leurs confirmations
+   d'avant. Un logement qui porte un bail ne se supprime pas (409 du
+   serveur) : la fenêtre l'explique et propose le statut « Hors location ».
+   **Aide** : sur les pages qui ont la barre du haut d'Immobilier, le
+   bouton Aide y est rangé (`poserAide` du layout, `dansEnTete` de
+   `help-button.tsx`) ; ailleurs il reste flottant.
 
 ## Investisseurs — saisies manuelles : apports hors QB, prêts (2026-11-13)
 

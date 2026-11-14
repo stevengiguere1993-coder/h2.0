@@ -19,6 +19,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ACCEPT_DOCS } from "@/components/immobilier/documents-a-importer";
+import { LigneRepliee } from "@/components/immobilier/fiche-commun";
 import {
   importDocument,
   type BailDocument
@@ -262,12 +263,17 @@ function draftEgal(a: Draft, b: Draft): boolean {
 
 export function TalDossiersSection({
   locataireId,
-  baux
+  baux,
+  repliSiVide = false
 }: {
   locataireId: number;
   /** Baux du locataire (pour « Ouvrir un dossier ») — libellé affiché. */
   baux: { id: number; label: string; status?: string }[];
+  /** Nouvelle présentation des fiches : sans dossier, le bloc tient sur
+   *  une ligne (« Dossier TAL : aucun + ») et s'ouvre sur demande. */
+  repliSiVide?: boolean;
 }) {
+  const [deplie, setDeplie] = useState(false);
   const [dossiers, setDossiers] = useState<TalDossier[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<number, Draft>>({});
@@ -407,6 +413,19 @@ export function TalDossiersSection({
 
   const bauxActifs = baux.filter((b) => !b.status || b.status === "actif");
   const bauxPourOuvrir = bauxActifs.length > 0 ? bauxActifs : baux;
+
+  if (repliSiVide && !deplie && !err) {
+    if (dossiers === null) return null;
+    if (dossiers.length === 0) {
+      return (
+        <LigneRepliee
+          titre="Dossier TAL"
+          resume="aucun"
+          onOuvrir={() => setDeplie(true)}
+        />
+      );
+    }
+  }
 
   return (
     <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
@@ -863,10 +882,15 @@ function PayeurBadge() {
 }
 
 export function GarantsContactsSection({
-  locataireId
+  locataireId,
+  repliSiVide = false
 }: {
   locataireId: number;
+  /** Nouvelle présentation des fiches : sans contact, le bloc tient sur
+   *  une ligne et s'ouvre sur demande. */
+  repliSiVide?: boolean;
 }) {
+  const [deplie, setDeplie] = useState(false);
   const [contacts, setContacts] = useState<LocataireContact[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -958,6 +982,19 @@ export function GarantsContactsSection({
       setErr(`Retrait : ${(e as Error).message}`);
     } finally {
       setBusy(false);
+    }
+  }
+
+  if (repliSiVide && !deplie && !adding && !err) {
+    if (contacts === null) return null;
+    if (contacts.length === 0) {
+      return (
+        <LigneRepliee
+          titre="Garants et contacts"
+          resume="aucun"
+          onOuvrir={() => setDeplie(true)}
+        />
+      );
     }
   }
 

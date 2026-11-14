@@ -15,6 +15,7 @@ import {
   Home,
   FileDown,
   FileSignature,
+  FileText,
   GitMerge,
   KeyRound,
   Loader2,
@@ -73,7 +74,20 @@ import {
   BailDocActions,
   ImmeubleDocumentsSection
 } from "@/components/immobilier/tal-avis";
-import { BoutonExport } from "@/components/immobilier/bouton-export";
+import {
+  BoutonExport,
+  type CibleExport
+} from "@/components/immobilier/bouton-export";
+import {
+  ChiffresFiche,
+  EnTeteFiche,
+  FenetreExport,
+  MenuFiche,
+  OngletsFiche,
+  SousOnglets
+} from "@/components/immobilier/fiche-commun";
+import type { ItemMenu } from "@/components/immobilier/refonte-commun";
+import { usePresentationImmobilier } from "@/hooks/use-presentation-immobilier";
 import {
   BadgeGestionExterne,
   CelluleLoyer,
@@ -363,8 +377,100 @@ const TABS = [
   // « maintenance à l'interne » est cochée) — retour Phil 2026-07-22.
   { id: "factures-ext", label: "Factures ponctuelles", icon: Wrench },
   { id: "maintenance", label: "Maintenance", icon: Wrench },
-  { id: "contrat-gestion", label: "Contrat de gestion", icon: FileSignature }
+  { id: "contrat-gestion", label: "Contrat de gestion", icon: FileSignature },
+  // Refonte, lot « fiches » : montrés seulement par la nouvelle
+  // présentation. Dans l'écran actuel, les documents et les codes
+  // d'accès sont au bas de la vue d'ensemble.
+  { id: "documents", label: "Documents", icon: FileText },
+  { id: "codes", label: "Codes d'accès", icon: KeyRound }
 ] as const;
+
+type OngletId = (typeof TABS)[number]["id"];
+
+const TABS_NOUVELLE_PRESENTATION: ReadonlyArray<OngletId> = [
+  "documents",
+  "codes"
+];
+
+/** Nouvelle présentation : 7 onglets qui réunissent les 13 pages de la
+ *  fiche. `?tab=` garde les mêmes valeurs, les liens venus d'ailleurs
+ *  (fiche locataire → `?tab=baux`) ouvrent donc le bon onglet. */
+const GROUPES_FICHE: {
+  id: string;
+  label: string;
+  pages: { id: OngletId; label: string }[];
+}[] = [
+  { id: "resume", label: "Résumé", pages: [{ id: "overview", label: "Résumé" }] },
+  {
+    id: "logements",
+    label: "Logements",
+    pages: [{ id: "logements", label: "Logements" }]
+  },
+  {
+    id: "loyers",
+    label: "Loyers",
+    pages: [
+      { id: "paiements", label: "Loyers" },
+      { id: "paiements-ext", label: "Loyers" }
+    ]
+  },
+  {
+    id: "baux",
+    label: "Baux",
+    pages: [
+      { id: "baux", label: "Baux" },
+      { id: "locations", label: "À louer" }
+    ]
+  },
+  {
+    id: "finances",
+    label: "Finances",
+    pages: [
+      { id: "hypotheques", label: "Hypothèques" },
+      { id: "evaluations", label: "Évaluations" },
+      { id: "cashflow", label: "Cashflow" },
+      { id: "factures-ext", label: "Factures ponctuelles" }
+    ]
+  },
+  {
+    id: "travaux",
+    label: "Travaux",
+    pages: [{ id: "maintenance", label: "Travaux" }]
+  },
+  {
+    id: "documents",
+    label: "Documents",
+    pages: [
+      { id: "documents", label: "Documents" },
+      { id: "codes", label: "Codes d'accès" },
+      { id: "contrat-gestion", label: "Contrat de gestion" }
+    ]
+  }
+];
+
+/** Montant sans cents, pour les quatre chiffres du haut. */
+function fmtArrondi(n: number | null | undefined): string {
+  if (n == null) return "—";
+  return new Intl.NumberFormat("fr-CA", {
+    style: "currency",
+    currency: "CAD",
+    maximumFractionDigits: 0
+  }).format(n);
+}
+
+const TYPES_IMMEUBLE: Record<string, string> = {
+  residentiel: "Résidentiel",
+  commercial: "Commercial",
+  mixte: "Mixte",
+  unifamilial: "Unifamilial",
+  autre: "Autre"
+};
+
+/** « multilogement » → « Multilogement » pour un type hors liste. */
+function typeLisible(type: string | null | undefined): string {
+  if (!type) return "";
+  return TYPES_IMMEUBLE[type] || `${type.charAt(0).toUpperCase()}${type.slice(1)}`;
+}
 
 // Onglets masqués quand l'immeuble est en gestion externe : les baux,
 // paiements internes, la maintenance et le contrat de gestion sont gérés
@@ -540,13 +646,20 @@ export default function ImmeubleDetailPage({
 
   const ownerId = ownerships[0]?.entreprise_id ?? null;
 
+  // Refonte, lot « fiches » : en-tête court, quatre chiffres, sept
+  // onglets. L'écran actuel reste rendu tel quel quand le lot est éteint
+  // (Paramètres → Présentation d'Immobilier).
+  const presentation = usePresentationImmobilier();
+  const nouvelle = presentation.pret && presentation.fiches;
+  const [showExport, setShowExport] = useState(false);
+
   const gestionExterne = !!immeuble?.gestion_externe;
   // Gestion externe MAIS maintenance par nos hommes → l'onglet
   // Maintenance reste actif (retour Phil 2026-07-22).
   const maintenanceInterne = !!immeuble?.maintenance_interne;
   const visibleTabs = useMemo(
     () =>
-      gestionExterne
+      (gestionExterne
         ? TABS.filter(
             (t) =>
               !TABS_MASQUES_GESTION_EXTERNE.includes(t.id) ||
@@ -554,17 +667,31 @@ export default function ImmeubleDetailPage({
           )
         : TABS.filter(
             (t) => !TABS_GESTION_EXTERNE_SEULEMENT.includes(t.id)
-          ),
-    [gestionExterne, maintenanceInterne]
+          )
+      ).filter((t) => nouvelle || !TABS_NOUVELLE_PRESENTATION.includes(t.id)),
+    [gestionExterne, maintenanceInterne, nouvelle]
   );
 
   // Si l'onglet actif devient masqué (gestion externe ou non), on
-  // retombe sur la vue d'ensemble.
+  // retombe sur la vue d'ensemble. On attend la fiche et le réglage de
+  // présentation : `?tab=documents` n'existe que dans la nouvelle.
+  const pretPourOnglets = presentation.pret && immeuble != null;
   useEffect(() => {
+    if (!pretPourOnglets) return;
     if (!visibleTabs.some((t) => t.id === tab)) {
       switchTab("overview");
     }
-  }, [visibleTabs, tab, switchTab]);
+  }, [visibleTabs, tab, switchTab, pretPourOnglets]);
+
+  // Nouvelle présentation : les 7 onglets, réduits aux pages visibles.
+  const groupes = useMemo(() => {
+    const visibles = new Set<OngletId>(visibleTabs.map((t) => t.id));
+    return GROUPES_FICHE.map((g) => ({
+      ...g,
+      pages: g.pages.filter((pg) => visibles.has(pg.id))
+    })).filter((g) => g.pages.length > 0);
+  }, [visibleTabs]);
+  const groupeActif = groupes.find((g) => g.pages.some((pg) => pg.id === tab));
 
   // Recharge les KPIs financiers (hypothèques, cash flow) après une mutation.
   const refreshFinancials = useCallback(async () => {
@@ -850,6 +977,92 @@ export default function ImmeubleDetailPage({
     }
   }
 
+  // Exports de CET immeuble (immeuble_id préfixé) : tableaux CSV / Excel
+  // et zip de tous ses documents. Mêmes fichiers dans les deux
+  // présentations (bouton « Exporter » ou menu « ⋯ » → Exporter).
+  const ciblesExport: CibleExport[] = [
+    {
+      label: "Paiements (mois courant)",
+      base: "/api/v1/immobilier/exports/paiements",
+      sujet: "paiements",
+      params: {
+        mois: new Date().toISOString().slice(0, 7),
+        immeuble_id: immeubleId
+      }
+    },
+    {
+      label: "Locataires",
+      base: "/api/v1/immobilier/exports/locataires",
+      sujet: "locataires",
+      params: { immeuble_id: immeubleId }
+    },
+    {
+      label: "Baux",
+      base: "/api/v1/immobilier/exports/baux",
+      sujet: "baux",
+      params: { immeuble_id: immeubleId }
+    },
+    {
+      label: "Logements",
+      base: "/api/v1/immobilier/exports/logements",
+      sujet: "logements",
+      params: { immeuble_id: immeubleId }
+    },
+    {
+      label: "Dépôts de garantie",
+      base: "/api/v1/immobilier/exports/depots",
+      sujet: "depots",
+      params: { immeuble_id: immeubleId }
+    }
+  ];
+  const zipExport = {
+    path: `/api/v1/immobilier/immeubles/${immeubleId}/documents.zip?categorie=tout`,
+    sujet: `immeuble_${immeubleId}`
+  };
+
+  // Nouvelle présentation : le seul menu de l'en-tête.
+  const aUnePhoto = !!(immeuble?.has_cover_photo || immeuble?.cover_photo_url);
+  const itemsMenuFiche: ItemMenu[] = [
+    {
+      cle: "modifier",
+      libelle: "Modifier",
+      detail: "Nom, adresse, propriétaire, mode de gestion, valeur",
+      onClick: openEdit
+    },
+    {
+      cle: "photo",
+      libelle: aUnePhoto ? "Changer la photo" : "Ajouter une photo",
+      onClick: () => fileRef.current?.click()
+    },
+    ...(aUnePhoto
+      ? [
+          {
+            cle: "photo-retirer",
+            libelle: "Retirer la photo",
+            onClick: () => void removePhoto()
+          }
+        ]
+      : []),
+    {
+      cle: "exporter",
+      libelle: "Exporter",
+      detail: "Tableaux Excel ou CSV, ou tous les documents",
+      onClick: () => setShowExport(true)
+    },
+    {
+      cle: "fusionner",
+      libelle: "Fusionner un autre immeuble ici",
+      detail: "Aperçu avant et après, puis confirmation",
+      onClick: () => setShowFusion(true)
+    },
+    {
+      cle: "supprimer",
+      libelle: "Supprimer l'immeuble",
+      danger: true,
+      onClick: () => setShowDelete(true)
+    }
+  ];
+
   if (error) {
     return (
       <>
@@ -868,7 +1081,7 @@ export default function ImmeubleDetailPage({
     );
   }
 
-  if (!immeuble) {
+  if (!immeuble || !presentation.pret) {
     return (
       <>
         <ImmobilierTopbar
@@ -911,6 +1124,95 @@ export default function ImmeubleDetailPage({
           <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Liste des immeubles
         </Link>
 
+        {nouvelle ? (
+          <>
+            <EnTeteFiche
+              visuel={
+                <button
+                  type="button"
+                  onClick={() => fileRef.current?.click()}
+                  disabled={photoBusy}
+                  title="Changer la photo de l'immeuble"
+                  aria-label="Changer la photo de l'immeuble"
+                  className="group relative hidden h-14 w-14 overflow-hidden rounded-xl bg-accent-500/15 text-accent-500 sm:block"
+                >
+                  {immeuble.has_cover_photo || immeuble.cover_photo_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={
+                        immeuble.has_cover_photo
+                          ? `/api/v1/immobilier/immeubles/${immeubleId}/cover-photo?t=${getToken() || ""}&v=${photoVer}`
+                          : (immeuble.cover_photo_url as string)
+                      }
+                      alt=""
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <span className="flex h-full w-full items-center justify-center">
+                      <Building2 className="h-6 w-6" aria-hidden />
+                    </span>
+                  )}
+                  {photoBusy ? (
+                    <span className="absolute inset-0 flex items-center justify-center bg-black/50">
+                      <Loader2 className="h-5 w-5 animate-spin text-white" />
+                    </span>
+                  ) : null}
+                </button>
+              }
+              titre={immeuble.name}
+              lignes={[
+                <>
+                  {immeuble.address}
+                  {immeuble.city ? `, ${immeuble.city}` : ""}
+                  {immeuble.postal_code ? ` (${immeuble.postal_code})` : ""}
+                  {immeuble.address_secondaire
+                    ? ` · aussi ${immeuble.address_secondaire}`
+                    : ""}
+                </>,
+                [
+                  typeLisible(immeuble.type),
+                  immeuble.annee_construction
+                    ? String(immeuble.annee_construction)
+                    : "",
+                  entreprises.find((e) => e.id === ownerId)?.name || "",
+                  immeuble.matricule ? `matricule ${immeuble.matricule}` : ""
+                ]
+                  .filter(Boolean)
+                  .join(" · ")
+              ]}
+              pastilles={
+                <>
+                  {!immeuble.is_active ? (
+                    <span className="badge badge-amber">Inactif</span>
+                  ) : null}
+                  {gestionExterne ? (
+                    <span className="badge badge-sky">Gestion externe</span>
+                  ) : null}
+                  <TalPastille immeubleId={immeubleId} />
+                </>
+              }
+              actions={
+                <MenuFiche
+                  libelle={`Autres actions pour ${immeuble.name}`}
+                  items={itemsMenuFiche}
+                />
+              }
+            />
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void uploadPhoto(f);
+                e.target.value = "";
+              }}
+            />
+          </>
+        ) : null}
+        {/* Écran actuel — inchangé. */}
+        {nouvelle ? null : (
         <header className="mt-4 flex flex-wrap items-start gap-4">
           <div className="flex flex-col items-center gap-1">
             <button
@@ -1035,45 +1337,8 @@ export default function ImmeubleDetailPage({
             {/* Exports de CET immeuble (immeuble_id préfixé) : tableaux
                 CSV/Excel + zip de tous ses documents. */}
             <BoutonExport
-              cibles={[
-                {
-                  label: "Paiements (mois courant)",
-                  base: "/api/v1/immobilier/exports/paiements",
-                  sujet: "paiements",
-                  params: {
-                    mois: new Date().toISOString().slice(0, 7),
-                    immeuble_id: immeubleId
-                  }
-                },
-                {
-                  label: "Locataires",
-                  base: "/api/v1/immobilier/exports/locataires",
-                  sujet: "locataires",
-                  params: { immeuble_id: immeubleId }
-                },
-                {
-                  label: "Baux",
-                  base: "/api/v1/immobilier/exports/baux",
-                  sujet: "baux",
-                  params: { immeuble_id: immeubleId }
-                },
-                {
-                  label: "Logements",
-                  base: "/api/v1/immobilier/exports/logements",
-                  sujet: "logements",
-                  params: { immeuble_id: immeubleId }
-                },
-                {
-                  label: "Dépôts de garantie",
-                  base: "/api/v1/immobilier/exports/depots",
-                  sujet: "depots",
-                  params: { immeuble_id: immeubleId }
-                }
-              ]}
-              zip={{
-                path: `/api/v1/immobilier/immeubles/${immeubleId}/documents.zip?categorie=tout`,
-                sujet: `immeuble_${immeubleId}`
-              }}
+              cibles={ciblesExport}
+              zip={zipExport}
               variant="outline"
             />
             <ActionsMenu
@@ -1083,6 +1348,7 @@ export default function ImmeubleDetailPage({
             />
           </div>
         </header>
+        )}
 
         {fusionMsg ? (
           <p className="mt-3 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
@@ -1095,8 +1361,52 @@ export default function ImmeubleDetailPage({
           </p>
         ) : null}
 
+        {/* Nouvelle présentation : les quatre mêmes chiffres, sans cents,
+            avec en dessous d'où ils viennent. */}
+        {nouvelle && financials ? (
+          <ChiffresFiche
+            chiffres={[
+              {
+                libelle: "Revenu mensuel",
+                valeur: fmtArrondi(financials.revenu_brut_mensuel),
+                sous:
+                  financials.revenu_brut_mensuel_toutes_unites != null &&
+                  Math.round(financials.revenu_brut_mensuel_toutes_unites) !==
+                    Math.round(financials.revenu_brut_mensuel)
+                    ? `${fmtArrondi(financials.revenu_brut_mensuel_toutes_unites)} si tout est loué`
+                    : `${fmtArrondi(financials.revenu_brut_annuel)} par année`,
+                titre: `${fmtCurrency(financials.revenu_brut_mensuel)} par mois, ${fmtCurrency(financials.revenu_brut_annuel)} par année`
+              },
+              {
+                libelle: "Cashflow mensuel",
+                valeur: fmtArrondi(financials.cash_flow_mensuel),
+                sous: `après hypothèque de ${fmtArrondi(financials.paiement_hypotheque_mensuel)}`,
+                ton:
+                  (financials.cash_flow_mensuel || 0) >= 0 ? "normal" : "alerte",
+                titre: fmtCurrency(financials.cash_flow_mensuel)
+              },
+              {
+                libelle: "Occupation",
+                valeur: `${financials.nb_logements_occupes} sur ${financials.nb_logements_actifs}`,
+                sous:
+                  (financials.nb_chambres || 0) > 0
+                    ? `${(financials.taux_occupation * 100).toFixed(0)} %, ${financials.nb_logements_en_chambres} en chambres`
+                    : `${(financials.taux_occupation * 100).toFixed(0)} %`
+              },
+              {
+                libelle: "Équité",
+                valeur: equite == null ? "—" : fmtArrondi(equite),
+                sous: lastEval
+                  ? `valeur ${fmtArrondi(lastEval.valeur)}, hypothèques ${fmtArrondi(balanceHypoActives)}`
+                  : "aucune évaluation",
+                ton: (equite ?? 0) >= 0 ? "normal" : "alerte"
+              }
+            ]}
+          />
+        ) : null}
+
         {/* KPIs financiers */}
-        {financials ? (
+        {financials && !nouvelle ? (
           <section className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Kpi
               label="Revenu mensuel"
@@ -1170,7 +1480,20 @@ export default function ImmeubleDetailPage({
           </section>
         ) : null}
 
+        {nouvelle ? (
+          <OngletsFiche
+            libelle="Sections de la fiche de l'immeuble"
+            onglets={groupes.map((g) => ({ id: g.id, label: g.label }))}
+            actif={groupeActif?.id ?? "resume"}
+            onChoisir={(id) => {
+              const g = groupes.find((x) => x.id === id);
+              if (g && g !== groupeActif) switchTab(g.pages[0].id);
+            }}
+          />
+        ) : null}
+
         {/* Tabs */}
+        {nouvelle ? null : (
         <nav
           className="mt-6 flex items-center gap-1 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           style={{ borderBottom: "1px solid #25252d" }}
@@ -1195,8 +1518,17 @@ export default function ImmeubleDetailPage({
             );
           })}
         </nav>
+        )}
 
         <div className="mt-5">
+          {nouvelle && groupeActif ? (
+            <SousOnglets
+              libelle={`Pages de l'onglet ${groupeActif.label}`}
+              onglets={groupeActif.pages}
+              actif={tab}
+              onChoisir={switchTab}
+            />
+          ) : null}
           {tab === "overview" ? (
             <>
               <OverviewTab
@@ -1208,6 +1540,10 @@ export default function ImmeubleDetailPage({
                 hypotheques={hypotheques}
                 evaluations={evaluations}
               />
+              {/* Nouvelle présentation : les codes et les documents ont
+                  leur onglet « Documents ». */}
+              {nouvelle ? null : (
+                <>
               {/* Codes d'accès (porte, lock box, garage…) — bug
                   mvilliard 2026-10-17 : un endroit pour tous les codes
                   reliés à l'immeuble. */}
@@ -1220,7 +1556,18 @@ export default function ImmeubleDetailPage({
               <div className="mt-4">
                 <ImmeubleDocumentsSection immeubleId={immeubleId} />
               </div>
+                </>
+              )}
             </>
+          ) : null}
+          {tab === "documents" ? (
+            <ImmeubleDocumentsSection
+              immeubleId={immeubleId}
+              classement={{ logements: logements || [], baux: baux || [] }}
+            />
+          ) : null}
+          {tab === "codes" ? (
+            <CodesAccesSection immeubleId={immeubleId} />
           ) : null}
           {tab === "logements" ? (
             <LogementsTab
@@ -1378,6 +1725,14 @@ export default function ImmeubleDetailPage({
             </div>
           </div>
         </div>
+      ) : null}
+
+      {showExport ? (
+        <FenetreExport
+          cibles={ciblesExport}
+          zip={zipExport}
+          onClose={() => setShowExport(false)}
+        />
       ) : null}
 
       {showFusion && immeuble ? (
@@ -4109,7 +4464,10 @@ function PaiementsMoisSection({
             <tbody className="divide-y divide-brand-800/70">
               {rows.map((r) => (
                 <tr
-                  key={r.bail_id}
+                  // Un logement vacant arrive avec bail_id = 0 : sa clé
+                  // est celle du logement, sinon deux vacants se
+                  // partagent la même ligne.
+                  key={r.bail_id || `vacant-${r.logement_id}`}
                   // Fond TEINTÉ selon l'état (retour Phil 2026-08-13) :
                   // gris attente, vert payé, jaune partiel, rouge
                   // retard — mêmes teintes que la page Paiements.

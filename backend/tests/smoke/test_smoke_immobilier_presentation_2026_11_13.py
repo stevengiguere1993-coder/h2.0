@@ -83,6 +83,9 @@ def test_api_retour_a_la_presentation_actuelle(client, auth_headers, employee_he
     assert next(lot for lot in corps["lots"] if lot["cle"] == "loyers")["nouvelle"] is True
     # Lot 3 (baux et logements à louer) : livré, donc nouveau par défaut.
     assert next(lot for lot in corps["lots"] if lot["cle"] == "baux")["nouvelle"] is True
+    # Lot 4 (fiches immeuble, logement et locataire) : livré lui aussi.
+    fiches = next(lot for lot in corps["lots"] if lot["cle"] == "fiches")
+    assert fiches["livre"] is True and fiches["nouvelle"] is True
     r = client.put(
         "/api/v1/immobilier/presentation", headers=auth_headers, json={"autre": True}
     )

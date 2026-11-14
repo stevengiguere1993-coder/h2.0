@@ -172,6 +172,10 @@ type Ctx = {
   // Nouvelle présentation : onglets des pages réunies sous la même
   // entrée de menu (vide ailleurs et en présentation actuelle).
   ongletsPage: OngletPage[];
+  // Lot « fiches » : le bouton Aide se range dans la barre du haut.
+  // La barre donne son emplacement par `poserAide`.
+  aideDansEnTete: boolean;
+  poserAide: (el: HTMLElement | null) => void;
 };
 
 const ctx = createContext<Ctx>({
@@ -180,7 +184,9 @@ const ctx = createContext<Ctx>({
   setCurrentEntrepriseId: () => {},
   entreprises: [],
   refreshEntreprises: async () => {},
-  ongletsPage: []
+  ongletsPage: [],
+  aideDansEnTete: false,
+  poserAide: () => {}
 });
 
 export function useImmobilierLayout() {
@@ -260,7 +266,15 @@ export default function ImmobilierLayout({
   // Refonte : quel menu montrer (réglage commun, Paramètres), et la
   // pastille « ce qui presse » de l'entrée Aujourd'hui (relue au plus
   // toutes les 5 minutes hors de la page Aujourd'hui).
-  const { menu: nouveauMenu } = usePresentationImmobilier();
+  const {
+    menu: nouveauMenu,
+    fiches: nouvellesFiches,
+    pret: presentationPrete
+  } = usePresentationImmobilier();
+  // Lot « fiches » : le bouton Aide ne flotte plus par-dessus les
+  // chiffres et les boutons, il se range dans la barre du haut.
+  const aideDansEnTete = presentationPrete && nouvellesFiches;
+  const [cibleAide, setCibleAide] = useState<HTMLElement | null>(null);
   const { data: aujourdhui } = useAujourdhuiImmobilier(currentEntrepriseId, {
     actif: nouveauMenu && !!user,
     fraicheurMs: 5 * 60_000
@@ -468,7 +482,9 @@ export default function ImmobilierLayout({
               setCurrentEntrepriseId,
               entreprises,
               refreshEntreprises,
-              ongletsPage
+              ongletsPage,
+              aideDansEnTete,
+              poserAide: setCibleAide
             }}
           >
             <ConfirmProvider>
@@ -476,7 +492,10 @@ export default function ImmobilierLayout({
                 {allowed ? <AccessGuard>{children}</AccessGuard> : <NoAccess />}
               </main>
               {/* Kratos + ThemeToggle intégrés dans ImmobilierTopbar */}
-              <HelpButton />
+              <HelpButton
+                dansEnTete={aideDansEnTete}
+                conteneurEnTete={cibleAide}
+              />
             </ConfirmProvider>
           </ctx.Provider>
         </div>
@@ -503,7 +522,8 @@ export function ImmobilierTopbar({
   breadcrumbs: { label: string; href?: string }[];
   rightSlot?: React.ReactNode;
 }) {
-  const { onOpenSidebar, ongletsPage } = useImmobilierLayout();
+  const { onOpenSidebar, ongletsPage, aideDansEnTete, poserAide } =
+    useImmobilierLayout();
   return (
     <>
     <header
@@ -529,9 +549,25 @@ export function ImmobilierTopbar({
             const cls = `truncate text-sm font-medium ${
               isLast ? "text-white" : c.href ? "text-white/60 hover:text-accent-500" : "text-white/50"
             }`;
+            // Lot « fiches » : au cellulaire, la barre ne garde que le
+            // nom de la page (le fil complet s'y réduisait à « I.. / 1. »).
+            const seulementLarge = aideDansEnTete && !isLast;
             return (
-              <span key={i} className="flex min-w-0 items-center gap-2">
-                {i > 0 ? <span className="text-white/30">/</span> : null}
+              <span
+                key={i}
+                className={`min-w-0 items-center gap-2 ${
+                  seulementLarge ? "hidden sm:flex" : "flex"
+                }`}
+              >
+                {i > 0 ? (
+                  <span
+                    className={`text-white/30 ${
+                      aideDansEnTete ? "hidden sm:inline" : ""
+                    }`}
+                  >
+                    /
+                  </span>
+                ) : null}
                 {!isLast && c.href ? (
                   <Link
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -550,6 +586,7 @@ export function ImmobilierTopbar({
         {rightSlot ? (
           <div className="hidden items-center gap-2 lg:flex">{rightSlot}</div>
         ) : null}
+        {aideDansEnTete ? <span ref={poserAide} className="flex" /> : null}
         <ThemeToggle />
         <KratosLogo size={144} floating={false} />
       </div>

@@ -32,7 +32,7 @@ const DEFAUT: PresentationImmobilier = {
   menu: true,
   loyers: true,
   baux: true,
-  fiches: false,
+  fiches: true,
   suivis: false
 };
 

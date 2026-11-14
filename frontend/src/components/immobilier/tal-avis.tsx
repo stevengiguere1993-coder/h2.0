@@ -77,6 +77,7 @@ export type BailDocument = {
 
 // Appels d'API des documents (import, bail signé) — dans leur propre
 // module pour que fin-bail.tsx puisse les utiliser sans cycle d'import.
+import { estBrouillonAuto, grouperDocuments } from "@/lib/documents-lecture";
 import {
   importDocument,
   uploadBailDocument
@@ -1594,10 +1595,19 @@ export function DocsList({
 export function DocumentsSection({
   locataireId,
   logementId,
-  bails
+  bails,
+  cacherBrouillons = false,
+  sansBandeauSansBail = false
 }: {
   locataireId?: number;
   logementId?: number;
+  /** Gestion externe : il n'y a jamais de bail dans Kratos, le bandeau
+   *  « Aucun bail actif, logement libre » y serait faux. */
+  sansBandeauSansBail?: boolean;
+  /** Refonte, lot « fiches » : les brouillons créés d'office (le
+   *  consentement préparé à la création d'un bail) restent cachés tant
+   *  qu'ils ne sont pas envoyés ; un lien les montre. */
+  cacherBrouillons?: boolean;
   /** Baux depuis lesquels générer un document (libellé affiché si >1).
    *  `status`/`document_id` (facultatifs) servent à proposer « Utiliser
    *  comme bail signé » sur un PDF « Bail » déposé sans bail. */
@@ -1615,6 +1625,14 @@ export function DocumentsSection({
   );
   const [docs, setDocs] = useState<BailDocument[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [voirBrouillons, setVoirBrouillons] = useState(false);
+  const nbBrouillons = cacherBrouillons
+    ? (docs ?? []).filter(estBrouillonAuto).length
+    : 0;
+  const docsMontres =
+    docs && nbBrouillons > 0 && !voirBrouillons
+      ? docs.filter((d) => !estBrouillonAuto(d))
+      : docs;
 
   const load = useCallback(async () => {
     // categorie=dossier : uniquement les pièces SIGNÉES ou IMPORTÉES —
@@ -1656,7 +1674,9 @@ export function DocumentsSection({
           Documents
         </h2>
         <span className="text-[11px] text-white/40">
-          {docs ? `${docs.length} document${docs.length > 1 ? "s" : ""}` : ""}
+          {docsMontres
+            ? `${docsMontres.length} document${docsMontres.length > 1 ? "s" : ""}`
+            : ""}
         </span>
         <span className="ml-auto flex flex-wrap items-center gap-2">
           <ImportDocButton
@@ -1694,7 +1714,7 @@ export function DocumentsSection({
           ))}
         </span>
       </div>
-      {bails.length === 0 ? (
+      {bails.length === 0 && !sansBandeauSansBail ? (
         <div className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
           {locataireId != null ? (
             <>
@@ -1730,18 +1750,32 @@ export function DocumentsSection({
           {err}
         </p>
       ) : null}
-      {docs === null ? (
+      {docsMontres == null ? (
         <p className="flex items-center gap-2 text-xs text-white/50">
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
         </p>
       ) : (
         <DocsList
-          docs={docs}
+          docs={docsMontres}
           onChanged={() => void load()}
           rattacherA={rattacherA}
           emptyText="Aucun document au dossier — importe un fichier (bouton « Importer ») ou génère un avis avec « Générer ▾ ». Les documents signés en ligne arrivent ici automatiquement."
         />
       )}
+      {nbBrouillons > 0 ? (
+        <button
+          type="button"
+          onClick={() => setVoirBrouillons((v) => !v)}
+          aria-pressed={voirBrouillons}
+          className="mt-3 text-sm font-semibold text-white/80 underline underline-offset-2 hover:text-white"
+        >
+          {voirBrouillons
+            ? "Cacher les brouillons non envoyés"
+            : nbBrouillons > 1
+              ? `Voir aussi les ${nbBrouillons} brouillons non envoyés`
+              : "Voir aussi le brouillon non envoyé"}
+        </button>
+      ) : null}
     </section>
   );
 }
@@ -1754,14 +1788,62 @@ export function DocumentsSection({
  * s'importe sur sa ligne de bail, le règlement ici).
  */
 export function ImmeubleDocumentsSection({
-  immeubleId
+  immeubleId,
+  classement
 }: {
   immeubleId: number;
+  /** Refonte, lot « fiches » : la liste se classe par logement et par
+   *  locataire, et les brouillons créés d'office (consentement préparé à
+   *  la création d'un bail) restent cachés tant qu'ils ne sont pas
+   *  envoyés. Sans cette propriété : la liste à plat, comme avant. */
+  classement?: {
+    logements: { id: number; numero: string }[];
+    baux: { id: number; logement_id: number; locataire_id?: number | null }[];
+  };
 }) {
   const [docs, setDocs] = useState<BailDocument[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [docType, setDocType] = useState("reglement_immeuble");
+  const [voirBrouillons, setVoirBrouillons] = useState(false);
+  // Noms des locataires (baux en cours et à venir) pour titrer les
+  // groupes. Sans réponse, les groupes s'affichent sans nom.
+  const [noms, setNoms] = useState<Record<number, string>>({});
+  const classe = classement != null;
+  useEffect(() => {
+    if (!classe) return;
+    let annule = false;
+    authedFetch(`/api/v1/immobilier/suivi-baux?immeuble_id=${immeubleId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then(
+        (
+          d: {
+            rows?: {
+              locataire_id: number | null;
+              locataire_nom: string | null;
+              prochain_locataire_id: number | null;
+              prochain_locataire_nom: string | null;
+            }[];
+          } | null
+        ) => {
+          if (annule || !d?.rows) return;
+          const trouves: Record<number, string> = {};
+          for (const r of d.rows) {
+            if (r.locataire_id != null && r.locataire_nom)
+              trouves[r.locataire_id] = r.locataire_nom;
+            if (r.prochain_locataire_id != null && r.prochain_locataire_nom)
+              trouves[r.prochain_locataire_id] = r.prochain_locataire_nom;
+          }
+          setNoms(trouves);
+        }
+      )
+      .catch(() => {
+        /* les groupes s'affichent sans nom */
+      });
+    return () => {
+      annule = true;
+    };
+  }, [classe, immeubleId]);
 
   const load = useCallback(async () => {
     try {
@@ -1799,6 +1881,13 @@ export function ImmeubleDocumentsSection({
     void load();
   }, [load]);
 
+  // Le compte de l'en-tête est celui des lignes montrées.
+  const nbMontres = !docs
+    ? 0
+    : classe && !voirBrouillons
+      ? docs.filter((d) => !estBrouillonAuto(d)).length
+      : docs.length;
+
   return (
     <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -1806,7 +1895,11 @@ export function ImmeubleDocumentsSection({
           Documents de l&apos;immeuble
         </h2>
         <span className="text-[11px] text-white/40">
-          {docs ? `${docs.length} document${docs.length > 1 ? "s" : ""}` : ""}
+          {docs && nbMontres > 0
+            ? `${nbMontres} document${nbMontres > 1 ? "s" : ""}`
+            : docs && !classe
+              ? "0 document"
+              : ""}
         </span>
         <span className="ml-auto flex flex-wrap items-center gap-2">
           <select
@@ -1838,6 +1931,15 @@ export function ImmeubleDocumentsSection({
         <p className="flex items-center gap-2 text-xs text-white/50">
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
         </p>
+      ) : classement ? (
+        <DocumentsClasses
+          docs={docs}
+          classement={classement}
+          noms={noms}
+          voirBrouillons={voirBrouillons}
+          onVoirBrouillons={setVoirBrouillons}
+          onChanged={() => void load()}
+        />
       ) : (
         <DocsList
           docs={docs}
@@ -1846,6 +1948,70 @@ export function ImmeubleDocumentsSection({
         />
       )}
     </section>
+  );
+}
+
+/** Documents d'un immeuble classés par logement (nouvelle présentation
+ *  de la fiche). Chaque groupe est la liste habituelle, avec ses mêmes
+ *  gestes. */
+function DocumentsClasses({
+  docs,
+  classement,
+  noms,
+  voirBrouillons,
+  onVoirBrouillons,
+  onChanged
+}: {
+  docs: BailDocument[];
+  classement: {
+    logements: { id: number; numero: string }[];
+    baux: { id: number; logement_id: number; locataire_id?: number | null }[];
+  };
+  noms: Record<number, string>;
+  voirBrouillons: boolean;
+  onVoirBrouillons: (v: boolean) => void;
+  onChanged: () => void;
+}) {
+  const brouillons = docs.filter(estBrouillonAuto).length;
+  const montres = voirBrouillons
+    ? docs
+    : docs.filter((d) => !estBrouillonAuto(d));
+  const groupes = grouperDocuments(montres, { ...classement, noms });
+  return (
+    <div className="space-y-4">
+      {groupes.length === 0 ? (
+        <p className="text-sm text-white/70">
+          Aucun document au dossier. Le bouton « Importer » dépose le
+          règlement d&apos;immeuble signé ou toute pièce de l&apos;immeuble.
+        </p>
+      ) : (
+        groupes.map((g) => (
+          <div key={g.cle}>
+            <h3 className="mb-1.5 flex flex-wrap items-baseline gap-x-2 text-sm font-semibold text-white">
+              {g.titre}
+              {g.sousTitre ? (
+                <span className="font-normal text-white/70">{g.sousTitre}</span>
+              ) : null}
+            </h3>
+            <DocsList docs={g.docs} onChanged={onChanged} />
+          </div>
+        ))
+      )}
+      {brouillons > 0 ? (
+        <button
+          type="button"
+          onClick={() => onVoirBrouillons(!voirBrouillons)}
+          aria-pressed={voirBrouillons}
+          className="text-sm font-semibold text-white/80 underline underline-offset-2 hover:text-white"
+        >
+          {voirBrouillons
+            ? "Cacher les brouillons non envoyés"
+            : brouillons > 1
+              ? `Voir aussi les ${brouillons} brouillons non envoyés`
+              : "Voir aussi le brouillon non envoyé"}
+        </button>
+      ) : null}
+    </div>
   );
 }
 

@@ -19,8 +19,7 @@ import {
   StickyNote,
   Trash2,
   User,
-  Wallet,
-  X
+  Wallet
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -29,6 +28,13 @@ import { useSearchParams } from "next/navigation";
 import { Link, useRouter } from "@/i18n/navigation";
 import { ApercuEnvoiModal } from "@/components/immobilier/apercu-envoi";
 import { TableauSuiviBaux } from "@/components/immobilier/tableau-suivi-baux";
+import { BauxDeLaFiche } from "@/components/immobilier/baux-nouvelle-vue";
+import {
+  lireOverview,
+  type LoyerMoisRow,
+  LoyersMoisSection,
+  messageErreur
+} from "@/components/immobilier/loyer-du-mois-fiche";
 import { type SuiviBailRow } from "@/components/immobilier/fin-bail";
 import { authedFetch } from "@/lib/auth";
 import {
@@ -42,7 +48,11 @@ import {
   DocumentsSection
 } from "@/components/immobilier/tal-avis";
 import { AssignerBailButton } from "@/components/immobilier/assigner-bail";
-import { BoutonExportZip } from "@/components/immobilier/bouton-export";
+import {
+  BoutonExportZip,
+  dateDuJour,
+  telechargerExport
+} from "@/components/immobilier/bouton-export";
 import {
   echeanceLabel,
   FinBailModal,
@@ -51,21 +61,38 @@ import {
   RelocationStatutPastille
 } from "@/components/immobilier/fin-bail";
 import {
-  CelluleLoyer,
   confirmationLibelle,
-  type MoisImpaye,
-  FraisCreditModal,
-  moisCouvertPourPaiement,
-  montantMarquerPaye,
-  type PaiementMois,
   RENOUVELLEMENT_BADGES
 } from "@/components/immobilier/paiements-actions";
 import {
+  Fenetre,
   usePaiementActions,
   type PaiementRowBase
 } from "@/components/immobilier/paiement-modals";
+import {
+  BlocRepliable,
+  type ChiffreFiche,
+  ChiffresFiche,
+  EnTeteFiche,
+  LigneRepliee,
+  MenuFiche,
+  type OngletFiche,
+  OngletsFiche
+} from "@/components/immobilier/fiche-commun";
+import {
+  CLS_PRINCIPAL,
+  type ItemMenu,
+  MessageBas
+} from "@/components/immobilier/refonte-commun";
 import { ImmobilierTopbar } from "../../layout";
 import { usePresentationImmobilier } from "@/hooks/use-presentation-immobilier";
+import { jourAvecAnnee } from "@/lib/baux-lecture";
+import {
+  chiffreBail,
+  chiffreDepot,
+  payableLe,
+  resteAPayer
+} from "@/lib/fiches-lecture";
 import { argent } from "@/lib/loyers-lecture";
 
 type Locataire = {
@@ -258,6 +285,29 @@ function money(n: number | null | undefined): string {
   }).format(n);
 }
 
+// ── Nouvelle présentation (refonte d'Immobilier, lot « fiches ») ─────
+type OngletLocataire = "resume" | "paiements" | "bail" | "suivi";
+
+const ONGLETS_LOCATAIRE: OngletFiche<OngletLocataire>[] = [
+  { id: "resume", label: "Résumé" },
+  { id: "paiements", label: "Paiements" },
+  { id: "bail", label: "Bail et documents", court: "Bail" },
+  { id: "suivi", label: "Suivi" }
+];
+
+/** Les trois gestes sous le nom : Appeler, Écrire, État de compte. */
+const CLS_GESTE_FICHE =
+  "btn-secondary min-h-[44px] gap-1.5 px-3 py-2.5 text-center text-sm leading-tight disabled:opacity-60";
+
+/** Étapes de la suppression d'un locataire : le serveur refuse d'abord
+ *  s'il a des baux, puis s'il a des paiements ; chaque refus se confirme
+ *  à part, avec ses mots. */
+type EtapeSuppression =
+  | { etape: "bail" }
+  | { etape: "confirmer" }
+  | { etape: "baux"; detail: string }
+  | { etape: "paiements"; detail: string };
+
 type IdentityForm = {
   full_name: string;
   email: string;
@@ -437,12 +487,67 @@ export default function LocataireDetailPage({
   } | null>(null);
   // Refonte, lot « loyers » : dans l'historique, la pastille décrit le
   // MOIS (« Partiel : 750 $ sur 1 000 $ ») et non le versement.
-  const pastilleDuMois = usePresentationImmobilier().loyers;
+  const presentation = usePresentationImmobilier();
+  const pastilleDuMois = presentation.loyers;
+
+  // Refonte, lot « fiches » : en-tête court, quatre chiffres, quatre
+  // onglets. L'écran actuel (tout empilé) reste le rendu quand le lot
+  // est éteint dans Paramètres → Présentation d'Immobilier.
+  const nouvelle = presentation.pret && presentation.fiches;
+  const [onglet, setOnglet] = useState<OngletLocataire>(() => {
+    const voulu = searchParams.get("onglet");
+    return ONGLETS_LOCATAIRE.some((o) => o.id === voulu)
+      ? (voulu as OngletLocataire)
+      : "resume";
+  });
+  const choisirOnglet = useCallback((suivant: OngletLocataire) => {
+    setOnglet(suivant);
+    // replaceState : F5 garde l'onglet, « retour » quitte la fiche.
+    const url = new URL(window.location.href);
+    if (suivant === "resume") url.searchParams.delete("onglet");
+    else url.searchParams.set("onglet", suivant);
+    window.history.replaceState(window.history.state, "", url.toString());
+  }, []);
+  /** Vrai : le bloc est d'un autre onglet que celui qu'on regarde. Les
+   *  blocs restent montés (un texte en cours de saisie n'est pas perdu
+   *  en changeant d'onglet), ils sont seulement cachés. */
+  const cache = (o: OngletLocataire) => nouvelle && onglet !== o;
+
+  // « Reste à payer » : le solde de la vue des loyers, au mois courant.
+  const moisCourant = new Date().toLocaleDateString("sv-SE").slice(0, 7);
+  const [lignesMois, setLignesMois] = useState<LoyerMoisRow[] | null>(null);
+  const chargerSolde = useCallback(async () => {
+    try {
+      const lignes = await lireOverview(moisCourant);
+      setLignesMois(lignes.filter((l) => l.locataire_id === locataireId));
+    } catch {
+      /* le chiffre reste en attente ; « Loyer du mois » dit l'erreur */
+    }
+  }, [moisCourant, locataireId]);
+  const dossierLu = dossier != null;
+  useEffect(() => {
+    if (nouvelle && dossierLu) void chargerSolde();
+  }, [nouvelle, dossierLu, chargerSolde]);
+  // Demande au bloc « Loyer du mois » de se relire.
+  const [versionLoyers, setVersionLoyers] = useState(0);
+  // Ce qui vient de se passer, dit au bas de l'écran.
+  const [messageFiche, setMessageFiche] = useState<{
+    cle: number;
+    ton: "succes" | "erreur";
+    texte: string;
+  } | null>(null);
   const histoActions = usePaiementActions<PaiementRowBase>({
     mois: new Date().toLocaleDateString("sv-SE").slice(0, 7),
     rows: [],
     fmt: money,
-    onChanged: loadDossier,
+    onChanged: async () => {
+      await loadDossier();
+      // Un versement corrigé change aussi le loyer du mois et le reste
+      // à payer.
+      setVersionLoyers((v) => v + 1);
+      if (nouvelle) void chargerSolde();
+    },
+    nouvellePresentation: nouvelle,
     onInfo: (text) => setHistoMsg({ kind: "ok", text }),
     onError: (text) => setHistoMsg({ kind: "err", text })
   });
@@ -461,9 +566,13 @@ export default function LocataireDetailPage({
     }
   }, [locataireId]);
 
+  // Avec les deux lots « fiches » et « baux », le bloc Baux de la fiche
+  // est celui de l'écran des baux refait : il lit ses lignes lui-même.
+  const bauxIntegres = nouvelle && presentation.baux;
+  const presentationPrete = presentation.pret;
   useEffect(() => {
-    void loadSuiviBaux();
-  }, [loadSuiviBaux]);
+    if (presentationPrete && !bauxIntegres) void loadSuiviBaux();
+  }, [loadSuiviBaux, presentationPrete, bauxIntegres]);
 
 
 
@@ -739,8 +848,221 @@ export default function LocataireDetailPage({
     }
   }
 
+  // ── Nouvelle présentation : menu « ⋯ », chiffres, suppression ──────
+  const bailActif = dossier?.baux.find((b) => b.status === "actif") ?? null;
+  const bauxPourTal = (dossier?.baux || []).map((b) => ({
+    id: b.id,
+    status: b.status,
+    label: `${b.immeuble_name}${
+      b.logement_numero ? ` · ${b.logement_numero}` : ""
+    } (${b.date_debut} → ${b.date_fin})`
+  }));
+
+  async function telechargerDocuments() {
+    try {
+      await telechargerExport(
+        `/api/v1/immobilier/locataires/${locataireId}/documents.zip?categorie=tout`,
+        `kratos_documents_locataire_${locataireId}_${dateDuJour()}.zip`
+      );
+    } catch (e) {
+      setMessageFiche({
+        cle: Date.now(),
+        ton: "erreur",
+        texte: `Téléchargement impossible : ${(e as Error).message}`
+      });
+    }
+  }
+
+  // Suppression en fenêtre (les confirmations du navigateur restent
+  // muettes dans Kratos installé sur un téléphone). Mêmes appels et
+  // mêmes refus du serveur que `supprimerLocataire`.
+  const [suppression, setSuppression] = useState<EtapeSuppression | null>(
+    null
+  );
+  async function confirmerSuppression() {
+    if (!suppression || suppression.etape === "bail") return;
+    const etape = suppression.etape;
+    const qs =
+      etape === "confirmer"
+        ? ""
+        : etape === "baux"
+          ? "?force=true"
+          : "?force=true&purger=true";
+    setDeleting(true);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/locataires/${locataireId}${qs}`,
+        { method: "DELETE" }
+      );
+      if (r.status === 409 && etape !== "paiements") {
+        const brut = await messageErreur(r);
+        const detail = brut.replace(/\s*\(purger=true\)/g, "");
+        if (etape === "confirmer") {
+          setSuppression({ etape: "baux", detail });
+          return;
+        }
+        if (/purger=true/.test(brut)) {
+          setSuppression({ etape: "paiements", detail });
+          return;
+        }
+        throw new Error(detail);
+      }
+      if (!r.ok && r.status !== 204) throw new Error(await messageErreur(r));
+      router.push("/immobilier/locataires" as never);
+    } catch (e) {
+      setSuppression(null);
+      setMessageFiche({
+        cle: Date.now(),
+        ton: "erreur",
+        texte: `Suppression impossible : ${(e as Error).message}`
+      });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  const itemsMenuFiche: ItemMenu[] = [
+    {
+      cle: "modifier",
+      libelle: "Modifier les coordonnées",
+      onClick: () => {
+        choisirOnglet("resume");
+        startEdit();
+      }
+    },
+    {
+      cle: "documents",
+      libelle: "Télécharger tous ses documents",
+      detail: "Un fichier zip : les PDF et leur index",
+      onClick: () => void telechargerDocuments()
+    },
+    {
+      cle: "supprimer",
+      libelle: "Supprimer le locataire",
+      danger: true,
+      disabled: deleting,
+      onClick: () =>
+        setSuppression(bailActif ? { etape: "bail" } : { etape: "confirmer" })
+    }
+  ];
+
+  const reste = lignesMois ? resteAPayer(lignesMois, moisCourant) : null;
+  const chiffresFiche: ChiffreFiche[] = dossier
+    ? [
+        {
+          libelle: "Loyer par mois",
+          valeur: bailActif ? argent(dossier.loyer_actuel) : "Aucun",
+          sous: bailActif
+            ? dossier.nb_baux_actifs > 1
+              ? `${dossier.nb_baux_actifs} baux en cours`
+              : payableLe(bailActif.jour_echeance)
+            : undefined
+        },
+        {
+          libelle: "Reste à payer",
+          valeur: reste ? argent(reste.montant) : "…",
+          sous: reste?.phrase,
+          ton: reste && reste.montant > 0 ? "alerte" : "normal",
+          titre: "Loyers échus et frais, moins tout ce qui a été reçu"
+        },
+        chiffreDepot(dossier.baux, dossier.depot_total),
+        chiffreBail(dossier.baux)
+      ]
+    : [];
+
   return (
     <>
+      {messageFiche ? (
+        <MessageBas
+          key={messageFiche.cle}
+          ton={messageFiche.ton}
+          onFermer={() => setMessageFiche(null)}
+        >
+          {messageFiche.texte}
+        </MessageBas>
+      ) : null}
+      {suppression && loc ? (
+        <Fenetre
+          titre="Supprimer le locataire"
+          sousTitre={loc.full_name}
+          teinte="text-rose-300"
+          onClose={() => {
+            if (!deleting) setSuppression(null);
+          }}
+        >
+          {suppression.etape === "bail" && bailActif ? (
+            <p className="text-sm text-white/80">
+              {loc.full_name} a encore un bail en cours (
+              {bailActif.immeuble_name}
+              {bailActif.logement_numero
+                ? `, logement ${bailActif.logement_numero}`
+                : ""}
+              ). Il faut d&apos;abord y mettre fin : fin immédiate, ou
+              entente signée.
+            </p>
+          ) : suppression.etape === "confirmer" ? (
+            <p className="text-sm text-white/80">
+              Sa fiche sera retirée de Kratos. S&apos;il a des baux ou des
+              paiements, Kratos te le dira avant de retirer quoi que ce
+              soit.
+            </p>
+          ) : suppression.etape === "baux" ? (
+            <>
+              <p className="text-sm text-white/80">{suppression.detail}</p>
+              <p className="text-sm font-semibold text-rose-300">
+                Continuer supprime le locataire ET tous ses baux,
+                paiements et documents. Ça ne se défait pas.
+              </p>
+            </>
+          ) : suppression.etape === "paiements" ? (
+            <>
+              <p className="text-sm text-white/80">{suppression.detail}</p>
+              <p className="text-sm font-semibold text-rose-300">
+                Continuer supprime aussi ses paiements et ses frais :
+                l&apos;historique des loyers de ce locataire disparaît.
+              </p>
+            </>
+          ) : null}
+          <div className="flex flex-wrap justify-end gap-2">
+            <button
+              type="button"
+              disabled={deleting}
+              onClick={() => setSuppression(null)}
+              className="btn-secondary min-h-[44px] px-4 py-2.5 text-sm disabled:opacity-60"
+            >
+              Annuler
+            </button>
+            {suppression.etape === "bail" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setSuppression(null);
+                  if (bailActif) setFinBailAvantSuppression(bailActif);
+                }}
+                className={`${CLS_PRINCIPAL} min-h-[44px] px-4 py-2.5 text-sm`}
+              >
+                Mettre fin au bail
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={() => void confirmerSuppression()}
+                className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg bg-rose-700 px-4 py-2.5 text-sm font-semibold text-neutral-50 transition hover:bg-rose-800 disabled:opacity-60"
+              >
+                {deleting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                ) : null}
+                {suppression.etape === "confirmer"
+                  ? "Supprimer"
+                  : suppression.etape === "baux"
+                    ? "Supprimer avec ses baux"
+                    : "Supprimer aussi ses paiements"}
+              </button>
+            )}
+          </div>
+        </Fenetre>
+      ) : null}
       {finBailAvantSuppression ? (
         <FinBailModal
           bailId={finBailAvantSuppression.id}
@@ -752,6 +1074,14 @@ export default function LocataireDetailPage({
             setFinBailAvantSuppression(null);
             setError(null);
             void loadDossier();
+            if (nouvelle) {
+              setMessageFiche({
+                cle: Date.now(),
+                ton: "succes",
+                texte: `${msg} Le bail est réglé : tu peux maintenant supprimer le locataire, ou le garder dans l'historique.`
+              });
+              return;
+            }
             window.alert(
               `${msg}\n\nLe bail est réglé : tu peux maintenant supprimer le locataire (bouton Supprimer) — ou le garder dans l'historique.`
             );
@@ -792,12 +1122,100 @@ export default function LocataireDetailPage({
           <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
             {error}
           </p>
-        ) : !loc ? (
+        ) : !loc || !presentation.pret ? (
           <div className="mt-6 flex items-center gap-2 text-xs text-white/50">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
           </div>
         ) : (
           <div className="mt-4 space-y-6">
+            {nouvelle ? (
+              <div>
+                <EnTeteFiche
+                  visuel={
+                    <span className="hidden h-12 w-12 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500 sm:flex">
+                      <User className="h-6 w-6" aria-hidden />
+                    </span>
+                  }
+                  titre={loc.full_name}
+                  lignes={[
+                    bailActif?.logement_id ? (
+                      <Link
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        href={`/immobilier/logements/${bailActif.logement_id}` as any}
+                        className="underline-offset-2 hover:underline"
+                        title="Ouvrir la fiche du logement"
+                      >
+                        Logement {bailActif.logement_numero || "sans numéro"} ·{" "}
+                        {bailActif.immeuble_name}
+                      </Link>
+                    ) : bailActif ? (
+                      bailActif.immeuble_name
+                    ) : (
+                      "Aucun bail en cours"
+                    )
+                  ]}
+                  actions={
+                    <MenuFiche
+                      items={itemsMenuFiche}
+                      libelle={`Autres actions pour ${loc.full_name}`}
+                    />
+                  }
+                />
+                <div className="mt-3 grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
+                  {(loc.phone || "").trim() ? (
+                    <a
+                      href={`tel:${(loc.phone || "").replace(/[^0-9+]/g, "")}`}
+                      className={CLS_GESTE_FICHE}
+                      title={`Appeler ${loc.phone}`}
+                    >
+                      <Phone className="h-4 w-4 shrink-0" aria-hidden />
+                      Appeler
+                    </a>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled
+                      className={CLS_GESTE_FICHE}
+                      title="Aucun téléphone au dossier : ajoute-le avec « Modifier »"
+                    >
+                      <Phone className="h-4 w-4 shrink-0" aria-hidden />
+                      Appeler
+                    </button>
+                  )}
+                  <Link
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    href={`/immobilier/communications?locataire_id=${locataireId}` as any}
+                    className={CLS_GESTE_FICHE}
+                    title="Écrire à ce locataire depuis Kratos : il est déjà coché, reste à choisir le message"
+                  >
+                    <Mail className="h-4 w-4 shrink-0" aria-hidden />
+                    Écrire
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => void etatDeCompte()}
+                    disabled={pdfLoading}
+                    className={CLS_GESTE_FICHE}
+                    title="Produire l'état de compte (PDF) : loyers, paiements, dépôt"
+                  >
+                    {pdfLoading ? (
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                    ) : (
+                      <Download className="h-4 w-4 shrink-0" aria-hidden />
+                    )}
+                    État de compte
+                  </button>
+                </div>
+                <ChiffresFiche chiffres={chiffresFiche} />
+                <OngletsFiche
+                  onglets={ONGLETS_LOCATAIRE}
+                  actif={onglet}
+                  onChoisir={choisirOnglet}
+                  libelle="Sections de la fiche du locataire"
+                />
+              </div>
+            ) : null}
+            {nouvelle ? null : (
             <header className="flex flex-wrap items-start gap-4">
               <div className="flex min-w-0 flex-1 items-start gap-4">
                 <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
@@ -898,12 +1316,45 @@ export default function LocataireDetailPage({
                 </button>
               </div>
             </header>
+            )}
 
             {/* Informations — lecture ou édition inline */}
+            {nouvelle ? (
+              <div hidden={cache("resume")}>
+                <LoyersMoisSection
+                  nouvelle
+                  locataireId={locataireId}
+                  version={versionLoyers}
+                  onMutated={() => {
+                    void loadDossier();
+                    void chargerSolde();
+                  }}
+                />
+              </div>
+            ) : null}
+            <div hidden={cache("resume")}>
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
-                Informations
-              </h2>
+              {nouvelle ? (
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Coordonnées
+                  </h2>
+                  {!editing ? (
+                    <button
+                      type="button"
+                      onClick={startEdit}
+                      className="btn-secondary btn-sm gap-1.5"
+                    >
+                      <Pencil className="h-4 w-4" aria-hidden />
+                      Modifier
+                    </button>
+                  ) : null}
+                </div>
+              ) : (
+                <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
+                  Informations
+                </h2>
+              )}
               {editing ? (
                 <form onSubmit={saveIdentity} className="space-y-3">
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -1064,9 +1515,10 @@ export default function LocataireDetailPage({
                 </dl>
               )}
             </section>
+            </div>
 
             {/* KPIs gestion locative */}
-            {dossier ? (
+            {dossier && !nouvelle ? (
               <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 <KpiTile
                   icon={<FileText className="h-4 w-4" />}
@@ -1134,12 +1586,16 @@ export default function LocataireDetailPage({
 
             {/* Loyers du mois — marquer payé / partiel / frais depuis la
                 fiche (retour Steven 2026-07-22). */}
-            <LoyersMoisSection
-              locataireId={locataireId}
-              onMutated={() => void loadDossier()}
-            />
+            {nouvelle ? null : (
+              <LoyersMoisSection
+                locataireId={locataireId}
+                version={versionLoyers}
+                onMutated={() => void loadDossier()}
+              />
+            )}
 
             {/* Historique de paiements */}
+            <div hidden={cache("paiements")}>
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
               <div className="mb-3 flex items-center justify-between">
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
@@ -1153,6 +1609,11 @@ export default function LocataireDetailPage({
                       {money(dossier.total_paye)}
                     </span>{" "}
                     encaissés
+                    {nouvelle && dossier.nb_retards > 0
+                      ? ` · ${dossier.nb_retards} payé${
+                          dossier.nb_retards > 1 ? "s" : ""
+                        } en retard`
+                      : ""}
                   </span>
                 ) : null}
               </div>
@@ -1173,7 +1634,79 @@ export default function LocataireDetailPage({
                   Aucun paiement enregistré pour ce locataire.
                 </p>
               ) : (
-                <div className="max-h-96 overflow-y-auto">
+                <>
+                {nouvelle ? (
+                  <ul className="divide-y divide-brand-800 sm:hidden">
+                    {dossier.paiements.map((p) => (
+                      <li key={p.id} className="py-3 first:pt-0 last:pb-0">
+                        <div className="flex items-baseline justify-between gap-3">
+                          <span className="font-semibold capitalize text-white">
+                            {moisLabel(p.mois_couvert)}
+                          </span>
+                          <span className="font-semibold tabular-nums text-white">
+                            {argent(p.montant)}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-sm text-white/70">
+                          {[
+                            p.paye_le
+                              ? `Reçu le ${jourAvecAnnee(p.paye_le)}`
+                              : "Pas encore reçu",
+                            p.methode,
+                            p.reference,
+                            p.notes
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </p>
+                        {p.modifie_par || confirmationLibelle(p) ? (
+                          <p className="mt-0.5 text-xs text-white/70">
+                            {[
+                              p.modifie_par ? `Corrigé par ${p.modifie_par}` : "",
+                              confirmationLibelle(p)
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </p>
+                        ) : null}
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                          <PastilleVersement p={p} duMois={pastilleDuMois} />
+                          <span className="flex shrink-0 gap-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                histoActions.modifierVersement(p, {
+                                  locataireName: loc?.full_name
+                                })
+                              }
+                              aria-label={`Modifier le versement de ${moisLabel(p.mois_couvert)}`}
+                              title="Modifier ce versement (montant, date, méthode, mois visé, retard)"
+                              className="btn-secondary h-10 w-10 p-0"
+                            >
+                              <Pencil className="h-4 w-4" aria-hidden />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                histoActions.supprimerVersement(p, {
+                                  locataireName: loc?.full_name
+                                })
+                              }
+                              aria-label={`Supprimer le versement de ${moisLabel(p.mois_couvert)}`}
+                              title="Supprimer ce versement"
+                              className="btn-secondary h-10 w-10 p-0"
+                            >
+                              <Trash2 className="h-4 w-4" aria-hidden />
+                            </button>
+                          </span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <div
+                  className={`${nouvelle ? "hidden sm:block " : ""}max-h-96 overflow-y-auto`}
+                >
                   <table className="w-full min-w-[600px] text-left text-sm">
                     <thead className="sticky top-0 bg-brand-900 text-[10px] uppercase tracking-wider text-white/45">
                       <tr>
@@ -1228,33 +1761,7 @@ export default function LocataireDetailPage({
                             ) : null}
                           </td>
                           <td className="py-2.5 pr-3 text-right">
-                            {pastilleDuMois &&
-                            p.paye_le &&
-                            p.du_mois != null &&
-                            p.recu_mois != null &&
-                            p.recu_mois + 0.005 < p.du_mois ? (
-                              <span
-                                className="badge badge-amber"
-                                title="Le mois n'est pas couvert : total reçu sur ce qui était dû (loyer et lignes du mois)"
-                              >
-                                Partiel : {argent(p.recu_mois)} sur{" "}
-                                {argent(p.du_mois)}
-                              </span>
-                            ) : p.paye_le ? (
-                              <span
-                                className={`badge ${
-                                  p.en_retard
-                                    ? "badge-amber"
-                                    : "badge-emerald"
-                                }`}
-                              >
-                                {p.en_retard ? "Payé en retard" : "Payé"}
-                              </span>
-                            ) : (
-                              <span className="badge badge-rose">
-                                Impayé
-                              </span>
-                            )}
+                            <PastilleVersement p={p} duMois={pastilleDuMois} />
                           </td>
                           <td className="py-2.5 text-right">
                             <span className="inline-flex items-center gap-1">
@@ -1289,6 +1796,7 @@ export default function LocataireDetailPage({
                     </tbody>
                   </table>
                 </div>
+                </>
               )}
               {/* Ce qui a changé le DÛ des mois : rabais du bail, frais,
                   crédits, loyer dû fixé à la main (bugs 4 et 10). Se
@@ -1334,8 +1842,10 @@ export default function LocataireDetailPage({
                 </div>
               ) : null}
             </section>
+            </div>
 
             {/* Baux */}
+            <div hidden={cache("bail")}>
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
@@ -1390,7 +1900,19 @@ export default function LocataireDetailPage({
                   deux versions de la même vue divergent toujours, et
                   c'est celle qu'on regarde le moins qui finit par
                   mentir (retour Phil 2026-08-19). */}
-              {suiviBaux === null ? (
+              {bauxIntegres ? (
+                // Nouvelle présentation : les lignes de l'écran des baux
+                // refait, réduites à ce locataire (mêmes boutons, mêmes
+                // fenêtres, « Mettre fin au bail » en toutes lettres).
+                <BauxDeLaFiche
+                  locataireId={locataireId}
+                  surChangement={() => {
+                    void loadDossier();
+                    setVersionLoyers((v) => v + 1);
+                    void chargerSolde();
+                  }}
+                />
+              ) : suiviBaux === null ? (
                 <p className="flex items-center gap-2 text-xs text-white/50">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />{" "}
                   Chargement…
@@ -1409,8 +1931,15 @@ export default function LocataireDetailPage({
                 />
               )}
             </section>
+            </div>
 
             {/* Avis & renouvellements */}
+            <div hidden={cache("bail")}>
+            <BlocRepliable
+              titre="Avis et renouvellements"
+              resume="aucun"
+              vide={nouvelle && (dossier?.renouvellements.length ?? 0) === 0}
+            >
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
               <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
                 Avis &amp; renouvellements
@@ -1501,11 +2030,15 @@ export default function LocataireDetailPage({
                 </ul>
               )}
             </section>
+            </BlocRepliable>
+            </div>
 
             {/* Documents — TOUT ce qui a été généré/envoyé pour ce
                 locataire (avis TAL, lettres…), génération incluse
                 hors tableau (retour Phil 2026-07-20). */}
+            <div hidden={cache("bail")}>
             <DocumentsSection
+              cacherBrouillons={nouvelle}
               locataireId={locataireId}
               bails={(dossier?.baux || []).map((b) => ({
                 id: b.id,
@@ -1516,26 +2049,26 @@ export default function LocataireDetailPage({
                 document_id: b.document_id ?? null
               }))}
             />
+            </div>
 
             {/* Dossier TAL — suivi simple des recours (retour Phil
                 2026-09-09, point 5) : statut, motif, numéro, dates,
                 notes et pièces rattachées. */}
-            <TalDossiersSection
-              locataireId={locataireId}
-              baux={(dossier?.baux || []).map((b) => ({
-                id: b.id,
-                status: b.status,
-                label: `${b.immeuble_name}${
-                  b.logement_numero ? ` · ${b.logement_numero}` : ""
-                } (${b.date_debut} → ${b.date_fin})`
-              }))}
-            />
+            {nouvelle ? null : (
+              <TalDossiersSection
+                locataireId={locataireId}
+                baux={bauxPourTal}
+              />
+            )}
 
             {/* Garants & contacts — sans fiche complète, cherchables
                 (retour Phil 2026-09-09, point 8). */}
-            <GarantsContactsSection locataireId={locataireId} />
+            {nouvelle ? null : (
+              <GarantsContactsSection locataireId={locataireId} />
+            )}
 
             {/* Communications — journal manuel */}
+            <div hidden={cache("suivi")}>
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
@@ -1634,8 +2167,10 @@ export default function LocataireDetailPage({
                 </ul>
               )}
             </section>
+            </div>
 
             {/* Notes */}
+            <div hidden={cache("suivi")}>
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
               <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
                 Notes
@@ -1675,10 +2210,12 @@ export default function LocataireDetailPage({
                 </button>
               </div>
             </section>
+            </div>
 
-            <Releves31Section locataireId={locataireId} />
+            {nouvelle ? null : <Releves31Section locataireId={locataireId} />}
 
             {/* Assurance locataire — à confirmer chaque année (Steven). */}
+            <div hidden={cache("suivi")}>
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
@@ -1790,6 +2327,27 @@ export default function LocataireDetailPage({
                 );
               })()}
             </section>
+            </div>
+            {nouvelle ? (
+              <>
+                <div hidden={cache("suivi")}>
+                  <TalDossiersSection
+                    repliSiVide
+                    locataireId={locataireId}
+                    baux={bauxPourTal}
+                  />
+                </div>
+                <div hidden={cache("suivi")}>
+                  <GarantsContactsSection
+                    repliSiVide
+                    locataireId={locataireId}
+                  />
+                </div>
+                <div hidden={cache("suivi")}>
+                  <Releves31Section repliSiVide locataireId={locataireId} />
+                </div>
+              </>
+            ) : null}
 
 
           </div>
@@ -1797,6 +2355,42 @@ export default function LocataireDetailPage({
       </div>
     </>
   );
+}
+
+/** L'état d'un versement de l'historique. `duMois` (refonte, lot
+ *  « loyers ») : la pastille décrit le MOIS quand il n'est pas couvert
+ *  (« Partiel : 750 $ sur 1 000 $ ») et non le versement. */
+function PastilleVersement({
+  p,
+  duMois
+}: {
+  p: DossierPaiement;
+  duMois: boolean;
+}) {
+  if (
+    duMois &&
+    p.paye_le &&
+    p.du_mois != null &&
+    p.recu_mois != null &&
+    p.recu_mois + 0.005 < p.du_mois
+  ) {
+    return (
+      <span
+        className="badge badge-amber"
+        title="Le mois n'est pas couvert : total reçu sur ce qui était dû (loyer et lignes du mois)"
+      >
+        Partiel : {argent(p.recu_mois)} sur {argent(p.du_mois)}
+      </span>
+    );
+  }
+  if (p.paye_le) {
+    return (
+      <span className={`badge ${p.en_retard ? "badge-amber" : "badge-emerald"}`}>
+        {p.en_retard ? "Payé en retard" : "Payé"}
+      </span>
+    );
+  }
+  return <span className="badge badge-rose">Impayé</span>;
 }
 
 function KpiTile({
@@ -1835,450 +2429,18 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 
-// ── Loyers du mois — paiements depuis la fiche locataire ──────────────
-// Mêmes actions que la page Baux & paiements (retour Steven 2026-07-22) :
-// marquer payé (restant), partiel, frais ponctuel, corriger une erreur.
-// Réutilise /loyers/overview filtré client-side sur le locataire.
-
-type LoyerMoisRow = {
-  bail_id: number;
-  immeuble_id: number;
-  immeuble_name: string;
-  logement_id?: number | null;
-  logement_numero: string | null;
-  locataire_id: number | null;
-  locataire_name?: string | null;
-  locataire_email?: string | null;
-  loyer_mensuel: number;
-  montant_paye: number | null;
-  paye_le: string | null;
-  etat: string;
-  /** Bail résilié/terminé en cours de mois : la ligne reste dans le
-   *  mois couvert avec un badge « Bail terminé le X » (M7). */
-  bail_statut?: string;
-  bail_termine_le?: string | null;
-  frais_mois?: { id: number; montant: number; libelle: string }[];
-  paiements?: PaiementMois[];
-  solde_total?: number;
-  /** Détail du solde : chaque mois encore dû (2026-11-13). */
-  mois_impayes?: MoisImpaye[];
-  nb_relances: number;
-  derniere_relance_le: string | null;
-};
-
-function LoyersMoisSection({
-  locataireId,
-  onMutated
-}: {
-  locataireId: number;
-  onMutated: () => void;
-}) {
-  const [mois, setMois] = useState<string>(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-  });
-  const [rows, setRows] = useState<LoyerMoisRow[] | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<number | null>(null);
-  const [relancingId, setRelancingId] = useState<number | null>(null);
-  //: Relance en attente de confirmation (aperçu partagé).
-  const [relanceApercu, setRelanceApercu] =
-    useState<LoyerMoisRow | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    setErr(null);
-    try {
-      const r = await authedFetch(
-        `/api/v1/immobilier/loyers/overview?mois=${mois}`
-      );
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const d = (await r.json()) as { rows: LoyerMoisRow[] };
-      setRows(d.rows.filter((row) => row.locataire_id === locataireId));
-    } catch (e) {
-      setErr((e as Error).message);
-      setRows([]);
-    }
-  }, [mois, locataireId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  async function apres() {
-    await load();
-    onMutated();
-  }
-
-  // Fenêtres TACTILES partagées (bugs 4 à 6, 2026-10-18) : versement
-  // daté, correction en place de chaque versement, loyer dû du mois,
-  // confirmations — plus de window.prompt / confirm (muets dans Kratos
-  // installé sur un téléphone). Mêmes fenêtres que la page Paiements.
-  const actions = usePaiementActions<LoyerMoisRow>({
-    mois,
-    rows: rows ?? [],
-    fmt: money,
-    onChanged: apres,
-    onInfo: setInfo,
-    onError: setErr
-  });
-
-  async function paiement(row: LoyerMoisRow, montant: number) {
-    setBusyId(row.bail_id);
-    setErr(null);
-    try {
-      const t = new Date();
-      const payeLe = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(
-        2,
-        "0"
-      )}-${String(t.getDate()).padStart(2, "0")}`;
-      const r = await authedFetch("/api/v1/immobilier/paiements", {
-        method: "POST",
-        body: JSON.stringify({
-          bail_id: row.bail_id,
-          // Ligne « dette » d'un bail terminé : imputer au dernier mois
-          // couvert (le backend refuse un mois hors période du bail).
-          mois_couvert: `${moisCouvertPourPaiement(row, mois)}-01`,
-          montant,
-          paye_le: payeLe
-        })
-      });
-      if (!r.ok)
-        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
-      await apres();
-    } catch (e) {
-      setErr(`Paiement échoué : ${(e as Error).message}`);
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function marquerPaye(row: LoyerMoisRow) {
-    // Restant du mois — et SOLDE du bail pour une ligne « dette
-    // seulement » (bail terminé, mois après sa fin — 2026-08-14).
-    await paiement(row, montantMarquerPaye(row));
-  }
-
-  // Paiement PARTIEL : versement daté (montant, date reçue, méthode,
-  // référence) — un versement par dépôt (bugs 5 et 6).
-  function marquerPartiel(row: LoyerMoisRow) {
-    actions.ouvrirVersement(row);
-  }
-
-  // Frais OU crédit — même fenêtre que la page Paiements et la fiche
-  // immeuble (Phil 2026-10-08) ; le crédit y est enfin possible aussi.
-  const [fraisPour, setFraisPour] = useState<LoyerMoisRow | null>(null);
-  async function ajouterFrais(row: LoyerMoisRow) {
-    setFraisPour(row);
-  }
-  async function confirmerFrais(montant: number, libelle: string) {
-    if (!fraisPour) return;
-    const r = await authedFetch(
-      `/api/v1/immobilier/baux/${fraisPour.bail_id}/frais`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          mois_couvert: `${mois}-01`,
-          montant,
-          libelle
-        })
-      }
-    );
-    if (!r.ok)
-      throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
-    setFraisPour(null);
-    await apres();
-  }
-
-  // « Corriger » ouvre la fenêtre du mois (bugs 4 à 6) : chaque
-  // versement se modifie ou se retire EN PLACE, le loyer dû du mois se
-  // fixe, les lignes du mois se retirent — sans perdre la ligne.
-  function corriger(row: LoyerMoisRow) {
-    actions.ouvrirCorrection(row);
-  }
-
-  // Rappel de loyer par courriel — même endpoint/payload que la page
-  // Paiements (« Relancer » partout).
-  async function relancer(row: LoyerMoisRow) {
-    setRelanceApercu(row);
-  }
-
-  async function envoyerRelance(row: LoyerMoisRow) {
-    setRelancingId(row.bail_id);
-    setInfo(null);
-    setErr(null);
-    try {
-      const r = await authedFetch("/api/v1/immobilier/loyers/relance", {
-        method: "POST",
-        body: JSON.stringify({ bail_id: row.bail_id, mois })
-      });
-      if (!r.ok) {
-        const t = await r.text();
-        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
-      }
-      const res = (await r.json()) as {
-        niveau: number;
-        destinataire: string;
-      };
-      setInfo(`Relance ${res.niveau} envoyée à ${res.destinataire}`);
-      await apres();
-    } catch (e) {
-      setErr(`Relance échouée : ${(e as Error).message}`);
-    } finally {
-      setRelanceApercu(null);
-      setRelancingId(null);
-    }
-  }
-
-  const moisLisible = (() => {
-    const [y, m] = mois.split("-").map(Number);
-    return new Date(y, (m || 1) - 1, 1).toLocaleDateString("fr-CA", {
-      month: "long",
-      year: "numeric"
-    });
-  })();
-
-  return (
-    <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-      <FraisCreditModal
-        open={fraisPour != null}
-        mois={mois}
-        locataireName={fraisPour?.locataire_name}
-        onClose={() => setFraisPour(null)}
-        onConfirm={confirmerFrais}
-      />
-      {actions.elements}
-      {relanceApercu ? (
-        <ApercuEnvoiModal
-          titre="Relance de loyer"
-          description={
-            "Un rappel de loyer. Le niveau s'incrémente à chaque " +
-            "relance du même mois — ces envois servent de preuve au " +
-            "TAL, donc vérifie que le loyer est bien impayé."
-          }
-          destinataireNom={relanceApercu.locataire_name || "Locataire"}
-          destinataireEmail={relanceApercu.locataire_email}
-          libelleEnvoi="Envoyer la relance"
-          busy={relancingId === relanceApercu.bail_id}
-          onAnnuler={() => setRelanceApercu(null)}
-          onConfirmer={() => void envoyerRelance(relanceApercu)}
-        />
-      ) : null}
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-          Loyer du mois
-        </h2>
-        <div className="inline-flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-950 px-1 py-0.5">
-          <button
-            type="button"
-            onClick={() =>
-              setMois((m) => {
-                const [y, mm] = m.split("-").map(Number);
-                const d = new Date(y, (mm || 1) - 2, 1);
-                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-              })
-            }
-            className="btn-ghost btn-xs"
-            aria-label="Mois précédent"
-          >
-            ‹
-          </button>
-          <span className="min-w-[110px] text-center text-xs font-semibold capitalize text-white">
-            {moisLisible}
-          </span>
-          <button
-            type="button"
-            onClick={() =>
-              setMois((m) => {
-                const [y, mm] = m.split("-").map(Number);
-                const d = new Date(y, mm || 1, 1);
-                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-              })
-            }
-            className="btn-ghost btn-xs"
-            aria-label="Mois suivant"
-          >
-            ›
-          </button>
-        </div>
-      </div>
-      {err ? (
-        <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-          {err}
-        </p>
-      ) : null}
-      {info ? (
-        <p className="mb-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-          {info}
-        </p>
-      ) : null}
-      {rows === null ? (
-        <p className="flex items-center gap-2 text-xs text-white/50">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
-        </p>
-      ) : rows.length === 0 ? (
-        <p className="text-xs text-white/50">
-          Aucun bail actif pour ce locataire ce mois-ci.
-        </p>
-      ) : (
-        <div className="space-y-3">
-          {rows.map((r) => (
-            <div
-              key={r.bail_id}
-              // Fond TEINTÉ selon l'état (retour Phil 2026-08-13) :
-              // gris attente, vert payé, jaune partiel, rouge retard —
-              // mêmes teintes que la page Paiements.
-              className={`rounded-xl border border-brand-800 p-3 ${
-                r.etat === "retard"
-                  ? "bg-rose-500/10"
-                  : r.etat === "partiel"
-                    ? "bg-amber-500/10"
-                    : r.etat === "paye"
-                      ? "bg-emerald-500/10"
-                      : "bg-brand-950/40"
-              }`}
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                {r.etat === "paye" ? (
-                  <span className="badge badge-emerald">Payé</span>
-                ) : r.etat === "partiel" ? (
-                  <span className="badge badge-amber">Partiel</span>
-                ) : r.etat === "retard" ? (
-                  <span className="badge badge-rose">Retard</span>
-                ) : (
-                  <span className="badge badge-neutral">Attente</span>
-                )}
-                {r.bail_termine_le ? (
-                  // M7 : bail résilié/terminé en cours de mois. Une date
-                  // de fin FUTURE = départ avant terme : la date
-                  // contractuelle serait trompeuse.
-                  <span
-                    className="badge badge-rose"
-                    title={
-                      r.bail_termine_le >
-                      new Date().toLocaleDateString("sv-SE")
-                        ? "Locataire parti avant la fin prévue du bail — la ligne reste tant que le solde n'est pas réglé"
-                        : "Le bail couvrait une partie de ce mois — dernier loyer et solde encore dus"
-                    }
-                  >
-                    {r.bail_termine_le >
-                    new Date().toLocaleDateString("sv-SE")
-                      ? "Bail terminé (avant terme)"
-                      : `Bail terminé le ${r.bail_termine_le}`}
-                  </span>
-                ) : null}
-                <span className="text-xs text-white/70">
-                  {r.immeuble_name}
-                  {r.logement_numero ? ` · ${r.logement_numero}` : ""}
-                </span>
-                {/* Même empilement Loyer / Reçu / Solde que la page
-                    Paiements et la fiche immeuble (retour Phil
-                    2026-08-13) — une seule lecture partout. */}
-                <span className="ml-auto text-sm">
-                  <CelluleLoyer
-                    loyer={r.loyer_mensuel}
-                    recu={r.montant_paye}
-                    solde={r.solde_total}
-                    moisImpayes={r.mois_impayes}
-                    moisAffiche={mois}
-                    fmt={money}
-                    frais={r.frais_mois}
-                    paiements={r.paiements}
-                    onSupprimerFrais={actions.supprimerFrais}
-                  />
-                </span>
-              </div>
-              {/* Reçu, solde et frais vivent maintenant dans la cellule
-                  Loyer ci-dessus — ici on ne garde que la DATE. */}
-              {r.paye_le ? (
-                <div className="mt-1 text-[11px] text-white/60">
-                  Payé le {r.paye_le}
-                </div>
-              ) : null}
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                {r.etat !== "paye" ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => void marquerPaye(r)}
-                      disabled={busyId === r.bail_id}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
-                    >
-                      {busyId === r.bail_id ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : (
-                        <Check className="h-3 w-3" />
-                      )}
-                      Marquer payé
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => marquerPartiel(r)}
-                      disabled={busyId === r.bail_id}
-                      title="Enregistrer un paiement partiel (montant saisi)"
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
-                    >
-                      Partiel
-                    </button>
-                  </>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => void ajouterFrais(r)}
-                  title="Ajouter un frais ponctuel au solde (ex. frais de retard 20 $)"
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/70 transition hover:bg-white/10"
-                >
-                  + Frais
-                </button>
-                {r.etat === "retard" || r.etat === "partiel" ? (
-                  <button
-                    type="button"
-                    onClick={() => void relancer(r)}
-                    disabled={relancingId === r.bail_id}
-                    title="Envoyer un rappel de loyer par courriel au locataire"
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
-                  >
-                    {relancingId === r.bail_id ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <Mail className="h-3 w-3" />
-                    )}
-                    Relancer
-                  </button>
-                ) : null}
-                {/* Toujours offert, même sans versement : c'est aussi
-                    là que le loyer DÛ du mois se fixe (bug 4). */}
-                <button
-                  type="button"
-                  onClick={() => corriger(r)}
-                  disabled={busyId === r.bail_id}
-                  title="Corriger : versements du mois (montant, date, retrait) et loyer dû du mois"
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/70 transition hover:bg-white/10 disabled:opacity-50"
-                >
-                  Corriger
-                </button>
-              </div>
-              {r.nb_relances > 0 ? (
-                <p className="mt-1 text-[10px] text-white/40">
-                  Relancé {r.nb_relances}×
-                  {r.derniere_relance_le
-                    ? ` · dernière ${r.derniere_relance_le}`
-                    : ""}
-                </p>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-
 /** Relevés 31 du locataire (occupation au 31 décembre de ses baux) —
  *  la production/l'envoi se gèrent dans Suivis annuels ; ici on VOIT
  *  l'état (retour Phil 2026-07-31). */
-function Releves31Section({ locataireId }: { locataireId: number }) {
+function Releves31Section({
+  locataireId,
+  repliSiVide = false
+}: {
+  locataireId: number;
+  /** Nouvelle présentation : sans relevé, le bloc tient sur une ligne. */
+  repliSiVide?: boolean;
+}) {
+  const [deplie, setDeplie] = useState(false);
   const [rows, setRows] = useState<
     | {
         annee: number;
@@ -2320,6 +2482,19 @@ function Releves31Section({ locataireId }: { locataireId: number }) {
     produit: "Produit",
     remis: "Remis"
   };
+
+  if (repliSiVide && !deplie) {
+    if (rows === null) return null;
+    if (rows.length === 0) {
+      return (
+        <LigneRepliee
+          titre="Relevés 31"
+          resume="aucun"
+          onOuvrir={() => setDeplie(true)}
+        />
+      );
+    }
+  }
 
   return (
     <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
